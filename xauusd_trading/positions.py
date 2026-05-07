@@ -92,6 +92,20 @@ class Position:
 # sizing
 # ---------------------------------------------------------------------------
 
+def _floor_to_step(value: float, step: float) -> float:
+    """FP-safe floor to a multiple of `step`. Returns a clean 2-decimal float
+    when step == 0.01 (no 0.15 -> 0.14 floating-point dust). For other steps,
+    rounds to 8 decimals.
+    """
+    if step <= 0:
+        return value
+    steps = math.floor(value / step + 1e-9)
+    out = steps * step
+    if math.isclose(step, 0.01, abs_tol=1e-9):
+        return round(out, 2)
+    return round(out, 8)
+
+
 def compute_lot(
     equity: float, signal: Signal, config: StrategyConfig,
     contract_size: float = CONTRACT_SIZE_OZ,
@@ -99,8 +113,15 @@ def compute_lot(
     """Return (lot_per_entry, base_stop_distance).
 
     All entries get the same lot, sized so total initial-SL price-risk across
-    all planned entries equals risk_per_signal x equity. Realized loss can
-    be smaller if not all entries fill before SL.
+    all planned entries equals risk_per_signal x equity, then floored to the
+    broker lot step and clamped to the broker minimum.
+
+    Lot rounding is UNCONDITIONAL: if `config.lot_step` is 0 (disabled), the
+    engine still falls back to a 0.01 step so backtest output and live orders
+    are always clean multiples. Same for `minimum_lot`. To use a coarser step
+    (e.g. 0.1), set the config value above 0.01 -- it always wins.
+
+    Realized loss can be smaller if not all entries fill before SL.
     """
     entries = signal.entries[:config.entry_count]
     first = entries[0]
@@ -115,9 +136,13 @@ def compute_lot(
     if total_price_risk <= 0:
         return 0.0, base_stop_distance
     lot = risk_amount / (total_price_risk * contract_size)
-    if config.lot_step > 0:
-        lot = math.floor(lot / config.lot_step) * config.lot_step
-    if config.minimum_lot and lot < config.minimum_lot:
+
+    # Always round to a step. Config can choose a larger step (e.g. 0.1) but
+    # cannot disable rounding -- 0.01 is the floor everywhere.
+    step = config.lot_step if config.lot_step > 0 else 0.01
+    min_lot = config.minimum_lot if config.minimum_lot > 0 else 0.01
+    lot = _floor_to_step(lot, step)
+    if lot < min_lot - 1e-9:
         lot = 0.0
     return lot, base_stop_distance
 

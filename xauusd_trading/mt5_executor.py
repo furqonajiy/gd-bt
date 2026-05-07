@@ -37,13 +37,19 @@ def signal_to_magic(signal_key: str) -> int:
     return int.from_bytes(h[:4], "big") & 0x7FFFFFFF
 
 
-def round_lot(lot: float, min_lot: float, lot_step: float) -> float:
-    """Floor lot to step, enforce minimum. Returns 0.0 if rounding produces 0."""
+def round_lot(lot: float, min_lot: float = 0.01, lot_step: float = 0.01) -> float:
+    """Floor `lot` to a multiple of `lot_step` and enforce `min_lot`.
+
+    Always returns a clean multiple of 0.01 (no floating-point dust like
+    0.15000000000000002). Uses a small epsilon on the floor so values that
+    are *already* on the step don't drop a step (e.g. 0.15 -> 0.14 due to FP).
+    Returns 0.0 if the floored value is below `min_lot`.
+    """
     if lot <= 0:
         return 0.0
-    rounded = math.floor(lot / lot_step) * lot_step
-    rounded = round(rounded, 8)
-    if rounded < min_lot:
+    steps = math.floor(lot / lot_step + 1e-9)
+    rounded = round(steps * lot_step, 2)  # 2 decimals = clean 0.01 multiples
+    if rounded < min_lot - 1e-9:
         return 0.0
     return rounded
 

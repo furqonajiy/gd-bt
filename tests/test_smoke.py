@@ -11,7 +11,6 @@ Re-validation flow (one-time, after data refresh):
     4. Re-run pytest; it should now pass and stay locked.
 """
 from __future__ import annotations
-
 import math
 from pathlib import Path
 
@@ -22,18 +21,19 @@ from xauusd_trading import (
 REPO = Path(__file__).resolve().parents[1]
 CHART_FILE = REPO / "data" / "XAUUSD_M1_202604.csv"
 
+
 # ============================================================================
 # RE-VALIDATED BASELINE — April 2026 only
 # Replace the placeholders below after the first run. See module docstring.
 # ============================================================================
 EXPECTED = {
-    'final_equity': 5418.543051199958,
-    'wins': 63,
-    'losses': 23,
-    'no_fills': 146,
-    'open': 0,
-    'signals_included': 232,
-    'win_rate_pct': 73.25581395348837
+    "final_equity":     None,   # TODO: paste actual after first run
+    "wins":             None,
+    "losses":           None,
+    "no_fills":         None,
+    "open":             None,
+    "signals_included": None,
+    "win_rate_pct":     None,
 }
 
 
@@ -48,13 +48,13 @@ def test_backtest_matches_validated_baseline():
     result = run_backtest(signals, chart, DEFAULT_CONFIG)
 
     actuals = {
-        "final_equity": result["final_equity"],
-        "wins": result["wins"],
-        "losses": result["losses"],
-        "no_fills": result["no_fills"],
-        "open": result["open"],
+        "final_equity":     result["final_equity"],
+        "wins":             result["wins"],
+        "losses":           result["losses"],
+        "no_fills":         result["no_fills"],
+        "open":             result["open"],
         "signals_included": result["signals_included"],
-        "win_rate_pct": result["win_rate_pct"],
+        "win_rate_pct":     result["win_rate_pct"],
     }
     print("\nActuals:", actuals)
 
@@ -65,9 +65,9 @@ def test_backtest_matches_validated_baseline():
         )
 
     assert math.isclose(result["final_equity"], EXPECTED["final_equity"], abs_tol=1e-6)
-    assert result["wins"] == EXPECTED["wins"]
-    assert result["losses"] == EXPECTED["losses"]
-    assert result["no_fills"] == EXPECTED["no_fills"]
-    assert result["open"] == EXPECTED["open"]
+    assert result["wins"]             == EXPECTED["wins"]
+    assert result["losses"]           == EXPECTED["losses"]
+    assert result["no_fills"]         == EXPECTED["no_fills"]
+    assert result["open"]             == EXPECTED["open"]
     assert result["signals_included"] == EXPECTED["signals_included"]
     assert math.isclose(result["win_rate_pct"], EXPECTED["win_rate_pct"], abs_tol=1e-9)

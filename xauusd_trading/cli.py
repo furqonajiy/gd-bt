@@ -178,7 +178,8 @@ def cmd_decide(args: argparse.Namespace) -> int:
         )
         executor = Mt5Executor(
             conn, args.mt5_symbol,
-            min_lot=args.min_lot, lot_step=args.lot_step,
+            min_lot=config.minimum_lot or 0.01,
+            lot_step=config.lot_step or 0.01,
         )
 
         print()
@@ -339,10 +340,6 @@ def build_parser() -> argparse.ArgumentParser:
     pd_.add_argument("--now", default=None)
     pd_.add_argument("--execute", action="store_true",
                      help="Place orders on MT5 directly (no confirmation prompt). Implies --mt5.")
-    pd_.add_argument("--min-lot", type=float, default=0.01,
-                     help="Broker minimum lot size (default 0.01)")
-    pd_.add_argument("--lot-step", type=float, default=0.01,
-                     help="Broker lot step size (default 0.01)")
     _add_strategy_overrides(pd_)
     _add_mt5_flags(pd_)
     pd_.set_defaults(func=cmd_decide)
