@@ -193,7 +193,7 @@ def _build_new_signal_plan(
 
 def _stage_label(position: Position, config: StrategyConfig) -> str:
     if not position.filled_entries():
-        return "Pending — no fills yet"
+        return "Pending -- no fills yet"
     if config.lock_after_tp1 and position.stage >= 1:
         return "Stage 2 (TP1 locked, stops at TP1)"
     return "Stage 1 (initial SL active)"
@@ -204,7 +204,7 @@ def _action_for(position: Position, minutes_to_exit: Optional[float]) -> tuple[s
     if not position.filled_entries():
         return "HOLD", ["No fills; pending orders standing."]
     if minutes_to_exit is not None and minutes_to_exit <= 10:
-        return "WATCH", [f"Time exit in {minutes_to_exit:.0f} min — may close at bar close."]
+        return "WATCH", [f"Time exit in {minutes_to_exit:.0f} min -- may close at bar close."]
     return "HOLD", notes
 
 
@@ -300,7 +300,7 @@ def render_report(rec: Recommendation) -> str:
     for o in rec.new_signal.orders:
         lines.append(
             f"    #{o.entry_index} {o.side} LIMIT {o.entry_price:g}   "
-            f"SL {o.initial_sl:.2f}   lot {o.lot:.4f}   "
+            f"SL {o.initial_sl:.2f}   lot {o.lot:.2f}   "
             f"risk {_fmt_money(-o.risk_dollars)}"
         )
     lines.append(
@@ -340,7 +340,7 @@ def render_report(rec: Recommendation) -> str:
         )
         for es in p.entries:
             stop_str = (
-                f"stop @ {es.effective_stop:g}" if es.effective_stop is not None else "—"
+                f"stop @ {es.effective_stop:g}" if es.effective_stop is not None else "--"
             )
             if es.status == "OPEN":
                 lines.append(
@@ -362,7 +362,7 @@ def render_report(rec: Recommendation) -> str:
             f"Action: {p.action}"
         )
         for n in p.notes:
-            lines.append(f"      • {n}")
+            lines.append(f"      - {n}")
 
     # Summary -----------------------------------------------------------
     lines.append("")

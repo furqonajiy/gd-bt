@@ -1,4 +1,4 @@
-"""xauusd_trading — validated XAUUSD strategy as a reusable engine.
+"""xauusd_trading -- validated XAUUSD strategy as a reusable engine.
 
 Public entry points:
 
@@ -27,6 +27,19 @@ from .engine import (
 )
 from .backtest import run_backtest, replay_signal, position_status
 
+# Optional MT5 executor exports (Windows-only; soft-fail on import).
+try:
+    from .mt5_executor import (
+        Mt5Executor, SignalRegistry, signal_to_magic,
+        round_lot, ExecutionLog, render_execution_log,
+    )
+    _MT5_EXEC_EXPORTS = [
+        "Mt5Executor", "SignalRegistry", "signal_to_magic",
+        "round_lot", "ExecutionLog", "render_execution_log",
+    ]
+except Exception:
+    _MT5_EXEC_EXPORTS = []
+
 __all__ = [
     "DEFAULT_CONFIG", "StrategyConfig",
     "Signal", "parse_signals_file", "parse_one_signal", "Bar",
@@ -35,4 +48,4 @@ __all__ = [
     "decide", "render_report",
     "Recommendation", "NewSignalPlan", "PositionStatus", "EntryStatus", "PlannedOrder",
     "run_backtest", "replay_signal", "position_status",
-]
+] + _MT5_EXEC_EXPORTS

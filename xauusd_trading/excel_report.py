@@ -2,8 +2,8 @@
 
 Two sheets:
 
-  Sheet 1 "Summary" — config, overall stats, monthly breakdown.
-  Sheet 2 "Per-Entry Detail" — one row per Entry slot (3 per signal),
+  Sheet 1 "Summary" -- config, overall stats, monthly breakdown.
+  Sheet 2 "Per-Entry Detail" -- one row per Entry slot (3 per signal),
                                 color-coded by outcome.
 
 Soft dependency on openpyxl. Importing this module raises ImportError if
@@ -126,6 +126,8 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
         ("SL multiplier", cfg.get("sl_multiplier")),
         ("Final target", cfg.get("final_target")),
         ("Lock after TP1", cfg.get("lock_after_tp1")),
+        ("Minimum lot", cfg.get("minimum_lot")),
+        ("Lot step", cfg.get("lot_step")),
         ("Chart start", result.get("chart_start")),
         ("Chart end", result.get("chart_end")),
     ]
@@ -246,7 +248,7 @@ def _write_entries_sheet(ws: Worksheet, result: dict) -> None:
 
     money_fmt = '"$"#,##0.00;[Red]-"$"#,##0.00'
     price_fmt = "#,##0.00"
-    lot_fmt = "0.0000"
+    lot_fmt = "0.00"   # lots are floored to broker step (default 0.01)
 
     rows = result.get("entry_rows", []) or []
     for r_idx, row in enumerate(rows, start=2):

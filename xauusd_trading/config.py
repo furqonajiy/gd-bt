@@ -26,8 +26,8 @@ class StrategyConfig:
     sl_multiplier: float = 1.25      # effective SL = 1.25 x raw distance
     final_target: str = "TP2"        # close all at TP2; TP1 only triggers lock
     lock_after_tp1: bool = True      # after TP1 touched, remaining stops -> TP1
-    minimum_lot: float = 0.0         # 0 disables broker rounding
-    lot_step: float = 0.0
+    minimum_lot: float = 0.01        # broker minimum (0.0 disables)
+    lot_step: float = 0.01           # broker step; lots are floored to multiples
 
 
 DEFAULT_CONFIG = StrategyConfig()
