@@ -17,6 +17,7 @@ signal, given current chart and (optionally) currently-open positions.
 """
 from __future__ import annotations
 import argparse
+import glob
 import json
 import sys
 from pathlib import Path
@@ -28,6 +29,29 @@ from .engine import decide, render_report
 from .signal import parse_one_signal, parse_signals_file
 
 
+def _expand_chart_paths(patterns: list[str]) -> list[Path]:
+    """Expand each pattern via glob (so wildcards work on every shell,
+    including PowerShell, which does NOT auto-expand globs for external
+    commands). Plain paths pass through unchanged. Raises if a pattern
+    matches nothing.
+    """
+    if not patterns:
+        return []
+    out: list[Path] = []
+    for pat in patterns:
+        if any(ch in pat for ch in "*?["):
+            matches = sorted(glob.glob(pat))
+            if not matches:
+                raise SystemExit(f"No files match pattern: {pat}")
+            out.extend(Path(m) for m in matches)
+        else:
+            p = Path(pat)
+            if not p.exists():
+                raise SystemExit(f"Chart file not found: {pat}")
+            out.append(p)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # subcommand: backtest
 # ---------------------------------------------------------------------------
@@ -35,7 +59,7 @@ from .signal import parse_one_signal, parse_signals_file
 def cmd_backtest(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     signals = parse_signals_file(Path(args.signals))
-    chart = CsvChartSource([Path(p) for p in args.charts])
+    chart = CsvChartSource(_expand_chart_paths(args.charts))
     result = run_backtest(
         signals, chart, config,
         exclude_structural_anomalies=args.exclude_structural_anomalies,
@@ -89,7 +113,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
     else:
         if not args.charts:
             raise SystemExit("Either --charts or --mt5 must be provided.")
-        chart = CsvChartSource([Path(p) for p in args.charts])
+        chart = CsvChartSource(_expand_chart_paths(args.charts))
         equity = args.equity
 
     signal = parse_one_signal(args.signal, args.signal_date, args.signal_tz)
