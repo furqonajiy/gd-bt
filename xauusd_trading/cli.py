@@ -54,7 +54,44 @@ def cmd_backtest(args: argparse.Namespace) -> int:
 
 def cmd_decide(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
-    chart = CsvChartSource([Path(p) for p in args.charts])
+
+    # Source selection -------------------------------------------------
+    use_mt5 = bool(args.mt5)
+    if use_mt5:
+        from .mt5_adapter import (
+            Mt5ChartSource, Mt5Connection, mt5_equity,
+            archive_m1_by_month, render_archive_summary,
+        )
+        conn = Mt5Connection(
+            path=args.mt5_path, login=args.mt5_login,
+            password=args.mt5_password, server=args.mt5_server,
+        )
+        conn.initialize()
+
+        # Archive first so the saved files are always up to date even if
+        # the decision step later fails for some reason.
+        if not args.no_archive:
+            summary = archive_m1_by_month(
+                conn, args.mt5_symbol, args.archive_dir,
+                months_back=args.archive_months,
+                server_offset_hours=args.mt5_server_offset,
+                overwrite=args.archive_overwrite,
+            )
+            print(render_archive_summary(summary))
+            print()
+
+        chart = Mt5ChartSource(
+            conn, symbol=args.mt5_symbol,
+            server_offset_hours=args.mt5_server_offset,
+            history_bars=args.mt5_history_bars,
+        )
+        equity = mt5_equity(conn) if args.equity_from_mt5 else args.equity
+    else:
+        if not args.charts:
+            raise SystemExit("Either --charts or --mt5 must be provided.")
+        chart = CsvChartSource([Path(p) for p in args.charts])
+        equity = args.equity
+
     signal = parse_one_signal(args.signal, args.signal_date, args.signal_tz)
 
     now = None
@@ -70,25 +107,98 @@ def cmd_decide(args: argparse.Namespace) -> int:
     if args.positions_json:
         prior = json.loads(Path(args.positions_json).read_text(encoding="utf-8"))
         from .positions import open_position, advance_bars
-        from .chart import iter_bars, slice_bars
-        chart_df = chart.dataframe
         replay_end = now if now is not None else chart.last_time()
         for item in prior:
             psig = parse_one_signal(item["signal"], item["date"], int(item["tz"]))
-            equity_at_open = float(item.get("equity_at_open", args.equity))
+            equity_at_open = float(item.get("equity_at_open", equity))
             pos = open_position(psig, equity_at_open, config)
-            advance_bars(pos, iter_bars(slice_bars(chart_df, pos.activation_time, replay_end)), config)
+            advance_bars(pos, chart.bars_between(pos.activation_time, replay_end), config)
             open_positions.append(pos)
 
-    positions = ManualPositionSource(equity=args.equity, positions=open_positions)
+    positions = ManualPositionSource(equity=equity, positions=open_positions)
     rec = decide(signal, chart, positions, config, now=now)
     print(render_report(rec))
+
+    if use_mt5:
+        conn.shutdown()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# subcommand: mt5-info (diagnostic)
+# ---------------------------------------------------------------------------
+
+def cmd_mt5_info(args: argparse.Namespace) -> int:
+    """Print MT5 connection info, latest bar, account equity, and open
+    positions/orders for the symbol. Use to verify the connection works.
+    """
+    from .mt5_adapter import (
+        Mt5ChartSource, Mt5Connection, mt5_equity, mt5_open_positions_summary,
+    )
+    with Mt5Connection(
+        path=args.mt5_path, login=args.mt5_login,
+        password=args.mt5_password, server=args.mt5_server,
+    ) as conn:
+        chart = Mt5ChartSource(
+            conn, symbol=args.mt5_symbol,
+            server_offset_hours=args.mt5_server_offset,
+        )
+        last = chart.latest()
+        print(f"Symbol:           {args.mt5_symbol}")
+        print(f"Server offset:    GMT+{args.mt5_server_offset}")
+        print(f"Latest bar:       {last.time if last else '(none)'}  "
+              f"close={last.close if last else '-'}  "
+              f"spread={last.spread_points if last else '-'} pts")
+        try:
+            print(f"Account equity:   ${mt5_equity(conn):,.2f}")
+        except Exception as e:
+            print(f"Account equity:   <error: {e}>")
+        print()
+        print("Open MT5 positions / pending orders for the symbol:")
+        rows = mt5_open_positions_summary(conn, args.mt5_symbol)
+        if not rows:
+            print("  (none)")
+        for r in rows:
+            print(f"  [{r['kind']}] #{r['ticket']}  {r['type']}  "
+                  f"vol={r['volume']}  open={r['price_open']}  "
+                  f"sl={r['sl']}  tp={r['tp']}  comment={r['comment']!r}")
+    return 0
+
+
+def cmd_fetch(args: argparse.Namespace) -> int:
+    """Pull M1 from MT5 and save to per-month CSVs without running a decision.
+    Useful for one-off bulk archiving or scheduled fetches.
+    """
+    from .mt5_adapter import (
+        Mt5Connection, archive_m1_by_month, render_archive_summary,
+    )
+    with Mt5Connection(
+        path=args.mt5_path, login=args.mt5_login,
+        password=args.mt5_password, server=args.mt5_server,
+    ) as conn:
+        summary = archive_m1_by_month(
+            conn, args.mt5_symbol, args.archive_dir,
+            months_back=args.archive_months,
+            server_offset_hours=args.mt5_server_offset,
+            overwrite=args.archive_overwrite,
+        )
+        print(render_archive_summary(summary))
     return 0
 
 
 # ---------------------------------------------------------------------------
 # argparse plumbing
 # ---------------------------------------------------------------------------
+
+def _add_archive_flags(p: argparse.ArgumentParser) -> None:
+    g = p.add_argument_group("M1 archive (per-month CSV files)")
+    g.add_argument("--archive-dir", default="data",
+                   help="Directory to save per-month M1 CSV files (default: data/)")
+    g.add_argument("--archive-months", type=int, default=4,
+                   help="How many calendar months back to fetch (default: 4)")
+    g.add_argument("--archive-overwrite", action="store_true",
+                   help="Overwrite each month file with the latest fetch (default: merge, "
+                        "which is safer when MT5's history window only partially covers a month)")
 
 def _add_strategy_overrides(p: argparse.ArgumentParser) -> None:
     p.add_argument("--initial-capital", type=float, default=DEFAULT_CONFIG.initial_capital)
@@ -109,6 +219,22 @@ def _config_from_args(args: argparse.Namespace) -> StrategyConfig:
     )
 
 
+def _add_mt5_flags(p: argparse.ArgumentParser) -> None:
+    g = p.add_argument_group("MT5 connection")
+    g.add_argument("--mt5-symbol", default="XAUUSD",
+                   help="Symbol name in MT5 Market Watch (e.g. XAUUSD, XAUUSD.r, GOLD)")
+    g.add_argument("--mt5-server-offset", type=int, default=3,
+                   help="Broker server timezone offset from UTC. Most XAUUSD brokers use 3.")
+    g.add_argument("--mt5-history-bars", type=int, default=5_000,
+                   help="How many M1 bars of history to make available for replay")
+    g.add_argument("--mt5-path", default=None,
+                   help="Optional path to terminal64.exe (defaults to MT5 auto-detect)")
+    g.add_argument("--mt5-login", type=int, default=None,
+                   help="Optional login. If omitted, uses currently logged-in terminal session.")
+    g.add_argument("--mt5-password", default=None)
+    g.add_argument("--mt5-server", default=None)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="xauusd",
                                 description="XAUUSD validated-strategy backtest and live decision engine")
@@ -127,14 +253,31 @@ def build_parser() -> argparse.ArgumentParser:
                      help='Signal line, e.g. "1. BUY XAUUSD 4543 - 4541 SL 4536 TP1 4551 TP2 4561 TP3 4576 2:02 PM"')
     pd_.add_argument("--signal-date", required=True, help="ISO date of the signal, e.g. 2026-05-05")
     pd_.add_argument("--signal-tz", type=int, required=True, help="GMT offset of signal clock time, e.g. 7")
-    pd_.add_argument("--charts", required=True, nargs="+", help="MT5 M1 CSV files (chart up to 'now')")
+    src = pd_.add_argument_group("Chart source (pick one)")
+    src.add_argument("--charts", nargs="+", default=None, help="MT5 M1 CSV files")
+    src.add_argument("--mt5", action="store_true", help="Use live MT5 chart instead of CSV")
     pd_.add_argument("--equity", type=float, default=DEFAULT_CONFIG.initial_capital)
+    pd_.add_argument("--equity-from-mt5", action="store_true",
+                     help="Use account equity from MT5 (overrides --equity). Requires --mt5.")
     pd_.add_argument("--positions-json", default=None,
                      help='Optional JSON file: list of {"signal": "...", "date": "YYYY-MM-DD", "tz": 7, "equity_at_open": 1000}')
     pd_.add_argument("--now", default=None,
                      help='Override "now" timestamp in chart timezone (GMT+3), e.g. "2026-05-05 18:00". Default: last chart bar.')
+    pd_.add_argument("--no-archive", action="store_true",
+                     help="Skip auto-archiving M1 to per-month CSVs when using --mt5")
     _add_strategy_overrides(pd_)
+    _add_mt5_flags(pd_)
+    _add_archive_flags(pd_)
     pd_.set_defaults(func=cmd_decide)
+
+    pm = sub.add_parser("mt5-info", help="Test MT5 connection: print latest bar, equity, open positions")
+    _add_mt5_flags(pm)
+    pm.set_defaults(func=cmd_mt5_info)
+
+    pf = sub.add_parser("fetch", help="Pull M1 from MT5 and save to per-month CSVs (no decision)")
+    _add_mt5_flags(pf)
+    _add_archive_flags(pf)
+    pf.set_defaults(func=cmd_fetch)
 
     return p
 

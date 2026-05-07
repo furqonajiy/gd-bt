@@ -60,7 +60,11 @@ pip install -r requirements.txt
 ## Run a backtest
 
 ```bash
-python -m xauusd_trading.cli backtest --signals xauusd_signals_corrected_all.txt --charts XAUUSD_M1_202601221044_202604302359.csv XAUUSD_M1_202605010100_202605052359.csv --output-dir backtest_output
+python -m xauusd_trading.cli backtest \
+  --signals xauusd_signals_corrected_all.txt \
+  --charts XAUUSD_M1_202601221044_202604302359.csv \
+           XAUUSD_M1_202605010100_202605052359.csv \
+  --output-dir backtest_output
 ```
 
 ## Run live decide on one signal
@@ -167,13 +171,28 @@ print(render_report(recommendation))
 
 ## Future: MT5 integration
 
-When you're ready to pull state directly from MT5, write two adapters
-satisfying the abstract interfaces in `adapters.py`:
+Live MT5 chart and equity are wired up. See **`MT5_SETUP.md`** for a step-
+by-step guide. Quick version:
 
-- `Mt5ChartSource(ChartSource)` — `latest`, `bars_between`, `first_time`, `last_time`
-- `Mt5PositionSource(PositionSource)` — `open_positions`, `equity`
+```powershell
+pip install MetaTrader5
 
-Drop them in. No engine code or backtest code changes.
+# Test connection
+python -m xauusd_trading.cli mt5-info --mt5-symbol XAUUSD
+
+# Run decide against live MT5 data
+python -m xauusd_trading.cli decide ^
+  --signal "1. BUY XAUUSD ..." --signal-date 2026-05-07 --signal-tz 7 ^
+  --mt5 --equity-from-mt5 ^
+  --positions-json positions.json
+```
+
+Auto-detecting open positions from MT5 is intentionally not done — MT5
+doesn't preserve the signal context (TP1/2/3, range, issue time) the engine
+needs. Maintain `positions.json` with currently-active signals and the
+engine reconstructs state by replaying them against the live chart.
+
+For broker-specific symbol or timezone tweaks, see `MT5_SETUP.md`.
 
 ## What this engine does NOT do
 
