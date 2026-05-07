@@ -16,7 +16,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def test_backtest_matches_validated_baseline():
-    signals = parse_signals_file(REPO / "xauusd_signals_corrected_all.txt")
+    signals = parse_signals_file(REPO / "signals.txt")
     chart = CsvChartSource([
         REPO / "XAUUSD_M1_202601221044_202604302359.csv",
         REPO / "XAUUSD_M1_202605010100_202605052359.csv",

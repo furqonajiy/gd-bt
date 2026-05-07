@@ -61,7 +61,7 @@ pip install -r requirements.txt
 
 ```bash
 python -m xauusd_trading.cli backtest \
-  --signals xauusd_signals_corrected_all.txt \
+  --signals signals.txt \
   --charts XAUUSD_M1_202601221044_202604302359.csv \
            XAUUSD_M1_202605010100_202605052359.csv \
   --output-dir backtest_output
@@ -71,7 +71,7 @@ python -m xauusd_trading.cli backtest \
 
 ```bash
 python -m xauusd_trading.cli decide \
-  --signal "1. BUY XAUUSD 4543 - 4541 SL 4536 TP1 4551 TP2 4561 TP3 4576 2:02 PM" \
+  --signal "6. BUY XAUUSD 4717 - 4715 SL 4710 TP1 4725 TP2 4735 TP3 4750 6:24 PM" \
   --signal-date 2026-05-05 \
   --signal-tz 7 \
   --charts XAUUSD_M1_202605010100_202605052359.csv \
