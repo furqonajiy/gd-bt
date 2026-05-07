@@ -83,6 +83,7 @@ def run_backtest(
 
     equity = config.initial_capital
     rows: list[dict] = []
+    entry_rows: list[dict] = []
     excluded: list[dict] = []
 
     for sig in signals:
@@ -105,6 +106,45 @@ def run_backtest(
             "status": status, "pnl": pnl if status != "OPEN" else None,
             "equity_before": equity, "equity_after": equity_after,
         })
+
+        # Per-entry detail rows. One row per Entry slot (3 per signal).
+        tz_label = (f"GMT+{sig.source_tz_offset}" if sig.source_tz_offset >= 0
+                    else f"GMT{sig.source_tz_offset}")
+        for e in pos.entries:
+            entry_rows.append({
+                "global_id": sig.global_id,
+                "signal_key": sig.signal_key,
+                "signal_date": sig.source_date,
+                "signal_time_source": sig.source_time_text,
+                "source_tz": tz_label,
+                "signal_time_chart": sig.signal_time_chart,
+                "side": sig.side,
+                "range_low": sig.range_low,
+                "range_high": sig.range_high,
+                "original_SL": sig.sl,
+                "TP1": sig.tp1,
+                "TP2": sig.tp2,
+                "TP3": sig.tp3,
+                "final_target_label": config.final_target.upper(),
+                "final_target_price": pos.target_level,
+                "entry_index": e.entry_index,
+                "entry_price": e.entry_price,
+                "effective_SL": e.initial_sl,
+                "SL_distance": pos.base_stop_distance,
+                "lot": e.lot,
+                "entry_status": e.status,
+                "fill_time": e.fill_time,
+                "exit_time": e.exit_time,
+                "exit_price": e.exit_price,
+                "stop_at_exit": e.stop_at_exit,
+                "pnl": e.pnl,
+                "first_fill_time": pos.first_fill_time,
+                "time_exit_deadline": pos.time_exit_deadline,
+                "signal_status": status,
+                "equity_before": equity,
+                "equity_after": equity_after,
+            })
+
         if status != "OPEN":
             equity = equity_after
         if equity <= 0:
@@ -115,6 +155,38 @@ def run_backtest(
     no_fills = sum(1 for r in rows if r["status"] == "NO_FILL")
     open_count = sum(1 for r in rows if r["status"] == "OPEN")
     realized = sum(r["pnl"] for r in rows if r["pnl"] is not None)
+
+    # Max drawdown across the equity curve.
+    max_dd_pct = 0.0
+    peak = config.initial_capital
+    for r in rows:
+        eq = r["equity_after"]
+        if eq > peak:
+            peak = eq
+        if peak > 0:
+            dd = (eq - peak) / peak * 100.0
+            if dd < max_dd_pct:
+                max_dd_pct = dd
+
+    # Monthly breakdown bucketed by signal_time_chart (GMT+3).
+    monthly: dict[str, dict] = {}
+    status_to_key = {"WIN": "wins", "LOSS": "losses",
+                     "NO_FILL": "no_fills", "OPEN": "open"}
+    for r in rows:
+        mk = r["signal_time_chart"].strftime("%Y-%m")
+        bucket = monthly.setdefault(mk, {
+            "month": mk, "signals": 0, "wins": 0, "losses": 0,
+            "no_fills": 0, "open": 0, "pnl": 0.0, "equity_end": None,
+        })
+        bucket["signals"] += 1
+        bucket[status_to_key.get(r["status"], "no_fills")] += 1
+        if r["pnl"] is not None:
+            bucket["pnl"] += r["pnl"]
+        bucket["equity_end"] = r["equity_after"]
+    monthly_rows = sorted(monthly.values(), key=lambda b: b["month"])
+    for b in monthly_rows:
+        wl = b["wins"] + b["losses"]
+        b["win_rate_pct"] = b["wins"] / wl * 100.0 if wl else 0.0
 
     return {
         "config": asdict(config),
@@ -128,14 +200,34 @@ def run_backtest(
         "realized_pnl": realized,
         "wins": wins, "losses": losses, "no_fills": no_fills, "open": open_count,
         "win_rate_pct": wins / (wins + losses) * 100.0 if (wins + losses) else 0.0,
+        "max_drawdown_pct": max_dd_pct,
         "rows": rows,
+        "entry_rows": entry_rows,
+        "monthly": monthly_rows,
     }
 
 
 def write_backtest_outputs(result: dict, output_dir: Path) -> None:
-    """Write summary.json and signal_results.csv."""
+    """Write summary.json, signal_results.csv, entry_results.csv, and
+    backtest_results.xlsx to the output directory.
+    """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    summary = {k: v for k, v in result.items() if k != "rows"}
+
+    # Summary JSON (everything except the heavy row data).
+    summary = {k: v for k, v in result.items()
+               if k not in {"rows", "entry_rows"}}
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
+
+    # CSVs for tooling.
     pd.DataFrame(result["rows"]).to_csv(output_dir / "signal_results.csv", index=False)
+    pd.DataFrame(result["entry_rows"]).to_csv(output_dir / "entry_results.csv", index=False)
+
+    # Excel report — soft dependency.
+    try:
+        from .excel_report import write_excel_report
+        write_excel_report(result, output_dir / "backtest_results.xlsx")
+    except ImportError as e:
+        # openpyxl not installed; xlsx is optional, CSVs always written.
+        print(f"[warn] Excel output skipped: {e}. "
+              f"Install with `pip install openpyxl` to enable.")
