@@ -1,8 +1,10 @@
 """MT5 trade execution and active position management.
 
-Used by `decide --execute`. Places fresh signals as 3 LIMIT orders with SL+TP2
+Used by `decide --execute`. Places fresh signals as N LIMIT orders (where N
+is the configured entry_count) with SL and the configured final-target TP
 attached, manages the TP1-lock by modifying SL once TP1 has been touched,
-cancels expired pendings, and time-closes positions past the 90-min hold.
+cancels expired pendings, and time-closes positions past the configured
+max-hold deadline.
 
 Tagging: each signal gets a unique 31-bit magic number derived from its
 signal_key (e.g. "2026-05-07#01"), and its signal_key is written to the
@@ -216,7 +218,7 @@ class Mt5Executor:
     # ---- placement -----------------------------------------------------
 
     def place_signal(self, signal: Signal, plan: NewSignalPlan) -> ExecutionLog:
-        """Place 3 LIMIT orders with SL=effective stop and TP=final target (TP2)."""
+        """Place LIMIT orders for the planned entries, with SL and final-target TP."""
         log = ExecutionLog()
         magic = signal_to_magic(signal.signal_key)
         comment = signal.signal_key[:31]

@@ -2,9 +2,10 @@
 """
 sweep.py -- Parameter sweep for the validated XAUUSD engine.
 
-Runs every configuration through the same `advance_one_bar` simulator your
-$1,000 -> $8,748 baseline uses, so all results are honest (strict-touch
-arming, same-bar worst-case stop wins, spread-aware triggers).
+Runs every configuration through the same `advance_one_bar` simulator the
+smoke test locks (no lookahead, strict-touch arming, same-bar worst-case
+stop wins, spread-aware triggers). The current v2 baseline was selected
+from a 3-stage sweep over ~7,900 configs; you can re-tune from here.
 
 What it sweeps
 --------------
@@ -16,7 +17,7 @@ What it sweeps
 - entry_sl_gap              - $1 / $2 / $5 buffer between deepest entry
                               and the signal's SL (range_to_sl only)
 - activation_delay_minutes  - 0 / 1 / 2 / 5
-- pending_expiry_minutes    - 15 / 20 / 30 / 45
+- pending_expiry_minutes    - 20 / 30 / 60 / 120 / 240
 - max_hold_minutes          - 30 / 60 / 90 / 120 / 180
 - sl_multiplier             - 0.75 / 1.0 / 1.25 / 1.5 / 2.0
 - final_target              - TP1 / TP2 / TP3
@@ -53,7 +54,7 @@ Usage
     # Smaller / quicker grid:
     python sweep.py --signals signals.txt --charts data/*.csv \\
                     --risks 0.05 --entry-counts 3,5 \\
-                    --ladders range_to_sl --sl-gaps 1.0
+                    --ladders range_to_sl --sl-gaps 1.0,2.0
 
     # Just count combinations without running:
     python sweep.py --signals signals.txt --charts data/*.csv --dry-run
@@ -68,11 +69,9 @@ import multiprocessing as mp
 import os
 import sys
 import time
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 # Make `xauusd_trading` importable when running this file directly from the repo root.
@@ -95,81 +94,33 @@ DEFAULT_GRID: dict[str, list[Any]] = {
     "entry_ladder":             ["range_uniform", "range_to_sl"],
     "entry_sl_gap":             [1.0, 2.0],          # range_to_sl only
     "activation_delay_minutes": [0, 2],
-    "pending_expiry_minutes":   [20, 30],
+    "pending_expiry_minutes":   [60, 120, 240],
     "max_hold_minutes":         [60, 90, 120],
     "sl_multiplier":            [1.0, 1.25, 1.5],
     "final_target":             ["TP2", "TP3"],
     "lock_after_tp1":           [True],
 }
 
-# The validated baseline, always added to the run as an anchor.
+# The current v2 baseline, always added to the run as an anchor for comparison.
 BASELINE = {
     "risk_per_signal": 0.05,
     "entry_count": 3,
-    "entry_ladder": "range_uniform",
-    "entry_sl_gap": 1.0,            # ignored by range_uniform
+    "entry_ladder": "range_to_sl",
+    "entry_sl_gap": 2.0,
     "activation_delay_minutes": 0,
-    "pending_expiry_minutes": 20,
+    "pending_expiry_minutes": 240,
     "max_hold_minutes": 90,
-    "sl_multiplier": 1.25,
+    "sl_multiplier": 1.0,
     "final_target": "TP2",
     "lock_after_tp1": True,
 }
 
+# Every key in BASELINE/DEFAULT_GRID maps directly to a StrategyConfig field.
 _STRATEGY_FIELDS = {
-    "risk_per_signal", "entry_count", "activation_delay_minutes",
-    "pending_expiry_minutes", "max_hold_minutes", "sl_multiplier",
-    "final_target", "lock_after_tp1",
+    "risk_per_signal", "entry_count", "entry_ladder", "entry_sl_gap",
+    "activation_delay_minutes", "pending_expiry_minutes", "max_hold_minutes",
+    "sl_multiplier", "final_target", "lock_after_tp1",
 }
-_LADDER_FIELDS = {"entry_ladder", "entry_sl_gap"}
-
-
-# ---------------------------------------------------------------------------
-# Entry ladder generation
-# ---------------------------------------------------------------------------
-
-def make_entry_prices(
-    signal: Signal, n_entries: int, ladder: str, sl_gap: float,
-) -> list[float]:
-    """Return n_entries entry prices for one signal under the given ladder.
-
-    BUY first entry is range_high (best price), sweep down toward range_low
-    (range_uniform) or toward signal.sl + sl_gap (range_to_sl).
-    SELL is the mirror.
-    """
-    if n_entries < 1:
-        raise ValueError(f"n_entries must be >= 1, got {n_entries}")
-    if n_entries == 1:
-        return [float(signal.range_high if signal.side == "BUY" else signal.range_low)]
-
-    if ladder == "range_uniform":
-        if signal.side == "BUY":
-            return [float(x) for x in np.linspace(signal.range_high, signal.range_low, n_entries)]
-        return [float(x) for x in np.linspace(signal.range_low, signal.range_high, n_entries)]
-
-    if ladder == "range_to_sl":
-        if signal.side == "BUY":
-            far = signal.sl + sl_gap
-            # If SL is structurally inside the range (anomaly), fall back gracefully.
-            if far >= signal.range_high:
-                return [float(x) for x in np.linspace(signal.range_high, signal.range_low, n_entries)]
-            return [float(x) for x in np.linspace(signal.range_high, far, n_entries)]
-        far = signal.sl - sl_gap
-        if far <= signal.range_low:
-            return [float(x) for x in np.linspace(signal.range_low, signal.range_high, n_entries)]
-        return [float(x) for x in np.linspace(signal.range_low, far, n_entries)]
-
-    raise ValueError(f"Unknown ladder strategy: {ladder!r}")
-
-
-def retrofit_signals(
-    signals: list[Signal], n_entries: int, ladder: str, sl_gap: float,
-) -> list[Signal]:
-    """Clone the signals list with new entries computed by the ladder."""
-    return [
-        replace(s, entries=make_entry_prices(s, n_entries, ladder, sl_gap))
-        for s in signals
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -203,15 +154,17 @@ def _backtest_subset(signals: list[Signal], config: StrategyConfig) -> dict:
 
 
 def _eval_config(combo: dict) -> dict:
-    """Evaluate one configuration. Runs full-period + IS + OOS = 3 backtests."""
+    """Evaluate one configuration. Runs full-period + IS + OOS = 3 backtests.
+
+    Entry prices are computed by the engine via `compute_entries(signal, config)`,
+    so all sweep axes -- including entry_ladder and entry_sl_gap -- flow through
+    the StrategyConfig directly. No signal mutation needed.
+    """
     assert _CHART is not None and _SIGNALS is not None
 
     config = StrategyConfig(**{k: combo[k] for k in _STRATEGY_FIELDS})
-    retrofit = retrofit_signals(
-        _SIGNALS, combo["entry_count"], combo["entry_ladder"], combo["entry_sl_gap"],
-    )
 
-    full = _backtest_subset(retrofit, config)
+    full = _backtest_subset(_SIGNALS, config)
     out = dict(combo)
     out.update({
         "full_final_equity":   full["final_equity"],
@@ -226,8 +179,8 @@ def _eval_config(combo: dict) -> dict:
     })
 
     if _SPLIT_TIME is not None:
-        train = [s for s in retrofit if s.signal_time_chart < _SPLIT_TIME]
-        test  = [s for s in retrofit if s.signal_time_chart >= _SPLIT_TIME]
+        train = [s for s in _SIGNALS if s.signal_time_chart < _SPLIT_TIME]
+        test  = [s for s in _SIGNALS if s.signal_time_chart >= _SPLIT_TIME]
         is_  = _backtest_subset(train, config)
         oos  = _backtest_subset(test,  config)
         out.update({
@@ -363,7 +316,7 @@ def main() -> int:
     p.add_argument("--activation-delays", default=None,
                    help="e.g. '0,2,5' (minutes)")
     p.add_argument("--pending-expiries", default=None,
-                   help="e.g. '20,30,45' (minutes)")
+                   help="e.g. '60,120,240' (minutes)")
     p.add_argument("--max-holds", default=None,
                    help="e.g. '60,90,120' (minutes)")
     p.add_argument("--sl-multipliers", default=None,
@@ -412,12 +365,12 @@ def main() -> int:
 
     combos = expand_grid(grid)
 
-    # 2. Always include the validated baseline as anchor
+    # 2. Always include the v2 baseline as anchor
     if BASELINE not in combos:
         combos.insert(0, dict(BASELINE))
 
     print(f"Grid expands to {len(combos)} configurations "
-          f"(including the baseline anchor).")
+          f"(including the v2 baseline anchor).")
     if len(combos) > args.max_configs:
         print(f"Exceeds --max-configs {args.max_configs}; aborting.")
         print("Reduce the grid via --risks/--entry-counts/... or raise --max-configs.")
@@ -485,9 +438,9 @@ def main() -> int:
     # 8. Final reminder
     print()
     print("Reminder: every config above ran through the same advance_one_bar")
-    print("simulator that produced the validated $8,748 baseline. No lookahead,")
-    print("no marketable fills, no skipped cancellations. The OOS column is the")
-    print("number to trust if you're picking a config to actually trade.")
+    print("simulator that the smoke test locks. No lookahead, no marketable")
+    print("fills, no skipped cancellations. The OOS column is the number to")
+    print("trust if you're picking a config to actually trade.")
     return 0
 
 
