@@ -1,4 +1,4 @@
-"""Command-line interface.
+"""Command-line interface. Replaces xauusd_trading/cli.py completely.
 
 Subcommands:
     xauusd backtest   --signals SIGNALS_FILE --charts CSV [CSV ...] [--output-dir DIR]
@@ -6,6 +6,11 @@ Subcommands:
 
     xauusd decide     --signal "..." --signal-date YYYY-MM-DD --signal-tz N [--execute]
                       (default: print-only. With --execute: places + manages on MT5.)
+
+    xauusd manage     [--execute]
+                      (manage existing tracked signals only; no new signal placement.
+                       Cancels expired pendings, locks SL to TP1 after TP1 touch,
+                       time-closes positions past max-hold deadline. Run periodically.)
 
     xauusd mt5-info   diagnostic
     xauusd fetch      pull M1 to per-month CSVs (no decision)
@@ -15,6 +20,7 @@ import argparse
 import glob
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from .adapters import CsvChartSource, ManualPositionSource
@@ -115,7 +121,6 @@ def cmd_decide(args: argparse.Namespace) -> int:
             password=args.mt5_password, server=args.mt5_server,
         )
         conn.initialize()
-        # Always archive 2 months back.
         try:
             summary = archive_m1_by_month(
                 conn, args.mt5_symbol, ARCHIVE_DIR,
@@ -144,10 +149,8 @@ def cmd_decide(args: argparse.Namespace) -> int:
 
     now = None
     if args.now:
-        from datetime import datetime as _dt
-        now = _dt.fromisoformat(args.now)
+        now = datetime.fromisoformat(args.now)
 
-    # Load tracked-signal registry; replay each against the chart up to "now".
     open_positions: list = []
     registry_path = Path(args.positions_json or "positions.json")
     prior_entries: list[dict] = []
@@ -170,7 +173,6 @@ def cmd_decide(args: argparse.Namespace) -> int:
     rec = decide(signal, chart, positions, config, now=now)
     print(render_report(rec))
 
-    # ---- execute on MT5 -----------------------------------------------
     if args.execute:
         from .mt5_executor import (
             Mt5Executor, SignalRegistry, signal_to_magic,
@@ -194,17 +196,14 @@ def cmd_decide(args: argparse.Namespace) -> int:
         registry = SignalRegistry(registry_path)
         log = ExecutionLog()
 
-        # Manage existing tracked positions.
         for pos in open_positions:
             mlog = executor.manage_position(pos, config, rec.generated_at)
             log.merge(mlog)
 
-        # Check for unknown MT5 objects (warn-and-proceed per spec).
         known = {signal_to_magic(p.signal.signal_key) for p in open_positions}
         known.add(signal_to_magic(signal.signal_key))
         log.warnings.extend(executor.warn_on_unknown(known))
 
-        # Place the new signal (skipped if it's already running).
         if any(p.signal.signal_key == signal.signal_key for p in open_positions):
             log.actions.append(
                 f"Signal {signal.signal_key} is already tracked; managed above."
@@ -215,7 +214,6 @@ def cmd_decide(args: argparse.Namespace) -> int:
             if plog.placed > 0:
                 registry.add(signal, equity)
 
-        # Auto-prune registry: drop entries whose magic has zero MT5 footprint.
         alive = executor.all_alive_magics()
         removed = registry.prune(alive)
         if removed:
@@ -229,6 +227,194 @@ def cmd_decide(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# subcommand: manage  (NEW)
+# ---------------------------------------------------------------------------
+
+def _format_position_status(pos, now: datetime) -> str:
+    """Human-readable one-position summary for the manage subcommand."""
+    s = pos.signal
+    lines: list[str] = []
+
+    if not pos.filled_entries():
+        stage = "Pending (no fills yet)"
+    elif pos.stage >= 1:
+        stage = "Stage 2 (TP1 touched -- SL locked at TP1)"
+    else:
+        stage = "Stage 1 (initial SL active)"
+
+    lines.append(
+        f"  {s.signal_key}  {s.side} {s.r1:g}-{s.r2:g}  "
+        f"SL={s.sl:g} TP1={s.tp1:g} TP2={s.tp2:g} TP3={s.tp3:g}"
+    )
+    lines.append(f"    Issued:        {s.signal_time_chart}  GMT+3")
+    lines.append(f"    Pending until: {pos.expiry_time}  GMT+3")
+    lines.append(f"    Stage:         {stage}")
+
+    if pos.first_fill_time is not None:
+        lines.append(f"    First fill:    {pos.first_fill_time}  GMT+3")
+    if pos.time_exit_deadline is not None:
+        delta_min = (pos.time_exit_deadline - now).total_seconds() / 60.0
+        countdown = (
+            f"({delta_min:+.0f} min)" if delta_min > 0 else
+            f"(deadline passed by {-delta_min:.0f} min -- will close on next manage)"
+        )
+        lines.append(f"    Time-exit at:  {pos.time_exit_deadline}  GMT+3  {countdown}")
+
+    for e in pos.entries:
+        if e.status == "OPEN":
+            lines.append(f"    #{e.entry_index}  ({e.entry_price:g})  OPEN     lot={e.lot:.2f}")
+        elif e.status == "PENDING":
+            lines.append(f"    #{e.entry_index}  ({e.entry_price:g})  PENDING  lot={e.lot:.2f}  (limit waiting)")
+        elif e.status == "NO_FILL":
+            lines.append(f"    #{e.entry_index}  ({e.entry_price:g})  NO_FILL")
+        else:  # SL / TP1 / TP2 / TP3 / LOCK_TP1 / TIME_EXIT
+            pnl_str = f"${e.pnl:+.2f}" if e.pnl is not None else "-"
+            exit_str = f"@ {e.exit_price:g}" if e.exit_price is not None else "-"
+            lines.append(f"    #{e.entry_index}  ({e.entry_price:g})  {e.status} {exit_str}  pnl={pnl_str}")
+
+    realized = pos.realized_pnl()
+    lines.append(f"    Realized P&L:  ${realized:+.2f}")
+    return "\n".join(lines)
+
+
+def cmd_manage(args: argparse.Namespace) -> int:
+    """Manage existing tracked signals on MT5; do NOT place anything new.
+
+    Reads positions.json, replays each tracked signal against the live MT5
+    chart up to "now", and (with --execute) applies engine-driven changes:
+      - Cancel pending orders that have expired (older than pending_expiry_minutes)
+      - Lock SL to TP1 once TP1 has been touched on a filled entry
+      - Time-close positions whose first fill is older than max_hold_minutes
+
+    Without --execute, prints status only (safe to run any time).
+
+    Suggested cadence: every 1-5 minutes via Task Scheduler / cron.
+    """
+    config = _config_from_args(args)
+    from .signal import parse_one_signal
+    from .positions import open_position, advance_bars
+    from .mt5_adapter import (
+        Mt5ChartSource, Mt5Connection, mt5_equity,
+        archive_m1_by_month, render_archive_summary,
+    )
+
+    conn = Mt5Connection(
+        path=args.mt5_path, login=args.mt5_login,
+        password=args.mt5_password, server=args.mt5_server,
+    )
+    conn.initialize()
+
+    try:
+        summary = archive_m1_by_month(
+            conn, args.mt5_symbol, ARCHIVE_DIR,
+            months_back=ARCHIVE_MONTHS,
+            server_offset_hours=args.mt5_server_offset,
+            overwrite=False,
+        )
+        print(render_archive_summary(summary))
+        print()
+    except Exception as e:
+        print(f"[mt5] archive failed (continuing): {e}", file=sys.stderr)
+
+    chart = Mt5ChartSource(
+        conn, symbol=args.mt5_symbol,
+        server_offset_hours=args.mt5_server_offset,
+        history_bars=args.mt5_history_bars,
+    )
+
+    try:
+        equity = mt5_equity(conn)
+    except Exception as e:
+        print(f"[mt5] account_info() failed: {e}", file=sys.stderr)
+        conn.shutdown()
+        return 2
+
+    registry_path = Path(args.positions_json or "positions.json")
+    if not registry_path.exists():
+        print(f"No registry file at {registry_path.resolve()}; nothing to manage.")
+        conn.shutdown()
+        return 0
+
+    try:
+        prior_entries = json.loads(registry_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"Could not read {registry_path}: {e}", file=sys.stderr)
+        conn.shutdown()
+        return 2
+
+    if not prior_entries:
+        print(f"{registry_path.name} is empty; nothing to manage.")
+        conn.shutdown()
+        return 0
+
+    replay_end = chart.last_time()
+    if replay_end is None:
+        print("[mt5] no chart data available; aborting.", file=sys.stderr)
+        conn.shutdown()
+        return 2
+
+    open_positions = []
+    for item in prior_entries:
+        psig = parse_one_signal(item["signal"], item["date"], int(item["tz"]))
+        equity_at_open = float(item.get("equity_at_open", equity))
+        pos = open_position(psig, equity_at_open, config)
+        advance_bars(pos, chart.bars_between(pos.activation_time, replay_end), config)
+        open_positions.append(pos)
+
+    print("=" * 70)
+    print("XAUUSD POSITION MANAGEMENT")
+    print(f"Chart time:      {replay_end}  GMT+3")
+    print(f"Account equity:  ${equity:,.2f}")
+    print(f"Tracked signals: {len(open_positions)}")
+    print("=" * 70)
+    for pos in open_positions:
+        print(_format_position_status(pos, replay_end))
+        print()
+
+    if args.execute:
+        from .mt5_executor import (
+            Mt5Executor, SignalRegistry, signal_to_magic,
+            render_execution_log, ExecutionLog,
+        )
+
+        executor = Mt5Executor(
+            conn, args.mt5_symbol,
+            min_lot=config.minimum_lot or 0.01,
+            lot_step=config.lot_step or 0.01,
+        )
+
+        errors = executor.sanity_checks(expected_equity=equity)
+        if errors:
+            print("SANITY CHECKS FAILED -- aborting execution:")
+            for e in errors:
+                print(f"  ! {e}")
+            conn.shutdown()
+            return 2
+
+        registry = SignalRegistry(registry_path)
+        log = ExecutionLog()
+
+        for pos in open_positions:
+            mlog = executor.manage_position(pos, config, replay_end)
+            log.merge(mlog)
+
+        known = {signal_to_magic(p.signal.signal_key) for p in open_positions}
+        log.warnings.extend(executor.warn_on_unknown(known))
+
+        alive = executor.all_alive_magics()
+        removed = registry.prune(alive)
+        if removed:
+            log.actions.append(f"Pruned {removed} closed signal(s) from {registry_path.name}")
+
+        print(render_execution_log(log))
+    else:
+        print("(read-only -- pass --execute to apply changes to MT5)")
+
+    conn.shutdown()
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # subcommand: mt5-info
 # ---------------------------------------------------------------------------
 
@@ -237,8 +423,8 @@ def cmd_mt5_info(args: argparse.Namespace) -> int:
         Mt5ChartSource, Mt5Connection, mt5_equity, mt5_open_positions_summary,
     )
     with Mt5Connection(
-        path=args.mt5_path, login=args.mt5_login,
-        password=args.mt5_password, server=args.mt5_server,
+            path=args.mt5_path, login=args.mt5_login,
+            password=args.mt5_password, server=args.mt5_server,
     ) as conn:
         chart = Mt5ChartSource(
             conn, symbol=args.mt5_symbol,
@@ -271,8 +457,8 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         Mt5Connection, archive_m1_by_month, render_archive_summary,
     )
     with Mt5Connection(
-        path=args.mt5_path, login=args.mt5_login,
-        password=args.mt5_password, server=args.mt5_server,
+            path=args.mt5_path, login=args.mt5_login,
+            password=args.mt5_password, server=args.mt5_server,
     ) as conn:
         summary = archive_m1_by_month(
             conn, args.mt5_symbol, ARCHIVE_DIR,
@@ -351,6 +537,18 @@ def build_parser() -> argparse.ArgumentParser:
     _add_strategy_overrides(pd_)
     _add_mt5_flags(pd_)
     pd_.set_defaults(func=cmd_decide)
+
+    # NEW: manage subcommand
+    pmg = sub.add_parser("manage",
+                         help="Manage tracked signals: lock SL to TP1, cancel expired pendings, time-close positions. "
+                              "Run periodically. Without --execute prints status only.")
+    pmg.add_argument("--positions-json", default=None,
+                     help="Tracked-signal registry (default: positions.json)")
+    pmg.add_argument("--execute", action="store_true",
+                     help="Apply changes to MT5. Without this flag, prints status only.")
+    _add_strategy_overrides(pmg)
+    _add_mt5_flags(pmg)
+    pmg.set_defaults(func=cmd_manage)
 
     pm = sub.add_parser("mt5-info", help="Diagnostic: latest bar, equity, open MT5 objects")
     _add_mt5_flags(pm)
