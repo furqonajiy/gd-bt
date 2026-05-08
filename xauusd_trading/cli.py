@@ -291,7 +291,13 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 def _add_strategy_overrides(p: argparse.ArgumentParser) -> None:
     p.add_argument("--initial-capital", type=float, default=DEFAULT_CONFIG.initial_capital)
     p.add_argument("--risk", type=float, default=DEFAULT_CONFIG.risk_per_signal)
-    p.add_argument("--entries", type=int, default=DEFAULT_CONFIG.entry_count, choices=[1, 2, 3])
+    p.add_argument("--entries", type=int, default=DEFAULT_CONFIG.entry_count,
+                   help="Number of entry slots per signal (>=1). Default uses validated config.")
+    p.add_argument("--entry-ladder", default=DEFAULT_CONFIG.entry_ladder,
+                   choices=["range_uniform", "range_to_sl"],
+                   help="How to space entries: within the signal range or extended toward SL.")
+    p.add_argument("--entry-sl-gap", type=float, default=DEFAULT_CONFIG.entry_sl_gap,
+                   help="Dollars between deepest entry and signal SL (range_to_sl only).")
 
 
 def _config_from_args(args: argparse.Namespace) -> StrategyConfig:
@@ -299,6 +305,8 @@ def _config_from_args(args: argparse.Namespace) -> StrategyConfig:
         initial_capital=getattr(args, "initial_capital", DEFAULT_CONFIG.initial_capital),
         risk_per_signal=getattr(args, "risk", DEFAULT_CONFIG.risk_per_signal),
         entry_count=getattr(args, "entries", DEFAULT_CONFIG.entry_count),
+        entry_ladder=getattr(args, "entry_ladder", DEFAULT_CONFIG.entry_ladder),
+        entry_sl_gap=getattr(args, "entry_sl_gap", DEFAULT_CONFIG.entry_sl_gap),
     )
 
 

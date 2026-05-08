@@ -1,8 +1,8 @@
 """Position lifecycle.
 
-A Position wraps one Signal and its three Entry slots. State is advanced bar
-by bar via `advance_one_bar`, which mirrors the validated backtest logic
-exactly:
+A Position wraps one Signal and its entry slots (count driven by config).
+State is advanced bar by bar via `advance_one_bar`, which mirrors the
+validated backtest logic exactly:
 
     1. Try fills on PENDING entries during the pending window using the
        strict-touch arming rule (no marketable / no stale fills).
@@ -11,8 +11,8 @@ exactly:
        priority (stop wins when both trigger).
     4. If TP1 was touched while at least one entry is OPEN, lock to stage 1
        (remaining and any future late-fill stops move to TP1).
-    5. After 90 minutes from first fill, time-exit any still-OPEN entries at
-       bar close.
+    5. After max_hold_minutes from first fill, time-exit any still-OPEN
+       entries at bar close.
 
 This module is the only place that owns these state transitions. The engine
 and backtest runner both call it.
@@ -25,7 +25,7 @@ from typing import Optional
 
 from .chart import Bar
 from .config import CONTRACT_SIZE_OZ, StrategyConfig
-from .signal import Signal
+from .signal import Signal, compute_entries
 from .triggers import (
     fill_trigger, initial_stop_for_entry, stop_trigger, target_trigger,
 )
@@ -41,7 +41,7 @@ TERMINAL = {"NO_FILL", "SL", "LOCK_TP1", "TP1", "TP2", "TP3", "TIME_EXIT"}
 
 @dataclass
 class Entry:
-    """One of the 3 entry slots of a Position."""
+    """One entry slot of a Position."""
     entry_index: int
     entry_price: float
     initial_sl: float            # planned SL applied while position is in stage 0
@@ -112,6 +112,7 @@ def compute_lot(
 ) -> tuple[float, float]:
     """Return (lot_per_entry, base_stop_distance).
 
+    Entries are computed from (signal, config) via compute_entries().
     All entries get the same lot, sized so total initial-SL price-risk across
     all planned entries equals risk_per_signal x equity, then floored to the
     broker lot step and clamped to the broker minimum.
@@ -123,7 +124,10 @@ def compute_lot(
 
     Realized loss can be smaller if not all entries fill before SL.
     """
-    entries = signal.entries[:config.entry_count]
+    entries = compute_entries(signal, config)
+    if not entries:
+        return 0.0, 0.0
+
     first = entries[0]
     raw_distance = first - signal.sl if signal.side == "BUY" else signal.sl - first
     base_stop_distance = raw_distance * config.sl_multiplier
@@ -161,7 +165,7 @@ def open_position(
 ) -> Position:
     """Create a fresh Position with PENDING entries from a Signal."""
     lot, base_stop_distance = compute_lot(equity, signal, config, contract_size)
-    entries_prices = signal.entries[:config.entry_count]
+    entries_prices = compute_entries(signal, config)
     entries = [
         Entry(
             entry_index=i, entry_price=p,
@@ -265,7 +269,7 @@ def advance_one_bar(
         if config.lock_after_tp1 and position.stage == 0 and tp1_hit:
             position.stage = 1
 
-    # 5. Time exit: at first bar at/after the 90-min deadline, close at close.
+    # 5. Time exit: at first bar at/after the deadline, close at close.
     if position.time_exit_deadline is not None and bar.time >= position.time_exit_deadline:
         for e in position.entries:
             if e.status == "OPEN":

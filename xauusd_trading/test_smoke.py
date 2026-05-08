@@ -1,14 +1,17 @@
-"""Smoke test: backtest must reproduce the re-validated April-2026 baseline.
+"""Smoke test: backtest must reproduce the v2 tuned baseline on April 2026.
 
 Run from repo root:
     python -m pytest tests/ -s
 
-Re-validation flow (one-time, after data refresh):
+Re-validation flow (one-time, after data refresh OR config change):
     1. Make sure data/XAUUSD_M1_202604.csv is in place.
     2. Run:   python -m pytest tests/test_smoke.py -s
        The test will fail and print the actual numbers under "Actuals:".
     3. Paste those numbers into the EXPECTED dict below.
     4. Re-run pytest; it should now pass and stay locked.
+
+After the v2 retune (May 2026), this file's EXPECTED dict was reset to
+None placeholders. Run pytest, paste the actuals, and lock.
 """
 from __future__ import annotations
 import math
@@ -23,7 +26,7 @@ CHART_FILE = REPO / "data" / "XAUUSD_M1_202604.csv"
 
 
 # ============================================================================
-# RE-VALIDATED BASELINE — April 2026 only
+# V2 BASELINE -- April 2026 only, tuned config from May-2026 sweep.
 # Replace the placeholders below after the first run. See module docstring.
 # ============================================================================
 EXPECTED = {
@@ -35,7 +38,6 @@ EXPECTED = {
     'signals_included': 232,
     'win_rate_pct': 67.2514619883041
 }
-
 
 def test_backtest_matches_validated_baseline():
     assert CHART_FILE.exists(), (

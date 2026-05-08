@@ -5,7 +5,7 @@ Public entry points:
     from xauusd_trading import (
         decide, render_report, run_backtest,
         DEFAULT_CONFIG, StrategyConfig,
-        Signal, parse_signals_file, parse_one_signal,
+        Signal, parse_signals_file, parse_one_signal, compute_entries,
         CsvChartSource, ManualPositionSource,
     )
 
@@ -14,7 +14,7 @@ backtest runner and the live decision engine, so behavior is guaranteed
 identical.
 """
 from .config import DEFAULT_CONFIG, StrategyConfig
-from .signal import Signal, parse_signals_file, parse_one_signal
+from .signal import Signal, parse_signals_file, parse_one_signal, compute_entries
 from .chart import Bar
 from .adapters import (
     ChartSource, CsvChartSource,
@@ -42,7 +42,7 @@ except Exception:
 
 __all__ = [
     "DEFAULT_CONFIG", "StrategyConfig",
-    "Signal", "parse_signals_file", "parse_one_signal", "Bar",
+    "Signal", "parse_signals_file", "parse_one_signal", "compute_entries", "Bar",
     "ChartSource", "CsvChartSource", "PositionSource", "ManualPositionSource",
     "Entry", "Position", "open_position", "advance_one_bar", "advance_bars",
     "decide", "render_report",

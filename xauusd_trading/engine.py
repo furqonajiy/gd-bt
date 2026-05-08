@@ -16,7 +16,7 @@ The engine deliberately adds no overlay logic (no skip / switch / hedge /
 take-profit-early on existing positions). Those decisions belong to the
 strategy itself: SL, SP, TP, and time exit. Adding cross-signal rules
 without re-validating against the backtest would risk degrading the
-61% / ~8.7x result. Such overlays can be layered on later if backtested.
+validated result. Such overlays can be layered on later if backtested.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -28,7 +28,7 @@ from .config import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
 from .positions import (
     Entry, Position, advance_bars, compute_lot, open_position,
 )
-from .signal import Signal
+from .signal import Signal, compute_entries
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +163,7 @@ def _build_new_signal_plan(
     lot, base_stop_distance = compute_lot(equity, signal, config, contract_size)
     orders: list[PlannedOrder] = []
     side = signal.side
-    for idx, ep in enumerate(signal.entries[:config.entry_count]):
+    for idx, ep in enumerate(compute_entries(signal, config)):
         sl = ep - base_stop_distance if side == "BUY" else ep + base_stop_distance
         risk_dollars = abs(ep - sl) * lot * contract_size
         orders.append(PlannedOrder(
@@ -178,7 +178,7 @@ def _build_new_signal_plan(
 
     rationale = (
         f"Strategy follows every signal. "
-        f"3 limits @ {', '.join(f'{o.entry_price:g}' for o in orders)}, "
+        f"{config.entry_count} limits @ {', '.join(f'{o.entry_price:g}' for o in orders)}, "
         f"effective SL distance ${base_stop_distance:.2f}, "
         f"final target {final_target} = {target_price:g}, "
         f"lock to TP1 after first TP1 touch, "
