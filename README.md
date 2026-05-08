@@ -10,30 +10,30 @@ These values produced the v2 backtest result. Touching them changes
 behavior and invalidates `tests/test_smoke.py`. Re-run the parameter sweep
 and re-lock the smoke test before deploying any change.
 
-| Parameter | Value |
-|---|---|
-| Initial capital | $1,000 |
-| Risk per signal | 5% of current equity |
-| Entries per signal | 3 limit orders |
-| Entry ladder | `range_to_sl` with $2 gap to signal SL |
-| Activation delay | 0 minutes |
-| Pending expiry | 240 minutes (4-hour fill window) |
-| Max hold | 90 minutes after first fill |
-| Initial SL | 1.0× raw first-entry-to-SL distance |
-| Final target | TP2 |
-| Stop lock | After TP1 touched, remaining stops move to TP1 |
-| Fill mode | Strict touch-only with arming |
-| Sizing | All entries same lot, total initial-SL price-risk = 5% × equity |
+| Parameter          | Value                                                           |
+|--------------------|-----------------------------------------------------------------|
+| Initial capital    | $1,000                                                          |
+| Risk per signal    | 5% of current equity                                            |
+| Entries per signal | 3 limit orders                                                  |
+| Entry ladder       | `range_to_sl` with $2 gap to signal SL                          |
+| Activation delay   | 0 minutes                                                       |
+| Pending expiry     | 240 minutes (4-hour fill window)                                |
+| Max hold           | 90 minutes after first fill                                     |
+| Initial SL         | 1.0× raw first-entry-to-SL distance                             |
+| Final target       | TP2                                                             |
+| Stop lock          | After TP1 touched, remaining stops move to TP1                  |
+| Fill mode          | Strict touch-only with arming                                   |
+| Sizing             | All entries same lot, total initial-SL price-risk = 5% × equity |
 
 Backtest performance on broker M1 data (Jan 22 – May 7, 2026):
 
-| Metric | Value |
-|---|---|
-| Full period | ~$1.13M |
-| In-sample (Jan–Mar) | ~$13,854 |
-| Out-of-sample (Apr–May) | ~$66,797 |
-| Max drawdown | -42.8% |
-| Win rate | 55.9% |
+| Metric                    | Value                                        |
+|---------------------------|----------------------------------------------|
+| Full period               | ~$1.13M                                      |
+| In-sample (Jan–Mar)       | ~$13,854                                     |
+| Out-of-sample (Apr–May)   | ~$66,797                                     |
+| Max drawdown              | -42.8%                                       |
+| Win rate                  | 55.9%                                        |
 | April-only smoke baseline | $50,493.01 (locked in `tests/test_smoke.py`) |
 
 **Forward expectation:** the headline figures reflect the favorable Apr–May
