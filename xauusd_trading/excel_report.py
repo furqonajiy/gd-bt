@@ -1,9 +1,12 @@
 """Excel report writer for backtest results.
 
-Two sheets:
+Three sheets:
 
-  Sheet 1 "Summary" -- config, overall stats, monthly breakdown.
-  Sheet 2 "Per-Entry Detail" -- one row per Entry slot (3 per signal),
+  Sheet 1 "Summary"          -- config, overall stats, monthly breakdown
+                                (now with a P&L % column).
+  Sheet 2 "Daily Breakdown"  -- one row per calendar day in the chart range
+                                (zero-activity days included), with P&L %.
+  Sheet 3 "Per-Entry Detail" -- one row per Entry slot (3 per signal),
                                 color-coded by outcome.
 
 Soft dependency on openpyxl. Importing this module raises ImportError if
@@ -25,7 +28,6 @@ from openpyxl.worksheet.worksheet import Worksheet
 # styling
 # ---------------------------------------------------------------------------
 
-# Excel-style conditional-formatting palette.
 HEADER_FILL = PatternFill("solid", fgColor="305496")
 HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
 SUBHEADER_FILL = PatternFill("solid", fgColor="D9E1F2")
@@ -48,6 +50,11 @@ STATUS_FILL = {
     "TIME_EXIT": PatternFill("solid", fgColor="FFEB9C"),
     "PENDING":   PatternFill("solid", fgColor="EAEAEA"),
 }
+
+# Lighter gray for "no signals on this day" rows in the Daily sheet -- visually
+# distinct from the NO_FILL gray used elsewhere so a quiet day doesn't look
+# like a failed entry.
+QUIET_DAY_FILL = PatternFill("solid", fgColor="F5F5F5")
 
 THIN = Side(border_style="thin", color="BFBFBF")
 GRID = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
@@ -89,12 +96,16 @@ def _write_header(ws: Worksheet, row: int, columns: list[str]) -> None:
         cell.border = GRID
 
 
+def _apply_row_fill(ws: Worksheet, row: int, ncols: int, fill: PatternFill) -> None:
+    for c in range(1, ncols + 1):
+        ws.cell(row=row, column=c).fill = fill
+
+
 def _apply_status_fill(ws: Worksheet, row: int, ncols: int, status: str) -> None:
     fill = STATUS_FILL.get(status)
     if fill is None:
         return
-    for c in range(1, ncols + 1):
-        ws.cell(row=row, column=c).fill = fill
+    _apply_row_fill(ws, row, ncols, fill)
 
 
 # ---------------------------------------------------------------------------
@@ -172,12 +183,15 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
     row += 1
     ws.cell(row=row, column=1, value="Monthly Breakdown").font = SUBHEADER_FONT
     ws.cell(row=row, column=1).fill = SUBHEADER_FILL
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+    # Subheader spans the 9 data columns now (added "P&L %").
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
     row += 1
     headers = ["Month", "Signals", "Wins", "Losses", "No-fills",
-               "Win rate", "P&L", "Equity end-of-month"]
+               "Win rate", "P&L", "P&L %", "Equity end-of-month"]
     _write_header(ws, row, headers)
     row += 1
+
+    money_fmt = '"$"#,##0.00;[Red]-"$"#,##0.00'
 
     monthly = result.get("monthly", []) or []
     for m in monthly:
@@ -189,16 +203,66 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
             m.get("no_fills"),
             f"{m.get('win_rate_pct', 0):.1f}%",
             m.get("pnl", 0.0),
+            f"{m.get('pnl_pct', 0):+.2f}%",
             m.get("equity_end"),
         ]
         for c, v in enumerate(cells, start=1):
             cell = ws.cell(row=row, column=c, value=v)
             cell.border = GRID
-            if c in (7, 8):  # P&L and equity
-                cell.number_format = '"$"#,##0.00;[Red]-"$"#,##0.00'
+            if c in (7, 9):  # P&L and Equity columns
+                cell.number_format = money_fmt
         row += 1
 
     ws.freeze_panes = "A2"
+    _autosize(ws)
+
+
+# ---------------------------------------------------------------------------
+# Daily Breakdown sheet
+# ---------------------------------------------------------------------------
+
+def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
+    ws.title = "Daily Breakdown"
+    headers = ["Date", "Signals", "Wins", "Losses", "No-fills",
+               "Win rate", "P&L", "P&L %", "Equity end-of-day"]
+    _write_header(ws, 1, headers)
+
+    money_fmt = '"$"#,##0.00;[Red]-"$"#,##0.00'
+    daily = result.get("daily", []) or []
+
+    for r_idx, d in enumerate(daily, start=2):
+        signals = d.get("signals", 0) or 0
+        pnl = d.get("pnl", 0.0) or 0.0
+
+        cells = [
+            d.get("date"),
+            signals,
+            d.get("wins", 0),
+            d.get("losses", 0),
+            d.get("no_fills", 0),
+            f"{d.get('win_rate_pct', 0):.1f}%" if signals else "-",
+            pnl,
+            f"{d.get('pnl_pct', 0):+.2f}%",
+            d.get("equity_end"),
+        ]
+        for c_idx, v in enumerate(cells, start=1):
+            cell = ws.cell(row=r_idx, column=c_idx, value=v)
+            cell.border = GRID
+            if c_idx in (7, 9):
+                cell.number_format = money_fmt
+
+        # Row coloring: gray for zero-activity days, green for net positive,
+        # red for net negative, default white for active-but-flat days.
+        if signals == 0:
+            _apply_row_fill(ws, r_idx, len(headers), QUIET_DAY_FILL)
+        elif pnl > 0:
+            _apply_row_fill(ws, r_idx, len(headers), STATUS_FILL["WIN"])
+        elif pnl < 0:
+            _apply_row_fill(ws, r_idx, len(headers), STATUS_FILL["LOSS"])
+
+    ws.freeze_panes = "A2"
+    if daily:
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(daily) + 1}"
     _autosize(ws)
 
 
@@ -277,13 +341,22 @@ def _write_entries_sheet(ws: Worksheet, result: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def write_excel_report(result: dict, output_path: Path | str) -> Path:
-    """Render the backtest result to a styled .xlsx file. Returns the path."""
+    """Render the backtest result to a styled .xlsx file. Returns the path.
+
+    Sheets, in order:
+      1. Summary           (config + overall + monthly breakdown w/ P&L %)
+      2. Daily Breakdown   (every calendar day in the chart range)
+      3. Per-Entry Detail  (one row per Entry slot, color-coded)
+    """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     wb = Workbook()
     summary_ws = wb.active
     _write_summary_sheet(summary_ws, result)
+
+    daily_ws = wb.create_sheet("Daily Breakdown")
+    _write_daily_sheet(daily_ws, result)
 
     entries_ws = wb.create_sheet("Per-Entry Detail")
     _write_entries_sheet(entries_ws, result)
