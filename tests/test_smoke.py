@@ -27,13 +27,13 @@ CHART_FILE = REPO / "data" / "XAUUSD_M1_202604.csv"
 # Replace the placeholders below after the first run. See module docstring.
 # ============================================================================
 EXPECTED = {
-    "final_equity":     None,   # TODO: paste actual after first run
-    "wins":             None,
-    "losses":           None,
-    "no_fills":         None,
-    "open":             None,
-    "signals_included": None,
-    "win_rate_pct":     None,
+    'final_equity': 50493.00999999989,
+    'wins': 115,
+    'losses': 56,
+    'no_fills': 61,
+    'open': 0,
+    'signals_included': 232,
+    'win_rate_pct': 67.2514619883041
 }
 
 

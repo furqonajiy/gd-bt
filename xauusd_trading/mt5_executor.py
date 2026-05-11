@@ -1,21 +1,33 @@
 """MT5 trade execution and active position management.
 
-Used by `decide --execute`. Places fresh signals as 3 LIMIT orders with SL+TP2
+Used by `decide --execute`. Places fresh signals as N LIMIT orders (where N
+is the configured entry_count) with SL and the configured final-target TP
 attached, manages the TP1-lock by modifying SL once TP1 has been touched,
-cancels expired pendings, and time-closes positions past the 90-min hold.
+cancels expired pendings, and time-closes positions past the configured
+max-hold deadline.
 
 Tagging: each signal gets a unique 31-bit magic number derived from its
 signal_key (e.g. "2026-05-07#01"), and its signal_key is written to the
 order/position comment so MT5 itself becomes the source of truth for "what's
 currently active". A small JSON registry (positions.json) maps magic ->
 signal text so we can replay engine state on later runs.
+
+Re-entry protection: `place_signal` consults THREE separate guards in
+ascending cost/strength order before sending any LIMITs:
+  1. positions.json membership (checked in cli.py before calling here)
+  2. find_orders / find_positions  -- magic has a current MT5 footprint
+  3. has_recent_history            -- magic was active in MT5 history recently
+
+Together they make `decide --execute` idempotent: re-running the same command
+after SL/TP/time-exit will NOT silently re-enter the same trade, regardless
+of whether positions.json was pruned in between.
 """
 from __future__ import annotations
 import hashlib
 import json
 import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +41,12 @@ from .signal import Signal
 DEFAULT_MIN_LOT = 0.01
 DEFAULT_LOT_STEP = 0.01
 DEFAULT_REGISTRY = "positions.json"
+# Lookback for re-entry protection. The validated strategy's worst-case
+# signal lifetime is pending_expiry (240 min) + max_hold (90 min) = 5.5h.
+# 12h gives generous headroom while staying safely under the "next trading
+# day" boundary -- signal_keys are date-stamped, so tomorrow's #08 has a
+# different magic from today's #08 and this guard won't false-trigger.
+HISTORY_LOOKBACK_HOURS = 12
 
 
 def signal_to_magic(signal_key: str) -> int:
@@ -213,18 +231,65 @@ class Mt5Executor:
                 )
         return warnings
 
+    def has_recent_history(
+        self, magic: int, lookback_hours: int = HISTORY_LOOKBACK_HOURS,
+    ) -> bool:
+        """True if MT5 history shows any closed orders/deals for this magic.
+
+        This is the third and strongest re-entry guard: it queries MT5's
+        order and deal history (not just currently-open objects) so it
+        catches signals that already closed via SL, TP, or time-exit even
+        after positions.json has been pruned.
+
+        Soft-fails (returns False) if the MT5 history calls error out --
+        we don't want a transient API hiccup to block legitimate placement.
+        The other two guards (positions.json + find_orders/find_positions)
+        still apply in that case.
+        """
+        try:
+            to_time = datetime.now() + timedelta(minutes=1)
+            from_time = to_time - timedelta(hours=lookback_hours)
+            orders = self.mt5.history_orders_get(from_time, to_time) or []
+            if any(getattr(o, "magic", None) == magic for o in orders):
+                return True
+            deals = self.mt5.history_deals_get(from_time, to_time) or []
+            return any(getattr(d, "magic", None) == magic for d in deals)
+        except Exception:
+            return False
+
     # ---- placement -----------------------------------------------------
 
     def place_signal(self, signal: Signal, plan: NewSignalPlan) -> ExecutionLog:
-        """Place 3 LIMIT orders with SL=effective stop and TP=final target (TP2)."""
+        """Place LIMIT orders for the planned entries, with SL and final-target TP.
+
+        Three idempotency guards run before anything is sent:
+          1. Live MT5 footprint (find_orders / find_positions)
+          2. Recent MT5 history (has_recent_history)
+        Plus the positions.json membership check that runs upstream in cli.py.
+
+        If any guard fires, we log the reason and return without placing.
+        """
         log = ExecutionLog()
         magic = signal_to_magic(signal.signal_key)
         comment = signal.signal_key[:31]
 
+        # Guard 1: currently-live orders or open positions for this magic.
         if self.find_orders(magic) or self.find_positions(magic):
             log.actions.append(
                 f"Signal {signal.signal_key} already has MT5 orders/positions; "
                 f"skipping placement (will manage instead)."
+            )
+            return log
+
+        # Guard 2: recent history for this magic (signal already closed
+        # earlier this session). Prevents re-entry after SL/TP/time-exit
+        # when positions.json has been pruned in between.
+        if self.has_recent_history(magic):
+            log.actions.append(
+                f"Signal {signal.signal_key} already has recent MT5 history "
+                f"(closed earlier within the last {HISTORY_LOOKBACK_HOURS}h); "
+                f"refusing to re-place to avoid accidental re-entry. "
+                f"If this is intentional, wait for the lookback window to clear."
             )
             return log
 

@@ -1,7 +1,11 @@
 """Signal parsing.
 
 Reads the human-format signal file and produces Signal objects with chart-time
-(GMT+3) timestamps and the 3-entry ladder pre-computed.
+(GMT+3) timestamps and the legacy 3-entry ladder pre-computed.
+
+For runtime entry generation under the active StrategyConfig, use
+`compute_entries(signal, config)` -- this lets the same parsed signal be
+evaluated with different ladder/count/gap settings without re-parsing.
 
 Signal file format:
 
@@ -9,8 +13,8 @@ Signal file format:
     1. BUY XAUUSD 4567 - 4565 SL 4560 TP1 4572 TP2 4579 TP3 4589 10:36 AM
     2. SELL XAUUSD 4600 - 4602 SL 4606 TP1 4597 TP2 4592 TP3 4585 11:04 AM
 
-Range entries follow the optimized rule: BUY range H/L -> [H, H-1, L];
-SELL range L/H -> [L, L+1, H]. Order is fill priority.
+Range entries follow the legacy 3-entry rule for parsing/validation only:
+BUY range H/L -> [H, H-1, L]; SELL range L/H -> [L, L+1, H].
 """
 from __future__ import annotations
 import math
@@ -18,9 +22,12 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from .config import CHART_TIMEZONE_OFFSET
+
+if TYPE_CHECKING:
+    from .config import StrategyConfig
 
 
 _DATE_RE = re.compile(
@@ -57,7 +64,7 @@ class Signal:
     tp1: float
     tp2: float
     tp3: float
-    entries: list[float]                 # 3 entries, fill priority order
+    entries: list[float]                 # legacy 3-entry ladder, used for validation
     anomalies: list[str] = field(default_factory=list)
     structural_anomaly: bool = False
 
@@ -74,6 +81,64 @@ class Signal:
         return min(self.r1, self.r2)
 
 
+# ---------------------------------------------------------------------------
+# entry-price generation -- config-driven, used at trade time
+# ---------------------------------------------------------------------------
+
+def _linspace(start: float, stop: float, n: int) -> list[float]:
+    """Numpy-free linspace returning Python floats."""
+    if n <= 0:
+        return []
+    if n == 1:
+        return [float(start)]
+    step = (stop - start) / (n - 1)
+    return [float(start + step * i) for i in range(n)]
+
+
+def compute_entries(signal: Signal, config: "StrategyConfig") -> list[float]:
+    """Return entry prices for one signal under the given config's ladder.
+
+    range_uniform: spread n entries evenly inside the signal's range
+        (BUY: high -> low; SELL: low -> high).
+
+    range_to_sl: spread n entries from the best price toward the signal SL,
+        leaving entry_sl_gap dollars between the deepest entry and the SL
+        (BUY: high -> sl + gap; SELL: low -> sl - gap).
+        If the gap would put the deepest entry outside the range
+        (anomalous signal, e.g. SL on wrong side), falls back to range_uniform.
+    """
+    n = config.entry_count
+    if n < 1:
+        raise ValueError(f"entry_count must be >= 1, got {n}")
+    if n == 1:
+        return [float(signal.range_high if signal.side == "BUY" else signal.range_low)]
+
+    ladder = config.entry_ladder
+    gap = config.entry_sl_gap
+
+    if ladder == "range_uniform":
+        if signal.side == "BUY":
+            return _linspace(signal.range_high, signal.range_low, n)
+        return _linspace(signal.range_low, signal.range_high, n)
+
+    if ladder == "range_to_sl":
+        if signal.side == "BUY":
+            far = signal.sl + gap
+            if far >= signal.range_high:        # SL anomaly: fall back gracefully
+                return _linspace(signal.range_high, signal.range_low, n)
+            return _linspace(signal.range_high, far, n)
+        far = signal.sl - gap
+        if far <= signal.range_low:
+            return _linspace(signal.range_low, signal.range_high, n)
+        return _linspace(signal.range_low, far, n)
+
+    raise ValueError(f"Unknown entry_ladder: {ladder!r}")
+
+
+# ---------------------------------------------------------------------------
+# legacy 3-entry rule, kept for parsing-time validation only
+# ---------------------------------------------------------------------------
+
 def _gmt_offset(sign: str, offset: str) -> int:
     n = int(offset)
     return n if sign == "+" else -n
@@ -84,6 +149,7 @@ def _to_chart_tz(dt: datetime, source_offset: int) -> datetime:
 
 
 def _entries_for(side: str, r1: float, r2: float) -> list[float]:
+    """Legacy 3-entry rule used during parsing/validation only."""
     high, low = max(r1, r2), min(r1, r2)
     return [high, high - 1.0, low] if side == "BUY" else [low, low + 1.0, high]
 

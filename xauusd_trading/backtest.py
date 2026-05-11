@@ -15,7 +15,7 @@ power both code paths.
 from __future__ import annotations
 import json
 from dataclasses import asdict
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -69,6 +69,29 @@ def position_status(pos: Position) -> tuple[str, float]:
 # ---------------------------------------------------------------------------
 # full backtest
 # ---------------------------------------------------------------------------
+
+_STATUS_TO_KEY = {"WIN": "wins", "LOSS": "losses",
+                  "NO_FILL": "no_fills", "OPEN": "open"}
+
+
+def _new_bucket(key_name: str, key_value: str, equity_start: float) -> dict:
+    """Empty period bucket (monthly or daily) with equity_start prefilled."""
+    return {
+        key_name: key_value, "signals": 0, "wins": 0, "losses": 0,
+        "no_fills": 0, "open": 0, "pnl": 0.0,
+        "equity_start": equity_start, "equity_end": equity_start,
+    }
+
+
+def _finalize_bucket(b: dict) -> None:
+    """Compute derived percentages on a bucket. Mutates in place."""
+    wl = b["wins"] + b["losses"]
+    b["win_rate_pct"] = b["wins"] / wl * 100.0 if wl else 0.0
+    if b["equity_start"] and b["equity_start"] > 0:
+        b["pnl_pct"] = b["pnl"] / b["equity_start"] * 100.0
+    else:
+        b["pnl_pct"] = 0.0
+
 
 def run_backtest(
     signals: list[Signal], chart: CsvChartSource,
@@ -168,25 +191,69 @@ def run_backtest(
             if dd < max_dd_pct:
                 max_dd_pct = dd
 
-    # Monthly breakdown bucketed by signal_time_chart (GMT+3).
+    # ------------------------------------------------------------------
+    # Monthly breakdown -- bucketed by signal_time_chart (GMT+3).
+    # equity_start = first signal's equity_before in that month
+    # equity_end   = last signal's equity_after in that month
+    # pnl_pct      = pnl / equity_start * 100  (this month's return)
+    # ------------------------------------------------------------------
     monthly: dict[str, dict] = {}
-    status_to_key = {"WIN": "wins", "LOSS": "losses",
-                     "NO_FILL": "no_fills", "OPEN": "open"}
     for r in rows:
         mk = r["signal_time_chart"].strftime("%Y-%m")
-        bucket = monthly.setdefault(mk, {
-            "month": mk, "signals": 0, "wins": 0, "losses": 0,
-            "no_fills": 0, "open": 0, "pnl": 0.0, "equity_end": None,
-        })
+        if mk not in monthly:
+            monthly[mk] = _new_bucket("month", mk, r["equity_before"])
+        bucket = monthly[mk]
         bucket["signals"] += 1
-        bucket[status_to_key.get(r["status"], "no_fills")] += 1
+        bucket[_STATUS_TO_KEY.get(r["status"], "no_fills")] += 1
         if r["pnl"] is not None:
             bucket["pnl"] += r["pnl"]
         bucket["equity_end"] = r["equity_after"]
     monthly_rows = sorted(monthly.values(), key=lambda b: b["month"])
     for b in monthly_rows:
-        wl = b["wins"] + b["losses"]
-        b["win_rate_pct"] = b["wins"] / wl * 100.0 if wl else 0.0
+        _finalize_bucket(b)
+
+    # ------------------------------------------------------------------
+    # Daily breakdown -- bucketed by signal_time_chart's date.
+    # First aggregate rows by date, then walk the full chart-range date
+    # window and fill in zero rows (carrying equity forward) for any day
+    # with no signals. This matches the user's request to "include every
+    # calendar day with zeros".
+    # ------------------------------------------------------------------
+    daily_by_key: dict[str, dict] = {}
+    for r in rows:
+        dk = r["signal_time_chart"].strftime("%Y-%m-%d")
+        if dk not in daily_by_key:
+            daily_by_key[dk] = _new_bucket("date", dk, r["equity_before"])
+        bucket = daily_by_key[dk]
+        bucket["signals"] += 1
+        bucket[_STATUS_TO_KEY.get(r["status"], "no_fills")] += 1
+        if r["pnl"] is not None:
+            bucket["pnl"] += r["pnl"]
+        bucket["equity_end"] = r["equity_after"]
+
+    daily_rows: list[dict] = []
+    if chart_start is not None and chart_end is not None:
+        cur: date = chart_start.date()
+        end_date: date = chart_end.date()
+        running_equity = config.initial_capital
+        while cur <= end_date:
+            dk = cur.strftime("%Y-%m-%d")
+            if dk in daily_by_key:
+                b = daily_by_key[dk]
+                # Trust the bucket's equity_start (first signal's equity_before
+                # that day), which equals the running_equity coming in.
+                running_equity = b["equity_end"]
+            else:
+                b = _new_bucket("date", dk, running_equity)
+                # equity_end already set to equity_start by _new_bucket
+            _finalize_bucket(b)
+            daily_rows.append(b)
+            cur += timedelta(days=1)
+    else:
+        # No chart range available -- fall back to whatever days had signals.
+        for b in sorted(daily_by_key.values(), key=lambda x: x["date"]):
+            _finalize_bucket(b)
+            daily_rows.append(b)
 
     return {
         "config": asdict(config),
@@ -204,6 +271,7 @@ def run_backtest(
         "rows": rows,
         "entry_rows": entry_rows,
         "monthly": monthly_rows,
+        "daily": daily_rows,
     }
 
 
@@ -222,8 +290,10 @@ def write_backtest_outputs(result: dict, output_dir: Path) -> None:
     # CSVs for tooling.
     pd.DataFrame(result["rows"]).to_csv(output_dir / "signal_results.csv", index=False)
     pd.DataFrame(result["entry_rows"]).to_csv(output_dir / "entry_results.csv", index=False)
+    # Daily CSV too -- handy for spreadsheets / charting tools.
+    pd.DataFrame(result.get("daily", [])).to_csv(output_dir / "daily_results.csv", index=False)
 
-    # Excel report — soft dependency.
+    # Excel report -- soft dependency.
     try:
         from .excel_report import write_excel_report
         write_excel_report(result, output_dir / "backtest_results.xlsx")
