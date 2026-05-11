@@ -4,8 +4,10 @@
 to "now", current open positions, and current equity, it returns a
 `Recommendation` describing:
 
-  - the action plan for the new signal (always FOLLOW with a concrete order
-    placement plan, since the validated strategy follows every signal), and
+  - the action plan for the new signal (FOLLOW with a concrete order
+    placement plan, or SKIP_EXPIRED when the pending window has already
+    closed -- the strategy follows every signal, but only when there's
+    still time to fill), and
   - the current state of every existing open position (stage, effective
     stop, floating P&L, time-exit countdown).
 
@@ -17,6 +19,11 @@ take-profit-early on existing positions). Those decisions belong to the
 strategy itself: SL, SP, TP, and time exit. Adding cross-signal rules
 without re-validating against the backtest would risk degrading the
 validated result. Such overlays can be layered on later if backtested.
+
+The SKIP_EXPIRED check is NOT a cross-signal overlay -- it's a per-signal
+guard against placing limit orders whose pending window has already passed
+(which would just be cancelled on the next manage cycle). It changes
+nothing about which signals the strategy would have filled in backtest.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -48,9 +55,14 @@ class PlannedOrder:
 
 @dataclass
 class NewSignalPlan:
-    """What to do about the new signal."""
+    """What to do about the new signal.
+
+    `action` is one of:
+      - "FOLLOW"       -- place the planned orders
+      - "SKIP_EXPIRED" -- pending window already closed; do nothing
+    """
     signal: Signal
-    action: str                          # "FOLLOW" (placeholder for future overlays)
+    action: str
     rationale: str
     orders: list[PlannedOrder]
     pending_expires_at: datetime
@@ -137,7 +149,9 @@ def decide(
     still_open = [p for p in open_positions if not p.is_terminal()]
 
     # --- 2. Build the plan for the new signal ---------------------------
-    plan = _build_new_signal_plan(signal, positions.equity(), config, contract_size)
+    plan = _build_new_signal_plan(
+        signal, positions.equity(), config, contract_size, now=now,
+    )
 
     # --- 3. Snapshot existing positions ---------------------------------
     last_bid = last_bar.close if last_bar is not None else None
@@ -159,6 +173,7 @@ def decide(
 
 def _build_new_signal_plan(
     signal: Signal, equity: float, config: StrategyConfig, contract_size: float,
+    now: Optional[datetime] = None,
 ) -> NewSignalPlan:
     lot, base_stop_distance = compute_lot(equity, signal, config, contract_size)
     orders: list[PlannedOrder] = []
@@ -176,16 +191,33 @@ def _build_new_signal_plan(
     expires = activation + timedelta(minutes=config.pending_expiry_minutes)
     total_risk = sum(o.risk_dollars for o in orders)
 
-    rationale = (
-        f"Strategy follows every signal. "
-        f"{config.entry_count} limits @ {', '.join(f'{o.entry_price:g}' for o in orders)}, "
-        f"effective SL distance ${base_stop_distance:.2f}, "
-        f"final target {final_target} = {target_price:g}, "
-        f"lock to TP1 after first TP1 touch, "
-        f"max hold {config.max_hold_minutes} min from first fill."
-    )
+    # SKIP_EXPIRED guard: if the pending window has already closed by the
+    # time we're deciding, don't bother placing -- the orders would just
+    # be cancelled on the next manage cycle. This avoids broker round-trips
+    # for already-stale signals (e.g. ones the user is replaying after the
+    # fact, or re-running the same decide command after the 4-hour window).
+    if now is not None and now >= expires:
+        minutes_past = (now - expires).total_seconds() / 60.0
+        action = "SKIP_EXPIRED"
+        rationale = (
+            f"Pending window already closed {minutes_past:.0f} min ago "
+            f"(expired {expires:%Y-%m-%d %H:%M} GMT+3, "
+            f"now {now:%Y-%m-%d %H:%M} GMT+3). "
+            f"No orders will be placed -- they would only be cancelled "
+            f"immediately on the next manage cycle."
+        )
+    else:
+        action = "FOLLOW"
+        rationale = (
+            f"Strategy follows every signal. "
+            f"{config.entry_count} limits @ {', '.join(f'{o.entry_price:g}' for o in orders)}, "
+            f"effective SL distance ${base_stop_distance:.2f}, "
+            f"final target {final_target} = {target_price:g}, "
+            f"lock to TP1 after first TP1 touch, "
+            f"max hold {config.max_hold_minutes} min from first fill."
+        )
     return NewSignalPlan(
-        signal=signal, action="FOLLOW", rationale=rationale, orders=orders,
+        signal=signal, action=action, rationale=rationale, orders=orders,
         pending_expires_at=expires, final_target_label=final_target,
         final_target_price=target_price, total_initial_risk_dollars=total_risk,
     )
@@ -295,29 +327,38 @@ def render_report(rec: Recommendation) -> str:
     lines.append("")
     lines.append(f"  Action: {rec.new_signal.action}")
     lines.append(f"  Reason: {rec.new_signal.rationale}")
-    lines.append("")
-    lines.append("  Orders to place:")
-    for o in rec.new_signal.orders:
+
+    # Only print the order plan when we'd actually place. For SKIP_EXPIRED
+    # the orders block is misleading since nothing will be sent to MT5.
+    if rec.new_signal.action == "FOLLOW":
+        lines.append("")
+        lines.append("  Orders to place:")
+        for o in rec.new_signal.orders:
+            lines.append(
+                f"    #{o.entry_index} {o.side} LIMIT {o.entry_price:g}   "
+                f"SL {o.initial_sl:.2f}   lot {o.lot:.2f}   "
+                f"risk {_fmt_money(-o.risk_dollars)}"
+            )
         lines.append(
-            f"    #{o.entry_index} {o.side} LIMIT {o.entry_price:g}   "
-            f"SL {o.initial_sl:.2f}   lot {o.lot:.2f}   "
-            f"risk {_fmt_money(-o.risk_dollars)}"
+            f"  Pending expires:  {_fmt_time(rec.new_signal.pending_expires_at)} GMT+3 "
+            f"({rec.config.pending_expiry_minutes} min after activation)"
         )
-    lines.append(
-        f"  Pending expires:  {_fmt_time(rec.new_signal.pending_expires_at)} GMT+3 "
-        f"({rec.config.pending_expiry_minutes} min after activation)"
-    )
-    lines.append(
-        f"  Final target:     {rec.new_signal.final_target_label} "
-        f"@ {rec.new_signal.final_target_price:g} "
-        f"(lock to TP1 after TP1 touch)"
-    )
-    lines.append(f"  Max hold:         {rec.config.max_hold_minutes} min from first fill")
-    lines.append(
-        f"  Total initial risk if all fill: "
-        f"{_fmt_money(-rec.new_signal.total_initial_risk_dollars)} "
-        f"({rec.config.risk_per_signal * 100:.1f}% of equity)"
-    )
+        lines.append(
+            f"  Final target:     {rec.new_signal.final_target_label} "
+            f"@ {rec.new_signal.final_target_price:g} "
+            f"(lock to TP1 after TP1 touch)"
+        )
+        lines.append(f"  Max hold:         {rec.config.max_hold_minutes} min from first fill")
+        lines.append(
+            f"  Total initial risk if all fill: "
+            f"{_fmt_money(-rec.new_signal.total_initial_risk_dollars)} "
+            f"({rec.config.risk_per_signal * 100:.1f}% of equity)"
+        )
+    else:
+        lines.append(
+            f"  Pending window closed at: "
+            f"{_fmt_time(rec.new_signal.pending_expires_at)} GMT+3"
+        )
 
     # Open positions ----------------------------------------------------
     lines.append("")
@@ -370,11 +411,18 @@ def render_report(rec: Recommendation) -> str:
     lines.append("-" * 70)
     total_realized = sum(p.realized_pnl for p in rec.open_positions)
     total_floating = sum(p.floating_pnl for p in rec.open_positions)
-    lines.append(
-        f"  New signal:             {rec.new_signal.action}  "
-        f"({len(rec.new_signal.orders)} orders, "
-        f"max risk {_fmt_money(-rec.new_signal.total_initial_risk_dollars)})"
-    )
+    if rec.new_signal.action == "FOLLOW":
+        new_signal_line = (
+            f"  New signal:             {rec.new_signal.action}  "
+            f"({len(rec.new_signal.orders)} orders, "
+            f"max risk {_fmt_money(-rec.new_signal.total_initial_risk_dollars)})"
+        )
+    else:
+        new_signal_line = (
+            f"  New signal:             {rec.new_signal.action}  "
+            f"(no orders placed)"
+        )
+    lines.append(new_signal_line)
     lines.append(
         f"  Existing positions:     {len(rec.open_positions)}  "
         f"realized {_fmt_money(total_realized)}  "

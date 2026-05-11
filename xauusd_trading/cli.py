@@ -5,7 +5,9 @@ Subcommands:
                       (always fetches latest 2 months of M1 from MT5 first if available)
 
     xauusd decide     --signal "..." --signal-date YYYY-MM-DD --signal-tz N [--execute]
-                      (default: print-only. With --execute: places + manages on MT5.)
+                      (default: print-only. With --execute: places + manages on MT5.
+                       If the signal's pending window has already closed by the time
+                       you run this, no orders are placed.)
 
     xauusd manage     [--execute]
                       (manage existing tracked signals only; no new signal placement.
@@ -204,9 +206,21 @@ def cmd_decide(args: argparse.Namespace) -> int:
         known.add(signal_to_magic(signal.signal_key))
         log.warnings.extend(executor.warn_on_unknown(known))
 
+        # Decide what to do with the new signal:
+        #   1. Already tracked  -> management above handled it; do not re-place.
+        #   2. Pending window already closed -> skip placement (would only be
+        #      cancelled immediately by the next manage cycle anyway).
+        #   3. Otherwise        -> place the planned orders.
         if any(p.signal.signal_key == signal.signal_key for p in open_positions):
             log.actions.append(
                 f"Signal {signal.signal_key} is already tracked; managed above."
+            )
+        elif rec.new_signal.action == "SKIP_EXPIRED":
+            log.actions.append(
+                f"Signal {signal.signal_key}: pending window already closed at "
+                f"{rec.new_signal.pending_expires_at:%Y-%m-%d %H:%M} GMT+3 "
+                f"(now {rec.generated_at:%Y-%m-%d %H:%M} GMT+3). "
+                f"Skipped placement to avoid orders that would be cancelled immediately."
             )
         else:
             plog = executor.place_signal(signal, rec.new_signal)
@@ -227,7 +241,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# subcommand: manage  (NEW)
+# subcommand: manage
 # ---------------------------------------------------------------------------
 
 def _format_position_status(pos, now: datetime) -> str:
@@ -533,12 +547,12 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Tracked-signal registry (default: positions.json, auto-managed when --execute is set)")
     pd_.add_argument("--now", default=None)
     pd_.add_argument("--execute", action="store_true",
-                     help="Place orders on MT5 directly (no confirmation prompt). Implies --mt5.")
+                     help="Place orders on MT5 directly (no confirmation prompt). Implies --mt5. "
+                          "Skips placement for signals whose pending window has already closed.")
     _add_strategy_overrides(pd_)
     _add_mt5_flags(pd_)
     pd_.set_defaults(func=cmd_decide)
 
-    # NEW: manage subcommand
     pmg = sub.add_parser("manage",
                          help="Manage tracked signals: lock SL to TP1, cancel expired pendings, time-close positions. "
                               "Run periodically. Without --execute prints status only.")
