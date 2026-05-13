@@ -12,13 +12,22 @@ Subcommands:
                        so later runs can show "X min late" and replay the actual
                        MT5 trajectory alongside the ideal one.)
 
-    xauusd manage     [--execute]
+    xauusd manage     [--execute] [--watch]
                       (manage existing tracked signals only; no new signal placement.
                        Cancels expired pendings, locks SL to TP1 after TP1 touch,
                        time-closes positions past max-hold deadline. Run periodically.
                        When a tracked signal has `executed_at` and you were late,
                        the report shows BOTH the ideal-execution replay and the
                        actual-execution replay so you can see what the lag cost.)
+
+    xauusd auto       --signals signals.txt
+                      (one-command live trading. Loops forever: reads signals.txt for
+                       new signals to execute, manages all tracked positions on each
+                       cycle. Combines `decide --execute` and `manage --watch --execute`
+                       into one workflow. Execution is implicit -- this command places
+                       real orders. Exits only on Ctrl+C. The 3-layer re-entry guard
+                       and SKIP_EXPIRED gate apply on every iteration, so re-reading
+                       signals.txt with already-processed signals is a no-op.)
 
     xauusd mt5-info   diagnostic
     xauusd fetch      pull M1 to per-month CSVs (no decision)
@@ -39,7 +48,7 @@ from .config import (
 )
 from .engine import decide, render_report
 from .positions import Position, advance_bars, open_position
-from .signal import parse_one_signal
+from .signal import parse_one_signal, parse_signals_file
 
 # Hardcoded archive policy (per project preference: minimal flags).
 ARCHIVE_DIR = "data"
@@ -90,7 +99,7 @@ def _try_archive_from_mt5(symbol: str, server_offset: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# tracked-signal replay (used by both decide and manage)
+# tracked-signal replay (used by decide, manage, and auto)
 # ---------------------------------------------------------------------------
 
 def _chart_now() -> datetime:
@@ -165,7 +174,7 @@ def _replay_tracked_signal(item: dict, chart, replay_end: datetime,
 
 
 # ---------------------------------------------------------------------------
-# manage-output formatters
+# manage/auto output formatters
 # ---------------------------------------------------------------------------
 
 def _format_lateness(executed_at: datetime, signal_time: datetime) -> str:
@@ -397,7 +406,6 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     _try_archive_from_mt5(args.mt5_symbol, args.mt5_server_offset)
 
-    from .signal import parse_signals_file
     signals = parse_signals_file(Path(args.signals))
     chart = CsvChartSource(_expand_chart_paths(args.charts))
     result = run_backtest(
@@ -592,6 +600,11 @@ def cmd_manage(args: argparse.Namespace) -> int:
     interrupts with Ctrl+C. Keeps one MT5 connection open across iterations
     to avoid the re-import / re-init / re-archive overhead of looping at the
     PowerShell level. The archive runs once at startup only.
+
+    Note: for one-command live trading (read signals.txt + execute + manage),
+    use `auto` instead. `manage --watch` is for "I'm already in trades and
+    just want to babysit them"; `auto` is for "let the system handle the
+    whole day".
     """
     config = _config_from_args(args)
 
@@ -723,8 +736,7 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
 
     # Build the executor up front -- in --execute mode it runs management
     # actions further down; in read-only mode it's used to query alive magics
-    # for the watch-mode exit check. Also used inside the rendering loop to
-    # detect missed-TP1-lock divergences per signal (see warning block below).
+    # for the watch-mode exit check.
     executor = Mt5Executor(
         conn, args.mt5_symbol,
         min_lot=config.minimum_lot or 0.01,
@@ -854,6 +866,366 @@ def _run_manage_watch(args: argparse.Namespace, config: StrategyConfig,
         print()
         print("Interrupted; exiting watch mode.")
         return 0
+
+
+# ---------------------------------------------------------------------------
+# subcommand: auto
+# ---------------------------------------------------------------------------
+
+def cmd_auto(args: argparse.Namespace) -> int:
+    """One-command live trading: read signals.txt + execute + manage in a loop.
+
+    Combines `decide --execute` and `manage --watch --execute` into a single
+    workflow. Designed to run for the duration of a trading session and let
+    you ignore everything except keeping signals.txt up to date.
+
+    On every iteration:
+      1. Replay each tracked position against the latest MT5 chart.
+      2. Render the dashboard (current state of every tracked signal,
+         with live floating P&L from symbol_info_tick).
+      3. Run management on MT5 (cancel expired pendings, Late TP1 catch-up,
+         lock SL to TP1 after TP1 touch, time-close past max-hold).
+      4. Re-parse signals.txt and pick out candidate signals:
+         - signal_time within the last (pending_expiry + 5min) -- older ones
+           would SKIP_EXPIRED anyway, no point flooding the log;
+         - signal_key not already in positions.json.
+      5. Run each candidate through the engine. If the engine says FOLLOW,
+         place via `executor.place_signal` (the 3-layer re-entry guard catches
+         anything that's already on MT5 or in recent MT5 history). If the
+         engine says SKIP_EXPIRED (race: aged out between filter and decide),
+         log and continue.
+      6. Stamp executed_at on the registry for every successful placement.
+      7. Prune closed signals.
+      8. Sleep --watch-interval seconds.
+
+    Exits only on Ctrl+C. Unlike `manage --watch`, the loop does NOT exit
+    when positions.json is empty -- new signals from signals.txt can arrive
+    at any moment, and the whole point of this mode is to wait for them.
+
+    Execution is implicit -- this command places real orders. No --execute
+    flag, no dry-run mode here. If you want a preview, use `decide` on a
+    single signal without --execute.
+
+    SAFETY:
+    - Do NOT run `auto` and a Task Scheduler `manage --execute` against the
+      same positions.json. They will race on SL modifications.
+    - Anything you paste into signals.txt will be executed if it's within
+      the 4-hour pending window. Treat signals.txt as the trust boundary --
+      same risk profile as `decide --execute`, but with less manual friction
+      between Telegram and MT5.
+    - Drawdown tolerance is still 50%. If realized DD goes past -42.8%
+      (the backtest's max), regime may have changed; consider Ctrl+C and
+      re-evaluating before letting it keep auto-firing.
+
+    REALISTIC EXPECTATIONS:
+    - Forward expectation 2-10x/month anchored on the IS column, not the
+      OOS/full-period backtest headlines.
+    - Concurrent same-direction signals can compound losses faster than the
+      backtest's -42.8% max DD because backtest runs signals sequentially.
+    """
+    config = _config_from_args(args)
+
+    # Validate --watch-interval.
+    interval = float(args.watch_interval)
+    if interval < 1.0:
+        print(
+            f"--watch-interval must be >= 1.0 (got {interval}). "
+            f"5.0 is the recommended default. Aborting.",
+            file=sys.stderr,
+        )
+        return 2
+    if interval < 2.0:
+        print(
+            f"WARNING: --watch-interval {interval}s is aggressive. The "
+            f"strategy is M1 so the worst-case reversal window is 60s; "
+            f"5s gives a 12x safety margin and is the recommended default."
+        )
+        print()
+
+    # Validate signals file up front. Re-read happens every iteration, so a
+    # transient permission error here would surface again; better to fail
+    # before the loop starts.
+    signals_path = Path(args.signals)
+    if not signals_path.exists():
+        print(f"signals file not found: {signals_path}", file=sys.stderr)
+        return 2
+    try:
+        parse_signals_file(signals_path)
+    except Exception as e:
+        print(f"signals file failed to parse: {e}", file=sys.stderr)
+        return 2
+
+    from .mt5_adapter import (
+        Mt5ChartSource, Mt5Connection,
+        archive_m1_by_month, render_archive_summary,
+    )
+
+    conn = Mt5Connection(
+        path=args.mt5_path, login=args.mt5_login,
+        password=args.mt5_password, server=args.mt5_server,
+    )
+    conn.initialize()
+
+    try:
+        # One-time archive at startup. Subsequent iterations re-query MT5
+        # for chart data directly; the archive is only for offline backtest
+        # use and doesn't need refreshing during an active session.
+        try:
+            summary = archive_m1_by_month(
+                conn, args.mt5_symbol, ARCHIVE_DIR,
+                months_back=ARCHIVE_MONTHS,
+                server_offset_hours=args.mt5_server_offset,
+                overwrite=False,
+            )
+            print(render_archive_summary(summary))
+            print()
+        except Exception as e:
+            print(f"[mt5] archive failed (continuing): {e}", file=sys.stderr)
+
+        chart = Mt5ChartSource(
+            conn, symbol=args.mt5_symbol,
+            server_offset_hours=args.mt5_server_offset,
+            history_bars=args.mt5_history_bars,
+        )
+
+        return _run_auto_watch(args, config, conn, chart, signals_path)
+    finally:
+        conn.shutdown()
+
+
+def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
+                    conn, chart, signals_path: Path) -> int:
+    """Loop _auto_pass until Ctrl+C. Unlike manage --watch, this never exits
+    on an empty registry -- new signals can arrive in signals.txt at any time.
+    """
+    interval = float(args.watch_interval)
+    clear_screen = not args.no_clear
+    iteration = 0
+    try:
+        while True:
+            iteration += 1
+            if clear_screen:
+                sys.stdout.write("\x1b[H\x1b[J")
+                sys.stdout.flush()
+            else:
+                print()
+            print(
+                f"[auto iter #{iteration} -- "
+                f"{datetime.now():%Y-%m-%d %H:%M:%S} local -- "
+                f"interval {interval:g}s -- signals: {signals_path}]"
+            )
+            exit_code = _auto_pass(args, config, conn, chart, signals_path)
+            if exit_code != 0:
+                return exit_code
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print()
+        print("Interrupted; exiting auto mode.")
+        return 0
+
+
+def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
+               conn, chart, signals_path: Path) -> int:
+    """One auto cycle. Returns 0 to continue looping, nonzero to abort.
+
+    Recoverable conditions (closed market, transient MT5 issues, transient
+    signals.txt read errors) return 0 so the loop retries on the next tick.
+    Only conditions that won't get better with a retry (account_info failure,
+    no chart data) return nonzero.
+    """
+    from .mt5_adapter import mt5_equity
+    from .mt5_executor import (
+        Mt5Executor, SignalRegistry, signal_to_magic,
+        render_execution_log, ExecutionLog,
+    )
+
+    # 1. Account equity.
+    try:
+        equity = mt5_equity(conn)
+    except Exception as e:
+        print(f"[mt5] account_info() failed: {e}", file=sys.stderr)
+        return 2
+
+    # 2. Registry.
+    registry_path = Path(args.positions_json or "positions.json")
+    registry = SignalRegistry(registry_path)
+    prior_entries = registry.load()
+
+    # 3. Chart state.
+    replay_end = chart.last_time()
+    if replay_end is None:
+        print("[mt5] no chart data available; skipping iteration")
+        return 0  # transient: retry next iter
+
+    # 4. Replay each tracked signal (ideal + actual views).
+    tracked: list[tuple[Position, Position, datetime | None]] = []
+    for item in prior_entries:
+        tracked.append(_replay_tracked_signal(item, chart, replay_end, config))
+
+    # 5. Live bid/ask. Fresh tick if available, else last bar's close +
+    # spread. Used for floating P&L in the dashboard.
+    bid, ask = 0.0, 0.0
+    tick = conn.mt5.symbol_info_tick(args.mt5_symbol)
+    if tick is not None and tick.bid > 0:
+        bid = tick.bid
+        ask = tick.ask if tick.ask > 0 else tick.bid
+    else:
+        last_bar = chart.latest()
+        if last_bar is not None:
+            bid = last_bar.close
+            ask = last_bar.close + last_bar.spread_price
+
+    # 6. Executor.
+    executor = Mt5Executor(
+        conn, args.mt5_symbol,
+        min_lot=config.minimum_lot or 0.01,
+        lot_step=config.lot_step or 0.01,
+    )
+
+    # 7. Dashboard header.
+    print("=" * 70)
+    print("XAUUSD AUTO MODE  (signals + management)")
+    print(f"Chart time:      {replay_end}  GMT+3")
+    print(f"Account equity:  ${equity:,.2f}")
+    print(f"Tracked signals: {len(tracked)}")
+    if bid > 0:
+        print(f"Live bid/ask:    {bid:g} / {ask:g}")
+    print("=" * 70)
+
+    # 8. Per-signal status blocks.
+    total_floating = 0.0
+    total_realized = 0.0
+    if tracked:
+        for pos_ideal, pos_actual, executed_at in tracked:
+            text, sig_floating, sig_realized = _format_position_status(
+                pos_ideal, pos_actual, executed_at, replay_end,
+                bid, ask, CONTRACT_SIZE_OZ,
+            )
+            print(text)
+            print()
+            total_floating += sig_floating
+            total_realized += sig_realized
+
+        # 9. Grand total.
+        print("=" * 70)
+        print(f"TOTAL FLOATING P&L:  ${total_floating:+.2f}    (engine view)")
+        print(f"TOTAL REALIZED P&L:  ${total_realized:+.2f}    (tracked signals only)")
+        print(f"TOTAL COMBINED:      ${total_floating + total_realized:+.2f}")
+        print("=" * 70)
+    else:
+        print("  (no tracked signals)")
+        print("=" * 70)
+    print()
+
+    # 10. Sanity checks.
+    errors = executor.sanity_checks(expected_equity=equity)
+    if errors:
+        print("SANITY CHECKS FAILED -- skipping MT5 actions this iteration:")
+        for e in errors:
+            print(f"  ! {e}")
+        # Market may be closed or the broker dropped trading temporarily;
+        # neither is a reason to abort the loop. Retry next tick.
+        return 0
+
+    log = ExecutionLog()
+
+    # 11. Manage tracked positions (drive from actual replay so MT5 actions
+    # match what MT5 has actually seen, not the ideal-execution assumption).
+    for _ideal, actual, _exec_at in tracked:
+        mlog = executor.manage_position(actual, config, replay_end)
+        log.merge(mlog)
+
+    # 12. Re-read signals.txt. Cheap (regex over a few-KB text file) so we
+    # don't need mtime tracking. A transient read error here just means we
+    # skip placement this iteration and try again next tick.
+    try:
+        all_signals = parse_signals_file(signals_path)
+    except Exception as e:
+        print(f"[signals] failed to parse {signals_path}: {e}")
+        all_signals = []
+
+    # 13. Filter candidates:
+    #   (a) signal_time within the pending window (with a small buffer so
+    #       signals that just expired don't oscillate);
+    #   (b) signal_key not already in the registry.
+    # The 3-layer guard in executor.place_signal handles everything else
+    # (current MT5 footprint, recent MT5 history). Re-load the registry
+    # here because manage_position above may have closed positions that
+    # haven't been pruned yet -- but those signals would still be in the
+    # registry, so the membership check stays correct.
+    existing_keys = {item.get("signal_key") for item in registry.load()}
+    age_cutoff = replay_end - timedelta(minutes=config.pending_expiry_minutes + 5)
+
+    candidates = [
+        s for s in all_signals
+        if s.signal_time_chart > age_cutoff
+           and s.signal_key not in existing_keys
+    ]
+    # Process oldest-first. Matches backtest's chronological order; ensures
+    # that if two new signals appear in the same iteration, the earlier one
+    # is placed first so its lot is sized off the current equity before the
+    # second one (which sees the same equity here, since MT5 hasn't realized
+    # P&L on the just-placed limits yet -- but the order is still stable).
+    candidates.sort(key=lambda s: s.signal_time_chart)
+
+    # 14. Process candidates.
+    for signal in candidates:
+        positions_source = ManualPositionSource(
+            equity=equity,
+            positions=[t[1] for t in tracked],
+        )
+        rec = decide(signal, chart, positions_source, config)
+
+        if rec.new_signal.action == "SKIP_EXPIRED":
+            # Race: signal aged out between the age filter and now. Rare
+            # (the buffer covers normal iteration jitter) but possible.
+            log.actions.append(
+                f"Signal {signal.signal_key}: pending window already closed at "
+                f"{rec.new_signal.pending_expires_at:%Y-%m-%d %H:%M} GMT+3 "
+                f"(now {replay_end:%H:%M}). Skipped."
+            )
+            continue
+
+        plog = executor.place_signal(signal, rec.new_signal)
+        log.merge(plog)
+
+        if plog.placed > 0:
+            executed_at = _chart_now()
+            registry.add(signal, equity, executed_at=executed_at)
+            lateness = _format_lateness(executed_at, signal.signal_time_chart)
+            log.actions.append(
+                f"Signal {signal.signal_key}: recorded executed_at = "
+                f"{executed_at:%Y-%m-%d %H:%M:%S} GMT+3 {lateness}"
+            )
+
+    # 15. Unknown-position warnings. Re-load registry because step 14 may
+    # have added new entries.
+    known_magics = {
+        signal_to_magic(item.get("signal_key", "?"))
+        for item in registry.load()
+    }
+    log.warnings.extend(executor.warn_on_unknown(known_magics))
+
+    # 16. Prune closed signals.
+    alive = executor.all_alive_magics()
+    removed = registry.prune(alive)
+    if removed:
+        log.actions.append(
+            f"Pruned {removed} closed signal(s) from {registry_path.name}"
+        )
+
+    # 17. Execution log. Only render when something actually happened --
+    # most iterations will be quiet, and printing an empty "EXECUTION:
+    # placed=0 modified=0 cancelled=0 closed=0" line every 5s is noise.
+    has_actions = (
+            log.actions or log.warnings
+            or log.placed > 0 or log.modified > 0
+            or log.cancelled > 0 or log.closed > 0
+    )
+    if has_actions:
+        print(render_execution_log(log))
+
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -994,8 +1366,8 @@ def build_parser() -> argparse.ArgumentParser:
     pmg.add_argument("--watch", action="store_true",
                      help="Loop the manage cycle every --watch-interval seconds, keeping "
                           "one MT5 connection open across iterations. Exits when no tracked "
-                          "signal has any live MT5 footprint, or on Ctrl+C. Use this during "
-                          "active trading hours instead of Task Scheduler.")
+                          "signal has any live MT5 footprint, or on Ctrl+C. For one-command "
+                          "live trading (read signals.txt + execute + manage), use `auto` instead.")
     pmg.add_argument("--watch-interval", type=float, default=5.0,
                      help="Seconds between watch iterations (default: 5.0). Minimum 1.0. "
                           "Values under 2.0 print a warning at startup -- the strategy is M1 "
@@ -1010,6 +1382,33 @@ def build_parser() -> argparse.ArgumentParser:
     _add_strategy_overrides(pmg)
     _add_mt5_flags(pmg)
     pmg.set_defaults(func=cmd_manage)
+
+    pa = sub.add_parser("auto",
+                        help="One-command live trading: continuously read signals.txt to "
+                             "execute valid new signals and manage all tracked positions. "
+                             "Execution is implicit (real orders placed). Exits only on Ctrl+C. "
+                             "Combines `decide --execute` + `manage --watch --execute`.")
+    pa.add_argument("--signals", required=True,
+                    help="Path to signals.txt. Paste new signals into this file as they "
+                         "arrive (with date headers like '2026-05-13 GMT+7' on top); the "
+                         "auto loop re-reads it on every iteration and picks up new ones.")
+    pa.add_argument("--positions-json", default=None,
+                    help="Tracked-signal registry (default: positions.json). Auto-managed: "
+                         "new signals are added on successful placement, closed signals are "
+                         "pruned, executed_at is stamped for every placement.")
+    pa.add_argument("--watch-interval", type=float, default=5.0,
+                    help="Seconds between iterations (default: 5.0). Minimum 1.0. Values "
+                         "under 2.0 print a warning at startup -- the strategy is M1 so 5s "
+                         "gives a 12x safety margin against the worst-case 60s TP1-to-SL "
+                         "reversal window.")
+    pa.add_argument("--no-clear", action="store_true",
+                    help="Disable the screen-clear between iterations. Default is to clear "
+                         "(live dashboard behavior). With --no-clear, iterations scroll -- "
+                         "useful for piping to a log file or when you want a permanent "
+                         "audit trail of EXECUTION lines.")
+    _add_strategy_overrides(pa)
+    _add_mt5_flags(pa)
+    pa.set_defaults(func=cmd_auto)
 
     pm = sub.add_parser("mt5-info", help="Diagnostic: latest bar, equity, open MT5 objects")
     _add_mt5_flags(pm)
