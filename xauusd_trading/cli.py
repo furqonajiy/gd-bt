@@ -33,7 +33,9 @@ from pathlib import Path
 
 from .adapters import CsvChartSource, ManualPositionSource
 from .backtest import run_backtest, write_backtest_outputs
-from .config import CHART_TIMEZONE_OFFSET, DEFAULT_CONFIG, StrategyConfig
+from .config import (
+    CHART_TIMEZONE_OFFSET, CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig,
+)
 from .engine import decide, render_report
 from .positions import Position, advance_bars, open_position
 from .signal import parse_one_signal
@@ -175,11 +177,86 @@ def _format_lateness(executed_at: datetime, signal_time: datetime) -> str:
     return "(on time)"
 
 
-def _format_position_body(pos: Position, now: datetime) -> list[str]:
+def _entry_floating(entry, side: str, bid: float, ask: float,
+                    contract_size: float = CONTRACT_SIZE_OZ) -> float:
+    """Floating P&L for one OPEN entry against current bid/ask.
+
+    Returns 0.0 for non-OPEN entries (no exposure). Mirrors the formula in
+    engine.py's `_snapshot_position`: BUYs would close at the bid, SELLs at
+    the ask (= bid + spread). Used both for the actual-view OPEN entries
+    (matches MT5's "Profit" column closely, modulo swap/commission) and for
+    the ideal-view counterfactual annotations.
+    """
+    if entry.status != "OPEN":
+        return 0.0
+    if side == "BUY":
+        return (bid - entry.entry_price) * entry.lot * contract_size
+    return (entry.entry_price - ask) * entry.lot * contract_size
+
+
+def _format_entry_line(entry, side: str, bid: float, ask: float,
+                       contract_size: float, ideal_entry=None) -> str:
+    """Format one entry line. When `ideal_entry` is given AND its status
+    diverges from `entry.status`, append a "[if on time: ...]" annotation
+    explaining the counterfactual.
+    """
+    if entry.status == "OPEN":
+        floating = _entry_floating(entry, side, bid, ask, contract_size)
+        base = (f"    #{entry.entry_index}  ({entry.entry_price:g})  OPEN     "
+                f"lot={entry.lot:.2f}   floating ${floating:+.2f}")
+    elif entry.status == "PENDING":
+        base = (f"    #{entry.entry_index}  ({entry.entry_price:g})  PENDING  "
+                f"lot={entry.lot:.2f}  (limit waiting)")
+    elif entry.status == "NO_FILL":
+        base = f"    #{entry.entry_index}  ({entry.entry_price:g})  NO_FILL"
+    else:  # SL / LOCK_TP1 / TP1 / TP2 / TP3 / TIME_EXIT
+        pnl_str = f"${entry.pnl:+.2f}" if entry.pnl is not None else "-"
+        exit_str = f"@ {entry.exit_price:g}" if entry.exit_price is not None else "-"
+        base = (f"    #{entry.entry_index}  ({entry.entry_price:g})  "
+                f"{entry.status} {exit_str}  pnl={pnl_str}")
+
+    if ideal_entry is None or ideal_entry.status == entry.status:
+        return base
+
+    # Statuses diverge -- annotate the actual-view line with what the
+    # ideal-view counterfactual would say. Practical cases (ideal is always
+    # at-or-ahead of actual because the actual replay starts later):
+    #   ideal=OPEN, actual=PENDING       -> you missed the fill so far
+    #   ideal=<terminal>, actual=PENDING -> ideal already filled & exited
+    #   ideal=<terminal>, actual=OPEN    -> ideal exited, actual still holding
+    if ideal_entry.status == "OPEN":
+        ideal_floating = _entry_floating(ideal_entry, side, bid, ask, contract_size)
+        time_str = (f"{ideal_entry.fill_time:%H:%M}"
+                    if ideal_entry.fill_time is not None else "?")
+        ann = f"   [if on time: OPEN since {time_str}, ${ideal_floating:+.2f}]"
+    elif ideal_entry.status == "PENDING":
+        ann = "   [if on time: still PENDING]"
+    elif ideal_entry.status == "NO_FILL":
+        ann = "   [if on time: NO_FILL]"
+    else:
+        pnl = ideal_entry.pnl
+        pnl_str = f"${pnl:+.2f}" if pnl is not None else "?"
+        time_str = (f"{ideal_entry.exit_time:%H:%M}"
+                    if ideal_entry.exit_time is not None else "?")
+        ann = f"   [if on time: {ideal_entry.status} at {time_str}, {pnl_str}]"
+    return base + ann
+
+
+def _format_position_body(
+        pos: Position, now: datetime,
+        bid: float, ask: float, contract_size: float,
+        *, ideal_for_annotations: Position | None = None,
+) -> tuple[list[str], float, float]:
     """Format the stage/fill/entries block for one Position view.
 
-    Returns a list of lines (4-space indent). Caller may indent further when
-    nesting under "If executed on time" / "Actual" sub-headers.
+    Returns (lines, floating_total, realized_total). Lines are 4-space-
+    indented; caller may add further indent when nesting under "If executed
+    on time" / "Actual" sub-headers.
+
+    `ideal_for_annotations`, when given, is the ideal Position to compare
+    against -- used only for the ACTUAL view of a dual-view block, so
+    entries whose status diverges from the ideal get an inline
+    "[if on time: ...]" annotation pointing at the counterfactual.
     """
     lines: list[str] = []
 
@@ -201,34 +278,44 @@ def _format_position_body(pos: Position, now: datetime) -> list[str]:
         )
         lines.append(f"    Time-exit at:  {pos.time_exit_deadline}  GMT+3  {countdown}")
 
-    for e in pos.entries:
-        if e.status == "OPEN":
-            lines.append(f"    #{e.entry_index}  ({e.entry_price:g})  OPEN     lot={e.lot:.2f}")
-        elif e.status == "PENDING":
-            lines.append(f"    #{e.entry_index}  ({e.entry_price:g})  PENDING  lot={e.lot:.2f}  (limit waiting)")
-        elif e.status == "NO_FILL":
-            lines.append(f"    #{e.entry_index}  ({e.entry_price:g})  NO_FILL")
-        else:  # SL / TP1 / TP2 / TP3 / LOCK_TP1 / TIME_EXIT
-            pnl_str = f"${e.pnl:+.2f}" if e.pnl is not None else "-"
-            exit_str = f"@ {e.exit_price:g}" if e.exit_price is not None else "-"
-            lines.append(f"    #{e.entry_index}  ({e.entry_price:g})  {e.status} {exit_str}  pnl={pnl_str}")
-    return lines
+    side = pos.signal.side
+    floating_total = 0.0
+    for i, e in enumerate(pos.entries):
+        ideal_e = (ideal_for_annotations.entries[i]
+                   if ideal_for_annotations is not None else None)
+        lines.append(_format_entry_line(e, side, bid, ask, contract_size, ideal_e))
+        floating_total += _entry_floating(e, side, bid, ask, contract_size)
+
+    realized_total = pos.realized_pnl()
+    lines.append(
+        f"    Floating:      ${floating_total:+.2f}    "
+        f"Realized: ${realized_total:+.2f}"
+    )
+    return lines, floating_total, realized_total
 
 
-def _format_position_status(pos_ideal: Position, pos_actual: Position,
-                            executed_at: datetime | None,
-                            now: datetime) -> str:
-    """Render one tracked-signal block.
+def _format_position_status(
+        pos_ideal: Position, pos_actual: Position,
+        executed_at: datetime | None, now: datetime,
+        bid: float, ask: float, contract_size: float,
+) -> tuple[str, float, float]:
+    """Render one tracked-signal block. Returns (text, floating, realized)
+    for the ACTUAL view, which the caller uses to roll up the grand total.
 
-    If the user has a recorded `executed_at` AND was meaningfully late, this
-    prints BOTH views:
-      - "If executed on time" (replayed from signal time) -- matches what
-        backtest assumes and what the engine would expect
-      - "Actual" (replayed from executed_at) -- matches what MT5 actually
-        sees, because bars before placement couldn't have filled anything
+    When `executed_at` is recorded AND the user was meaningfully late, this
+    emits a dual view:
+      - "If executed on time" -- the strategy's ideal-execution assumption
+        (replayed from signal time); matches what backtest produces.
+      - "Actual"              -- what MT5 saw, replayed from `executed_at`;
+        bars before placement can't fire fills.
 
-    Otherwise it prints a single view (legacy entries and on-time placements
-    look exactly like before).
+    On divergence between the views, each diverging entry in the actual
+    view gets a `[if on time: ...]` annotation, and a "Lateness cost so far"
+    summary line gives the net P&L delta plus a missed/extra-fill count.
+
+    For legacy entries (no `executed_at`) and on-time placements the dual
+    view collapses to a single view; the output looks like before but with
+    per-entry floating P&L and a Floating/Realized footer added.
     """
     s = pos_ideal.signal
     lines: list[str] = []
@@ -247,25 +334,58 @@ def _format_position_status(pos_ideal: Position, pos_actual: Position,
 
     lines.append(f"    Pending until: {pos_ideal.expiry_time}  GMT+3")
 
-    # Dual view only when we have a real late-execution split.
     if pos_actual is not pos_ideal:
+        # Dual view: real late-execution split exists.
         lines.append("")
-        lines.append(f"    If executed on time ({s.signal_time_chart:%H:%M} -- the strategy's assumption):")
-        for line in _format_position_body(pos_ideal, now):
+        lines.append(
+            f"    If executed on time ({s.signal_time_chart:%H:%M} -- "
+            f"the strategy's assumption):"
+        )
+        ideal_lines, ideal_floating, ideal_realized = _format_position_body(
+            pos_ideal, now, bid, ask, contract_size,
+        )
+        for line in ideal_lines:
             lines.append("  " + line)
+
         lines.append("")
         lines.append(f"    Actual (executed {executed_at:%H:%M} -- what MT5 sees):")
-        for line in _format_position_body(pos_actual, now):
+        actual_lines, actual_floating, actual_realized = _format_position_body(
+            pos_actual, now, bid, ask, contract_size,
+            ideal_for_annotations=pos_ideal,
+        )
+        for line in actual_lines:
             lines.append("  " + line)
-    else:
-        lines.extend(_format_position_body(pos_ideal, now))
 
-    # P&L from the actual view -- that's the one that matches reality on MT5.
-    # For legacy/on-time entries pos_actual is pos_ideal, so this is the same
-    # number you'd have gotten before.
-    realized = pos_actual.realized_pnl()
-    lines.append(f"    Realized P&L:  ${realized:+.2f}")
-    return "\n".join(lines)
+        # Lateness cost: delta in total P&L between actual and ideal.
+        # Negative means lateness hurt you ($X less than on-time path);
+        # positive means lateness helped you (avoided an adverse fill).
+        ideal_pnl = ideal_floating + ideal_realized
+        actual_pnl = actual_floating + actual_realized
+        pnl_delta = actual_pnl - ideal_pnl
+
+        ideal_fills = sum(1 for e in pos_ideal.entries if e.fill_time is not None)
+        actual_fills = sum(1 for e in pos_actual.entries if e.fill_time is not None)
+        fill_diff = actual_fills - ideal_fills
+        if fill_diff < 0:
+            fill_note = f", {-fill_diff} missed fill{'s' if -fill_diff != 1 else ''}"
+        elif fill_diff > 0:
+            fill_note = f", {fill_diff} extra fill{'s' if fill_diff != 1 else ''}"
+        else:
+            fill_note = ""
+
+        lines.append("")
+        lines.append(f"    Lateness cost so far: ${pnl_delta:+.2f}{fill_note}")
+        lines.append(f"    Total (actual):       ${actual_pnl:+.2f}")
+        return "\n".join(lines), actual_floating, actual_realized
+
+    # Single view: legacy entry or on-time placement.
+    body_lines, floating_total, realized_total = _format_position_body(
+        pos_ideal, now, bid, ask, contract_size,
+    )
+    lines.extend(body_lines)
+    total = floating_total + realized_total
+    lines.append(f"    Total:         ${total:+.2f}")
+    return "\n".join(lines), floating_total, realized_total
 
 
 # ---------------------------------------------------------------------------
@@ -532,15 +652,55 @@ def cmd_manage(args: argparse.Namespace) -> int:
     for item in prior_entries:
         tracked.append(_replay_tracked_signal(item, chart, replay_end, config))
 
+    # Live bid/ask for floating P&L. The tick is fresher (0-60s) than the
+    # last completed M1 bar's close, so per-entry floating numbers match
+    # MT5's "Profit" column tightly. If the market is closed or the tick is
+    # missing, fall back to the latest bar's close as bid and bar.close +
+    # bar.spread_price as ask -- floating numbers will be slightly stale but
+    # the display still works.
+    bid, ask = 0.0, 0.0
+    tick = conn.mt5.symbol_info_tick(args.mt5_symbol)
+    if tick is not None and tick.bid > 0:
+        bid = tick.bid
+        ask = tick.ask if tick.ask > 0 else tick.bid
+    else:
+        last_bar = chart.latest()
+        if last_bar is not None:
+            bid = last_bar.close
+            ask = last_bar.close + last_bar.spread_price
+
     print("=" * 70)
     print("XAUUSD POSITION MANAGEMENT")
     print(f"Chart time:      {replay_end}  GMT+3")
     print(f"Account equity:  ${equity:,.2f}")
     print(f"Tracked signals: {len(tracked)}")
+    if bid > 0:
+        print(f"Live bid/ask:    {bid:g} / {ask:g}")
     print("=" * 70)
+
+    total_floating = 0.0
+    total_realized = 0.0
     for pos_ideal, pos_actual, executed_at in tracked:
-        print(_format_position_status(pos_ideal, pos_actual, executed_at, replay_end))
+        text, sig_floating, sig_realized = _format_position_status(
+            pos_ideal, pos_actual, executed_at, replay_end,
+            bid, ask, CONTRACT_SIZE_OZ,
+        )
+        print(text)
         print()
+        total_floating += sig_floating
+        total_realized += sig_realized
+
+    # Grand total across all tracked signals. Uses the actual view's numbers
+    # so the floating figure matches MT5's account-level "Profit" sum
+    # (modulo swap/commission, which we don't model). Realized here means
+    # "realized within currently-tracked signals" -- signals that have
+    # already closed and been pruned from the registry don't contribute.
+    print("=" * 70)
+    print(f"TOTAL FLOATING P&L:  ${total_floating:+.2f}    (matches MT5 'Profit' column)")
+    print(f"TOTAL REALIZED P&L:  ${total_realized:+.2f}    (tracked signals only, ex-prune)")
+    print(f"TOTAL COMBINED:      ${total_floating + total_realized:+.2f}")
+    print("=" * 70)
+    print()
 
     if args.execute:
         from .mt5_executor import (
