@@ -46,7 +46,7 @@ from .backtest import run_backtest, write_backtest_outputs
 from .config import (
     CHART_TIMEZONE_OFFSET, CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig,
 )
-from .engine import decide, render_report
+from .engine import decide, format_replay_outcome, render_report
 from .positions import Position, advance_bars, open_position
 from .signal import parse_one_signal, parse_signals_file
 
@@ -544,6 +544,24 @@ def cmd_decide(args: argparse.Namespace) -> int:
                 f"(now {rec.generated_at:%Y-%m-%d %H:%M} GMT+3). "
                 f"Skipped placement to avoid orders that would be cancelled immediately."
             )
+        elif rec.new_signal.action == "SKIP_INVALIDATED":
+            # Per the Q1 invalidation rule: backtest replay shows this signal
+            # has already played out (SL/TP/TIME_EXIT/NO_FILL on at least one
+            # entry). Placing fresh orders now would create a trade that
+            # diverges from the validated baseline.
+            #
+            # Q3 format: emit a multi-line log entry with the per-entry
+            # breakdown. The replay_position carries the replayed state
+            # whenever SKIP_INVALIDATED fires; format_replay_outcome turns
+            # it into one line per entry plus a realized-total summary.
+            rp = rec.new_signal.replay_position
+            lines = [
+                f"Signal {signal.signal_key}: backtest replay shows signal "
+                f"already played out -- no orders placed."
+            ]
+            if rp is not None:
+                lines.extend(format_replay_outcome(rp, indent="  "))
+            log.actions.append("\n".join(lines))
         else:
             plog = executor.place_signal(signal, rec.new_signal)
             log.merge(plog)
@@ -1187,6 +1205,24 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                 f"{rec.new_signal.pending_expires_at:%Y-%m-%d %H:%M} GMT+3 "
                 f"(now {replay_end:%H:%M}). Skipped."
             )
+            continue
+
+        if rec.new_signal.action == "SKIP_INVALIDATED":
+            # Q1 invalidation rule fired: backtest replay shows the signal
+            # has already played out (SL/TP/TIME_EXIT/NO_FILL on at least
+            # one entry). Placing now would create a divergent trade.
+            #
+            # Q3 format: emit a multi-line log entry with the per-entry
+            # breakdown so the user can see exactly why the signal was
+            # rejected (which entries filled, which SL'd, etc.).
+            rp = rec.new_signal.replay_position
+            lines = [
+                f"Signal {signal.signal_key}: backtest replay shows signal "
+                f"already played out -- no orders placed."
+            ]
+            if rp is not None:
+                lines.extend(format_replay_outcome(rp, indent="  "))
+            log.actions.append("\n".join(lines))
             continue
 
         plog = executor.place_signal(signal, rec.new_signal)

@@ -5,9 +5,10 @@ to "now", current open positions, and current equity, it returns a
 `Recommendation` describing:
 
   - the action plan for the new signal (FOLLOW with a concrete order
-    placement plan, or SKIP_EXPIRED when the pending window has already
-    closed -- the strategy follows every signal, but only when there's
-    still time to fill), and
+    placement plan, SKIP_EXPIRED when the pending window has already
+    closed, or SKIP_INVALIDATED when backtest replay from activation_time
+    to now shows the signal has already played out -- entries filled and
+    SL'd, TP'd, or time-exited), and
   - the current state of every existing open position (stage, effective
     stop, floating P&L, time-exit countdown).
 
@@ -20,10 +21,17 @@ strategy itself: SL, SP, TP, and time exit. Adding cross-signal rules
 without re-validating against the backtest would risk degrading the
 validated result. Such overlays can be layered on later if backtested.
 
-The SKIP_EXPIRED check is NOT a cross-signal overlay -- it's a per-signal
-guard against placing limit orders whose pending window has already passed
-(which would just be cancelled on the next manage cycle). It changes
-nothing about which signals the strategy would have filled in backtest.
+The SKIP_EXPIRED and SKIP_INVALIDATED gates are NOT cross-signal overlays
+-- they're per-signal divergence-correction guards. Neither changes which
+signals the strategy would have filled in backtest:
+  - SKIP_EXPIRED refuses placement after the 4-hour pending window so we
+    don't send limits that would just be cancelled.
+  - SKIP_INVALIDATED refuses placement when backtest replay says the
+    signal has already played out, so live can't open a fresh trade that
+    backtest already closed (e.g. user pastes signals.txt entries hours
+    late). Without this gate, late placements would diverge from the
+    backtest path because the engine's replay-from-signal-time assumption
+    no longer matches reality.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -33,7 +41,7 @@ from typing import Optional
 from .adapters import ChartSource, PositionSource
 from .config import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
 from .positions import (
-    Entry, Position, advance_bars, compute_lot, open_position,
+    Entry, Position, TERMINAL, advance_bars, compute_lot, open_position,
 )
 from .signal import Signal, compute_entries
 
@@ -58,8 +66,13 @@ class NewSignalPlan:
     """What to do about the new signal.
 
     `action` is one of:
-      - "FOLLOW"       -- place the planned orders
-      - "SKIP_EXPIRED" -- pending window already closed; do nothing
+      - "FOLLOW"           -- place the planned orders
+      - "SKIP_EXPIRED"     -- pending window already closed; do nothing
+      - "SKIP_INVALIDATED" -- backtest replay shows the signal has already
+        played out (entries filled and SL'd, TP'd, time-exited, or NO_FILL
+        on pending expiry). The orders would diverge from the backtest
+        path if placed now. `replay_position` carries the replayed
+        Position for rendering the per-entry rationale.
     """
     signal: Signal
     action: str
@@ -69,6 +82,12 @@ class NewSignalPlan:
     final_target_label: str
     final_target_price: float
     total_initial_risk_dollars: float
+    # Replayed Position from activation_time to now. Set whenever the engine
+    # ran the validity check (i.e. `chart` was provided to decide). None for
+    # backwards compat with callers that didn't pass a chart. When the action
+    # is SKIP_INVALIDATED, render_report uses this to produce the per-entry
+    # outcome breakdown shown to the user.
+    replay_position: Optional[Position] = None
 
 
 @dataclass
@@ -154,8 +173,11 @@ def decide(
     still_open = [p for p in open_positions if not p.is_terminal()]
 
     # --- 2. Build the plan for the new signal ---------------------------
+    # The chart is passed in so the validity gate can replay the signal
+    # from activation_time to now and detect already-played-out signals.
     plan = _build_new_signal_plan(
-        signal, positions.equity(), config, contract_size, now=now,
+        signal, positions.equity(), config, contract_size,
+        now=now, chart=chart,
     )
 
     # --- 3. Snapshot existing positions ---------------------------------
@@ -179,7 +201,24 @@ def decide(
 def _build_new_signal_plan(
         signal: Signal, equity: float, config: StrategyConfig, contract_size: float,
         now: Optional[datetime] = None,
+        chart: Optional[ChartSource] = None,
 ) -> NewSignalPlan:
+    """Build the order placement plan for one signal, with two pre-flight gates.
+
+    Gate order (each replaces "place orders" with a SKIP action if it fires):
+      1. SKIP_EXPIRED       -- now >= pending_expires_at. Cheap, runs first.
+      2. SKIP_INVALIDATED   -- backtest replay from activation_time to now
+                                shows any entry has reached a terminal status
+                                (SL, LOCK_TP1, TP*, TIME_EXIT, NO_FILL).
+                                Requires `chart` to be available; skipped if
+                                chart is None (legacy callers).
+      3. FOLLOW             -- default; place the planned orders.
+
+    SKIP_INVALIDATED is what prevents auto from creating new positions for
+    signals that backtest would have already closed. Without this, pasting
+    a 2-hour-old signal into signals.txt and letting auto run would happily
+    place fresh limits even though the trade is already a loss in backtest.
+    """
     lot, base_stop_distance = compute_lot(equity, signal, config, contract_size)
     orders: list[PlannedOrder] = []
     side = signal.side
@@ -196,36 +235,128 @@ def _build_new_signal_plan(
     expires = activation + timedelta(minutes=config.pending_expiry_minutes)
     total_risk = sum(o.risk_dollars for o in orders)
 
-    # SKIP_EXPIRED guard: if the pending window has already closed by the
-    # time we're deciding, don't bother placing -- the orders would just
-    # be cancelled on the next manage cycle. This avoids broker round-trips
-    # for already-stale signals (e.g. ones the user is replaying after the
-    # fact, or re-running the same decide command after the 4-hour window).
+    # ---- Gate 1: SKIP_EXPIRED ----
+    # Pending window already closed by the time we're deciding. Don't
+    # bother placing -- the orders would just be cancelled on the next
+    # manage cycle. Cheap to check, runs before the replay.
     if now is not None and now >= expires:
         minutes_past = (now - expires).total_seconds() / 60.0
-        action = "SKIP_EXPIRED"
-        rationale = (
-            f"Pending window already closed {minutes_past:.0f} min ago "
-            f"(expired {expires:%Y-%m-%d %H:%M} GMT+3, "
-            f"now {now:%Y-%m-%d %H:%M} GMT+3). "
-            f"No orders will be placed -- they would only be cancelled "
-            f"immediately on the next manage cycle."
+        return NewSignalPlan(
+            signal=signal, action="SKIP_EXPIRED",
+            rationale=(
+                f"Pending window already closed {minutes_past:.0f} min ago "
+                f"(expired {expires:%Y-%m-%d %H:%M} GMT+3, "
+                f"now {now:%Y-%m-%d %H:%M} GMT+3). "
+                f"No orders will be placed -- they would only be cancelled "
+                f"immediately on the next manage cycle."
+            ),
+            orders=orders, pending_expires_at=expires,
+            final_target_label=final_target, final_target_price=target_price,
+            total_initial_risk_dollars=total_risk,
+            replay_position=None,
         )
-    else:
-        action = "FOLLOW"
-        rationale = (
+
+    # ---- Gate 2: SKIP_INVALIDATED ----
+    # Replay the signal from activation_time to now. If any entry has
+    # reached a terminal status, the trade has already played out in the
+    # backtest path; placing fresh orders would open a divergent live trade
+    # that backtest would consider already closed.
+    #
+    # "Terminal" means {SL, LOCK_TP1, TP1, TP2, TP3, TIME_EXIT, NO_FILL}
+    # (imported from positions.py). Non-terminal {PENDING, OPEN} means
+    # we're still mid-trade in backtest, so placing fresh orders aligns
+    # with the backtest path (either replacing a cancelled pending or
+    # re-opening an accidentally-closed position at a price level backtest
+    # still considers in play).
+    #
+    # Skipped when chart is unavailable (legacy callers) to preserve the
+    # old behavior; production code paths always pass chart.
+    replay_pos: Optional[Position] = None
+    if chart is not None and now is not None:
+        replay_pos = open_position(signal, equity, config, contract_size)
+        # If activation is still in the future, no bars to advance through.
+        # All entries stay PENDING -> valid -> FOLLOW.
+        if replay_pos.activation_time <= now:
+            advance_bars(
+                replay_pos,
+                chart.bars_between(replay_pos.activation_time, now),
+                config, contract_size,
+            )
+        if any(e.status in TERMINAL for e in replay_pos.entries):
+            return NewSignalPlan(
+                signal=signal, action="SKIP_INVALIDATED",
+                rationale=(
+                    "Backtest replay from signal time to now shows this "
+                    "signal has already played out -- placing fresh orders "
+                    "would diverge from the backtest path. "
+                    "See per-entry breakdown below."
+                ),
+                orders=orders, pending_expires_at=expires,
+                final_target_label=final_target, final_target_price=target_price,
+                total_initial_risk_dollars=total_risk,
+                replay_position=replay_pos,
+            )
+
+    # ---- Gate 3: FOLLOW ----
+    return NewSignalPlan(
+        signal=signal, action="FOLLOW",
+        rationale=(
             f"Strategy follows every signal. "
             f"{config.entry_count} limits @ {', '.join(f'{o.entry_price:g}' for o in orders)}, "
             f"effective SL distance ${base_stop_distance:.2f}, "
             f"final target {final_target} = {target_price:g}, "
             f"lock to TP1 after first TP1 touch, "
             f"max hold {config.max_hold_minutes} min from first fill."
-        )
-    return NewSignalPlan(
-        signal=signal, action=action, rationale=rationale, orders=orders,
-        pending_expires_at=expires, final_target_label=final_target,
-        final_target_price=target_price, total_initial_risk_dollars=total_risk,
+        ),
+        orders=orders, pending_expires_at=expires,
+        final_target_label=final_target, final_target_price=target_price,
+        total_initial_risk_dollars=total_risk,
+        replay_position=replay_pos,
     )
+
+
+def format_replay_outcome(replay: Position, indent: str = "    ") -> list[str]:
+    """Render a per-entry outcome breakdown for a replayed signal.
+
+    Used by render_report (SKIP_INVALIDATED case) AND by the CLI auto/decide
+    EXECUTION log so both surfaces show the same per-entry detail. Each line
+    starts with `indent`.
+
+    Output looks like:
+        #0 (4702.00): filled 11:22, SL at 12:18, pnl -$56.70
+        #1 (4703.50): filled 11:31, SL at 12:18, pnl -$45.36
+        #2 (4705.00): NO_FILL (pending expired)
+        Backtest result: -$102.06 realized -- no orders will be placed.
+    """
+    lines: list[str] = []
+    for e in replay.entries:
+        if e.status == "PENDING":
+            lines.append(f"{indent}#{e.entry_index} ({e.entry_price:g}): still PENDING")
+        elif e.status == "OPEN":
+            fill_str = f"{e.fill_time:%H:%M}" if e.fill_time is not None else "?"
+            lines.append(
+                f"{indent}#{e.entry_index} ({e.entry_price:g}): filled "
+                f"{fill_str}, currently OPEN in backtest"
+            )
+        elif e.status == "NO_FILL":
+            lines.append(
+                f"{indent}#{e.entry_index} ({e.entry_price:g}): NO_FILL "
+                f"(pending expired)"
+            )
+        else:  # terminal exit (SL, LOCK_TP1, TP1/2/3, TIME_EXIT)
+            fill_str = f"{e.fill_time:%H:%M}" if e.fill_time is not None else "?"
+            exit_str = f"{e.exit_time:%H:%M}" if e.exit_time is not None else "?"
+            pnl_str = f"${e.pnl:+.2f}" if e.pnl is not None else "-"
+            lines.append(
+                f"{indent}#{e.entry_index} ({e.entry_price:g}): filled "
+                f"{fill_str}, {e.status} at {exit_str}, pnl {pnl_str}"
+            )
+    realized = replay.realized_pnl()
+    lines.append(
+        f"{indent}Backtest result: ${realized:+.2f} realized "
+        f"-- no orders will be placed."
+    )
+    return lines
 
 
 def _stage_label(position: Position, config: StrategyConfig) -> str:
@@ -344,9 +475,8 @@ def render_report(rec: Recommendation) -> str:
     lines.append(f"  Action: {rec.new_signal.action}")
     lines.append(f"  Reason: {rec.new_signal.rationale}")
 
-    # Only print the order plan when we'd actually place. For SKIP_EXPIRED
-    # the orders block is misleading since nothing will be sent to MT5.
     if rec.new_signal.action == "FOLLOW":
+        # Order plan -- only meaningful when we'd actually place.
         lines.append("")
         lines.append("  Orders to place:")
         for o in rec.new_signal.orders:
@@ -370,11 +500,19 @@ def render_report(rec: Recommendation) -> str:
             f"{_fmt_money(-rec.new_signal.total_initial_risk_dollars)} "
             f"({rec.config.risk_per_signal * 100:.1f}% of equity)"
         )
-    else:
+    elif rec.new_signal.action == "SKIP_EXPIRED":
         lines.append(
             f"  Pending window closed at: "
             f"{_fmt_time(rec.new_signal.pending_expires_at)} GMT+3"
         )
+    elif rec.new_signal.action == "SKIP_INVALIDATED":
+        # Per-entry replay outcome breakdown. The replay_position is set
+        # whenever SKIP_INVALIDATED fires, so this block is safe to assume.
+        rp = rec.new_signal.replay_position
+        if rp is not None:
+            lines.append("")
+            lines.append("  Backtest replay outcome:")
+            lines.extend(format_replay_outcome(rp, indent="    "))
 
     # Open positions ----------------------------------------------------
     lines.append("")
