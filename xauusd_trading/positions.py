@@ -68,6 +68,12 @@ class Position:
     first_fill_time: Optional[datetime] = None
     time_exit_deadline: Optional[datetime] = None
     last_processed_time: Optional[datetime] = None
+    # Wall-clock placement time (chart tz, GMT+3). Pure metadata: not used by
+    # `advance_one_bar` or any state-transition logic. Callers set it after
+    # construction so live tooling can render "X min late" and compare an
+    # ideal-execution replay (from activation_time) with an actual-execution
+    # replay (from executed_at). Optional; backtest leaves it None.
+    executed_at: Optional[datetime] = None
 
     def is_terminal(self) -> bool:
         return all(e.status in TERMINAL for e in self.entries)
@@ -107,8 +113,8 @@ def _floor_to_step(value: float, step: float) -> float:
 
 
 def compute_lot(
-    equity: float, signal: Signal, config: StrategyConfig,
-    contract_size: float = CONTRACT_SIZE_OZ,
+        equity: float, signal: Signal, config: StrategyConfig,
+        contract_size: float = CONTRACT_SIZE_OZ,
 ) -> tuple[float, float]:
     """Return (lot_per_entry, base_stop_distance).
 
@@ -160,8 +166,8 @@ def _pnl(side: str, entry: float, exit_price: float, lot: float, contract_size: 
 # ---------------------------------------------------------------------------
 
 def open_position(
-    signal: Signal, equity: float, config: StrategyConfig,
-    contract_size: float = CONTRACT_SIZE_OZ,
+        signal: Signal, equity: float, config: StrategyConfig,
+        contract_size: float = CONTRACT_SIZE_OZ,
 ) -> Position:
     """Create a fresh Position with PENDING entries from a Signal."""
     lot, base_stop_distance = compute_lot(equity, signal, config, contract_size)
@@ -188,8 +194,8 @@ def open_position(
 # ---------------------------------------------------------------------------
 
 def _close_entry(
-    entry: Entry, status: str, t: datetime, exit_price: float,
-    side: str, contract_size: float, stop_at: Optional[float] = None,
+        entry: Entry, status: str, t: datetime, exit_price: float,
+        side: str, contract_size: float, stop_at: Optional[float] = None,
 ) -> None:
     entry.status = status
     entry.exit_time = t
@@ -199,8 +205,8 @@ def _close_entry(
 
 
 def advance_one_bar(
-    position: Position, bar: Bar, config: StrategyConfig,
-    contract_size: float = CONTRACT_SIZE_OZ,
+        position: Position, bar: Bar, config: StrategyConfig,
+        contract_size: float = CONTRACT_SIZE_OZ,
 ) -> None:
     """Mutate `position` state to reflect one minute of price action."""
     side = position.signal.side
@@ -279,8 +285,8 @@ def advance_one_bar(
 
 
 def advance_bars(
-    position: Position, bars, config: StrategyConfig,
-    contract_size: float = CONTRACT_SIZE_OZ,
+        position: Position, bars, config: StrategyConfig,
+        contract_size: float = CONTRACT_SIZE_OZ,
 ) -> None:
     """Advance through an iterable of Bar objects, stopping early if terminal."""
     for bar in bars:
