@@ -721,6 +721,20 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
             bid = last_bar.close
             ask = last_bar.close + last_bar.spread_price
 
+    # Build the executor up front -- in --execute mode it runs management
+    # actions further down; in read-only mode it's used to query alive magics
+    # for the watch-mode exit check. Also used inside the rendering loop to
+    # detect missed-TP1-lock divergences per signal (see warning block below).
+    executor = Mt5Executor(
+        conn, args.mt5_symbol,
+        min_lot=config.minimum_lot or 0.01,
+        lot_step=config.lot_step or 0.01,
+    )
+    tracked_magics = {
+        signal_to_magic(actual.signal.signal_key)
+        for _ideal, actual, _exec_at in tracked
+    }
+
     print("=" * 70)
     print("XAUUSD POSITION MANAGEMENT")
     print(f"Chart time:      {replay_end}  GMT+3")
@@ -742,30 +756,18 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
         total_floating += sig_floating
         total_realized += sig_realized
 
-    # Grand total across all tracked signals. Uses the actual view's numbers
-    # so the floating figure matches MT5's account-level "Profit" sum
-    # (modulo swap/commission, which we don't model). Realized here means
-    # "realized within currently-tracked signals" -- signals that have
-    # already closed and been pruned from the registry don't contribute.
+    # Grand total across all tracked signals (engine view).
+    # In divergence cases the engine's floating shows $0 for entries it
+    # considers LOCK_TP1-terminal even when MT5 still has them open; under
+    # --execute, `manage_position` then runs a "Late TP1 catch-up" market
+    # close on those positions to cap the divergence and bring MT5 into line
+    # with the backtest path.
     print("=" * 70)
-    print(f"TOTAL FLOATING P&L:  ${total_floating:+.2f}    (matches MT5 'Profit' column)")
+    print(f"TOTAL FLOATING P&L:  ${total_floating:+.2f}    (engine view)")
     print(f"TOTAL REALIZED P&L:  ${total_realized:+.2f}    (tracked signals only, ex-prune)")
     print(f"TOTAL COMBINED:      ${total_floating + total_realized:+.2f}")
     print("=" * 70)
     print()
-
-    # Always build the executor -- in --execute mode it runs management
-    # actions, in read-only mode it's used purely to count alive magics so
-    # watch can detect "all done" without mutating the registry.
-    executor = Mt5Executor(
-        conn, args.mt5_symbol,
-        min_lot=config.minimum_lot or 0.01,
-        lot_step=config.lot_step or 0.01,
-    )
-    tracked_magics = {
-        signal_to_magic(actual.signal.signal_key)
-        for _ideal, actual, _exec_at in tracked
-    }
 
     if args.execute:
         errors = executor.sanity_checks(expected_equity=equity)
@@ -809,13 +811,29 @@ def _run_manage_watch(args: argparse.Namespace, config: StrategyConfig,
                       conn, chart) -> int:
     """Loop the manage cycle until the registry has no live MT5 footprint or
     the user hits Ctrl+C. One MT5 connection is shared across iterations.
+
+    By default each iteration clears the terminal (move cursor home + erase
+    from cursor to end of screen) so the output behaves like a live dashboard:
+    one screenful at a time, no scrolling. Modern terminals (PowerShell 7+,
+    Windows Terminal, anything VT-aware) preserve content above the clear
+    point in their scrollback buffer, so you can still scroll up to see prior
+    iterations if needed. Pass --no-clear to fall back to scrolling-log
+    behavior (useful when you want a permanent record of EXECUTION lines).
     """
     interval = float(args.watch_interval)
+    clear_screen = not args.no_clear
     iteration = 0
     try:
         while True:
             iteration += 1
-            print()
+            if clear_screen:
+                # \x1b[H = move cursor to top-left (row 1, col 1).
+                # \x1b[J = erase from cursor to end of screen.
+                # Combined: clear the visible area without nuking scrollback.
+                sys.stdout.write("\x1b[H\x1b[J")
+                sys.stdout.flush()
+            else:
+                print()
             print(
                 f"[watch iter #{iteration} -- "
                 f"{datetime.now():%Y-%m-%d %H:%M:%S} local -- "
@@ -983,6 +1001,12 @@ def build_parser() -> argparse.ArgumentParser:
                           "Values under 2.0 print a warning at startup -- the strategy is M1 "
                           "so 5s gives a 12x safety margin against the worst-case 60s reversal "
                           "window between TP1 touch and SL hit.")
+    pmg.add_argument("--no-clear", action="store_true",
+                     help="In watch mode, disable the screen clear between iterations. "
+                          "Default in watch mode is to clear (dashboard behavior): output "
+                          "stays on one screen and refreshes in place. With --no-clear, "
+                          "iterations scroll instead -- useful when you want a permanent "
+                          "record of EXECUTION lines or you're piping output to a file.")
     _add_strategy_overrides(pmg)
     _add_mt5_flags(pmg)
     pmg.set_defaults(func=cmd_manage)

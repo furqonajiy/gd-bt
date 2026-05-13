@@ -393,9 +393,77 @@ class Mt5Executor:
                         f"{res.comment if res else self.mt5.last_error()}"
                     )
 
-        # 2. Move SL to TP1 if engine is in stage 1 (TP1 was touched).
+        # 2. Late TP1 catch-up.
+        # When the engine's replay has LOCK_TP1 entries, the SL-at-TP1 lock
+        # would have closed those positions at breakeven-plus in backtest. If
+        # MT5 still has open positions for this magic whose SL is NOT yet at
+        # TP1, manage was late: the lock never made it to the broker. Rather
+        # than wait for the SL-lock step below to try (which gets rejected by
+        # the broker if price has moved past TP1) and possibly leave the
+        # position exposed to the original SL, close them at market now. This
+        # caps the divergence from the backtest path -- you take the current
+        # price as your exit instead of risking a full original-SL loss.
+        #
+        # Positions whose SL is already at TP1 (lock applied on some earlier
+        # cycle) are left alone -- the broker will trigger them when price
+        # returns to TP1, matching backtest's LOCK_TP1 exit precisely.
+        target_sl = round(engine_pos.signal.tp1, digits)
+        if any(e.status == "LOCK_TP1" for e in engine_pos.entries):
+            unlocked = [
+                p for p in self.find_positions(magic)
+                if abs(p.sl - target_sl) > 10 ** (-digits)
+            ]
+            if unlocked:
+                # Compute the engine's would-have-been LOCK_TP1 outcome so we
+                # can log the gap between backtest and live for each close.
+                backtest_lock_pnl = sum(
+                    e.pnl or 0.0
+                    for e in engine_pos.entries
+                    if e.status == "LOCK_TP1"
+                )
+                for p in unlocked:
+                    tick = self.mt5.symbol_info_tick(self.symbol)
+                    if tick is None:
+                        log.actions.append(
+                            f"  Late TP1 catch-up on #{p.ticket}: no tick "
+                            f"available, skipping"
+                        )
+                        continue
+                    if p.type == self.mt5.POSITION_TYPE_BUY:
+                        close_type, price = self.mt5.ORDER_TYPE_SELL, tick.bid
+                    else:
+                        close_type, price = self.mt5.ORDER_TYPE_BUY, tick.ask
+                    req = {
+                        "action":       self.mt5.TRADE_ACTION_DEAL,
+                        "position":     p.ticket,
+                        "symbol":       self.symbol,
+                        "volume":       p.volume,
+                        "type":         close_type,
+                        "price":        price,
+                        "magic":        magic,
+                        "comment":      f"{engine_pos.signal.signal_key}/late-tp1"[:31],
+                        "type_filling": self.mt5.ORDER_FILLING_RETURN,
+                    }
+                    res = self.mt5.order_send(req)
+                    if res and res.retcode == self.mt5.TRADE_RETCODE_DONE:
+                        log.closed += 1
+                        log.actions.append(
+                            f"  Late TP1 catch-up closed #{p.ticket} @ {price:g} "
+                            f"({engine_pos.signal.signal_key}; backtest LOCK_TP1 "
+                            f"would have realized ${backtest_lock_pnl:+.2f} -- "
+                            f"actual close at current market)"
+                        )
+                    else:
+                        log.actions.append(
+                            f"  FAILED late TP1 catch-up close on #{p.ticket}: "
+                            f"{res.comment if res else self.mt5.last_error()}"
+                        )
+
+        # 3. Move SL to TP1 if engine is in stage 1 (TP1 was touched).
+        # This handles the "TP1 touched but hasn't returned to TP1 yet" case
+        # (stage 1, no LOCK_TP1 entries yet). Once a LOCK_TP1 entry appears,
+        # step 2 above takes precedence and closes at market instead.
         if config.lock_after_tp1 and engine_pos.stage >= 1:
-            target_sl = round(engine_pos.signal.tp1, digits)
             for p in self.find_positions(magic):
                 if abs(p.sl - target_sl) <= 10 ** (-digits):
                     continue  # already locked
