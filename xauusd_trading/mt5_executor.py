@@ -21,6 +21,12 @@ ascending cost/strength order before sending any LIMITs:
 Together they make `decide --execute` idempotent: re-running the same command
 after SL/TP/time-exit will NOT silently re-enter the same trade, regardless
 of whether positions.json was pruned in between.
+
+The registry also persists `executed_at` (wall-clock placement time in chart
+tz). This lets `manage` and `decide` show "X min late" annotations and
+optionally replay the position from your real placement moment to reflect
+what MT5 actually sees -- because the engine's default replay-from-signal-time
+assumption is the strategy's ideal, not what happens when a human is slow.
 """
 from __future__ import annotations
 import hashlib
@@ -94,9 +100,15 @@ class SignalRegistry:
     """Tiny JSON-file registry of currently-tracked signals.
 
     Each entry: {"signal_key": str, "signal": str, "date": "YYYY-MM-DD",
-                 "tz": int, "equity_at_open": float}
+                 "tz": int, "equity_at_open": float,
+                 "executed_at": "YYYY-MM-DDTHH:MM:SS" (chart tz, optional)}
     Auto-pruned: entries whose magic has zero MT5 orders AND zero MT5 positions
     are removed on each call.
+
+    `executed_at` is set by `decide --execute` immediately after `place_signal`
+    reports a successful placement. Older entries written before this field
+    existed will be missing it; downstream tooling treats that as "unknown
+    lateness" and falls back to the ideal-execution replay (signal-time start).
     """
 
     def __init__(self, path: Path):
@@ -113,16 +125,25 @@ class SignalRegistry:
     def save(self, entries: list[dict]) -> None:
         self.path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
 
-    def add(self, signal: Signal, equity: float) -> None:
+    def add(self, signal: Signal, equity: float,
+            executed_at: Optional[datetime] = None) -> None:
+        """Insert or replace the registry entry for this signal.
+
+        `executed_at` is the wall-clock placement time in chart tz (GMT+3).
+        Pass None to omit (e.g. when migrating legacy code paths).
+        """
         entries = self.load()
         entries = [e for e in entries if e.get("signal_key") != signal.signal_key]
-        entries.append({
+        record = {
             "signal_key": signal.signal_key,
             "signal": _reconstruct_signal_text(signal),
             "date": signal.source_date,
             "tz": signal.source_tz_offset,
             "equity_at_open": float(equity),
-        })
+        }
+        if executed_at is not None:
+            record["executed_at"] = executed_at.isoformat()
+        entries.append(record)
         self.save(entries)
 
     def prune(self, alive_magics: set[int]) -> int:
@@ -232,7 +253,7 @@ class Mt5Executor:
         return warnings
 
     def has_recent_history(
-        self, magic: int, lookback_hours: int = HISTORY_LOOKBACK_HOURS,
+            self, magic: int, lookback_hours: int = HISTORY_LOOKBACK_HOURS,
     ) -> bool:
         """True if MT5 history shows any closed orders/deals for this magic.
 
@@ -344,7 +365,13 @@ class Mt5Executor:
 
     def manage_position(self, engine_pos: Position, config: StrategyConfig,
                         chart_now: datetime) -> ExecutionLog:
-        """Reconcile MT5 with engine state for one tracked signal."""
+        """Reconcile MT5 with engine state for one tracked signal.
+
+        Pass the position you want MT5 actions to be driven by. When a
+        signal has a recorded `executed_at`, the caller should pass the
+        *actual* replay (started at executed_at, not signal time) so the
+        engine's stage/fill state matches what MT5 actually saw.
+        """
         log = ExecutionLog()
         magic = signal_to_magic(engine_pos.signal.signal_key)
         digits = self.mt5.symbol_info(self.symbol).digits

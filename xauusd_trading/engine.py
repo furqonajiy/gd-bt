@@ -99,6 +99,11 @@ class PositionStatus:
     floating_pnl: float
     action: str                          # HOLD / WATCH (no overlay-driven actions yet)
     notes: list[str] = field(default_factory=list)
+    # Wall-clock placement time (chart tz) if the caller recorded one.
+    # When present, render_report shows "Executed: ... (X min late)" so the
+    # user can see how their human lag deviates from the strategy's ideal
+    # (instant-at-signal-time) execution assumption.
+    executed_at: Optional[datetime] = None
 
 
 @dataclass
@@ -115,13 +120,13 @@ class Recommendation:
 # ---------------------------------------------------------------------------
 
 def decide(
-    signal: Signal,
-    chart: ChartSource,
-    positions: PositionSource,
-    config: StrategyConfig = DEFAULT_CONFIG,
-    *,
-    now: Optional[datetime] = None,
-    contract_size: float = CONTRACT_SIZE_OZ,
+        signal: Signal,
+        chart: ChartSource,
+        positions: PositionSource,
+        config: StrategyConfig = DEFAULT_CONFIG,
+        *,
+        now: Optional[datetime] = None,
+        contract_size: float = CONTRACT_SIZE_OZ,
 ) -> Recommendation:
     """Produce a Recommendation for the given signal.
 
@@ -172,8 +177,8 @@ def decide(
 # ---------------------------------------------------------------------------
 
 def _build_new_signal_plan(
-    signal: Signal, equity: float, config: StrategyConfig, contract_size: float,
-    now: Optional[datetime] = None,
+        signal: Signal, equity: float, config: StrategyConfig, contract_size: float,
+        now: Optional[datetime] = None,
 ) -> NewSignalPlan:
     lot, base_stop_distance = compute_lot(equity, signal, config, contract_size)
     orders: list[PlannedOrder] = []
@@ -241,8 +246,8 @@ def _action_for(position: Position, minutes_to_exit: Optional[float]) -> tuple[s
 
 
 def _snapshot_entry(
-    pos: Position, e: Entry, last_bid: Optional[float],
-    last_spread: float, config: StrategyConfig, contract_size: float,
+        pos: Position, e: Entry, last_bid: Optional[float],
+        last_spread: float, config: StrategyConfig, contract_size: float,
 ) -> EntryStatus:
     side = pos.signal.side
     effective_stop = (
@@ -264,8 +269,8 @@ def _snapshot_entry(
 
 
 def _snapshot_position(
-    pos: Position, now: datetime, last_bid: Optional[float],
-    last_spread: float, config: StrategyConfig, contract_size: float,
+        pos: Position, now: datetime, last_bid: Optional[float],
+        last_spread: float, config: StrategyConfig, contract_size: float,
 ) -> PositionStatus:
     minutes_to_exit: Optional[float] = None
     if pos.time_exit_deadline is not None:
@@ -283,6 +288,7 @@ def _snapshot_position(
         first_fill_time=pos.first_fill_time, time_exit_at=pos.time_exit_deadline,
         minutes_to_time_exit=minutes_to_exit, entries=entry_statuses,
         realized_pnl=realized, floating_pnl=floating, action=action, notes=notes,
+        executed_at=pos.executed_at,
     )
 
 
@@ -299,6 +305,16 @@ def _fmt_money(x: Optional[float]) -> str:
         return "-"
     sign = "+" if x >= 0 else "-"
     return f"{sign}${abs(x):.2f}"
+
+
+def _fmt_lateness(executed_at: datetime, signal_time: datetime) -> str:
+    """Return a 'on time' / 'X min late' / 'X min early' annotation."""
+    delta_min = (executed_at - signal_time).total_seconds() / 60.0
+    if delta_min >= 0.5:
+        return f"({delta_min:.1f} min late)"
+    if delta_min <= -0.5:
+        return f"({-delta_min:.1f} min early)"
+    return "(on time)"
 
 
 def render_report(rec: Recommendation) -> str:
@@ -372,6 +388,13 @@ def render_report(rec: Recommendation) -> str:
             f"  Signal {s.signal_key}  {s.side} {s.r1:g}-{s.r2:g}  "
             f"issued {_fmt_time(s.signal_time_chart)}"
         )
+        # Show actual placement time when we recorded one (decide --execute
+        # captures it; legacy registry entries without it just skip this line).
+        if p.executed_at is not None:
+            lines.append(
+                f"    Executed: {_fmt_time(p.executed_at)} GMT+3 "
+                f"{_fmt_lateness(p.executed_at, s.signal_time_chart)}"
+            )
         lines.append(
             f"    Stage:  {p.stage_label}    "
             f"First fill: {_fmt_time(p.first_fill_time)}    "

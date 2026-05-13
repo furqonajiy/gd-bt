@@ -7,12 +7,18 @@ Subcommands:
     xauusd decide     --signal "..." --signal-date YYYY-MM-DD --signal-tz N [--execute]
                       (default: print-only. With --execute: places + manages on MT5.
                        If the signal's pending window has already closed by the time
-                       you run this, no orders are placed.)
+                       you run this, no orders are placed. Successful placement
+                       records `executed_at` (wall-clock chart-tz) in positions.json
+                       so later runs can show "X min late" and replay the actual
+                       MT5 trajectory alongside the ideal one.)
 
     xauusd manage     [--execute]
                       (manage existing tracked signals only; no new signal placement.
                        Cancels expired pendings, locks SL to TP1 after TP1 touch,
-                       time-closes positions past max-hold deadline. Run periodically.)
+                       time-closes positions past max-hold deadline. Run periodically.
+                       When a tracked signal has `executed_at` and you were late,
+                       the report shows BOTH the ideal-execution replay and the
+                       actual-execution replay so you can see what the lag cost.)
 
     xauusd mt5-info   diagnostic
     xauusd fetch      pull M1 to per-month CSVs (no decision)
@@ -22,13 +28,18 @@ import argparse
 import glob
 import json
 import sys
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .adapters import CsvChartSource, ManualPositionSource
 from .backtest import run_backtest, write_backtest_outputs
-from .config import DEFAULT_CONFIG, StrategyConfig
+from .config import (
+    CHART_TIMEZONE_OFFSET, CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig,
+)
 from .engine import decide, render_report
+from .positions import Position, advance_bars, open_position
+from .signal import parse_one_signal
 
 # Hardcoded archive policy (per project preference: minimal flags).
 ARCHIVE_DIR = "data"
@@ -79,6 +90,306 @@ def _try_archive_from_mt5(symbol: str, server_offset: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# tracked-signal replay (used by both decide and manage)
+# ---------------------------------------------------------------------------
+
+def _chart_now() -> datetime:
+    """Wall-clock current time in chart timezone (GMT+3), naive.
+
+    Matches the project convention of using GMT+3 naive datetimes everywhere
+    internally. `datetime.utcnow()` is fine here; the project already uses it
+    elsewhere in mt5_adapter.py. If you migrate to a stricter tz-aware setup
+    later, do it in one pass across the codebase.
+    """
+    return datetime.utcnow() + timedelta(hours=CHART_TIMEZONE_OFFSET)
+
+
+def _parse_executed_at(raw) -> datetime | None:
+    """Parse an executed_at field from the registry. None on missing/invalid."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw))
+    except Exception:
+        return None
+
+
+def _replay_tracked_signal(item: dict, chart, replay_end: datetime,
+                           config: StrategyConfig
+                           ) -> tuple[Position, Position, datetime | None]:
+    """Replay one registry entry, returning (pos_ideal, pos_actual, executed_at).
+
+    pos_ideal:  replayed from the signal's activation_time. This is the
+                "strategy assumes instant placement at signal time" view,
+                identical to what `replay_signal` does in backtest -- so it
+                serves as the baseline of what *should* have happened.
+
+    pos_actual: replayed from executed_at when that timestamp is present AND
+                later than activation_time. Otherwise it's the SAME Python
+                object as pos_ideal (no second replay; both views collapse).
+
+    executed_at: parsed datetime in chart tz, or None for legacy entries
+                that predate the field.
+
+    Both Position objects have their `executed_at` field stamped (where
+    available) so downstream renderers can show "X min late" inline.
+    """
+    psig = parse_one_signal(item["signal"], item["date"], int(item["tz"]))
+    equity_at_open = float(item.get("equity_at_open", 0.0))
+    executed_at = _parse_executed_at(item.get("executed_at"))
+
+    pos_ideal = open_position(psig, equity_at_open, config)
+    advance_bars(
+        pos_ideal,
+        chart.bars_between(pos_ideal.activation_time, replay_end),
+        config,
+    )
+    pos_ideal.executed_at = executed_at
+
+    if executed_at is not None and executed_at > pos_ideal.activation_time:
+        pos_actual = open_position(psig, equity_at_open, config)
+        # Replay from the real placement moment. Bars before executed_at
+        # don't trigger fills here because pos_actual never saw them.
+        advance_bars(
+            pos_actual,
+            chart.bars_between(executed_at, replay_end),
+            config,
+        )
+        pos_actual.executed_at = executed_at
+    else:
+        # Either no executed_at recorded (legacy entry) or it equals/predates
+        # activation_time (on-time placement). Single view suffices.
+        pos_actual = pos_ideal
+
+    return pos_ideal, pos_actual, executed_at
+
+
+# ---------------------------------------------------------------------------
+# manage-output formatters
+# ---------------------------------------------------------------------------
+
+def _format_lateness(executed_at: datetime, signal_time: datetime) -> str:
+    """Return '(X.X min late)' / '(on time)' / '(X.X min early)' annotation."""
+    delta_min = (executed_at - signal_time).total_seconds() / 60.0
+    if delta_min >= 0.5:
+        return f"({delta_min:.1f} min late)"
+    if delta_min <= -0.5:
+        return f"({-delta_min:.1f} min early)"
+    return "(on time)"
+
+
+def _entry_floating(entry, side: str, bid: float, ask: float,
+                    contract_size: float = CONTRACT_SIZE_OZ) -> float:
+    """Floating P&L for one OPEN entry against current bid/ask.
+
+    Returns 0.0 for non-OPEN entries (no exposure). Mirrors the formula in
+    engine.py's `_snapshot_position`: BUYs would close at the bid, SELLs at
+    the ask (= bid + spread). Used both for the actual-view OPEN entries
+    (matches MT5's "Profit" column closely, modulo swap/commission) and for
+    the ideal-view counterfactual annotations.
+    """
+    if entry.status != "OPEN":
+        return 0.0
+    if side == "BUY":
+        return (bid - entry.entry_price) * entry.lot * contract_size
+    return (entry.entry_price - ask) * entry.lot * contract_size
+
+
+def _format_entry_line(entry, side: str, bid: float, ask: float,
+                       contract_size: float, ideal_entry=None) -> str:
+    """Format one entry line. When `ideal_entry` is given AND its status
+    diverges from `entry.status`, append a "[if on time: ...]" annotation
+    explaining the counterfactual.
+    """
+    if entry.status == "OPEN":
+        floating = _entry_floating(entry, side, bid, ask, contract_size)
+        base = (f"    #{entry.entry_index}  ({entry.entry_price:g})  OPEN     "
+                f"lot={entry.lot:.2f}   floating ${floating:+.2f}")
+    elif entry.status == "PENDING":
+        base = (f"    #{entry.entry_index}  ({entry.entry_price:g})  PENDING  "
+                f"lot={entry.lot:.2f}  (limit waiting)")
+    elif entry.status == "NO_FILL":
+        base = f"    #{entry.entry_index}  ({entry.entry_price:g})  NO_FILL"
+    else:  # SL / LOCK_TP1 / TP1 / TP2 / TP3 / TIME_EXIT
+        pnl_str = f"${entry.pnl:+.2f}" if entry.pnl is not None else "-"
+        exit_str = f"@ {entry.exit_price:g}" if entry.exit_price is not None else "-"
+        base = (f"    #{entry.entry_index}  ({entry.entry_price:g})  "
+                f"{entry.status} {exit_str}  pnl={pnl_str}")
+
+    if ideal_entry is None or ideal_entry.status == entry.status:
+        return base
+
+    # Statuses diverge -- annotate the actual-view line with what the
+    # ideal-view counterfactual would say. Practical cases (ideal is always
+    # at-or-ahead of actual because the actual replay starts later):
+    #   ideal=OPEN, actual=PENDING       -> you missed the fill so far
+    #   ideal=<terminal>, actual=PENDING -> ideal already filled & exited
+    #   ideal=<terminal>, actual=OPEN    -> ideal exited, actual still holding
+    if ideal_entry.status == "OPEN":
+        ideal_floating = _entry_floating(ideal_entry, side, bid, ask, contract_size)
+        time_str = (f"{ideal_entry.fill_time:%H:%M}"
+                    if ideal_entry.fill_time is not None else "?")
+        ann = f"   [if on time: OPEN since {time_str}, ${ideal_floating:+.2f}]"
+    elif ideal_entry.status == "PENDING":
+        ann = "   [if on time: still PENDING]"
+    elif ideal_entry.status == "NO_FILL":
+        ann = "   [if on time: NO_FILL]"
+    else:
+        pnl = ideal_entry.pnl
+        pnl_str = f"${pnl:+.2f}" if pnl is not None else "?"
+        time_str = (f"{ideal_entry.exit_time:%H:%M}"
+                    if ideal_entry.exit_time is not None else "?")
+        ann = f"   [if on time: {ideal_entry.status} at {time_str}, {pnl_str}]"
+    return base + ann
+
+
+def _format_position_body(
+        pos: Position, now: datetime,
+        bid: float, ask: float, contract_size: float,
+        *, ideal_for_annotations: Position | None = None,
+) -> tuple[list[str], float, float]:
+    """Format the stage/fill/entries block for one Position view.
+
+    Returns (lines, floating_total, realized_total). Lines are 4-space-
+    indented; caller may add further indent when nesting under "If executed
+    on time" / "Actual" sub-headers.
+
+    `ideal_for_annotations`, when given, is the ideal Position to compare
+    against -- used only for the ACTUAL view of a dual-view block, so
+    entries whose status diverges from the ideal get an inline
+    "[if on time: ...]" annotation pointing at the counterfactual.
+    """
+    lines: list[str] = []
+
+    if not pos.filled_entries():
+        stage = "Pending (no fills yet)"
+    elif pos.stage >= 1:
+        stage = "Stage 2 (TP1 touched -- SL locked at TP1)"
+    else:
+        stage = "Stage 1 (initial SL active)"
+    lines.append(f"    Stage:         {stage}")
+
+    if pos.first_fill_time is not None:
+        lines.append(f"    First fill:    {pos.first_fill_time}  GMT+3")
+    if pos.time_exit_deadline is not None:
+        delta_min = (pos.time_exit_deadline - now).total_seconds() / 60.0
+        countdown = (
+            f"({delta_min:+.0f} min)" if delta_min > 0 else
+            f"(deadline passed by {-delta_min:.0f} min -- will close on next manage)"
+        )
+        lines.append(f"    Time-exit at:  {pos.time_exit_deadline}  GMT+3  {countdown}")
+
+    side = pos.signal.side
+    floating_total = 0.0
+    for i, e in enumerate(pos.entries):
+        ideal_e = (ideal_for_annotations.entries[i]
+                   if ideal_for_annotations is not None else None)
+        lines.append(_format_entry_line(e, side, bid, ask, contract_size, ideal_e))
+        floating_total += _entry_floating(e, side, bid, ask, contract_size)
+
+    realized_total = pos.realized_pnl()
+    lines.append(
+        f"    Floating:      ${floating_total:+.2f}    "
+        f"Realized: ${realized_total:+.2f}"
+    )
+    return lines, floating_total, realized_total
+
+
+def _format_position_status(
+        pos_ideal: Position, pos_actual: Position,
+        executed_at: datetime | None, now: datetime,
+        bid: float, ask: float, contract_size: float,
+) -> tuple[str, float, float]:
+    """Render one tracked-signal block. Returns (text, floating, realized)
+    for the ACTUAL view, which the caller uses to roll up the grand total.
+
+    When `executed_at` is recorded AND the user was meaningfully late, this
+    emits a dual view:
+      - "If executed on time" -- the strategy's ideal-execution assumption
+        (replayed from signal time); matches what backtest produces.
+      - "Actual"              -- what MT5 saw, replayed from `executed_at`;
+        bars before placement can't fire fills.
+
+    On divergence between the views, each diverging entry in the actual
+    view gets a `[if on time: ...]` annotation, and a "Lateness cost so far"
+    summary line gives the net P&L delta plus a missed/extra-fill count.
+
+    For legacy entries (no `executed_at`) and on-time placements the dual
+    view collapses to a single view; the output looks like before but with
+    per-entry floating P&L and a Floating/Realized footer added.
+    """
+    s = pos_ideal.signal
+    lines: list[str] = []
+
+    lines.append(
+        f"  {s.signal_key}  {s.side} {s.r1:g}-{s.r2:g}  "
+        f"SL={s.sl:g} TP1={s.tp1:g} TP2={s.tp2:g} TP3={s.tp3:g}"
+    )
+    lines.append(f"    Issued:        {s.signal_time_chart}  GMT+3")
+
+    if executed_at is not None:
+        lines.append(
+            f"    Executed:      {executed_at:%Y-%m-%d %H:%M:%S}  GMT+3  "
+            f"{_format_lateness(executed_at, s.signal_time_chart)}"
+        )
+
+    lines.append(f"    Pending until: {pos_ideal.expiry_time}  GMT+3")
+
+    if pos_actual is not pos_ideal:
+        # Dual view: real late-execution split exists.
+        lines.append("")
+        lines.append(
+            f"    If executed on time ({s.signal_time_chart:%H:%M} -- "
+            f"the strategy's assumption):"
+        )
+        ideal_lines, ideal_floating, ideal_realized = _format_position_body(
+            pos_ideal, now, bid, ask, contract_size,
+        )
+        for line in ideal_lines:
+            lines.append("  " + line)
+
+        lines.append("")
+        lines.append(f"    Actual (executed {executed_at:%H:%M} -- what MT5 sees):")
+        actual_lines, actual_floating, actual_realized = _format_position_body(
+            pos_actual, now, bid, ask, contract_size,
+            ideal_for_annotations=pos_ideal,
+        )
+        for line in actual_lines:
+            lines.append("  " + line)
+
+        # Lateness cost: delta in total P&L between actual and ideal.
+        # Negative means lateness hurt you ($X less than on-time path);
+        # positive means lateness helped you (avoided an adverse fill).
+        ideal_pnl = ideal_floating + ideal_realized
+        actual_pnl = actual_floating + actual_realized
+        pnl_delta = actual_pnl - ideal_pnl
+
+        ideal_fills = sum(1 for e in pos_ideal.entries if e.fill_time is not None)
+        actual_fills = sum(1 for e in pos_actual.entries if e.fill_time is not None)
+        fill_diff = actual_fills - ideal_fills
+        if fill_diff < 0:
+            fill_note = f", {-fill_diff} missed fill{'s' if -fill_diff != 1 else ''}"
+        elif fill_diff > 0:
+            fill_note = f", {fill_diff} extra fill{'s' if fill_diff != 1 else ''}"
+        else:
+            fill_note = ""
+
+        lines.append("")
+        lines.append(f"    Lateness cost so far: ${pnl_delta:+.2f}{fill_note}")
+        lines.append(f"    Total (actual):       ${actual_pnl:+.2f}")
+        return "\n".join(lines), actual_floating, actual_realized
+
+    # Single view: legacy entry or on-time placement.
+    body_lines, floating_total, realized_total = _format_position_body(
+        pos_ideal, now, bid, ask, contract_size,
+    )
+    lines.extend(body_lines)
+    total = floating_total + realized_total
+    lines.append(f"    Total:         ${total:+.2f}")
+    return "\n".join(lines), floating_total, realized_total
+
+
+# ---------------------------------------------------------------------------
 # subcommand: backtest
 # ---------------------------------------------------------------------------
 
@@ -107,8 +418,6 @@ def cmd_backtest(args: argparse.Namespace) -> int:
 
 def cmd_decide(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
-    from .signal import parse_one_signal
-    from .positions import open_position, advance_bars
 
     use_mt5 = bool(args.mt5) or bool(args.execute)
     conn = None
@@ -153,7 +462,6 @@ def cmd_decide(args: argparse.Namespace) -> int:
     if args.now:
         now = datetime.fromisoformat(args.now)
 
-    open_positions: list = []
     registry_path = Path(args.positions_json or "positions.json")
     prior_entries: list[dict] = []
     if registry_path.exists():
@@ -163,13 +471,16 @@ def cmd_decide(args: argparse.Namespace) -> int:
             prior_entries = []
 
     replay_end = now if now is not None else chart.last_time()
+
+    # Build (ideal, actual, executed_at) for every tracked signal. Use the
+    # actual view for engine / executor calls so MT5 actions and the report's
+    # OPEN POSITIONS section reflect what MT5 actually sees.
+    tracked: list[tuple[Position, Position, datetime | None]] = []
     if prior_entries and replay_end is not None:
         for item in prior_entries:
-            psig = parse_one_signal(item["signal"], item["date"], int(item["tz"]))
-            equity_at_open = float(item.get("equity_at_open", equity))
-            pos = open_position(psig, equity_at_open, config)
-            advance_bars(pos, chart.bars_between(pos.activation_time, replay_end), config)
-            open_positions.append(pos)
+            tracked.append(_replay_tracked_signal(item, chart, replay_end, config))
+
+    open_positions = [t[1] for t in tracked]  # pos_actual
 
     positions = ManualPositionSource(equity=equity, positions=open_positions)
     rec = decide(signal, chart, positions, config, now=now)
@@ -198,6 +509,8 @@ def cmd_decide(args: argparse.Namespace) -> int:
         registry = SignalRegistry(registry_path)
         log = ExecutionLog()
 
+        # Manage existing tracked signals first, against their actual replay
+        # so cancel/lock/time-exit decisions match MT5's true state.
         for pos in open_positions:
             mlog = executor.manage_position(pos, config, rec.generated_at)
             log.merge(mlog)
@@ -210,7 +523,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
         #   1. Already tracked  -> management above handled it; do not re-place.
         #   2. Pending window already closed -> skip placement (would only be
         #      cancelled immediately by the next manage cycle anyway).
-        #   3. Otherwise        -> place the planned orders.
+        #   3. Otherwise        -> place the planned orders, capture executed_at.
         if any(p.signal.signal_key == signal.signal_key for p in open_positions):
             log.actions.append(
                 f"Signal {signal.signal_key} is already tracked; managed above."
@@ -226,7 +539,18 @@ def cmd_decide(args: argparse.Namespace) -> int:
             plog = executor.place_signal(signal, rec.new_signal)
             log.merge(plog)
             if plog.placed > 0:
-                registry.add(signal, equity)
+                # Stamp the registry with the wall-clock placement moment.
+                # Captured AFTER place_signal returns so it reflects the time
+                # MT5 actually accepted the orders, not when we started the
+                # command. Subsequent `manage` runs use this to compute how
+                # late you were and replay the actual MT5 trajectory.
+                executed_at = _chart_now()
+                registry.add(signal, equity, executed_at=executed_at)
+                lateness = _format_lateness(executed_at, signal.signal_time_chart)
+                log.actions.append(
+                    f"Recorded executed_at = "
+                    f"{executed_at:%Y-%m-%d %H:%M:%S} GMT+3 {lateness}"
+                )
 
         alive = executor.all_alive_magics()
         removed = registry.prune(alive)
@@ -244,53 +568,6 @@ def cmd_decide(args: argparse.Namespace) -> int:
 # subcommand: manage
 # ---------------------------------------------------------------------------
 
-def _format_position_status(pos, now: datetime) -> str:
-    """Human-readable one-position summary for the manage subcommand."""
-    s = pos.signal
-    lines: list[str] = []
-
-    if not pos.filled_entries():
-        stage = "Pending (no fills yet)"
-    elif pos.stage >= 1:
-        stage = "Stage 2 (TP1 touched -- SL locked at TP1)"
-    else:
-        stage = "Stage 1 (initial SL active)"
-
-    lines.append(
-        f"  {s.signal_key}  {s.side} {s.r1:g}-{s.r2:g}  "
-        f"SL={s.sl:g} TP1={s.tp1:g} TP2={s.tp2:g} TP3={s.tp3:g}"
-    )
-    lines.append(f"    Issued:        {s.signal_time_chart}  GMT+3")
-    lines.append(f"    Pending until: {pos.expiry_time}  GMT+3")
-    lines.append(f"    Stage:         {stage}")
-
-    if pos.first_fill_time is not None:
-        lines.append(f"    First fill:    {pos.first_fill_time}  GMT+3")
-    if pos.time_exit_deadline is not None:
-        delta_min = (pos.time_exit_deadline - now).total_seconds() / 60.0
-        countdown = (
-            f"({delta_min:+.0f} min)" if delta_min > 0 else
-            f"(deadline passed by {-delta_min:.0f} min -- will close on next manage)"
-        )
-        lines.append(f"    Time-exit at:  {pos.time_exit_deadline}  GMT+3  {countdown}")
-
-    for e in pos.entries:
-        if e.status == "OPEN":
-            lines.append(f"    #{e.entry_index}  ({e.entry_price:g})  OPEN     lot={e.lot:.2f}")
-        elif e.status == "PENDING":
-            lines.append(f"    #{e.entry_index}  ({e.entry_price:g})  PENDING  lot={e.lot:.2f}  (limit waiting)")
-        elif e.status == "NO_FILL":
-            lines.append(f"    #{e.entry_index}  ({e.entry_price:g})  NO_FILL")
-        else:  # SL / TP1 / TP2 / TP3 / LOCK_TP1 / TIME_EXIT
-            pnl_str = f"${e.pnl:+.2f}" if e.pnl is not None else "-"
-            exit_str = f"@ {e.exit_price:g}" if e.exit_price is not None else "-"
-            lines.append(f"    #{e.entry_index}  ({e.entry_price:g})  {e.status} {exit_str}  pnl={pnl_str}")
-
-    realized = pos.realized_pnl()
-    lines.append(f"    Realized P&L:  ${realized:+.2f}")
-    return "\n".join(lines)
-
-
 def cmd_manage(args: argparse.Namespace) -> int:
     """Manage existing tracked signals on MT5; do NOT place anything new.
 
@@ -300,13 +577,42 @@ def cmd_manage(args: argparse.Namespace) -> int:
       - Lock SL to TP1 once TP1 has been touched on a filled entry
       - Time-close positions whose first fill is older than max_hold_minutes
 
+    For tracked signals that have an `executed_at` and were placed late, the
+    report shows TWO replays per signal:
+      - "If executed on time" -- the strategy's ideal-execution assumption
+      - "Actual"              -- what MT5 saw, starting from your real
+                                 placement moment
+    Use the gap between them to gauge how much manual lag is costing you.
+    Auto-execution (planned) will close that gap to zero.
+
     Without --execute, prints status only (safe to run any time).
 
-    Suggested cadence: every 1-5 minutes via Task Scheduler / cron.
+    With --watch, loops the manage cycle every --watch-interval seconds
+    (default 5s) until positions.json has no live MT5 footprint or the user
+    interrupts with Ctrl+C. Keeps one MT5 connection open across iterations
+    to avoid the re-import / re-init / re-archive overhead of looping at the
+    PowerShell level. The archive runs once at startup only.
     """
     config = _config_from_args(args)
-    from .signal import parse_one_signal
-    from .positions import open_position, advance_bars
+
+    # Validate --watch-interval if watch mode is on.
+    if args.watch:
+        interval = float(args.watch_interval)
+        if interval < 1.0:
+            print(
+                f"--watch-interval must be >= 1.0 (got {interval}). "
+                f"5.0 is the recommended default. Aborting.",
+                file=sys.stderr,
+            )
+            return 2
+        if interval < 2.0:
+            print(
+                f"WARNING: --watch-interval {interval}s is aggressive. The "
+                f"strategy is M1 so the worst-case reversal window is 60s; "
+                f"5s gives a 12x safety margin and is the recommended default."
+            )
+            print()
+
     from .mt5_adapter import (
         Mt5ChartSource, Mt5Connection, mt5_equity,
         archive_m1_by_month, render_archive_summary,
@@ -319,101 +625,166 @@ def cmd_manage(args: argparse.Namespace) -> int:
     conn.initialize()
 
     try:
-        summary = archive_m1_by_month(
-            conn, args.mt5_symbol, ARCHIVE_DIR,
-            months_back=ARCHIVE_MONTHS,
-            server_offset_hours=args.mt5_server_offset,
-            overwrite=False,
-        )
-        print(render_archive_summary(summary))
-        print()
-    except Exception as e:
-        print(f"[mt5] archive failed (continuing): {e}", file=sys.stderr)
+        # One-time archive at startup. In watch mode this is intentionally
+        # NOT repeated per iteration -- the chart source re-queries MT5 on
+        # every call, so fresh bars are always used for replay; the archive
+        # is only for offline backtesting and doesn't need refreshing during
+        # an interactive watch session.
+        try:
+            summary = archive_m1_by_month(
+                conn, args.mt5_symbol, ARCHIVE_DIR,
+                months_back=ARCHIVE_MONTHS,
+                server_offset_hours=args.mt5_server_offset,
+                overwrite=False,
+            )
+            print(render_archive_summary(summary))
+            print()
+        except Exception as e:
+            print(f"[mt5] archive failed (continuing): {e}", file=sys.stderr)
 
-    chart = Mt5ChartSource(
-        conn, symbol=args.mt5_symbol,
-        server_offset_hours=args.mt5_server_offset,
-        history_bars=args.mt5_history_bars,
+        chart = Mt5ChartSource(
+            conn, symbol=args.mt5_symbol,
+            server_offset_hours=args.mt5_server_offset,
+            history_bars=args.mt5_history_bars,
+        )
+
+        if args.watch:
+            return _run_manage_watch(args, config, conn, chart)
+        exit_code, _ = _manage_pass(args, config, conn, chart)
+        return exit_code
+    finally:
+        conn.shutdown()
+
+
+def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
+                 conn, chart) -> tuple[int, int]:
+    """Run one manage cycle.
+
+    Returns (exit_code, n_alive_on_mt5) where n_alive_on_mt5 is the count of
+    currently-tracked signals that still have at least one order or position
+    on MT5. The watch loop uses 0 to detect "all closed; exit cleanly".
+
+    Works in both --execute and read-only modes. In read-only mode the alive
+    count is computed by querying MT5 directly without mutating the registry,
+    so watch + no-execute can still terminate naturally when everything closes.
+    """
+    from .mt5_adapter import mt5_equity
+    from .mt5_executor import (
+        Mt5Executor, SignalRegistry, signal_to_magic,
+        render_execution_log, ExecutionLog,
     )
 
     try:
         equity = mt5_equity(conn)
     except Exception as e:
         print(f"[mt5] account_info() failed: {e}", file=sys.stderr)
-        conn.shutdown()
-        return 2
+        return 2, 0
 
     registry_path = Path(args.positions_json or "positions.json")
     if not registry_path.exists():
         print(f"No registry file at {registry_path.resolve()}; nothing to manage.")
-        conn.shutdown()
-        return 0
+        return 0, 0
 
     try:
         prior_entries = json.loads(registry_path.read_text(encoding="utf-8"))
     except Exception as e:
         print(f"Could not read {registry_path}: {e}", file=sys.stderr)
-        conn.shutdown()
-        return 2
+        return 2, 0
 
     if not prior_entries:
         print(f"{registry_path.name} is empty; nothing to manage.")
-        conn.shutdown()
-        return 0
+        return 0, 0
 
     replay_end = chart.last_time()
     if replay_end is None:
         print("[mt5] no chart data available; aborting.", file=sys.stderr)
-        conn.shutdown()
-        return 2
+        return 2, 0
 
-    open_positions = []
+    tracked: list[tuple[Position, Position, datetime | None]] = []
     for item in prior_entries:
-        psig = parse_one_signal(item["signal"], item["date"], int(item["tz"]))
-        equity_at_open = float(item.get("equity_at_open", equity))
-        pos = open_position(psig, equity_at_open, config)
-        advance_bars(pos, chart.bars_between(pos.activation_time, replay_end), config)
-        open_positions.append(pos)
+        tracked.append(_replay_tracked_signal(item, chart, replay_end, config))
+
+    # Live bid/ask for floating P&L. The tick is fresher (0-60s) than the
+    # last completed M1 bar's close, so per-entry floating numbers match
+    # MT5's "Profit" column tightly. If the market is closed or the tick is
+    # missing, fall back to the latest bar's close as bid and bar.close +
+    # bar.spread_price as ask -- floating numbers will be slightly stale but
+    # the display still works.
+    bid, ask = 0.0, 0.0
+    tick = conn.mt5.symbol_info_tick(args.mt5_symbol)
+    if tick is not None and tick.bid > 0:
+        bid = tick.bid
+        ask = tick.ask if tick.ask > 0 else tick.bid
+    else:
+        last_bar = chart.latest()
+        if last_bar is not None:
+            bid = last_bar.close
+            ask = last_bar.close + last_bar.spread_price
 
     print("=" * 70)
     print("XAUUSD POSITION MANAGEMENT")
     print(f"Chart time:      {replay_end}  GMT+3")
     print(f"Account equity:  ${equity:,.2f}")
-    print(f"Tracked signals: {len(open_positions)}")
+    print(f"Tracked signals: {len(tracked)}")
+    if bid > 0:
+        print(f"Live bid/ask:    {bid:g} / {ask:g}")
     print("=" * 70)
-    for pos in open_positions:
-        print(_format_position_status(pos, replay_end))
+
+    total_floating = 0.0
+    total_realized = 0.0
+    for pos_ideal, pos_actual, executed_at in tracked:
+        text, sig_floating, sig_realized = _format_position_status(
+            pos_ideal, pos_actual, executed_at, replay_end,
+            bid, ask, CONTRACT_SIZE_OZ,
+        )
+        print(text)
         print()
+        total_floating += sig_floating
+        total_realized += sig_realized
+
+    # Grand total across all tracked signals. Uses the actual view's numbers
+    # so the floating figure matches MT5's account-level "Profit" sum
+    # (modulo swap/commission, which we don't model). Realized here means
+    # "realized within currently-tracked signals" -- signals that have
+    # already closed and been pruned from the registry don't contribute.
+    print("=" * 70)
+    print(f"TOTAL FLOATING P&L:  ${total_floating:+.2f}    (matches MT5 'Profit' column)")
+    print(f"TOTAL REALIZED P&L:  ${total_realized:+.2f}    (tracked signals only, ex-prune)")
+    print(f"TOTAL COMBINED:      ${total_floating + total_realized:+.2f}")
+    print("=" * 70)
+    print()
+
+    # Always build the executor -- in --execute mode it runs management
+    # actions, in read-only mode it's used purely to count alive magics so
+    # watch can detect "all done" without mutating the registry.
+    executor = Mt5Executor(
+        conn, args.mt5_symbol,
+        min_lot=config.minimum_lot or 0.01,
+        lot_step=config.lot_step or 0.01,
+    )
+    tracked_magics = {
+        signal_to_magic(actual.signal.signal_key)
+        for _ideal, actual, _exec_at in tracked
+    }
 
     if args.execute:
-        from .mt5_executor import (
-            Mt5Executor, SignalRegistry, signal_to_magic,
-            render_execution_log, ExecutionLog,
-        )
-
-        executor = Mt5Executor(
-            conn, args.mt5_symbol,
-            min_lot=config.minimum_lot or 0.01,
-            lot_step=config.lot_step or 0.01,
-        )
-
         errors = executor.sanity_checks(expected_equity=equity)
         if errors:
             print("SANITY CHECKS FAILED -- aborting execution:")
             for e in errors:
                 print(f"  ! {e}")
-            conn.shutdown()
-            return 2
+            return 2, len(tracked_magics)
 
         registry = SignalRegistry(registry_path)
         log = ExecutionLog()
 
-        for pos in open_positions:
-            mlog = executor.manage_position(pos, config, replay_end)
+        # Drive MT5 actions from the actual replay -- that's the one whose
+        # stage / time_exit_deadline match what MT5 has actually seen.
+        for _ideal, actual, _exec_at in tracked:
+            mlog = executor.manage_position(actual, config, replay_end)
             log.merge(mlog)
 
-        known = {signal_to_magic(p.signal.signal_key) for p in open_positions}
-        log.warnings.extend(executor.warn_on_unknown(known))
+        log.warnings.extend(executor.warn_on_unknown(tracked_magics))
 
         alive = executor.all_alive_magics()
         removed = registry.prune(alive)
@@ -422,10 +793,49 @@ def cmd_manage(args: argparse.Namespace) -> int:
 
         print(render_execution_log(log))
     else:
+        # Read-only path: still query MT5 for the alive set so watch mode
+        # can exit cleanly when nothing's left. No registry mutation.
+        alive = executor.all_alive_magics()
         print("(read-only -- pass --execute to apply changes to MT5)")
 
-    conn.shutdown()
-    return 0
+    # n_alive = how many of OUR tracked signals still have any MT5 footprint.
+    # Both branches compute `alive` from the same all_alive_magics() call
+    # after any management actions, so closed signals are reflected.
+    n_alive = len(tracked_magics & alive)
+    return 0, n_alive
+
+
+def _run_manage_watch(args: argparse.Namespace, config: StrategyConfig,
+                      conn, chart) -> int:
+    """Loop the manage cycle until the registry has no live MT5 footprint or
+    the user hits Ctrl+C. One MT5 connection is shared across iterations.
+    """
+    interval = float(args.watch_interval)
+    iteration = 0
+    try:
+        while True:
+            iteration += 1
+            print()
+            print(
+                f"[watch iter #{iteration} -- "
+                f"{datetime.now():%Y-%m-%d %H:%M:%S} local -- "
+                f"interval {interval:g}s]"
+            )
+            exit_code, n_alive = _manage_pass(args, config, conn, chart)
+            if exit_code != 0:
+                return exit_code
+            if n_alive == 0:
+                print()
+                print(
+                    "All tracked signals have no live MT5 footprint; "
+                    "exiting watch mode."
+                )
+                return 0
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print()
+        print("Interrupted; exiting watch mode.")
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -548,18 +958,31 @@ def build_parser() -> argparse.ArgumentParser:
     pd_.add_argument("--now", default=None)
     pd_.add_argument("--execute", action="store_true",
                      help="Place orders on MT5 directly (no confirmation prompt). Implies --mt5. "
-                          "Skips placement for signals whose pending window has already closed.")
+                          "Skips placement for signals whose pending window has already closed. "
+                          "On successful placement, records executed_at in positions.json so "
+                          "later runs can show how late you were.")
     _add_strategy_overrides(pd_)
     _add_mt5_flags(pd_)
     pd_.set_defaults(func=cmd_decide)
 
     pmg = sub.add_parser("manage",
                          help="Manage tracked signals: lock SL to TP1, cancel expired pendings, time-close positions. "
-                              "Run periodically. Without --execute prints status only.")
+                              "Run periodically. Without --execute prints status only. Shows ideal vs actual "
+                              "replay side-by-side for signals you placed late.")
     pmg.add_argument("--positions-json", default=None,
                      help="Tracked-signal registry (default: positions.json)")
     pmg.add_argument("--execute", action="store_true",
                      help="Apply changes to MT5. Without this flag, prints status only.")
+    pmg.add_argument("--watch", action="store_true",
+                     help="Loop the manage cycle every --watch-interval seconds, keeping "
+                          "one MT5 connection open across iterations. Exits when no tracked "
+                          "signal has any live MT5 footprint, or on Ctrl+C. Use this during "
+                          "active trading hours instead of Task Scheduler.")
+    pmg.add_argument("--watch-interval", type=float, default=5.0,
+                     help="Seconds between watch iterations (default: 5.0). Minimum 1.0. "
+                          "Values under 2.0 print a warning at startup -- the strategy is M1 "
+                          "so 5s gives a 12x safety margin against the worst-case 60s reversal "
+                          "window between TP1 touch and SL hit.")
     _add_strategy_overrides(pmg)
     _add_mt5_flags(pmg)
     pmg.set_defaults(func=cmd_manage)
