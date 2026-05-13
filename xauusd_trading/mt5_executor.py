@@ -29,6 +29,7 @@ what MT5 actually sees -- because the engine's default replay-from-signal-time
 assumption is the strategy's ideal, not what happens when a human is slow.
 """
 from __future__ import annotations
+import calendar
 import hashlib
 import json
 import math
@@ -169,12 +170,28 @@ class Mt5Executor:
 
     def __init__(self, conn: Mt5Connection, symbol: str,
                  min_lot: float = DEFAULT_MIN_LOT,
-                 lot_step: float = DEFAULT_LOT_STEP):
+                 lot_step: float = DEFAULT_LOT_STEP,
+                 server_offset_hours: int = 3):
+        """
+        Parameters
+        ----------
+        conn : initialized Mt5Connection.
+        symbol : exact symbol string as in MT5 Market Watch.
+        min_lot, lot_step : broker rounding constraints.
+        server_offset_hours : broker server timezone offset from UTC. Most
+            XAUUSD brokers run GMT+3 year-round, which is the project default.
+            This value is used by `has_recent_history` to build query windows
+            in the broker-time-as-UTC epoch space MT5 stores history in --
+            getting it wrong causes the re-entry guard to miss recent deals
+            and re-place signals that just closed (see the function docstring
+            for the full mechanism).
+        """
         self.conn = conn
         self.mt5 = conn.mt5
         self.symbol = symbol
         self.min_lot = min_lot
         self.lot_step = lot_step
+        self.server_offset_hours = server_offset_hours
         self._sym_info = None
 
     # ---- pre-flight ----------------------------------------------------
@@ -262,18 +279,37 @@ class Mt5Executor:
         catches signals that already closed via SL, TP, or time-exit even
         after positions.json has been pruned.
 
+        Builds the query window in broker-time-pretending-to-be-UTC epoch
+        ints, the same space MT5 uses internally to store history.time
+        fields (see mt5_adapter._chart_time_to_mt5_epoch for the matching
+        trick on the chart side). Passing naive Python datetimes here would
+        cause the MT5 wrapper to convert them from the Python process's
+        LOCAL timezone to real UTC -- but MT5 stores history times as
+        broker-local-time treated as UTC. The two epoch spaces are shifted
+        apart by the broker's GMT offset (3h for a typical XAUUSD broker
+        on GMT+3), so a naive query window ends ~3h before deals that just
+        happened, and the guard misses them.
+
         Soft-fails (returns False) if the MT5 history calls error out --
         we don't want a transient API hiccup to block legitimate placement.
         The other two guards (positions.json + find_orders/find_positions)
         still apply in that case.
         """
         try:
-            to_time = datetime.now() + timedelta(minutes=1)
-            from_time = to_time - timedelta(hours=lookback_hours)
-            orders = self.mt5.history_orders_get(from_time, to_time) or []
+            # Construct the window in broker-time-pretending-to-be-UTC, the
+            # same epoch space MT5 uses internally. Independent of the
+            # Python process's local timezone.
+            broker_now = datetime.utcnow() + timedelta(hours=self.server_offset_hours)
+            to_epoch = calendar.timegm(
+                (broker_now + timedelta(minutes=1)).timetuple()
+            )
+            from_epoch = calendar.timegm(
+                (broker_now - timedelta(hours=lookback_hours)).timetuple()
+            )
+            orders = self.mt5.history_orders_get(from_epoch, to_epoch) or []
             if any(getattr(o, "magic", None) == magic for o in orders):
                 return True
-            deals = self.mt5.history_deals_get(from_time, to_time) or []
+            deals = self.mt5.history_deals_get(from_epoch, to_epoch) or []
             return any(getattr(d, "magic", None) == magic for d in deals)
         except Exception:
             return False

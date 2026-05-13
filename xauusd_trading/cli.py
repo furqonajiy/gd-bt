@@ -503,6 +503,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
             conn, args.mt5_symbol,
             min_lot=config.minimum_lot or 0.01,
             lot_step=config.lot_step or 0.01,
+            server_offset_hours=args.mt5_server_offset,
         )
 
         print()
@@ -741,6 +742,7 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
         conn, args.mt5_symbol,
         min_lot=config.minimum_lot or 0.01,
         lot_step=config.lot_step or 0.01,
+        server_offset_hours=args.mt5_server_offset,
     )
     tracked_magics = {
         signal_to_magic(actual.signal.signal_key)
@@ -1080,6 +1082,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         conn, args.mt5_symbol,
         min_lot=config.minimum_lot or 0.01,
         lot_step=config.lot_step or 0.01,
+        server_offset_hours=args.mt5_server_offset,
     )
 
     # 7. Dashboard header.
