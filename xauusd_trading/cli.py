@@ -28,6 +28,7 @@ import argparse
 import glob
 import json
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -585,9 +586,33 @@ def cmd_manage(args: argparse.Namespace) -> int:
     Auto-execution (planned) will close that gap to zero.
 
     Without --execute, prints status only (safe to run any time).
-    Suggested cadence: every 1-5 minutes via Task Scheduler / cron.
+
+    With --watch, loops the manage cycle every --watch-interval seconds
+    (default 5s) until positions.json has no live MT5 footprint or the user
+    interrupts with Ctrl+C. Keeps one MT5 connection open across iterations
+    to avoid the re-import / re-init / re-archive overhead of looping at the
+    PowerShell level. The archive runs once at startup only.
     """
     config = _config_from_args(args)
+
+    # Validate --watch-interval if watch mode is on.
+    if args.watch:
+        interval = float(args.watch_interval)
+        if interval < 1.0:
+            print(
+                f"--watch-interval must be >= 1.0 (got {interval}). "
+                f"5.0 is the recommended default. Aborting.",
+                file=sys.stderr,
+            )
+            return 2
+        if interval < 2.0:
+            print(
+                f"WARNING: --watch-interval {interval}s is aggressive. The "
+                f"strategy is M1 so the worst-case reversal window is 60s; "
+                f"5s gives a 12x safety margin and is the recommended default."
+            )
+            print()
+
     from .mt5_adapter import (
         Mt5ChartSource, Mt5Connection, mt5_equity,
         archive_m1_by_month, render_archive_summary,
@@ -600,53 +625,80 @@ def cmd_manage(args: argparse.Namespace) -> int:
     conn.initialize()
 
     try:
-        summary = archive_m1_by_month(
-            conn, args.mt5_symbol, ARCHIVE_DIR,
-            months_back=ARCHIVE_MONTHS,
-            server_offset_hours=args.mt5_server_offset,
-            overwrite=False,
-        )
-        print(render_archive_summary(summary))
-        print()
-    except Exception as e:
-        print(f"[mt5] archive failed (continuing): {e}", file=sys.stderr)
+        # One-time archive at startup. In watch mode this is intentionally
+        # NOT repeated per iteration -- the chart source re-queries MT5 on
+        # every call, so fresh bars are always used for replay; the archive
+        # is only for offline backtesting and doesn't need refreshing during
+        # an interactive watch session.
+        try:
+            summary = archive_m1_by_month(
+                conn, args.mt5_symbol, ARCHIVE_DIR,
+                months_back=ARCHIVE_MONTHS,
+                server_offset_hours=args.mt5_server_offset,
+                overwrite=False,
+            )
+            print(render_archive_summary(summary))
+            print()
+        except Exception as e:
+            print(f"[mt5] archive failed (continuing): {e}", file=sys.stderr)
 
-    chart = Mt5ChartSource(
-        conn, symbol=args.mt5_symbol,
-        server_offset_hours=args.mt5_server_offset,
-        history_bars=args.mt5_history_bars,
+        chart = Mt5ChartSource(
+            conn, symbol=args.mt5_symbol,
+            server_offset_hours=args.mt5_server_offset,
+            history_bars=args.mt5_history_bars,
+        )
+
+        if args.watch:
+            return _run_manage_watch(args, config, conn, chart)
+        exit_code, _ = _manage_pass(args, config, conn, chart)
+        return exit_code
+    finally:
+        conn.shutdown()
+
+
+def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
+                 conn, chart) -> tuple[int, int]:
+    """Run one manage cycle.
+
+    Returns (exit_code, n_alive_on_mt5) where n_alive_on_mt5 is the count of
+    currently-tracked signals that still have at least one order or position
+    on MT5. The watch loop uses 0 to detect "all closed; exit cleanly".
+
+    Works in both --execute and read-only modes. In read-only mode the alive
+    count is computed by querying MT5 directly without mutating the registry,
+    so watch + no-execute can still terminate naturally when everything closes.
+    """
+    from .mt5_adapter import mt5_equity
+    from .mt5_executor import (
+        Mt5Executor, SignalRegistry, signal_to_magic,
+        render_execution_log, ExecutionLog,
     )
 
     try:
         equity = mt5_equity(conn)
     except Exception as e:
         print(f"[mt5] account_info() failed: {e}", file=sys.stderr)
-        conn.shutdown()
-        return 2
+        return 2, 0
 
     registry_path = Path(args.positions_json or "positions.json")
     if not registry_path.exists():
         print(f"No registry file at {registry_path.resolve()}; nothing to manage.")
-        conn.shutdown()
-        return 0
+        return 0, 0
 
     try:
         prior_entries = json.loads(registry_path.read_text(encoding="utf-8"))
     except Exception as e:
         print(f"Could not read {registry_path}: {e}", file=sys.stderr)
-        conn.shutdown()
-        return 2
+        return 2, 0
 
     if not prior_entries:
         print(f"{registry_path.name} is empty; nothing to manage.")
-        conn.shutdown()
-        return 0
+        return 0, 0
 
     replay_end = chart.last_time()
     if replay_end is None:
         print("[mt5] no chart data available; aborting.", file=sys.stderr)
-        conn.shutdown()
-        return 2
+        return 2, 0
 
     tracked: list[tuple[Position, Position, datetime | None]] = []
     for item in prior_entries:
@@ -702,25 +754,26 @@ def cmd_manage(args: argparse.Namespace) -> int:
     print("=" * 70)
     print()
 
+    # Always build the executor -- in --execute mode it runs management
+    # actions, in read-only mode it's used purely to count alive magics so
+    # watch can detect "all done" without mutating the registry.
+    executor = Mt5Executor(
+        conn, args.mt5_symbol,
+        min_lot=config.minimum_lot or 0.01,
+        lot_step=config.lot_step or 0.01,
+    )
+    tracked_magics = {
+        signal_to_magic(actual.signal.signal_key)
+        for _ideal, actual, _exec_at in tracked
+    }
+
     if args.execute:
-        from .mt5_executor import (
-            Mt5Executor, SignalRegistry, signal_to_magic,
-            render_execution_log, ExecutionLog,
-        )
-
-        executor = Mt5Executor(
-            conn, args.mt5_symbol,
-            min_lot=config.minimum_lot or 0.01,
-            lot_step=config.lot_step or 0.01,
-        )
-
         errors = executor.sanity_checks(expected_equity=equity)
         if errors:
             print("SANITY CHECKS FAILED -- aborting execution:")
             for e in errors:
                 print(f"  ! {e}")
-            conn.shutdown()
-            return 2
+            return 2, len(tracked_magics)
 
         registry = SignalRegistry(registry_path)
         log = ExecutionLog()
@@ -731,9 +784,7 @@ def cmd_manage(args: argparse.Namespace) -> int:
             mlog = executor.manage_position(actual, config, replay_end)
             log.merge(mlog)
 
-        known = {signal_to_magic(actual.signal.signal_key)
-                 for _ideal, actual, _exec_at in tracked}
-        log.warnings.extend(executor.warn_on_unknown(known))
+        log.warnings.extend(executor.warn_on_unknown(tracked_magics))
 
         alive = executor.all_alive_magics()
         removed = registry.prune(alive)
@@ -742,10 +793,49 @@ def cmd_manage(args: argparse.Namespace) -> int:
 
         print(render_execution_log(log))
     else:
+        # Read-only path: still query MT5 for the alive set so watch mode
+        # can exit cleanly when nothing's left. No registry mutation.
+        alive = executor.all_alive_magics()
         print("(read-only -- pass --execute to apply changes to MT5)")
 
-    conn.shutdown()
-    return 0
+    # n_alive = how many of OUR tracked signals still have any MT5 footprint.
+    # Both branches compute `alive` from the same all_alive_magics() call
+    # after any management actions, so closed signals are reflected.
+    n_alive = len(tracked_magics & alive)
+    return 0, n_alive
+
+
+def _run_manage_watch(args: argparse.Namespace, config: StrategyConfig,
+                      conn, chart) -> int:
+    """Loop the manage cycle until the registry has no live MT5 footprint or
+    the user hits Ctrl+C. One MT5 connection is shared across iterations.
+    """
+    interval = float(args.watch_interval)
+    iteration = 0
+    try:
+        while True:
+            iteration += 1
+            print()
+            print(
+                f"[watch iter #{iteration} -- "
+                f"{datetime.now():%Y-%m-%d %H:%M:%S} local -- "
+                f"interval {interval:g}s]"
+            )
+            exit_code, n_alive = _manage_pass(args, config, conn, chart)
+            if exit_code != 0:
+                return exit_code
+            if n_alive == 0:
+                print()
+                print(
+                    "All tracked signals have no live MT5 footprint; "
+                    "exiting watch mode."
+                )
+                return 0
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print()
+        print("Interrupted; exiting watch mode.")
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -883,6 +973,16 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Tracked-signal registry (default: positions.json)")
     pmg.add_argument("--execute", action="store_true",
                      help="Apply changes to MT5. Without this flag, prints status only.")
+    pmg.add_argument("--watch", action="store_true",
+                     help="Loop the manage cycle every --watch-interval seconds, keeping "
+                          "one MT5 connection open across iterations. Exits when no tracked "
+                          "signal has any live MT5 footprint, or on Ctrl+C. Use this during "
+                          "active trading hours instead of Task Scheduler.")
+    pmg.add_argument("--watch-interval", type=float, default=5.0,
+                     help="Seconds between watch iterations (default: 5.0). Minimum 1.0. "
+                          "Values under 2.0 print a warning at startup -- the strategy is M1 "
+                          "so 5s gives a 12x safety margin against the worst-case 60s reversal "
+                          "window between TP1 touch and SL hit.")
     _add_strategy_overrides(pmg)
     _add_mt5_flags(pmg)
     pmg.set_defaults(func=cmd_manage)
