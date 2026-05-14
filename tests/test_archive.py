@@ -3,9 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
-from xauusd_trading.mt5_adapter import (
+from xauusd_trading import (
     _MT5_EXPORT_COLUMNS, _merge_with_existing,
 )
 

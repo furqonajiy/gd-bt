@@ -24,10 +24,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from .config import CHART_TIMEZONE_OFFSET
+from xauusd_trading import CHART_TIMEZONE_OFFSET
 
 if TYPE_CHECKING:
-    from .config import StrategyConfig
+    from xauusd_trading import StrategyConfig
 
 
 _DATE_RE = re.compile(

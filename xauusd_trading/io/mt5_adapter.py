@@ -27,11 +27,9 @@ import calendar
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
-from .adapters import ChartSource, PositionSource
-from .chart import Bar
-from .config import POINT_VALUE
-from .positions import Position
-
+from xauusd_trading import ChartSource
+from xauusd_trading import Bar
+from xauusd_trading import POINT_VALUE
 
 # MT5 Python interprets naive datetimes as the Python process's LOCAL time,
 # and even tz-aware datetimes can be re-routed through local time on some

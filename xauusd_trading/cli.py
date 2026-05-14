@@ -39,14 +39,14 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .adapters import CsvChartSource, ManualPositionSource
-from .backtest import run_backtest, write_backtest_outputs
-from .config import (
+from xauusd_trading import CsvChartSource, ManualPositionSource
+from xauusd_trading import run_backtest, write_backtest_outputs
+from xauusd_trading import (
     CHART_TIMEZONE_OFFSET, CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig,
 )
-from .engine import decide, format_replay_outcome, render_report
-from .positions import Position, advance_bars, open_position
-from .signal import parse_one_signal, parse_signals_file
+from xauusd_trading import decide, format_replay_outcome, render_report
+from xauusd_trading import Position, advance_bars, open_position
+from xauusd_trading import parse_one_signal, parse_signals_file
 
 # Hardcoded archive policy (per project preference: minimal flags).
 ARCHIVE_DIR = "data"
@@ -76,7 +76,7 @@ def _try_archive_from_mt5(symbol: str, server_offset: int) -> None:
     Soft-fail (warn and continue) if MT5 isn't reachable.
     """
     try:
-        from .mt5_adapter import (
+        from xauusd_trading import (
             Mt5Connection, archive_m1_by_month, render_archive_summary,
         )
     except Exception as e:
@@ -413,11 +413,11 @@ def cmd_decide(args: argparse.Namespace) -> int:
     ExecutionLog = None  # imported lazily; only available when use_mt5
 
     if use_mt5:
-        from .mt5_adapter import (
+        from xauusd_trading import (
             Mt5ChartSource, Mt5Connection, mt5_equity,
             archive_m1_by_month, render_archive_summary,
         )
-        from .mt5_executor import Mt5Executor, ExecutionLog
+        from xauusd_trading import Mt5Executor, ExecutionLog
         conn = Mt5Connection(
             path=args.mt5_path, login=args.mt5_login,
             password=args.mt5_password, server=args.mt5_server,
@@ -493,7 +493,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
     print(render_report(rec))
 
     if args.execute:
-        from .mt5_executor import (
+        from xauusd_trading import (
             SignalRegistry, signal_to_magic, render_execution_log,
         )
 
@@ -589,9 +589,8 @@ def cmd_manage(args: argparse.Namespace) -> int:
             )
             print()
 
-    from .mt5_adapter import (
-        Mt5ChartSource, Mt5Connection, mt5_equity,
-        archive_m1_by_month, render_archive_summary,
+    from xauusd_trading import (
+        Mt5ChartSource, Mt5Connection, archive_m1_by_month, render_archive_summary,
     )
 
     conn = Mt5Connection(
@@ -630,8 +629,8 @@ def cmd_manage(args: argparse.Namespace) -> int:
 def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
                  conn, chart) -> tuple[int, int]:
     """Run one manage cycle. Returns (exit_code, n_alive_on_mt5)."""
-    from .mt5_adapter import mt5_equity
-    from .mt5_executor import (
+    from xauusd_trading import mt5_equity
+    from xauusd_trading import (
         Mt5Executor, SignalRegistry, signal_to_magic,
         render_execution_log, ExecutionLog,
     )
@@ -826,7 +825,7 @@ def cmd_auto(args: argparse.Namespace) -> int:
         print(f"signals file failed to parse: {e}", file=sys.stderr)
         return 2
 
-    from .mt5_adapter import (
+    from xauusd_trading import (
         Mt5ChartSource, Mt5Connection,
         archive_m1_by_month, render_archive_summary,
     )
@@ -891,8 +890,8 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
 
 def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                conn, chart, signals_path: Path) -> int:
-    from .mt5_adapter import mt5_equity
-    from .mt5_executor import (
+    from xauusd_trading import mt5_equity
+    from xauusd_trading import (
         Mt5Executor, SignalRegistry, signal_to_magic,
         render_execution_log, ExecutionLog,
     )
@@ -1090,7 +1089,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
 # ---------------------------------------------------------------------------
 
 def cmd_mt5_info(args: argparse.Namespace) -> int:
-    from .mt5_adapter import (
+    from xauusd_trading import (
         Mt5ChartSource, Mt5Connection, mt5_equity, mt5_open_positions_summary,
     )
     with Mt5Connection(
@@ -1124,7 +1123,7 @@ def cmd_mt5_info(args: argparse.Namespace) -> int:
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
-    from .mt5_adapter import (
+    from xauusd_trading import (
         Mt5Connection, archive_m1_by_month, render_archive_summary,
     )
     with Mt5Connection(

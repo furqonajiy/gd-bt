@@ -17,15 +17,14 @@ import json
 from dataclasses import asdict
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Iterable, Optional
 
 import pandas as pd
 
-from .adapters import CsvChartSource
-from .chart import iter_bars, slice_bars
-from .config import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
-from .positions import Position, advance_bars, open_position
-from .signal import Signal, parse_signals_file
+from xauusd_trading import CsvChartSource
+from xauusd_trading import iter_bars, slice_bars
+from xauusd_trading import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
+from xauusd_trading import Position, advance_bars, open_position
+from xauusd_trading import Signal
 
 
 # ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ from typing import Iterable, Iterator, Optional
 
 import pandas as pd
 
-from .config import POINT_VALUE
+from xauusd_trading import POINT_VALUE
 
 
 @dataclass(frozen=True)

@@ -8,15 +8,14 @@ satisfy the same contracts. No engine code has to change.
 """
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
 import pandas as pd
 
-from .chart import Bar, latest_bar, load_chart, slice_bars, iter_bars
-from .positions import Position
+from xauusd_trading import Bar, latest_bar, load_chart, slice_bars, iter_bars
+from xauusd_trading import Position
 
 
 # ---------------------------------------------------------------------------

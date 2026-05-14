@@ -53,11 +53,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from .config import StrategyConfig
-from .engine import NewSignalPlan
-from .mt5_adapter import Mt5Connection
-from .positions import Position, advance_bars
-from .signal import Signal
+from xauusd_trading import StrategyConfig
+from xauusd_trading import NewSignalPlan
+from xauusd_trading import Mt5Connection
+from xauusd_trading import Position, advance_bars
+from xauusd_trading import Signal
 
 
 DEFAULT_MIN_LOT = 0.01

@@ -6,13 +6,12 @@ placement, or positive slippage taking the fill below the planned price).
 from __future__ import annotations
 import calendar
 from datetime import datetime, timedelta
-from typing import Optional
 
 from xauusd_trading import DEFAULT_CONFIG, parse_one_signal
-from xauusd_trading.chart import Bar
-from xauusd_trading.config import POINT_VALUE
-from xauusd_trading.mt5_executor import Mt5Executor, signal_to_magic
-from xauusd_trading.positions import advance_bars, open_position
+from xauusd_trading import Bar
+from xauusd_trading import POINT_VALUE
+from xauusd_trading import Mt5Executor, signal_to_magic
+from xauusd_trading import advance_bars, open_position
 
 
 # --- fakes (no real MT5 needed) -----------------------------------------

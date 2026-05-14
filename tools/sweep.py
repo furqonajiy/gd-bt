@@ -80,7 +80,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from xauusd_trading import (  # noqa: E402
     CsvChartSource, StrategyConfig, parse_signals_file, run_backtest,
 )
-from xauusd_trading.signal import Signal  # noqa: E402
+from xauusd_trading import Signal  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

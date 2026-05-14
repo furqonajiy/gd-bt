@@ -19,13 +19,13 @@ and backtest runner both call it.
 """
 from __future__ import annotations
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
 from .chart import Bar
-from .config import CONTRACT_SIZE_OZ, StrategyConfig
-from .signal import Signal, compute_entries
+from xauusd_trading import CONTRACT_SIZE_OZ, StrategyConfig
+from xauusd_trading import Signal, compute_entries
 from .triggers import (
     fill_trigger, initial_stop_for_entry, stop_trigger, target_trigger,
 )

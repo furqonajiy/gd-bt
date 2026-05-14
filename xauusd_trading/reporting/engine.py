@@ -40,12 +40,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional
 
-from .adapters import ChartSource, PositionSource
-from .config import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
-from .positions import (
-    Entry, Position, TERMINAL, advance_bars, compute_lot, open_position,
+from xauusd_trading import ChartSource, PositionSource
+from xauusd_trading import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
+from xauusd_trading import (
+    Entry, Position, advance_bars, compute_lot, open_position,
 )
-from .signal import Signal, compute_entries
+from xauusd_trading import Signal, compute_entries
 
 
 # ---------------------------------------------------------------------------
