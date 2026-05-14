@@ -5,10 +5,10 @@ to "now", current open positions, and current equity, it returns a
 `Recommendation` describing:
 
   - the action plan for the new signal (FOLLOW with a concrete order
-    placement plan, SKIP_EXPIRED when the pending window has already
-    closed, or SKIP_INVALIDATED when backtest replay from activation_time
-    to now shows the signal has already played out -- entries filled and
-    SL'd, TP'd, or time-exited), and
+    placement plan -- possibly partial when backtest replay shows some
+    entries have already played out; SKIP_EXPIRED when the pending
+    window has already closed; or SKIP_INVALIDATED when backtest replay
+    shows EVERY entry has already played out), and
   - the current state of every existing open position (stage, effective
     stop, floating P&L, time-exit countdown).
 
@@ -21,17 +21,19 @@ strategy itself: SL, SP, TP, and time exit. Adding cross-signal rules
 without re-validating against the backtest would risk degrading the
 validated result. Such overlays can be layered on later if backtested.
 
-The SKIP_EXPIRED and SKIP_INVALIDATED gates are NOT cross-signal overlays
--- they're per-signal divergence-correction guards. Neither changes which
-signals the strategy would have filled in backtest:
+SKIP_EXPIRED, SKIP_INVALIDATED, and the new partial-FOLLOW mode are NOT
+cross-signal overlays -- they're per-signal divergence-correction guards.
+None changes which signals the strategy would have filled in backtest:
   - SKIP_EXPIRED refuses placement after the 4-hour pending window so we
     don't send limits that would just be cancelled.
-  - SKIP_INVALIDATED refuses placement when backtest replay says the
-    signal has already played out, so live can't open a fresh trade that
-    backtest already closed (e.g. user pastes signals.txt entries hours
-    late). Without this gate, late placements would diverge from the
-    backtest path because the engine's replay-from-signal-time assumption
-    no longer matches reality.
+  - SKIP_INVALIDATED refuses placement only when EVERY entry in the
+    backtest replay has reached a terminal status (SL, LOCK_TP1, TP*,
+    TIME_EXIT, NO_FILL) -- so there's literally nothing left to do.
+  - Partial FOLLOW handles the in-between case: when SOME entries have
+    played out in replay but others are still PENDING or OPEN, only the
+    placeable entries are sent to MT5. This matches the backtest path
+    exactly -- terminal entries are entries the backtest also wouldn't
+    have any further action on.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -66,13 +68,17 @@ class NewSignalPlan:
     """What to do about the new signal.
 
     `action` is one of:
-      - "FOLLOW"           -- place the planned orders
-      - "SKIP_EXPIRED"     -- pending window already closed; do nothing
-      - "SKIP_INVALIDATED" -- backtest replay shows the signal has already
-        played out (entries filled and SL'd, TP'd, time-exited, or NO_FILL
-        on pending expiry). The orders would diverge from the backtest
-        path if placed now. `replay_position` carries the replayed
-        Position for rendering the per-entry rationale.
+      - "FOLLOW"           -- place the orders in `orders`. May be a strict
+        subset of all entry slots when the backtest replay shows some
+        entries have already played out (partial FOLLOW). Inspect
+        `replay_position` (when set) to see which entry indices were
+        filtered out and why.
+      - "SKIP_EXPIRED"     -- pending window already closed; do nothing.
+      - "SKIP_INVALIDATED" -- every entry has reached a terminal status
+        in the backtest replay (no placeable entries remain). The orders
+        would diverge from the backtest path if placed now.
+        `replay_position` carries the replayed Position for rendering the
+        per-entry rationale.
     """
     signal: Signal
     action: str
@@ -85,8 +91,8 @@ class NewSignalPlan:
     # Replayed Position from activation_time to now. Set whenever the engine
     # ran the validity check (i.e. `chart` was provided to decide). None for
     # backwards compat with callers that didn't pass a chart. When the action
-    # is SKIP_INVALIDATED, render_report uses this to produce the per-entry
-    # outcome breakdown shown to the user.
+    # is SKIP_INVALIDATED or FOLLOW with a filtered orders list, render_report
+    # uses this to produce the per-entry outcome breakdown shown to the user.
     replay_position: Optional[Position] = None
 
 
@@ -205,19 +211,20 @@ def _build_new_signal_plan(
 ) -> NewSignalPlan:
     """Build the order placement plan for one signal, with two pre-flight gates.
 
-    Gate order (each replaces "place orders" with a SKIP action if it fires):
+    Gate order:
       1. SKIP_EXPIRED       -- now >= pending_expires_at. Cheap, runs first.
-      2. SKIP_INVALIDATED   -- backtest replay from activation_time to now
-                                shows any entry has reached a terminal status
-                                (SL, LOCK_TP1, TP*, TIME_EXIT, NO_FILL).
-                                Requires `chart` to be available; skipped if
-                                chart is None (legacy callers).
-      3. FOLLOW             -- default; place the planned orders.
+      2. Replay-based filtering (chart must be provided):
+           - All entries terminal in replay        -> SKIP_INVALIDATED
+           - Some entries terminal, others not     -> FOLLOW (partial: only
+                                                      the still-PENDING/OPEN
+                                                      entries are placed)
+           - All entries still PENDING / OPEN      -> FOLLOW (standard)
+      3. FOLLOW (no replay performed; chart was None) -- legacy path.
 
-    SKIP_INVALIDATED is what prevents auto from creating new positions for
-    signals that backtest would have already closed. Without this, pasting
-    a 2-hour-old signal into signals.txt and letting auto run would happily
-    place fresh limits even though the trade is already a loss in backtest.
+    The replay-based filtering is what the user requested with the rule
+    "always execute signals if the status of the entry is still OPEN and
+    Pending in backtest results". The replay's per-entry status is the
+    authoritative source for which entries should reach MT5.
     """
     lot, base_stop_distance = compute_lot(equity, signal, config, contract_size)
     orders: list[PlannedOrder] = []
@@ -256,39 +263,36 @@ def _build_new_signal_plan(
             replay_position=None,
         )
 
-    # ---- Gate 2: SKIP_INVALIDATED ----
-    # Replay the signal from activation_time to now. If any entry has
-    # reached a terminal status, the trade has already played out in the
-    # backtest path; placing fresh orders would open a divergent live trade
-    # that backtest would consider already closed.
+    # ---- Gate 2: replay-based per-entry filtering ----
+    # Replay the signal from activation_time to now. Per-entry status
+    # determines which orders make it to MT5:
+    #   PENDING / OPEN      -> placeable (entry still in play in backtest)
+    #   terminal {SL, LOCK_TP1, TP1, TP2, TP3, TIME_EXIT, NO_FILL}
+    #                       -> filter out (entry already played out)
     #
-    # "Terminal" means {SL, LOCK_TP1, TP1, TP2, TP3, TIME_EXIT, NO_FILL}
-    # (imported from positions.py). Non-terminal {PENDING, OPEN} means
-    # we're still mid-trade in backtest, so placing fresh orders aligns
-    # with the backtest path (either replacing a cancelled pending or
-    # re-opening an accidentally-closed position at a price level backtest
-    # still considers in play).
-    #
-    # Skipped when chart is unavailable (legacy callers) to preserve the
-    # old behavior; production code paths always pass chart.
+    # Skipped when chart is unavailable (legacy callers) so the old all-or-
+    # nothing behavior is preserved.
     replay_pos: Optional[Position] = None
     if chart is not None and now is not None:
         replay_pos = open_position(signal, equity, config, contract_size)
-        # If activation is still in the future, no bars to advance through.
-        # All entries stay PENDING -> valid -> FOLLOW.
+        # If activation is still in the future, no bars to advance through;
+        # all entries stay PENDING -> all placeable -> standard FOLLOW.
         if replay_pos.activation_time <= now:
             advance_bars(
                 replay_pos,
                 chart.bars_between(replay_pos.activation_time, now),
                 config, contract_size,
             )
-        if any(e.status in TERMINAL for e in replay_pos.entries):
+        placeable_indices = {
+            e.entry_index for e in replay_pos.entries
+            if e.status in ("PENDING", "OPEN")
+        }
+        if not placeable_indices:
             return NewSignalPlan(
                 signal=signal, action="SKIP_INVALIDATED",
                 rationale=(
-                    "Backtest replay from signal time to now shows this "
-                    "signal has already played out -- placing fresh orders "
-                    "would diverge from the backtest path. "
+                    "Backtest replay from signal time to now shows every "
+                    "entry has already played out -- nothing to place. "
                     "See per-entry breakdown below."
                 ),
                 orders=orders, pending_expires_at=expires,
@@ -296,6 +300,28 @@ def _build_new_signal_plan(
                 total_initial_risk_dollars=total_risk,
                 replay_position=replay_pos,
             )
+        if len(placeable_indices) < len(orders):
+            filtered = [o for o in orders if o.entry_index in placeable_indices]
+            filtered_risk = sum(o.risk_dollars for o in filtered)
+            skipped_count = len(orders) - len(filtered)
+            placed_ids = ", ".join(f"#{o.entry_index}" for o in filtered)
+            return NewSignalPlan(
+                signal=signal, action="FOLLOW",
+                rationale=(
+                    f"Partial placement: {len(filtered)} of {len(orders)} "
+                    f"entries placeable ({placed_ids}). The other "
+                    f"{skipped_count} entr"
+                    f"{'y has' if skipped_count == 1 else 'ies have'} "
+                    f"already played out in the backtest replay; "
+                    f"only entries whose replay status is still PENDING "
+                    f"or OPEN are sent to MT5. See per-entry breakdown below."
+                ),
+                orders=filtered, pending_expires_at=expires,
+                final_target_label=final_target, final_target_price=target_price,
+                total_initial_risk_dollars=filtered_risk,
+                replay_position=replay_pos,
+            )
+        # All entries placeable -- fall through to standard FOLLOW below.
 
     # ---- Gate 3: FOLLOW ----
     return NewSignalPlan(
@@ -318,15 +344,17 @@ def _build_new_signal_plan(
 def format_replay_outcome(replay: Position, indent: str = "    ") -> list[str]:
     """Render a per-entry outcome breakdown for a replayed signal.
 
-    Used by render_report (SKIP_INVALIDATED case) AND by the CLI auto/decide
-    EXECUTION log so both surfaces show the same per-entry detail. Each line
-    starts with `indent`.
+    Used by render_report (SKIP_INVALIDATED case AND partial-FOLLOW case)
+    and by the CLI auto/decide EXECUTION log. Returns just the per-entry
+    lines plus a "Backtest realized so far" summary -- callers add their
+    own context about what will/won't be placed, since that depends on
+    the surrounding gate logic.
 
     Output looks like:
         #0 (4702.00): filled 11:22, SL at 12:18, pnl -$56.70
         #1 (4703.50): filled 11:31, SL at 12:18, pnl -$45.36
         #2 (4705.00): NO_FILL (pending expired)
-        Backtest result: -$102.06 realized -- no orders will be placed.
+        Backtest realized so far: -$102.06
     """
     lines: list[str] = []
     for e in replay.entries:
@@ -352,10 +380,7 @@ def format_replay_outcome(replay: Position, indent: str = "    ") -> list[str]:
                 f"{fill_str}, {e.status} at {exit_str}, pnl {pnl_str}"
             )
     realized = replay.realized_pnl()
-    lines.append(
-        f"{indent}Backtest result: ${realized:+.2f} realized "
-        f"-- no orders will be placed."
-    )
+    lines.append(f"{indent}Backtest realized so far: ${realized:+.2f}")
     return lines
 
 
@@ -500,6 +525,13 @@ def render_report(rec: Recommendation) -> str:
             f"{_fmt_money(-rec.new_signal.total_initial_risk_dollars)} "
             f"({rec.config.risk_per_signal * 100:.1f}% of equity)"
         )
+        # If partial, show the per-entry replay so the user can see what
+        # was filtered out and why.
+        rp = rec.new_signal.replay_position
+        if rp is not None and len(rec.new_signal.orders) < len(rp.entries):
+            lines.append("")
+            lines.append("  Backtest replay outcome (full signal):")
+            lines.extend(format_replay_outcome(rp, indent="    "))
     elif rec.new_signal.action == "SKIP_EXPIRED":
         lines.append(
             f"  Pending window closed at: "

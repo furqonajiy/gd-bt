@@ -1,4 +1,4 @@
-"""Command-line interface. Replaces xauusd_trading/cli.py completely.
+"""Command-line interface.
 
 Subcommands:
     xauusd backtest   --signals SIGNALS_FILE --charts CSV [CSV ...] [--output-dir DIR]
@@ -6,28 +6,26 @@ Subcommands:
 
     xauusd decide     --signal "..." --signal-date YYYY-MM-DD --signal-tz N [--execute]
                       (default: print-only. With --execute: places + manages on MT5.
-                       If the signal's pending window has already closed by the time
-                       you run this, no orders are placed. Successful placement
-                       records `executed_at` (wall-clock chart-tz) in positions.json
-                       so later runs can show "X min late" and replay the actual
-                       MT5 trajectory alongside the ideal one.)
+                       Whenever MT5 is reachable, reconciliation runs before manage
+                       to patch any PENDING entries the bar-replay missed -- e.g.
+                       MT5 fills with positive slippage like 4670 limit filling at
+                       4668.44. Backtest is unaffected; this only runs live.
+
+                       The engine filters orders by per-entry backtest-replay
+                       status: only entries whose replay status is PENDING or
+                       OPEN are placed. Terminal entries are filtered out; if
+                       ALL are terminal, the engine returns SKIP_INVALIDATED.)
 
     xauusd manage     [--execute] [--watch]
                       (manage existing tracked signals only; no new signal placement.
-                       Cancels expired pendings, locks SL to TP1 after TP1 touch,
-                       time-closes positions past max-hold deadline. Run periodically.
-                       When a tracked signal has `executed_at` and you were late,
-                       the report shows BOTH the ideal-execution replay and the
-                       actual-execution replay so you can see what the lag cost.)
+                       Reconciliation always runs first so the dashboard reflects
+                       MT5 reality even when bar-replay missed a fill.)
 
     xauusd auto       --signals signals.txt
                       (one-command live trading. Loops forever: reads signals.txt for
                        new signals to execute, manages all tracked positions on each
-                       cycle. Combines `decide --execute` and `manage --watch --execute`
-                       into one workflow. Execution is implicit -- this command places
-                       real orders. Exits only on Ctrl+C. The 3-layer re-entry guard
-                       and SKIP_EXPIRED gate apply on every iteration, so re-reading
-                       signals.txt with already-processed signals is a no-op.)
+                       cycle. Reconciliation runs on every iteration to keep engine
+                       state in lockstep with MT5. Exits only on Ctrl+C.)
 
     xauusd mt5-info   diagnostic
     xauusd fetch      pull M1 to per-month CSVs (no decision)
@@ -103,13 +101,7 @@ def _try_archive_from_mt5(symbol: str, server_offset: int) -> None:
 # ---------------------------------------------------------------------------
 
 def _chart_now() -> datetime:
-    """Wall-clock current time in chart timezone (GMT+3), naive.
-
-    Matches the project convention of using GMT+3 naive datetimes everywhere
-    internally. `datetime.utcnow()` is fine here; the project already uses it
-    elsewhere in mt5_adapter.py. If you migrate to a stricter tz-aware setup
-    later, do it in one pass across the codebase.
-    """
+    """Wall-clock current time in chart timezone (GMT+3), naive."""
     return datetime.utcnow() + timedelta(hours=CHART_TIMEZONE_OFFSET)
 
 
@@ -126,23 +118,7 @@ def _parse_executed_at(raw) -> datetime | None:
 def _replay_tracked_signal(item: dict, chart, replay_end: datetime,
                            config: StrategyConfig
                            ) -> tuple[Position, Position, datetime | None]:
-    """Replay one registry entry, returning (pos_ideal, pos_actual, executed_at).
-
-    pos_ideal:  replayed from the signal's activation_time. This is the
-                "strategy assumes instant placement at signal time" view,
-                identical to what `replay_signal` does in backtest -- so it
-                serves as the baseline of what *should* have happened.
-
-    pos_actual: replayed from executed_at when that timestamp is present AND
-                later than activation_time. Otherwise it's the SAME Python
-                object as pos_ideal (no second replay; both views collapse).
-
-    executed_at: parsed datetime in chart tz, or None for legacy entries
-                that predate the field.
-
-    Both Position objects have their `executed_at` field stamped (where
-    available) so downstream renderers can show "X min late" inline.
-    """
+    """Replay one registry entry, returning (pos_ideal, pos_actual, executed_at)."""
     psig = parse_one_signal(item["signal"], item["date"], int(item["tz"]))
     equity_at_open = float(item.get("equity_at_open", 0.0))
     executed_at = _parse_executed_at(item.get("executed_at"))
@@ -157,8 +133,6 @@ def _replay_tracked_signal(item: dict, chart, replay_end: datetime,
 
     if executed_at is not None and executed_at > pos_ideal.activation_time:
         pos_actual = open_position(psig, equity_at_open, config)
-        # Replay from the real placement moment. Bars before executed_at
-        # don't trigger fills here because pos_actual never saw them.
         advance_bars(
             pos_actual,
             chart.bars_between(executed_at, replay_end),
@@ -166,11 +140,65 @@ def _replay_tracked_signal(item: dict, chart, replay_end: datetime,
         )
         pos_actual.executed_at = executed_at
     else:
-        # Either no executed_at recorded (legacy entry) or it equals/predates
-        # activation_time (on-time placement). Single view suffices.
         pos_actual = pos_ideal
 
     return pos_ideal, pos_actual, executed_at
+
+
+def _print_reconcile_log(reconcile_log) -> None:
+    """Print a RECONCILIATION block from an ExecutionLog if non-empty."""
+    if not reconcile_log.actions and not reconcile_log.warnings:
+        return
+    print("RECONCILIATION:")
+    for a in reconcile_log.actions:
+        print(a)
+    for w in reconcile_log.warnings:
+        print(f"  ! {w}")
+    print()
+
+
+def _is_partial_placement(rec) -> bool:
+    """True iff this is a partial FOLLOW (some entries filtered out by replay)."""
+    if rec.new_signal.action != "FOLLOW":
+        return False
+    rp = rec.new_signal.replay_position
+    if rp is None:
+        return False
+    return len(rec.new_signal.orders) < len(rp.entries)
+
+
+def _partial_placement_log_lines(signal_key: str, rec) -> list[str]:
+    """Render an EXECUTION-log block describing a partial placement.
+
+    Includes the per-entry replay breakdown so the user can see exactly
+    which entries were filtered out and why.
+    """
+    rp = rec.new_signal.replay_position
+    placed = len(rec.new_signal.orders)
+    total = len(rp.entries)
+    skipped = total - placed
+    placed_ids = ", ".join(f"#{o.entry_index}" for o in rec.new_signal.orders)
+    header = (
+        f"Signal {signal_key}: partial placement -- {placed} of {total} "
+        f"entries placeable ({placed_ids}). The other "
+        f"{skipped} entr{'y' if skipped == 1 else 'ies'} already played "
+        f"out in backtest replay; only PENDING/OPEN entries are sent to MT5."
+    )
+    lines = [header]
+    lines.extend(format_replay_outcome(rp, indent="  "))
+    return lines
+
+
+def _skip_invalidated_log_lines(signal_key: str, rec) -> list[str]:
+    """Render an EXECUTION-log block for SKIP_INVALIDATED."""
+    rp = rec.new_signal.replay_position
+    lines = [
+        f"Signal {signal_key}: every entry has already played out in "
+        f"backtest replay -- no orders placed."
+    ]
+    if rp is not None:
+        lines.extend(format_replay_outcome(rp, indent="  "))
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -189,14 +217,7 @@ def _format_lateness(executed_at: datetime, signal_time: datetime) -> str:
 
 def _entry_floating(entry, side: str, bid: float, ask: float,
                     contract_size: float = CONTRACT_SIZE_OZ) -> float:
-    """Floating P&L for one OPEN entry against current bid/ask.
-
-    Returns 0.0 for non-OPEN entries (no exposure). Mirrors the formula in
-    engine.py's `_snapshot_position`: BUYs would close at the bid, SELLs at
-    the ask (= bid + spread). Used both for the actual-view OPEN entries
-    (matches MT5's "Profit" column closely, modulo swap/commission) and for
-    the ideal-view counterfactual annotations.
-    """
+    """Floating P&L for one OPEN entry against current bid/ask."""
     if entry.status != "OPEN":
         return 0.0
     if side == "BUY":
@@ -206,10 +227,7 @@ def _entry_floating(entry, side: str, bid: float, ask: float,
 
 def _format_entry_line(entry, side: str, bid: float, ask: float,
                        contract_size: float, ideal_entry=None) -> str:
-    """Format one entry line. When `ideal_entry` is given AND its status
-    diverges from `entry.status`, append a "[if on time: ...]" annotation
-    explaining the counterfactual.
-    """
+    """Format one entry line, with optional '[if on time: ...]' annotation."""
     if entry.status == "OPEN":
         floating = _entry_floating(entry, side, bid, ask, contract_size)
         base = (f"    #{entry.entry_index}  ({entry.entry_price:g})  OPEN     "
@@ -219,7 +237,7 @@ def _format_entry_line(entry, side: str, bid: float, ask: float,
                 f"lot={entry.lot:.2f}  (limit waiting)")
     elif entry.status == "NO_FILL":
         base = f"    #{entry.entry_index}  ({entry.entry_price:g})  NO_FILL"
-    else:  # SL / LOCK_TP1 / TP1 / TP2 / TP3 / TIME_EXIT
+    else:
         pnl_str = f"${entry.pnl:+.2f}" if entry.pnl is not None else "-"
         exit_str = f"@ {entry.exit_price:g}" if entry.exit_price is not None else "-"
         base = (f"    #{entry.entry_index}  ({entry.entry_price:g})  "
@@ -228,12 +246,6 @@ def _format_entry_line(entry, side: str, bid: float, ask: float,
     if ideal_entry is None or ideal_entry.status == entry.status:
         return base
 
-    # Statuses diverge -- annotate the actual-view line with what the
-    # ideal-view counterfactual would say. Practical cases (ideal is always
-    # at-or-ahead of actual because the actual replay starts later):
-    #   ideal=OPEN, actual=PENDING       -> you missed the fill so far
-    #   ideal=<terminal>, actual=PENDING -> ideal already filled & exited
-    #   ideal=<terminal>, actual=OPEN    -> ideal exited, actual still holding
     if ideal_entry.status == "OPEN":
         ideal_floating = _entry_floating(ideal_entry, side, bid, ask, contract_size)
         time_str = (f"{ideal_entry.fill_time:%H:%M}"
@@ -257,17 +269,7 @@ def _format_position_body(
         bid: float, ask: float, contract_size: float,
         *, ideal_for_annotations: Position | None = None,
 ) -> tuple[list[str], float, float]:
-    """Format the stage/fill/entries block for one Position view.
-
-    Returns (lines, floating_total, realized_total). Lines are 4-space-
-    indented; caller may add further indent when nesting under "If executed
-    on time" / "Actual" sub-headers.
-
-    `ideal_for_annotations`, when given, is the ideal Position to compare
-    against -- used only for the ACTUAL view of a dual-view block, so
-    entries whose status diverges from the ideal get an inline
-    "[if on time: ...]" annotation pointing at the counterfactual.
-    """
+    """Format the stage/fill/entries block for one Position view."""
     lines: list[str] = []
 
     if not pos.filled_entries():
@@ -309,24 +311,7 @@ def _format_position_status(
         executed_at: datetime | None, now: datetime,
         bid: float, ask: float, contract_size: float,
 ) -> tuple[str, float, float]:
-    """Render one tracked-signal block. Returns (text, floating, realized)
-    for the ACTUAL view, which the caller uses to roll up the grand total.
-
-    When `executed_at` is recorded AND the user was meaningfully late, this
-    emits a dual view:
-      - "If executed on time" -- the strategy's ideal-execution assumption
-        (replayed from signal time); matches what backtest produces.
-      - "Actual"              -- what MT5 saw, replayed from `executed_at`;
-        bars before placement can't fire fills.
-
-    On divergence between the views, each diverging entry in the actual
-    view gets a `[if on time: ...]` annotation, and a "Lateness cost so far"
-    summary line gives the net P&L delta plus a missed/extra-fill count.
-
-    For legacy entries (no `executed_at`) and on-time placements the dual
-    view collapses to a single view; the output looks like before but with
-    per-entry floating P&L and a Floating/Realized footer added.
-    """
+    """Render one tracked-signal block. Returns (text, floating, realized)."""
     s = pos_ideal.signal
     lines: list[str] = []
 
@@ -345,7 +330,6 @@ def _format_position_status(
     lines.append(f"    Pending until: {pos_ideal.expiry_time}  GMT+3")
 
     if pos_actual is not pos_ideal:
-        # Dual view: real late-execution split exists.
         lines.append("")
         lines.append(
             f"    If executed on time ({s.signal_time_chart:%H:%M} -- "
@@ -366,9 +350,6 @@ def _format_position_status(
         for line in actual_lines:
             lines.append("  " + line)
 
-        # Lateness cost: delta in total P&L between actual and ideal.
-        # Negative means lateness hurt you ($X less than on-time path);
-        # positive means lateness helped you (avoided an adverse fill).
         ideal_pnl = ideal_floating + ideal_realized
         actual_pnl = actual_floating + actual_realized
         pnl_delta = actual_pnl - ideal_pnl
@@ -388,7 +369,6 @@ def _format_position_status(
         lines.append(f"    Total (actual):       ${actual_pnl:+.2f}")
         return "\n".join(lines), actual_floating, actual_realized
 
-    # Single view: legacy entry or on-time placement.
     body_lines, floating_total, realized_total = _format_position_body(
         pos_ideal, now, bid, ask, contract_size,
     )
@@ -429,12 +409,15 @@ def cmd_decide(args: argparse.Namespace) -> int:
 
     use_mt5 = bool(args.mt5) or bool(args.execute)
     conn = None
+    executor = None
+    ExecutionLog = None  # imported lazily; only available when use_mt5
 
     if use_mt5:
         from .mt5_adapter import (
             Mt5ChartSource, Mt5Connection, mt5_equity,
             archive_m1_by_month, render_archive_summary,
         )
+        from .mt5_executor import Mt5Executor, ExecutionLog
         conn = Mt5Connection(
             path=args.mt5_path, login=args.mt5_login,
             password=args.mt5_password, server=args.mt5_server,
@@ -456,6 +439,13 @@ def cmd_decide(args: argparse.Namespace) -> int:
             conn, symbol=args.mt5_symbol,
             server_offset_hours=args.mt5_server_offset,
             history_bars=args.mt5_history_bars,
+        )
+        # Build executor up front so reconciliation can run before decide().
+        executor = Mt5Executor(
+            conn, args.mt5_symbol,
+            min_lot=config.minimum_lot or 0.01,
+            lot_step=config.lot_step or 0.01,
+            server_offset_hours=args.mt5_server_offset,
         )
         equity = mt5_equity(conn) if (args.equity_from_mt5 or args.execute) else args.equity
     else:
@@ -480,15 +470,23 @@ def cmd_decide(args: argparse.Namespace) -> int:
 
     replay_end = now if now is not None else chart.last_time()
 
-    # Build (ideal, actual, executed_at) for every tracked signal. Use the
-    # actual view for engine / executor calls so MT5 actions and the report's
-    # OPEN POSITIONS section reflect what MT5 actually sees.
     tracked: list[tuple[Position, Position, datetime | None]] = []
     if prior_entries and replay_end is not None:
         for item in prior_entries:
             tracked.append(_replay_tracked_signal(item, chart, replay_end, config))
 
-    open_positions = [t[1] for t in tracked]  # pos_actual
+    # Reconcile actual replay with MT5 reality. Patches PENDING entries that
+    # the bar-replay missed (MT5 fills that happened in the same minute as
+    # placement, or with positive slippage). Always runs in MT5 mode; CSV-only
+    # mode skips. Only queries MT5, never modifies it.
+    if executor is not None and tracked:
+        reconcile_log = ExecutionLog()
+        for _ideal, actual, _exec_at in tracked:
+            rlog = executor.reconcile_with_mt5(actual, config, chart, replay_end)
+            reconcile_log.merge(rlog)
+        _print_reconcile_log(reconcile_log)
+
+    open_positions = [t[1] for t in tracked]
 
     positions = ManualPositionSource(equity=equity, positions=open_positions)
     rec = decide(signal, chart, positions, config, now=now)
@@ -496,14 +494,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
 
     if args.execute:
         from .mt5_executor import (
-            Mt5Executor, SignalRegistry, signal_to_magic,
-            render_execution_log, ExecutionLog,
-        )
-        executor = Mt5Executor(
-            conn, args.mt5_symbol,
-            min_lot=config.minimum_lot or 0.01,
-            lot_step=config.lot_step or 0.01,
-            server_offset_hours=args.mt5_server_offset,
+            SignalRegistry, signal_to_magic, render_execution_log,
         )
 
         print()
@@ -518,8 +509,6 @@ def cmd_decide(args: argparse.Namespace) -> int:
         registry = SignalRegistry(registry_path)
         log = ExecutionLog()
 
-        # Manage existing tracked signals first, against their actual replay
-        # so cancel/lock/time-exit decisions match MT5's true state.
         for pos in open_positions:
             mlog = executor.manage_position(pos, config, rec.generated_at)
             log.merge(mlog)
@@ -528,11 +517,6 @@ def cmd_decide(args: argparse.Namespace) -> int:
         known.add(signal_to_magic(signal.signal_key))
         log.warnings.extend(executor.warn_on_unknown(known))
 
-        # Decide what to do with the new signal:
-        #   1. Already tracked  -> management above handled it; do not re-place.
-        #   2. Pending window already closed -> skip placement (would only be
-        #      cancelled immediately by the next manage cycle anyway).
-        #   3. Otherwise        -> place the planned orders, capture executed_at.
         if any(p.signal.signal_key == signal.signal_key for p in open_positions):
             log.actions.append(
                 f"Signal {signal.signal_key} is already tracked; managed above."
@@ -545,32 +529,19 @@ def cmd_decide(args: argparse.Namespace) -> int:
                 f"Skipped placement to avoid orders that would be cancelled immediately."
             )
         elif rec.new_signal.action == "SKIP_INVALIDATED":
-            # Per the Q1 invalidation rule: backtest replay shows this signal
-            # has already played out (SL/TP/TIME_EXIT/NO_FILL on at least one
-            # entry). Placing fresh orders now would create a trade that
-            # diverges from the validated baseline.
-            #
-            # Q3 format: emit a multi-line log entry with the per-entry
-            # breakdown. The replay_position carries the replayed state
-            # whenever SKIP_INVALIDATED fires; format_replay_outcome turns
-            # it into one line per entry plus a realized-total summary.
-            rp = rec.new_signal.replay_position
-            lines = [
-                f"Signal {signal.signal_key}: backtest replay shows signal "
-                f"already played out -- no orders placed."
-            ]
-            if rp is not None:
-                lines.extend(format_replay_outcome(rp, indent="  "))
-            log.actions.append("\n".join(lines))
+            log.actions.append("\n".join(
+                _skip_invalidated_log_lines(signal.signal_key, rec)
+            ))
         else:
+            # FOLLOW (possibly partial). When partial, surface the per-entry
+            # replay breakdown so the user can see what's being filtered.
+            if _is_partial_placement(rec):
+                log.actions.append("\n".join(
+                    _partial_placement_log_lines(signal.signal_key, rec)
+                ))
             plog = executor.place_signal(signal, rec.new_signal)
             log.merge(plog)
             if plog.placed > 0:
-                # Stamp the registry with the wall-clock placement moment.
-                # Captured AFTER place_signal returns so it reflects the time
-                # MT5 actually accepted the orders, not when we started the
-                # command. Subsequent `manage` runs use this to compute how
-                # late you were and replay the actual MT5 trajectory.
                 executed_at = _chart_now()
                 registry.add(signal, equity, executed_at=executed_at)
                 lateness = _format_lateness(executed_at, signal.signal_time_chart)
@@ -596,38 +567,11 @@ def cmd_decide(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 def cmd_manage(args: argparse.Namespace) -> int:
-    """Manage existing tracked signals on MT5; do NOT place anything new.
-
-    Reads positions.json, replays each tracked signal against the live MT5
-    chart up to "now", and (with --execute) applies engine-driven changes:
-      - Cancel pending orders that have expired (older than pending_expiry_minutes)
-      - Lock SL to TP1 once TP1 has been touched on a filled entry
-      - Time-close positions whose first fill is older than max_hold_minutes
-
-    For tracked signals that have an `executed_at` and were placed late, the
-    report shows TWO replays per signal:
-      - "If executed on time" -- the strategy's ideal-execution assumption
-      - "Actual"              -- what MT5 saw, starting from your real
-                                 placement moment
-    Use the gap between them to gauge how much manual lag is costing you.
-    Auto-execution (planned) will close that gap to zero.
-
-    Without --execute, prints status only (safe to run any time).
-
-    With --watch, loops the manage cycle every --watch-interval seconds
-    (default 5s) until positions.json has no live MT5 footprint or the user
-    interrupts with Ctrl+C. Keeps one MT5 connection open across iterations
-    to avoid the re-import / re-init / re-archive overhead of looping at the
-    PowerShell level. The archive runs once at startup only.
-
-    Note: for one-command live trading (read signals.txt + execute + manage),
-    use `auto` instead. `manage --watch` is for "I'm already in trades and
-    just want to babysit them"; `auto` is for "let the system handle the
-    whole day".
+    """Manage tracked signals on MT5. Reconciliation runs first so dashboard
+    reflects MT5 reality; with --execute, manage actions follow.
     """
     config = _config_from_args(args)
 
-    # Validate --watch-interval if watch mode is on.
     if args.watch:
         interval = float(args.watch_interval)
         if interval < 1.0:
@@ -657,11 +601,6 @@ def cmd_manage(args: argparse.Namespace) -> int:
     conn.initialize()
 
     try:
-        # One-time archive at startup. In watch mode this is intentionally
-        # NOT repeated per iteration -- the chart source re-queries MT5 on
-        # every call, so fresh bars are always used for replay; the archive
-        # is only for offline backtesting and doesn't need refreshing during
-        # an interactive watch session.
         try:
             summary = archive_m1_by_month(
                 conn, args.mt5_symbol, ARCHIVE_DIR,
@@ -690,16 +629,7 @@ def cmd_manage(args: argparse.Namespace) -> int:
 
 def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
                  conn, chart) -> tuple[int, int]:
-    """Run one manage cycle.
-
-    Returns (exit_code, n_alive_on_mt5) where n_alive_on_mt5 is the count of
-    currently-tracked signals that still have at least one order or position
-    on MT5. The watch loop uses 0 to detect "all closed; exit cleanly".
-
-    Works in both --execute and read-only modes. In read-only mode the alive
-    count is computed by querying MT5 directly without mutating the registry,
-    so watch + no-execute can still terminate naturally when everything closes.
-    """
+    """Run one manage cycle. Returns (exit_code, n_alive_on_mt5)."""
     from .mt5_adapter import mt5_equity
     from .mt5_executor import (
         Mt5Executor, SignalRegistry, signal_to_magic,
@@ -736,12 +666,6 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
     for item in prior_entries:
         tracked.append(_replay_tracked_signal(item, chart, replay_end, config))
 
-    # Live bid/ask for floating P&L. The tick is fresher (0-60s) than the
-    # last completed M1 bar's close, so per-entry floating numbers match
-    # MT5's "Profit" column tightly. If the market is closed or the tick is
-    # missing, fall back to the latest bar's close as bid and bar.close +
-    # bar.spread_price as ask -- floating numbers will be slightly stale but
-    # the display still works.
     bid, ask = 0.0, 0.0
     tick = conn.mt5.symbol_info_tick(args.mt5_symbol)
     if tick is not None and tick.bid > 0:
@@ -753,9 +677,6 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
             bid = last_bar.close
             ask = last_bar.close + last_bar.spread_price
 
-    # Build the executor up front -- in --execute mode it runs management
-    # actions further down; in read-only mode it's used to query alive magics
-    # for the watch-mode exit check.
     executor = Mt5Executor(
         conn, args.mt5_symbol,
         min_lot=config.minimum_lot or 0.01,
@@ -766,6 +687,14 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
         signal_to_magic(actual.signal.signal_key)
         for _ideal, actual, _exec_at in tracked
     }
+
+    # Reconcile actual replay with MT5 reality BEFORE rendering the dashboard
+    # so displayed state matches what MT5 has. Always runs; only queries MT5.
+    reconcile_log = ExecutionLog()
+    for _ideal, actual, _exec_at in tracked:
+        rlog = executor.reconcile_with_mt5(actual, config, chart, replay_end)
+        reconcile_log.merge(rlog)
+    _print_reconcile_log(reconcile_log)
 
     print("=" * 70)
     print("XAUUSD POSITION MANAGEMENT")
@@ -788,12 +717,6 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
         total_floating += sig_floating
         total_realized += sig_realized
 
-    # Grand total across all tracked signals (engine view).
-    # In divergence cases the engine's floating shows $0 for entries it
-    # considers LOCK_TP1-terminal even when MT5 still has them open; under
-    # --execute, `manage_position` then runs a "Late TP1 catch-up" market
-    # close on those positions to cap the divergence and bring MT5 into line
-    # with the backtest path.
     print("=" * 70)
     print(f"TOTAL FLOATING P&L:  ${total_floating:+.2f}    (engine view)")
     print(f"TOTAL REALIZED P&L:  ${total_realized:+.2f}    (tracked signals only, ex-prune)")
@@ -812,8 +735,6 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
         registry = SignalRegistry(registry_path)
         log = ExecutionLog()
 
-        # Drive MT5 actions from the actual replay -- that's the one whose
-        # stage / time_exit_deadline match what MT5 has actually seen.
         for _ideal, actual, _exec_at in tracked:
             mlog = executor.manage_position(actual, config, replay_end)
             log.merge(mlog)
@@ -827,31 +748,15 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
 
         print(render_execution_log(log))
     else:
-        # Read-only path: still query MT5 for the alive set so watch mode
-        # can exit cleanly when nothing's left. No registry mutation.
         alive = executor.all_alive_magics()
         print("(read-only -- pass --execute to apply changes to MT5)")
 
-    # n_alive = how many of OUR tracked signals still have any MT5 footprint.
-    # Both branches compute `alive` from the same all_alive_magics() call
-    # after any management actions, so closed signals are reflected.
     n_alive = len(tracked_magics & alive)
     return 0, n_alive
 
 
 def _run_manage_watch(args: argparse.Namespace, config: StrategyConfig,
                       conn, chart) -> int:
-    """Loop the manage cycle until the registry has no live MT5 footprint or
-    the user hits Ctrl+C. One MT5 connection is shared across iterations.
-
-    By default each iteration clears the terminal (move cursor home + erase
-    from cursor to end of screen) so the output behaves like a live dashboard:
-    one screenful at a time, no scrolling. Modern terminals (PowerShell 7+,
-    Windows Terminal, anything VT-aware) preserve content above the clear
-    point in their scrollback buffer, so you can still scroll up to see prior
-    iterations if needed. Pass --no-clear to fall back to scrolling-log
-    behavior (useful when you want a permanent record of EXECUTION lines).
-    """
     interval = float(args.watch_interval)
     clear_screen = not args.no_clear
     iteration = 0
@@ -859,9 +764,6 @@ def _run_manage_watch(args: argparse.Namespace, config: StrategyConfig,
         while True:
             iteration += 1
             if clear_screen:
-                # \x1b[H = move cursor to top-left (row 1, col 1).
-                # \x1b[J = erase from cursor to end of screen.
-                # Combined: clear the visible area without nuking scrollback.
                 sys.stdout.write("\x1b[H\x1b[J")
                 sys.stdout.flush()
             else:
@@ -893,59 +795,11 @@ def _run_manage_watch(args: argparse.Namespace, config: StrategyConfig,
 # ---------------------------------------------------------------------------
 
 def cmd_auto(args: argparse.Namespace) -> int:
-    """One-command live trading: read signals.txt + execute + manage in a loop.
-
-    Combines `decide --execute` and `manage --watch --execute` into a single
-    workflow. Designed to run for the duration of a trading session and let
-    you ignore everything except keeping signals.txt up to date.
-
-    On every iteration:
-      1. Replay each tracked position against the latest MT5 chart.
-      2. Render the dashboard (current state of every tracked signal,
-         with live floating P&L from symbol_info_tick).
-      3. Run management on MT5 (cancel expired pendings, Late TP1 catch-up,
-         lock SL to TP1 after TP1 touch, time-close past max-hold).
-      4. Re-parse signals.txt and pick out candidate signals:
-         - signal_time within the last (pending_expiry + 5min) -- older ones
-           would SKIP_EXPIRED anyway, no point flooding the log;
-         - signal_key not already in positions.json.
-      5. Run each candidate through the engine. If the engine says FOLLOW,
-         place via `executor.place_signal` (the 3-layer re-entry guard catches
-         anything that's already on MT5 or in recent MT5 history). If the
-         engine says SKIP_EXPIRED (race: aged out between filter and decide),
-         log and continue.
-      6. Stamp executed_at on the registry for every successful placement.
-      7. Prune closed signals.
-      8. Sleep --watch-interval seconds.
-
-    Exits only on Ctrl+C. Unlike `manage --watch`, the loop does NOT exit
-    when positions.json is empty -- new signals from signals.txt can arrive
-    at any moment, and the whole point of this mode is to wait for them.
-
-    Execution is implicit -- this command places real orders. No --execute
-    flag, no dry-run mode here. If you want a preview, use `decide` on a
-    single signal without --execute.
-
-    SAFETY:
-    - Do NOT run `auto` and a Task Scheduler `manage --execute` against the
-      same positions.json. They will race on SL modifications.
-    - Anything you paste into signals.txt will be executed if it's within
-      the 4-hour pending window. Treat signals.txt as the trust boundary --
-      same risk profile as `decide --execute`, but with less manual friction
-      between Telegram and MT5.
-    - Drawdown tolerance is still 50%. If realized DD goes past -42.8%
-      (the backtest's max), regime may have changed; consider Ctrl+C and
-      re-evaluating before letting it keep auto-firing.
-
-    REALISTIC EXPECTATIONS:
-    - Forward expectation 2-10x/month anchored on the IS column, not the
-      OOS/full-period backtest headlines.
-    - Concurrent same-direction signals can compound losses faster than the
-      backtest's -42.8% max DD because backtest runs signals sequentially.
+    """One-command live trading. Reconciliation runs every iteration so the
+    engine's view of fills stays in lockstep with MT5 even when bars miss.
     """
     config = _config_from_args(args)
 
-    # Validate --watch-interval.
     interval = float(args.watch_interval)
     if interval < 1.0:
         print(
@@ -962,9 +816,6 @@ def cmd_auto(args: argparse.Namespace) -> int:
         )
         print()
 
-    # Validate signals file up front. Re-read happens every iteration, so a
-    # transient permission error here would surface again; better to fail
-    # before the loop starts.
     signals_path = Path(args.signals)
     if not signals_path.exists():
         print(f"signals file not found: {signals_path}", file=sys.stderr)
@@ -987,9 +838,6 @@ def cmd_auto(args: argparse.Namespace) -> int:
     conn.initialize()
 
     try:
-        # One-time archive at startup. Subsequent iterations re-query MT5
-        # for chart data directly; the archive is only for offline backtest
-        # use and doesn't need refreshing during an active session.
         try:
             summary = archive_m1_by_month(
                 conn, args.mt5_symbol, ARCHIVE_DIR,
@@ -1015,9 +863,6 @@ def cmd_auto(args: argparse.Namespace) -> int:
 
 def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
                     conn, chart, signals_path: Path) -> int:
-    """Loop _auto_pass until Ctrl+C. Unlike manage --watch, this never exits
-    on an empty registry -- new signals can arrive in signals.txt at any time.
-    """
     interval = float(args.watch_interval)
     clear_screen = not args.no_clear
     iteration = 0
@@ -1046,13 +891,6 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
 
 def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                conn, chart, signals_path: Path) -> int:
-    """One auto cycle. Returns 0 to continue looping, nonzero to abort.
-
-    Recoverable conditions (closed market, transient MT5 issues, transient
-    signals.txt read errors) return 0 so the loop retries on the next tick.
-    Only conditions that won't get better with a retry (account_info failure,
-    no chart data) return nonzero.
-    """
     from .mt5_adapter import mt5_equity
     from .mt5_executor import (
         Mt5Executor, SignalRegistry, signal_to_magic,
@@ -1075,15 +913,14 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     replay_end = chart.last_time()
     if replay_end is None:
         print("[mt5] no chart data available; skipping iteration")
-        return 0  # transient: retry next iter
+        return 0
 
     # 4. Replay each tracked signal (ideal + actual views).
     tracked: list[tuple[Position, Position, datetime | None]] = []
     for item in prior_entries:
         tracked.append(_replay_tracked_signal(item, chart, replay_end, config))
 
-    # 5. Live bid/ask. Fresh tick if available, else last bar's close +
-    # spread. Used for floating P&L in the dashboard.
+    # 5. Live bid/ask.
     bid, ask = 0.0, 0.0
     tick = conn.mt5.symbol_info_tick(args.mt5_symbol)
     if tick is not None and tick.bid > 0:
@@ -1102,6 +939,15 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         lot_step=config.lot_step or 0.01,
         server_offset_hours=args.mt5_server_offset,
     )
+
+    # 6b. Reconcile actual replay with MT5 reality. Patches PENDING entries
+    # the bar-replay missed (MT5 fills in the same minute as placement, or
+    # with positive slippage). Always runs; only queries MT5, never modifies.
+    reconcile_log = ExecutionLog()
+    for _ideal, actual, _exec_at in tracked:
+        rlog = executor.reconcile_with_mt5(actual, config, chart, replay_end)
+        reconcile_log.merge(rlog)
+    _print_reconcile_log(reconcile_log)
 
     # 7. Dashboard header.
     print("=" * 70)
@@ -1127,7 +973,6 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             total_floating += sig_floating
             total_realized += sig_realized
 
-        # 9. Grand total.
         print("=" * 70)
         print(f"TOTAL FLOATING P&L:  ${total_floating:+.2f}    (engine view)")
         print(f"TOTAL REALIZED P&L:  ${total_realized:+.2f}    (tracked signals only)")
@@ -1138,42 +983,29 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         print("=" * 70)
     print()
 
-    # 10. Sanity checks.
+    # 9. Sanity checks.
     errors = executor.sanity_checks(expected_equity=equity)
     if errors:
         print("SANITY CHECKS FAILED -- skipping MT5 actions this iteration:")
         for e in errors:
             print(f"  ! {e}")
-        # Market may be closed or the broker dropped trading temporarily;
-        # neither is a reason to abort the loop. Retry next tick.
         return 0
 
     log = ExecutionLog()
 
-    # 11. Manage tracked positions (drive from actual replay so MT5 actions
-    # match what MT5 has actually seen, not the ideal-execution assumption).
+    # 10. Manage tracked positions (drive from actual replay, reconciled above).
     for _ideal, actual, _exec_at in tracked:
         mlog = executor.manage_position(actual, config, replay_end)
         log.merge(mlog)
 
-    # 12. Re-read signals.txt. Cheap (regex over a few-KB text file) so we
-    # don't need mtime tracking. A transient read error here just means we
-    # skip placement this iteration and try again next tick.
+    # 11. Re-read signals.txt.
     try:
         all_signals = parse_signals_file(signals_path)
     except Exception as e:
         print(f"[signals] failed to parse {signals_path}: {e}")
         all_signals = []
 
-    # 13. Filter candidates:
-    #   (a) signal_time within the pending window (with a small buffer so
-    #       signals that just expired don't oscillate);
-    #   (b) signal_key not already in the registry.
-    # The 3-layer guard in executor.place_signal handles everything else
-    # (current MT5 footprint, recent MT5 history). Re-load the registry
-    # here because manage_position above may have closed positions that
-    # haven't been pruned yet -- but those signals would still be in the
-    # registry, so the membership check stays correct.
+    # 12. Filter candidates.
     existing_keys = {item.get("signal_key") for item in registry.load()}
     age_cutoff = replay_end - timedelta(minutes=config.pending_expiry_minutes + 5)
 
@@ -1182,14 +1014,9 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         if s.signal_time_chart > age_cutoff
            and s.signal_key not in existing_keys
     ]
-    # Process oldest-first. Matches backtest's chronological order; ensures
-    # that if two new signals appear in the same iteration, the earlier one
-    # is placed first so its lot is sized off the current equity before the
-    # second one (which sees the same equity here, since MT5 hasn't realized
-    # P&L on the just-placed limits yet -- but the order is still stable).
     candidates.sort(key=lambda s: s.signal_time_chart)
 
-    # 14. Process candidates.
+    # 13. Process candidates.
     for signal in candidates:
         positions_source = ManualPositionSource(
             equity=equity,
@@ -1198,8 +1025,6 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         rec = decide(signal, chart, positions_source, config)
 
         if rec.new_signal.action == "SKIP_EXPIRED":
-            # Race: signal aged out between the age filter and now. Rare
-            # (the buffer covers normal iteration jitter) but possible.
             log.actions.append(
                 f"Signal {signal.signal_key}: pending window already closed at "
                 f"{rec.new_signal.pending_expires_at:%Y-%m-%d %H:%M} GMT+3 "
@@ -1208,22 +1033,18 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             continue
 
         if rec.new_signal.action == "SKIP_INVALIDATED":
-            # Q1 invalidation rule fired: backtest replay shows the signal
-            # has already played out (SL/TP/TIME_EXIT/NO_FILL on at least
-            # one entry). Placing now would create a divergent trade.
-            #
-            # Q3 format: emit a multi-line log entry with the per-entry
-            # breakdown so the user can see exactly why the signal was
-            # rejected (which entries filled, which SL'd, etc.).
-            rp = rec.new_signal.replay_position
-            lines = [
-                f"Signal {signal.signal_key}: backtest replay shows signal "
-                f"already played out -- no orders placed."
-            ]
-            if rp is not None:
-                lines.extend(format_replay_outcome(rp, indent="  "))
-            log.actions.append("\n".join(lines))
+            log.actions.append("\n".join(
+                _skip_invalidated_log_lines(signal.signal_key, rec)
+            ))
             continue
+
+        # FOLLOW (possibly partial). When partial, surface the per-entry
+        # replay breakdown so the user can see exactly what's filtered out
+        # and why.
+        if _is_partial_placement(rec):
+            log.actions.append("\n".join(
+                _partial_placement_log_lines(signal.signal_key, rec)
+            ))
 
         plog = executor.place_signal(signal, rec.new_signal)
         log.merge(plog)
@@ -1237,15 +1058,14 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                 f"{executed_at:%Y-%m-%d %H:%M:%S} GMT+3 {lateness}"
             )
 
-    # 15. Unknown-position warnings. Re-load registry because step 14 may
-    # have added new entries.
+    # 14. Unknown-position warnings.
     known_magics = {
         signal_to_magic(item.get("signal_key", "?"))
         for item in registry.load()
     }
     log.warnings.extend(executor.warn_on_unknown(known_magics))
 
-    # 16. Prune closed signals.
+    # 15. Prune closed signals.
     alive = executor.all_alive_magics()
     removed = registry.prune(alive)
     if removed:
@@ -1253,9 +1073,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             f"Pruned {removed} closed signal(s) from {registry_path.name}"
         )
 
-    # 17. Execution log. Only render when something actually happened --
-    # most iterations will be quiet, and printing an empty "EXECUTION:
-    # placed=0 modified=0 cancelled=0 closed=0" line every 5s is noise.
+    # 16. Execution log.
     has_actions = (
             log.actions or log.warnings
             or log.placed > 0 or log.modified > 0
@@ -1386,65 +1204,32 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Tracked-signal registry (default: positions.json, auto-managed when --execute is set)")
     pd_.add_argument("--now", default=None)
     pd_.add_argument("--execute", action="store_true",
-                     help="Place orders on MT5 directly (no confirmation prompt). Implies --mt5. "
-                          "Skips placement for signals whose pending window has already closed. "
-                          "On successful placement, records executed_at in positions.json so "
-                          "later runs can show how late you were.")
+                     help="Place orders on MT5 directly (no confirmation prompt). Implies --mt5.")
     _add_strategy_overrides(pd_)
     _add_mt5_flags(pd_)
     pd_.set_defaults(func=cmd_decide)
 
     pmg = sub.add_parser("manage",
-                         help="Manage tracked signals: lock SL to TP1, cancel expired pendings, time-close positions. "
-                              "Run periodically. Without --execute prints status only. Shows ideal vs actual "
-                              "replay side-by-side for signals you placed late.")
-    pmg.add_argument("--positions-json", default=None,
-                     help="Tracked-signal registry (default: positions.json)")
+                         help="Manage tracked signals: lock SL to TP1, cancel expired pendings, time-close positions.")
+    pmg.add_argument("--positions-json", default=None)
     pmg.add_argument("--execute", action="store_true",
                      help="Apply changes to MT5. Without this flag, prints status only.")
     pmg.add_argument("--watch", action="store_true",
-                     help="Loop the manage cycle every --watch-interval seconds, keeping "
-                          "one MT5 connection open across iterations. Exits when no tracked "
-                          "signal has any live MT5 footprint, or on Ctrl+C. For one-command "
-                          "live trading (read signals.txt + execute + manage), use `auto` instead.")
+                     help="Loop the manage cycle every --watch-interval seconds.")
     pmg.add_argument("--watch-interval", type=float, default=5.0,
-                     help="Seconds between watch iterations (default: 5.0). Minimum 1.0. "
-                          "Values under 2.0 print a warning at startup -- the strategy is M1 "
-                          "so 5s gives a 12x safety margin against the worst-case 60s reversal "
-                          "window between TP1 touch and SL hit.")
+                     help="Seconds between watch iterations (default: 5.0). Minimum 1.0.")
     pmg.add_argument("--no-clear", action="store_true",
-                     help="In watch mode, disable the screen clear between iterations. "
-                          "Default in watch mode is to clear (dashboard behavior): output "
-                          "stays on one screen and refreshes in place. With --no-clear, "
-                          "iterations scroll instead -- useful when you want a permanent "
-                          "record of EXECUTION lines or you're piping output to a file.")
+                     help="In watch mode, disable the screen clear between iterations.")
     _add_strategy_overrides(pmg)
     _add_mt5_flags(pmg)
     pmg.set_defaults(func=cmd_manage)
 
     pa = sub.add_parser("auto",
-                        help="One-command live trading: continuously read signals.txt to "
-                             "execute valid new signals and manage all tracked positions. "
-                             "Execution is implicit (real orders placed). Exits only on Ctrl+C. "
-                             "Combines `decide --execute` + `manage --watch --execute`.")
-    pa.add_argument("--signals", required=True,
-                    help="Path to signals.txt. Paste new signals into this file as they "
-                         "arrive (with date headers like '2026-05-13 GMT+7' on top); the "
-                         "auto loop re-reads it on every iteration and picks up new ones.")
-    pa.add_argument("--positions-json", default=None,
-                    help="Tracked-signal registry (default: positions.json). Auto-managed: "
-                         "new signals are added on successful placement, closed signals are "
-                         "pruned, executed_at is stamped for every placement.")
-    pa.add_argument("--watch-interval", type=float, default=5.0,
-                    help="Seconds between iterations (default: 5.0). Minimum 1.0. Values "
-                         "under 2.0 print a warning at startup -- the strategy is M1 so 5s "
-                         "gives a 12x safety margin against the worst-case 60s TP1-to-SL "
-                         "reversal window.")
-    pa.add_argument("--no-clear", action="store_true",
-                    help="Disable the screen-clear between iterations. Default is to clear "
-                         "(live dashboard behavior). With --no-clear, iterations scroll -- "
-                         "useful for piping to a log file or when you want a permanent "
-                         "audit trail of EXECUTION lines.")
+                        help="One-command live trading: continuously read signals.txt + execute + manage.")
+    pa.add_argument("--signals", required=True)
+    pa.add_argument("--positions-json", default=None)
+    pa.add_argument("--watch-interval", type=float, default=5.0)
+    pa.add_argument("--no-clear", action="store_true")
     _add_strategy_overrides(pa)
     _add_mt5_flags(pa)
     pa.set_defaults(func=cmd_auto)
