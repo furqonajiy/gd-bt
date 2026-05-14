@@ -12,15 +12,24 @@ order/position comment so MT5 itself becomes the source of truth for "what's
 currently active". A small JSON registry (positions.json) maps magic ->
 signal text so we can replay engine state on later runs.
 
-Re-entry protection: `place_signal` consults THREE separate guards in
-ascending cost/strength order before sending any LIMITs:
+Re-entry protection: `place_signal` consults TWO guards before sending any
+LIMITs:
   1. positions.json membership (checked in cli.py before calling here)
   2. find_orders / find_positions  -- magic has a current MT5 footprint
-  3. has_recent_history            -- magic was active in MT5 history recently
 
-Together they make `decide --execute` idempotent: re-running the same command
-after SL/TP/time-exit will NOT silently re-enter the same trade, regardless
-of whether positions.json was pruned in between.
+The third layer that used to live here (a 12h MT5-history lookback) has been
+removed. The engine's `_build_new_signal_plan` now filters placed entries
+based on the backtest replay's per-entry status: entries whose replay status
+is PENDING or OPEN reach this method; entries whose replay status is terminal
+never do. With the engine's replay as the authoritative source for the
+place/skip decision, the magic-level history guard is redundant in the normal
+case and over-restrictive in the user's case (re-entry after a manual clear,
+where the replay correctly says "still in play" but history shows old deals).
+
+The remaining two guards continue to check current live state, not history,
+so they're orthogonal to the replay and still useful as duplicate-prevention.
+`has_recent_history` is retained below for diagnostic scripts (e.g.
+diagnose_history.py) but is no longer called from `place_signal`.
 
 The registry also persists `executed_at` (wall-clock placement time in chart
 tz). This lets `manage` and `decide` show "X min late" annotations and
@@ -54,11 +63,11 @@ from .signal import Signal
 DEFAULT_MIN_LOT = 0.01
 DEFAULT_LOT_STEP = 0.01
 DEFAULT_REGISTRY = "positions.json"
-# Lookback for re-entry protection. The validated strategy's worst-case
-# signal lifetime is pending_expiry (240 min) + max_hold (90 min) = 5.5h.
-# 12h gives generous headroom while staying safely under the "next trading
-# day" boundary -- signal_keys are date-stamped, so tomorrow's #08 has a
-# different magic from today's #08 and this guard won't false-trigger.
+# Lookback used by the (now-diagnostic-only) has_recent_history function.
+# Kept here so external scripts that import the constant (e.g.
+# diagnose_history.py at the repo root) continue to work. The constant
+# is no longer consulted by place_signal -- the engine's per-entry replay
+# filtering supersedes it.
 HISTORY_LOOKBACK_HOURS = 12
 
 
@@ -186,12 +195,10 @@ class Mt5Executor:
         min_lot, lot_step : broker rounding constraints.
         server_offset_hours : broker server timezone offset from UTC. Most
             XAUUSD brokers run GMT+3 year-round, which is the project default.
-            This value is used by `has_recent_history` to build query windows
-            in the broker-time-as-UTC epoch space MT5 stores history in --
-            getting it wrong causes the re-entry guard to miss recent deals
-            and re-place signals that just closed (see the function docstring
-            for the full mechanism). Also used by `reconcile_with_mt5` to
-            convert MT5's `position.time` back into chart-tz.
+            Used by `reconcile_with_mt5` to convert MT5's `position.time` back
+            into chart-tz, and by the (diagnostic-only) `has_recent_history`
+            to build query windows in the broker-time-as-UTC epoch space MT5
+            stores history in.
         """
         self.conn = conn
         self.mt5 = conn.mt5
@@ -403,31 +410,20 @@ class Mt5Executor:
     ) -> bool:
         """True if MT5 history shows any closed orders/deals for this magic.
 
-        This is the third and strongest re-entry guard: it queries MT5's
-        order and deal history (not just currently-open objects) so it
-        catches signals that already closed via SL, TP, or time-exit even
-        after positions.json has been pruned.
+        NOTE: Retained for diagnostic scripts (e.g. diagnose_history.py at
+        the repo root) but NO LONGER called from `place_signal`. The engine's
+        `_build_new_signal_plan` performs per-entry filtering based on the
+        backtest replay, which supersedes this guard. See module docstring
+        for the rationale.
 
         Builds the query window in broker-time-pretending-to-be-UTC epoch
         ints, the same space MT5 uses internally to store history.time
         fields (see mt5_adapter._chart_time_to_mt5_epoch for the matching
-        trick on the chart side). Passing naive Python datetimes here would
-        cause the MT5 wrapper to convert them from the Python process's
-        LOCAL timezone to real UTC -- but MT5 stores history times as
-        broker-local-time treated as UTC. The two epoch spaces are shifted
-        apart by the broker's GMT offset (3h for a typical XAUUSD broker
-        on GMT+3), so a naive query window ends ~3h before deals that just
-        happened, and the guard misses them.
+        trick on the chart side).
 
-        Soft-fails (returns False) if the MT5 history calls error out --
-        we don't want a transient API hiccup to block legitimate placement.
-        The other two guards (positions.json + find_orders/find_positions)
-        still apply in that case.
+        Soft-fails (returns False) if the MT5 history calls error out.
         """
         try:
-            # Construct the window in broker-time-pretending-to-be-UTC, the
-            # same epoch space MT5 uses internally. Independent of the
-            # Python process's local timezone.
             broker_now = datetime.utcnow() + timedelta(hours=self.server_offset_hours)
             to_epoch = calendar.timegm(
                 (broker_now + timedelta(minutes=1)).timetuple()
@@ -448,34 +444,28 @@ class Mt5Executor:
     def place_signal(self, signal: Signal, plan: NewSignalPlan) -> ExecutionLog:
         """Place LIMIT orders for the planned entries, with SL and final-target TP.
 
-        Three idempotency guards run before anything is sent:
-          1. Live MT5 footprint (find_orders / find_positions)
-          2. Recent MT5 history (has_recent_history)
+        ONE idempotency guard runs before anything is sent:
+          1. Live MT5 footprint (find_orders / find_positions) -- magic has
+             current MT5 orders or positions.
+
         Plus the positions.json membership check that runs upstream in cli.py.
 
-        If any guard fires, we log the reason and return without placing.
+        The 12h MT5-history guard that used to live here has been removed:
+        the engine's `_build_new_signal_plan` now filters `plan.orders` based
+        on per-entry backtest-replay status (only PENDING / OPEN entries
+        reach this method), which supersedes the magic-level history check.
         """
         log = ExecutionLog()
         magic = signal_to_magic(signal.signal_key)
         comment = signal.signal_key[:31]
 
         # Guard 1: currently-live orders or open positions for this magic.
+        # Prevents duplicate placement within the same session, even if the
+        # registry was manually edited or pruned.
         if self.find_orders(magic) or self.find_positions(magic):
             log.actions.append(
                 f"Signal {signal.signal_key} already has MT5 orders/positions; "
                 f"skipping placement (will manage instead)."
-            )
-            return log
-
-        # Guard 2: recent history for this magic (signal already closed
-        # earlier this session). Prevents re-entry after SL/TP/time-exit
-        # when positions.json has been pruned in between.
-        if self.has_recent_history(magic):
-            log.actions.append(
-                f"Signal {signal.signal_key} already has recent MT5 history "
-                f"(closed earlier within the last {HISTORY_LOOKBACK_HOURS}h); "
-                f"refusing to re-place to avoid accidental re-entry. "
-                f"If this is intentional, wait for the lookback window to clear."
             )
             return log
 

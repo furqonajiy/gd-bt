@@ -1,4 +1,4 @@
-"""Command-line interface. Replaces xauusd_trading/cli.py completely.
+"""Command-line interface.
 
 Subcommands:
     xauusd backtest   --signals SIGNALS_FILE --charts CSV [CSV ...] [--output-dir DIR]
@@ -9,7 +9,12 @@ Subcommands:
                        Whenever MT5 is reachable, reconciliation runs before manage
                        to patch any PENDING entries the bar-replay missed -- e.g.
                        MT5 fills with positive slippage like 4670 limit filling at
-                       4668.44. Backtest is unaffected; this only runs live.)
+                       4668.44. Backtest is unaffected; this only runs live.
+
+                       The engine filters orders by per-entry backtest-replay
+                       status: only entries whose replay status is PENDING or
+                       OPEN are placed. Terminal entries are filtered out; if
+                       ALL are terminal, the engine returns SKIP_INVALIDATED.)
 
     xauusd manage     [--execute] [--watch]
                       (manage existing tracked signals only; no new signal placement.
@@ -150,6 +155,50 @@ def _print_reconcile_log(reconcile_log) -> None:
     for w in reconcile_log.warnings:
         print(f"  ! {w}")
     print()
+
+
+def _is_partial_placement(rec) -> bool:
+    """True iff this is a partial FOLLOW (some entries filtered out by replay)."""
+    if rec.new_signal.action != "FOLLOW":
+        return False
+    rp = rec.new_signal.replay_position
+    if rp is None:
+        return False
+    return len(rec.new_signal.orders) < len(rp.entries)
+
+
+def _partial_placement_log_lines(signal_key: str, rec) -> list[str]:
+    """Render an EXECUTION-log block describing a partial placement.
+
+    Includes the per-entry replay breakdown so the user can see exactly
+    which entries were filtered out and why.
+    """
+    rp = rec.new_signal.replay_position
+    placed = len(rec.new_signal.orders)
+    total = len(rp.entries)
+    skipped = total - placed
+    placed_ids = ", ".join(f"#{o.entry_index}" for o in rec.new_signal.orders)
+    header = (
+        f"Signal {signal_key}: partial placement -- {placed} of {total} "
+        f"entries placeable ({placed_ids}). The other "
+        f"{skipped} entr{'y' if skipped == 1 else 'ies'} already played "
+        f"out in backtest replay; only PENDING/OPEN entries are sent to MT5."
+    )
+    lines = [header]
+    lines.extend(format_replay_outcome(rp, indent="  "))
+    return lines
+
+
+def _skip_invalidated_log_lines(signal_key: str, rec) -> list[str]:
+    """Render an EXECUTION-log block for SKIP_INVALIDATED."""
+    rp = rec.new_signal.replay_position
+    lines = [
+        f"Signal {signal_key}: every entry has already played out in "
+        f"backtest replay -- no orders placed."
+    ]
+    if rp is not None:
+        lines.extend(format_replay_outcome(rp, indent="  "))
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +441,6 @@ def cmd_decide(args: argparse.Namespace) -> int:
             history_bars=args.mt5_history_bars,
         )
         # Build executor up front so reconciliation can run before decide().
-        # This replaces the old `if args.execute:` build site -- single source.
         executor = Mt5Executor(
             conn, args.mt5_symbol,
             min_lot=config.minimum_lot or 0.01,
@@ -448,7 +496,6 @@ def cmd_decide(args: argparse.Namespace) -> int:
         from .mt5_executor import (
             SignalRegistry, signal_to_magic, render_execution_log,
         )
-        # executor was built up front in the use_mt5 branch above; reuse it.
 
         print()
         errors = executor.sanity_checks(expected_equity=equity)
@@ -482,15 +529,16 @@ def cmd_decide(args: argparse.Namespace) -> int:
                 f"Skipped placement to avoid orders that would be cancelled immediately."
             )
         elif rec.new_signal.action == "SKIP_INVALIDATED":
-            rp = rec.new_signal.replay_position
-            lines = [
-                f"Signal {signal.signal_key}: backtest replay shows signal "
-                f"already played out -- no orders placed."
-            ]
-            if rp is not None:
-                lines.extend(format_replay_outcome(rp, indent="  "))
-            log.actions.append("\n".join(lines))
+            log.actions.append("\n".join(
+                _skip_invalidated_log_lines(signal.signal_key, rec)
+            ))
         else:
+            # FOLLOW (possibly partial). When partial, surface the per-entry
+            # replay breakdown so the user can see what's being filtered.
+            if _is_partial_placement(rec):
+                log.actions.append("\n".join(
+                    _partial_placement_log_lines(signal.signal_key, rec)
+                ))
             plog = executor.place_signal(signal, rec.new_signal)
             log.merge(plog)
             if plog.placed > 0:
@@ -935,7 +983,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         print("=" * 70)
     print()
 
-    # 10. Sanity checks.
+    # 9. Sanity checks.
     errors = executor.sanity_checks(expected_equity=equity)
     if errors:
         print("SANITY CHECKS FAILED -- skipping MT5 actions this iteration:")
@@ -945,19 +993,19 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
 
     log = ExecutionLog()
 
-    # 11. Manage tracked positions (drive from actual replay, reconciled above).
+    # 10. Manage tracked positions (drive from actual replay, reconciled above).
     for _ideal, actual, _exec_at in tracked:
         mlog = executor.manage_position(actual, config, replay_end)
         log.merge(mlog)
 
-    # 12. Re-read signals.txt.
+    # 11. Re-read signals.txt.
     try:
         all_signals = parse_signals_file(signals_path)
     except Exception as e:
         print(f"[signals] failed to parse {signals_path}: {e}")
         all_signals = []
 
-    # 13. Filter candidates.
+    # 12. Filter candidates.
     existing_keys = {item.get("signal_key") for item in registry.load()}
     age_cutoff = replay_end - timedelta(minutes=config.pending_expiry_minutes + 5)
 
@@ -968,7 +1016,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     ]
     candidates.sort(key=lambda s: s.signal_time_chart)
 
-    # 14. Process candidates.
+    # 13. Process candidates.
     for signal in candidates:
         positions_source = ManualPositionSource(
             equity=equity,
@@ -985,15 +1033,18 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             continue
 
         if rec.new_signal.action == "SKIP_INVALIDATED":
-            rp = rec.new_signal.replay_position
-            lines = [
-                f"Signal {signal.signal_key}: backtest replay shows signal "
-                f"already played out -- no orders placed."
-            ]
-            if rp is not None:
-                lines.extend(format_replay_outcome(rp, indent="  "))
-            log.actions.append("\n".join(lines))
+            log.actions.append("\n".join(
+                _skip_invalidated_log_lines(signal.signal_key, rec)
+            ))
             continue
+
+        # FOLLOW (possibly partial). When partial, surface the per-entry
+        # replay breakdown so the user can see exactly what's filtered out
+        # and why.
+        if _is_partial_placement(rec):
+            log.actions.append("\n".join(
+                _partial_placement_log_lines(signal.signal_key, rec)
+            ))
 
         plog = executor.place_signal(signal, rec.new_signal)
         log.merge(plog)
@@ -1007,14 +1058,14 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                 f"{executed_at:%Y-%m-%d %H:%M:%S} GMT+3 {lateness}"
             )
 
-    # 15. Unknown-position warnings.
+    # 14. Unknown-position warnings.
     known_magics = {
         signal_to_magic(item.get("signal_key", "?"))
         for item in registry.load()
     }
     log.warnings.extend(executor.warn_on_unknown(known_magics))
 
-    # 16. Prune closed signals.
+    # 15. Prune closed signals.
     alive = executor.all_alive_magics()
     removed = registry.prune(alive)
     if removed:
@@ -1022,7 +1073,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             f"Pruned {removed} closed signal(s) from {registry_path.name}"
         )
 
-    # 17. Execution log.
+    # 16. Execution log.
     has_actions = (
             log.actions or log.warnings
             or log.placed > 0 or log.modified > 0
