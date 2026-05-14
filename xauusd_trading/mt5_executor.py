@@ -27,6 +27,12 @@ tz). This lets `manage` and `decide` show "X min late" annotations and
 optionally replay the position from your real placement moment to reflect
 what MT5 actually sees -- because the engine's default replay-from-signal-time
 assumption is the strategy's ideal, not what happens when a human is slow.
+
+Divergence reconciliation: `reconcile_with_mt5` patches the engine's
+PENDING entries from MT5's actual open positions when the bar-by-bar replay
+missed a fill (typically a same-minute fill at executed_at, or positive
+slippage). This is a per-signal correction, not a cross-signal overlay --
+backtest is unaffected.
 """
 from __future__ import annotations
 import calendar
@@ -41,7 +47,7 @@ from typing import Optional
 from .config import StrategyConfig
 from .engine import NewSignalPlan
 from .mt5_adapter import Mt5Connection
-from .positions import Position
+from .positions import Position, advance_bars
 from .signal import Signal
 
 
@@ -184,7 +190,8 @@ class Mt5Executor:
             in the broker-time-as-UTC epoch space MT5 stores history in --
             getting it wrong causes the re-entry guard to miss recent deals
             and re-place signals that just closed (see the function docstring
-            for the full mechanism).
+            for the full mechanism). Also used by `reconcile_with_mt5` to
+            convert MT5's `position.time` back into chart-tz.
         """
         self.conn = conn
         self.mt5 = conn.mt5
@@ -268,6 +275,128 @@ class Mt5Executor:
                     f"magic={p.magic} comment={p.comment!r}"
                 )
         return warnings
+
+    # ---- reconciliation ------------------------------------------------
+
+    def _broker_epoch_to_chart_time(self, epoch: int) -> datetime:
+        """Convert MT5's broker-time-as-UTC-epoch to chart-tz naive datetime.
+
+        Mirrors mt5_adapter.Mt5ChartSource._to_chart_time. MT5 stores times
+        (bar.time, position.time, deal.time) as Unix-style epoch ints but
+        interprets them as broker-local-time treated as UTC. To get chart-tz
+        (GMT+3 naive), shift by (3 - server_offset_hours).
+        """
+        broker_naive = datetime.utcfromtimestamp(int(epoch))
+        return broker_naive + timedelta(hours=3 - self.server_offset_hours)
+
+    def reconcile_with_mt5(
+            self, engine_pos: Position, config: StrategyConfig,
+            chart, now: datetime,
+    ) -> ExecutionLog:
+        """Sync engine_pos's PENDING entries with MT5's actual open positions.
+
+        When the engine's bar-by-bar replay misses an MT5 fill (most commonly
+        because the fill happened in the same M1 bar as placement, or because
+        positive slippage took the fill price below the planned entry), MT5
+        has positions the engine still thinks are PENDING. This method queries
+        MT5 directly, maps positions to engine entry slots by chronological
+        order (laddered LIMITs fire in deterministic price order, so the
+        time-order they fill in matches the slot-order in the engine), and
+        patches PENDING entries to OPEN using MT5's actual fill price, lot,
+        and time.
+
+        The engine's `initial_sl` is left unchanged. Combined with the
+        broker-side SL that was attached at placement (also unchanged), this
+        preserves the original planned stop distance. Positive slippage on
+        the entry then translates directly to improved R:R, not a wider stop.
+
+        After patching, re-advances the engine through chart bars from the
+        earliest patched fill time to `now`, so stage transitions (TP1 touch
+        -> stage 1) catch up. Safe to re-process bars: fill checks skip
+        non-PENDING entries; stop/target checks on terminal entries are no-ops.
+
+        Idempotent: nothing happens if all entries are already in sync.
+        Per-signal divergence correction, not a cross-signal overlay -- does
+        not change which signals the strategy fills, only reconciles when
+        bar-replay misses MT5 reality. Backtest is unaffected because it
+        doesn't go through this code path.
+
+        Returns an ExecutionLog noting any patches made (empty if none).
+        """
+        log = ExecutionLog()
+        magic = signal_to_magic(engine_pos.signal.signal_key)
+
+        mt5_positions = sorted(
+            self.find_positions(magic),
+            key=lambda p: p.time,
+        )
+        if not mt5_positions:
+            return log
+
+        if len(mt5_positions) > len(engine_pos.entries):
+            log.warnings.append(
+                f"Magic {magic} ({engine_pos.signal.signal_key}): MT5 has "
+                f"{len(mt5_positions)} positions but engine has only "
+                f"{len(engine_pos.entries)} entry slots. Skipping "
+                f"reconciliation to avoid mis-mapping."
+            )
+            return log
+
+        earliest_patched: Optional[datetime] = None
+
+        for i, mt5_pos in enumerate(mt5_positions):
+            entry = engine_pos.entries[i]
+            if entry.status != "PENDING":
+                # Already in sync (OPEN) or terminal (SL / TP / TIME_EXIT /
+                # LOCK_TP1 / NO_FILL). Don't overwrite.
+                continue
+
+            fill_time_chart = self._broker_epoch_to_chart_time(mt5_pos.time)
+            actual_price = float(mt5_pos.price_open)
+            actual_lot = float(mt5_pos.volume)
+            planned_price = entry.entry_price
+
+            log.actions.append(
+                f"  Reconciled #{i} ({engine_pos.signal.signal_key}): "
+                f"MT5 fill at {actual_price:g} lot={actual_lot:.2f} at "
+                f"{fill_time_chart:%Y-%m-%d %H:%M:%S} GMT+3 "
+                f"(engine had PENDING at planned {planned_price:g})"
+            )
+
+            entry.status = "OPEN"
+            entry.fill_time = fill_time_chart
+            entry.entry_price = actual_price
+            entry.lot = actual_lot
+            # entry.initial_sl intentionally NOT recomputed -- preserves the
+            # planned stop distance, which matches the broker-side SL that
+            # was attached at placement. Positive slippage = better R:R, not
+            # a wider stop.
+
+            if earliest_patched is None or fill_time_chart < earliest_patched:
+                earliest_patched = fill_time_chart
+
+        if earliest_patched is None:
+            return log
+
+        # Anchor first_fill_time / time_exit_deadline off the real MT5 fill.
+        # Only update if our anchor is earlier than what's already there
+        # (preserves any first_fill_time the bar-replay correctly caught on
+        # a different ladder entry).
+        if (engine_pos.first_fill_time is None
+                or earliest_patched < engine_pos.first_fill_time):
+            engine_pos.first_fill_time = earliest_patched
+            engine_pos.time_exit_deadline = earliest_patched + timedelta(
+                minutes=config.max_hold_minutes
+            )
+
+        # Re-advance through bars from the earliest patched fill to now.
+        # Bars before are unaffected; bars in between may now trigger stage
+        # transitions or stop/target exits on the newly-OPEN entries that
+        # the first replay couldn't see.
+        bars = chart.bars_between(earliest_patched, now)
+        advance_bars(engine_pos, bars, config)
+
+        return log
 
     def has_recent_history(
             self, magic: int, lookback_hours: int = HISTORY_LOOKBACK_HOURS,
@@ -407,6 +536,9 @@ class Mt5Executor:
         signal has a recorded `executed_at`, the caller should pass the
         *actual* replay (started at executed_at, not signal time) so the
         engine's stage/fill state matches what MT5 actually saw.
+
+        For best results, call `reconcile_with_mt5` on the same position
+        first so any MT5 fills the bar-replay missed have been patched in.
         """
         log = ExecutionLog()
         magic = signal_to_magic(engine_pos.signal.signal_key)
