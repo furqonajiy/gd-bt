@@ -117,7 +117,7 @@ class Config:
     def load(cls, path: Path) -> "Config":
         if not path.exists():
             sys.stderr.write(
-                f"Missing {path.name}. Copy listener_config.json -> "
+                f"Missing {path.name}. Copy listener_config.example.json -> "
                 f"{path.name} and fill api_id + api_hash.\n"
             )
             sys.exit(1)
@@ -140,7 +140,7 @@ class Config:
 NEW_SIGNAL_MARKER = re.compile(
     r"\U0001F947\s*(?P<side>BUY|SELL)\s+XAUUSD",
     re.IGNORECASE | re.UNICODE,
-)
+    )
 
 # Lenient field extractors. Run after _normalize_text(), so commas are still
 # in place (they're handled by the num() converter).
@@ -308,8 +308,56 @@ def _section_signal_count(lines: list[str], header_idx: int) -> int:
     return count
 
 
+class DuplicateSignalError(ValueError):
+    """Raised by append_manual_signal when the content already exists in
+    today's section. Distinct from a format-validation ValueError so the
+    Saved Messages reply can be a friendlier 'already there' instead of '❌'."""
+
+    def __init__(self, existing_line: str, existing_index: int):
+        super().__init__(
+            f"Already present as #{existing_index}: {existing_line}"
+        )
+        self.existing_line = existing_line
+        self.existing_index = existing_index
+
+
+def _find_matching_signal_in_section(
+        lines: list[str], header_idx: int,
+        side: str, r1: float, r2: float, sl: float,
+        tp1: float, tp2: float, tp3: float, time_text: str,
+) -> Optional[tuple[str, int]]:
+    """Content-based dedup. Walk the section starting at `header_idx` and
+    return (existing_line, existing_index) if a signal with the SAME side,
+    SAME prices, AND SAME time already exists. Returns None otherwise.
+
+    Acts as a defensive backup to state-based dedup so that even if
+    telegram_state.json is deleted, corrupted, or out of sync, the listener
+    won't re-write a signal that's already in signals.txt.
+
+    Time is part of the comparison so a legitimate same-price signal posted
+    at a different time of day is NOT treated as a duplicate.
+    """
+    norm_time = time_text.upper().replace(" ", "")
+    for line in lines[header_idx + 1:]:
+        if DATE_HEADER_RE.match(line):
+            break
+        m = STRICT_LINE_RE.match(line)
+        if not m:
+            continue
+        if (m.group("side").upper() == side
+                and float(m.group("r1")) == r1
+                and float(m.group("r2")) == r2
+                and float(m.group("sl")) == sl
+                and float(m.group("tp1")) == tp1
+                and float(m.group("tp2")) == tp2
+                and float(m.group("tp3")) == tp3
+                and m.group("time").upper().replace(" ", "") == norm_time):
+            return line.strip(), int(m.group("id"))
+    return None
+
+
 def _insert_into_section(
-    lines: list[str], header_idx: int, signal_line: str,
+        lines: list[str], header_idx: int, signal_line: str,
 ) -> list[str]:
     """Insert `signal_line` at the end of the section starting at
     `header_idx`, before any trailing blank lines."""
@@ -326,7 +374,7 @@ def _insert_into_section(
 
 
 def _append_new_section(
-    lines: list[str], date_str: str, tz_offset: int, signal_line: str,
+        lines: list[str], date_str: str, tz_offset: int, signal_line: str,
 ) -> list[str]:
     """Append a new date section at the end of the file."""
     while lines and lines[-1].strip() == "":
@@ -340,15 +388,33 @@ def _append_new_section(
 
 
 def write_signal_to_file(
-    parsed: ParsedSignal, signal_dt_gmt7: datetime,
-) -> tuple[str, int]:
+        parsed: ParsedSignal, signal_dt_gmt7: datetime,
+) -> tuple[str, int, bool]:
     """Append a parsed VICTOR signal to signals.txt.
-    Returns (signal_line, day_index) for state-tracking."""
+
+    Returns (signal_line, day_index, was_duplicate).
+    When was_duplicate is True, no write happened; (signal_line, day_index)
+    refer to the existing entry that matched. The caller should still update
+    state to 'written' for that message_id so future events skip it cleanly.
+    """
     date_str = signal_dt_gmt7.strftime("%Y-%m-%d")
     time_text = _format_time(signal_dt_gmt7)
 
     lines = _read_signals_lines()
     header_idx = _find_section(lines, date_str)
+
+    # Content-based dedup: defensive backup to state-based dedup. Catches
+    # the case where state was lost/reset but the signal is already in file.
+    if header_idx is not None:
+        match = _find_matching_signal_in_section(
+            lines, header_idx,
+            parsed.side, parsed.r1, parsed.r2, parsed.sl,
+            parsed.tp1, parsed.tp2, parsed.tp3, time_text,
+        )
+        if match is not None:
+            existing_line, existing_idx = match
+            return existing_line, existing_idx, True
+
     if header_idx is None:
         day_index = 1
         signal_line = parsed.to_line(day_index, time_text)
@@ -361,7 +427,7 @@ def write_signal_to_file(
         lines = _insert_into_section(lines, header_idx, signal_line)
 
     _atomic_write_lines(lines)
-    return signal_line, day_index
+    return signal_line, day_index, False
 
 
 def append_manual_signal(line: str) -> tuple[str, int]:
@@ -371,7 +437,10 @@ def append_manual_signal(line: str) -> tuple[str, int]:
     double-write `5.` when `5.` already exists.
 
     Returns (rendered_line, day_index_used).
-    Raises ValueError if `line` doesn't match the canonical format.
+    Raises:
+      ValueError              -- the line doesn't match the canonical format.
+      DuplicateSignalError    -- an identical signal (same side, prices, time)
+                                 is already in today's section.
     """
     m = STRICT_LINE_RE.match(line.strip())
     if not m:
@@ -385,6 +454,21 @@ def append_manual_signal(line: str) -> tuple[str, int]:
 
     lines = _read_signals_lines()
     header_idx = _find_section(lines, date_str)
+
+    # Content-based dedup. Same rule as auto-write path: if a signal with
+    # the same side, prices, and time already exists, don't add a second.
+    if header_idx is not None:
+        match = _find_matching_signal_in_section(
+            lines, header_idx,
+            m.group("side").upper(),
+            float(m.group("r1")), float(m.group("r2")),
+            float(m.group("sl")),
+            float(m.group("tp1")), float(m.group("tp2")), float(m.group("tp3")),
+            m.group("time"),
+        )
+        if match is not None:
+            raise DuplicateSignalError(match[0], match[1])
+
     new_index = (
         1 if header_idx is None
         else _section_signal_count(lines, header_idx) + 1
@@ -394,7 +478,6 @@ def append_manual_signal(line: str) -> tuple[str, int]:
     # after the `N.` as-is so user's chosen prices/time stand.
     _, rest = line.split(".", 1)
     renumbered = f"{new_index}.{rest}".strip()
-    # Round-trip through STRICT_LINE_RE one more time to be safe.
     if not STRICT_LINE_RE.match(renumbered):
         raise ValueError("Line is unparseable after renumbering -- nothing was written.")
 
@@ -576,6 +659,15 @@ class Listener:
                     await self._reply_saved(
                         f"✅ Injected as #{idx} in today's section:\n`{rendered}`"
                     )
+            except DuplicateSignalError as e:
+                log.info(
+                    f"Manual injection is a duplicate: matches #{e.existing_index} "
+                    f"({e.existing_line})"
+                )
+                await self._reply_saved(
+                    f"ℹ️ Already in signals.txt as #{e.existing_index}:\n"
+                    f"`{e.existing_line}`"
+                )
             except ValueError as e:
                 log.warning(f"Manual injection rejected: {e}")
                 await self._reply_saved(f"❌ {e}")
@@ -597,17 +689,43 @@ class Listener:
         async with self._lock:
             existing = state_get(self.state, message_id)
 
-            if is_edit:
-                # Spec: ignore edits if the original was successfully written.
-                # Re-process if it was quarantined or never seen.
-                if existing and existing.get("status") == "written":
-                    log.debug(f"Edit on already-written message {message_id}; ignoring")
-                    return
-                if existing:
-                    log.info(
-                        f"Edit on previously-{existing.get('status')} "
-                        f"message {message_id}: re-parsing"
-                    )
+            # ------------------------------------------------------------------
+            # Universal dedup. We bypass all parsing if state shows this
+            # message was already handled successfully. This covers:
+            #   * catch_up re-processing the same message_ids after a restart
+            #   * Telegram redelivering an event after a reconnect
+            #   * the user accidentally starting two listener processes
+            #   * any other path that double-fires for the same message_id
+            # The previous version only ran this check for is_edit=True, which
+            # let new-message events from catch_up sneak past and write
+            # duplicates with fresh day-indices.
+            # ------------------------------------------------------------------
+            if existing and existing.get("status") == "written":
+                log.debug(
+                    f"Message {message_id} already written as "
+                    f"{existing.get('signal_key')}; ignoring "
+                    f"({'edit' if is_edit else 'new'} event)"
+                )
+                return
+
+            # For previously-quarantined messages, only re-parse on EDIT
+            # events (Victor might have fixed a typo). New-message events
+            # are usually catch_up replays of the original; the user was
+            # already notified once, so skip silently.
+            if (existing
+                    and existing.get("status") in ("quarantined", "write_failed")
+                    and not is_edit):
+                log.debug(
+                    f"Catch-up saw previously-{existing.get('status')} "
+                    f"message {message_id}; ignoring (user already notified)"
+                )
+                return
+
+            if is_edit and existing:
+                log.info(
+                    f"Edit on previously-{existing.get('status')} "
+                    f"message {message_id}: re-parsing"
+                )
 
             try:
                 parsed = parse_victor_signal(raw)
@@ -640,14 +758,32 @@ class Listener:
                         "status": "dry-run", "line": line_preview,
                     })
                 else:
-                    signal_line, day_index = write_signal_to_file(parsed, msg_dt_gmt7)
+                    signal_line, day_index, was_duplicate = write_signal_to_file(
+                        parsed, msg_dt_gmt7,
+                    )
                     signal_key = f"{msg_dt_gmt7:%Y-%m-%d}#{day_index:02d}"
-                    state_set(self.state, message_id, {
-                        "status": "written",
-                        "signal_key": signal_key,
-                        "line": signal_line,
-                    })
-                    log.info(f"Wrote {signal_key}: {signal_line}")
+                    if was_duplicate:
+                        # Content-based dedup caught it. Record as 'written'
+                        # pointing at the existing entry so we never look at
+                        # this message_id again, and don't bother the user
+                        # with a notification.
+                        log.info(
+                            f"Message {message_id} matches existing "
+                            f"{signal_key}: {signal_line} -- skipping write"
+                        )
+                        state_set(self.state, message_id, {
+                            "status": "written",
+                            "signal_key": signal_key,
+                            "line": signal_line,
+                            "note": "matched existing entry by content",
+                        })
+                    else:
+                        state_set(self.state, message_id, {
+                            "status": "written",
+                            "signal_key": signal_key,
+                            "line": signal_line,
+                        })
+                        log.info(f"Wrote {signal_key}: {signal_line}")
                 save_state(self.state)
             except Exception as e:
                 log.error(f"Write failed on message {message_id}: {e}")
@@ -663,7 +799,7 @@ class Listener:
                     )
 
     async def _notify_failure(
-        self, raw: str, reason: str, msg_dt_gmt7: datetime,
+            self, raw: str, reason: str, msg_dt_gmt7: datetime,
     ) -> None:
         """Post a Saved Messages note with a pre-filled correction template."""
         date_str = msg_dt_gmt7.strftime("%Y-%m-%d")
