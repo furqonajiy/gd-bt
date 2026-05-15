@@ -209,6 +209,94 @@ def parse_victor_signal(raw_text: str) -> Optional[ParsedSignal]:
     )
 
 
+# ---------------------------------------------------------------------------
+# signal-geometry auto-correction
+# ---------------------------------------------------------------------------
+
+# VICTOR's standard signal geometry. Every signal should satisfy:
+#
+#   BUY:  |r1 - r2| == 2,  ref = min(r1, r2)
+#         SL  = ref - 5
+#         TP1 = ref + 10,  TP2 = ref + 20,  TP3 = ref + 40
+#
+#   SELL: |r1 - r2| == 2,  ref = max(r1, r2)
+#         SL  = ref + 5
+#         TP1 = ref - 10,  TP2 = ref - 20,  TP3 = ref - 40
+#
+# When VICTOR mistypes (seen: TP3 off by 100, SL off by 10), we recover
+# the intended values by trusting `side` and `r1` and re-deriving the rest.
+# Range correction trusts r1 because it's the leading number in the line
+# and tends to be reliable; the trailing number after `-` is what gets
+# mistyped most often.
+
+_GEOMETRY_TOL = 1e-6
+
+
+@dataclass
+class GeometryFix:
+    """Result of running VICTOR's expected geometry over a parsed signal."""
+    corrected: ParsedSignal
+    changes: list[str]   # human-readable, e.g. "SL: 4543 -> 4553"
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.changes)
+
+
+def apply_signal_corrections(parsed: ParsedSignal) -> GeometryFix:
+    """Force the signal onto VICTOR's standard geometry; report each change."""
+    side = parsed.side.upper()
+    r1 = parsed.r1
+    changes: list[str] = []
+
+    # Step 1: range. Trust r1; fix r2 if width != 2.
+    if side == "BUY":
+        expected_r2 = r1 - 2.0
+    elif side == "SELL":
+        expected_r2 = r1 + 2.0
+    else:
+        # Unknown side -> can't apply rules; pass through.
+        return GeometryFix(corrected=parsed, changes=[])
+
+    new_r2 = parsed.r2
+    if abs(parsed.r2 - expected_r2) > _GEOMETRY_TOL:
+        changes.append(f"R2: {_fmt_price(parsed.r2)} -> {_fmt_price(expected_r2)}")
+        new_r2 = expected_r2
+
+    # Step 2: reference price from corrected range.
+    if side == "BUY":
+        ref = min(r1, new_r2)
+        exp_sl, exp_tp1, exp_tp2, exp_tp3 = (
+            ref - 5.0, ref + 10.0, ref + 20.0, ref + 40.0,
+        )
+    else:
+        ref = max(r1, new_r2)
+        exp_sl, exp_tp1, exp_tp2, exp_tp3 = (
+            ref + 5.0, ref - 10.0, ref - 20.0, ref - 40.0,
+        )
+
+    new_sl, new_tp1, new_tp2, new_tp3 = parsed.sl, parsed.tp1, parsed.tp2, parsed.tp3
+
+    if abs(parsed.sl - exp_sl) > _GEOMETRY_TOL:
+        changes.append(f"SL: {_fmt_price(parsed.sl)} -> {_fmt_price(exp_sl)}")
+        new_sl = exp_sl
+    if abs(parsed.tp1 - exp_tp1) > _GEOMETRY_TOL:
+        changes.append(f"TP1: {_fmt_price(parsed.tp1)} -> {_fmt_price(exp_tp1)}")
+        new_tp1 = exp_tp1
+    if abs(parsed.tp2 - exp_tp2) > _GEOMETRY_TOL:
+        changes.append(f"TP2: {_fmt_price(parsed.tp2)} -> {_fmt_price(exp_tp2)}")
+        new_tp2 = exp_tp2
+    if abs(parsed.tp3 - exp_tp3) > _GEOMETRY_TOL:
+        changes.append(f"TP3: {_fmt_price(parsed.tp3)} -> {_fmt_price(exp_tp3)}")
+        new_tp3 = exp_tp3
+
+    corrected = ParsedSignal(
+        side=side, r1=r1, r2=new_r2,
+        sl=new_sl, tp1=new_tp1, tp2=new_tp2, tp3=new_tp3,
+    )
+    return GeometryFix(corrected=corrected, changes=changes)
+
+
 def _format_time(dt: datetime) -> str:
     """Render time the way signals.txt does: '10:44 AM', '1:01 PM'."""
     t = dt.strftime("%I:%M %p")
@@ -379,14 +467,19 @@ def write_signal_to_file(
     return signal_line, day_index, False
 
 
-def append_manual_signal(line: str) -> tuple[str, int]:
+def append_manual_signal(line: str) -> tuple[str, int, list[str]]:
     """Append a strict-canonical signal line (from Saved Messages).
 
     The day-index in `line` is REPLACED with the next free index in
     today's section, so it's impossible to double-write `5.` when `5.`
-    already exists.
+    already exists. Geometry corrections are applied silently so the
+    Saved Messages path produces the same canonical output as VICTOR's
+    direct feed.
 
-    Returns (rendered_line, day_index_used).
+    Returns (rendered_line, day_index_used, geometry_changes). The
+    changes list is non-empty when auto-correction shifted any value;
+    the caller can surface those changes in the Saved Messages reply.
+
     Raises:
       ValueError           — line doesn't match the canonical format.
       DuplicateSignalError — identical signal already in today's section.
@@ -398,6 +491,16 @@ def append_manual_signal(line: str) -> tuple[str, int]:
             "`N. BUY|SELL XAUUSD R1 - R2 SL S TP1 T1 TP2 T2 TP3 T3 HH:MM AM|PM`"
         )
 
+    raw_parsed = ParsedSignal(
+        side=m.group("side").upper(),
+        r1=float(m.group("r1")), r2=float(m.group("r2")),
+        sl=float(m.group("sl")),
+        tp1=float(m.group("tp1")), tp2=float(m.group("tp2")), tp3=float(m.group("tp3")),
+    )
+    fix = apply_signal_corrections(raw_parsed)
+    parsed = fix.corrected
+    time_text = m.group("time")
+
     now_gmt7 = datetime.utcnow() + timedelta(hours=SIGNAL_SOURCE_TZ_OFFSET)
     date_str = now_gmt7.strftime("%Y-%m-%d")
 
@@ -407,11 +510,8 @@ def append_manual_signal(line: str) -> tuple[str, int]:
     if header_idx is not None:
         match = _find_matching_signal_in_section(
             lines, header_idx,
-            m.group("side").upper(),
-            float(m.group("r1")), float(m.group("r2")),
-            float(m.group("sl")),
-            float(m.group("tp1")), float(m.group("tp2")), float(m.group("tp3")),
-            m.group("time"),
+            parsed.side, parsed.r1, parsed.r2, parsed.sl,
+            parsed.tp1, parsed.tp2, parsed.tp3, time_text,
         )
         if match is not None:
             raise DuplicateSignalError(match[0], match[1])
@@ -421,20 +521,18 @@ def append_manual_signal(line: str) -> tuple[str, int]:
         else _section_signal_count(lines, header_idx) + 1
     )
 
-    # Re-render with the corrected index; keep everything after the `N.` as-is.
-    _, rest = line.split(".", 1)
-    renumbered = f"{new_index}.{rest}".strip()
-    if not STRICT_LINE_RE.match(renumbered):
+    rendered = parsed.to_line(new_index, time_text)
+    if not STRICT_LINE_RE.match(rendered):
         raise ValueError("Line is unparseable after renumbering -- nothing was written.")
 
     if header_idx is None:
         lines = _append_new_section(
-            lines, date_str, SIGNAL_SOURCE_TZ_OFFSET, renumbered,
+            lines, date_str, SIGNAL_SOURCE_TZ_OFFSET, rendered,
         )
     else:
-        lines = _insert_into_section(lines, header_idx, renumbered)
+        lines = _insert_into_section(lines, header_idx, rendered)
     _atomic_write_lines(lines)
-    return renumbered, new_index
+    return rendered, new_index, fix.changes
 
 
 def next_day_index(date_str: str) -> int:
@@ -599,11 +697,22 @@ class Listener:
                     log.info(f"[dry-run] would inject manual signal: {text}")
                     await self._reply_saved(f"✅ [dry-run] would inject: `{text}`")
                 else:
-                    rendered, idx = append_manual_signal(text)
-                    log.info(f"Manual injection #{idx}: {rendered}")
-                    await self._reply_saved(
-                        f"✅ Injected as #{idx} in today's section:\n`{rendered}`"
-                    )
+                    rendered, idx, changes = append_manual_signal(text)
+                    if changes:
+                        log.info(
+                            f"Manual injection #{idx} (auto-corrected "
+                            f"{', '.join(changes)}): {rendered}"
+                        )
+                        await self._reply_saved(
+                            f"✅ Injected as #{idx} "
+                            f"(auto-corrected: {', '.join(changes)}):\n"
+                            f"`{rendered}`"
+                        )
+                    else:
+                        log.info(f"Manual injection #{idx}: {rendered}")
+                        await self._reply_saved(
+                            f"✅ Injected as #{idx} in today's section:\n`{rendered}`"
+                        )
             except DuplicateSignalError as e:
                 log.info(
                     f"Manual injection is a duplicate: matches #{e.existing_index} "
@@ -665,7 +774,7 @@ class Listener:
                 )
 
             try:
-                parsed = parse_victor_signal(raw)
+                parsed_raw = parse_victor_signal(raw)
             except ValueError as e:
                 log.warning(f"Parse failure on message {message_id}: {e}")
                 state_set(self.state, message_id, {
@@ -679,10 +788,21 @@ class Listener:
                     await self._notify_failure(raw, str(e), msg_dt_gmt7)
                 return
 
-            if parsed is None:
+            if parsed_raw is None:
                 # Not a new signal — update, "Move SL", commentary, etc.
                 # Silent no-op; don't pollute state file.
                 return
+
+            # Apply VICTOR's standard geometry. If any field was off (mistype
+            # in the channel post), correct it before the write so signals.txt
+            # is always canonical.
+            fix = apply_signal_corrections(parsed_raw)
+            if fix.changed:
+                log.warning(
+                    f"Auto-corrected message {message_id} to standard "
+                    f"geometry: {', '.join(fix.changes)}"
+                )
+            parsed = fix.corrected
 
             try:
                 if self.dry_run:
@@ -718,8 +838,13 @@ class Listener:
                             "status": "written",
                             "signal_key": signal_key,
                             "line": signal_line,
+                            **({"auto_corrected": fix.changes} if fix.changed else {}),
                         })
                         log.info(f"Wrote {signal_key}: {signal_line}")
+                        if fix.changed:
+                            await self._notify_correction(
+                                raw, signal_key, signal_line, fix.changes,
+                            )
                 save_state(self.state)
             except Exception as e:
                 log.error(f"Write failed on message {message_id}: {e}")
@@ -756,6 +881,26 @@ class Listener:
             await self.client.send_message(self.saved_id, notification)
         except Exception as e:
             log.warning(f"Saved Messages notification failed: {e}")
+
+    async def _notify_correction(
+            self, raw: str, signal_key: str, signal_line: str,
+            changes: list[str],
+    ) -> None:
+        """Tell the user we auto-corrected a VICTOR mistype.
+
+        Best-effort: failures only log, never raise.
+        """
+        truncated = raw[:600] + ("..." if len(raw) > 600 else "")
+        body = (
+            f"⚠️ Auto-corrected {signal_key} (VICTOR mistype):\n"
+            f"`{signal_line}`\n"
+            f"Changes: {', '.join(changes)}\n"
+            f"\nOriginal raw:\n```\n{truncated}\n```"
+        )
+        try:
+            await self.client.send_message(self.saved_id, body)
+        except Exception as e:
+            log.warning(f"Saved Messages correction notice failed: {e}")
 
     async def _reply_saved(self, text: str) -> None:
         try:
