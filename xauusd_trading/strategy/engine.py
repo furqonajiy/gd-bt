@@ -1,39 +1,20 @@
 """Decision engine.
 
-`decide(...)` is the single entry point. Given a new signal, the chart up
-to "now", current open positions, and current equity, it returns a
-`Recommendation` describing:
+`decide(signal, chart, positions, config)` returns a Recommendation
+describing what to do with the new signal and the current state of every
+existing open position. `render_report(rec)` formats it for the console.
 
-  - the action plan for the new signal (FOLLOW with a concrete order
-    placement plan -- possibly partial when backtest replay shows some
-    entries have already played out; SKIP_EXPIRED when the pending
-    window has already closed; or SKIP_INVALIDATED when backtest replay
-    shows EVERY entry has already played out), and
-  - the current state of every existing open position (stage, effective
-    stop, floating P&L, time-exit countdown).
+Gate order applied to the new signal:
+  1. SKIP_EXPIRED       — pending window already closed.
+  2. Replay-based filtering — entries terminal in backtest replay are
+     filtered out; remaining placeable entries go to MT5.
+       - all terminal  → SKIP_INVALIDATED
+       - mix           → FOLLOW (partial)
+       - all placeable → FOLLOW (standard)
 
-`render_report(...)` formats a Recommendation as human-readable text
-suitable for console / Telegram.
-
-The engine deliberately adds no overlay logic (no skip / switch / hedge /
-take-profit-early on existing positions). Those decisions belong to the
-strategy itself: SL, SP, TP, and time exit. Adding cross-signal rules
-without re-validating against the backtest would risk degrading the
-validated result. Such overlays can be layered on later if backtested.
-
-SKIP_EXPIRED, SKIP_INVALIDATED, and the new partial-FOLLOW mode are NOT
-cross-signal overlays -- they're per-signal divergence-correction guards.
-None changes which signals the strategy would have filled in backtest:
-  - SKIP_EXPIRED refuses placement after the 4-hour pending window so we
-    don't send limits that would just be cancelled.
-  - SKIP_INVALIDATED refuses placement only when EVERY entry in the
-    backtest replay has reached a terminal status (SL, LOCK_TP1, TP*,
-    TIME_EXIT, NO_FILL) -- so there's literally nothing left to do.
-  - Partial FOLLOW handles the in-between case: when SOME entries have
-    played out in replay but others are still PENDING or OPEN, only the
-    placeable entries are sent to MT5. This matches the backtest path
-    exactly -- terminal entries are entries the backtest also wouldn't
-    have any further action on.
+The engine adds no cross-signal overlay logic. The gates above are
+per-signal divergence corrections — they don't change which signals the
+backtest would fill, only which entries reach MT5 when decide runs late.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -65,20 +46,13 @@ class PlannedOrder:
 
 @dataclass
 class NewSignalPlan:
-    """What to do about the new signal.
+    """Plan for the new signal.
 
-    `action` is one of:
-      - "FOLLOW"           -- place the orders in `orders`. May be a strict
-        subset of all entry slots when the backtest replay shows some
-        entries have already played out (partial FOLLOW). Inspect
-        `replay_position` (when set) to see which entry indices were
-        filtered out and why.
-      - "SKIP_EXPIRED"     -- pending window already closed; do nothing.
-      - "SKIP_INVALIDATED" -- every entry has reached a terminal status
-        in the backtest replay (no placeable entries remain). The orders
-        would diverge from the backtest path if placed now.
-        `replay_position` carries the replayed Position for rendering the
-        per-entry rationale.
+    action: FOLLOW | SKIP_EXPIRED | SKIP_INVALIDATED
+    orders: the placeable entries (may be a strict subset on partial FOLLOW)
+    replay_position: backtest replay from activation_time to now; set
+        whenever the chart was provided. render_report uses it for the
+        per-entry breakdown on partial FOLLOW and SKIP_INVALIDATED.
     """
     signal: Signal
     action: str
@@ -88,11 +62,6 @@ class NewSignalPlan:
     final_target_label: str
     final_target_price: float
     total_initial_risk_dollars: float
-    # Replayed Position from activation_time to now. Set whenever the engine
-    # ran the validity check (i.e. `chart` was provided to decide). None for
-    # backwards compat with callers that didn't pass a chart. When the action
-    # is SKIP_INVALIDATED or FOLLOW with a filtered orders list, render_report
-    # uses this to produce the per-entry outcome breakdown shown to the user.
     replay_position: Optional[Position] = None
 
 
@@ -115,25 +84,21 @@ class PositionStatus:
     """Snapshot of one in-flight Position."""
     signal: Signal
     stage: int
-    stage_label: str                     # "Pending" / "Stage 1 (initial SL)" / "Stage 2 (TP1 locked)"
+    stage_label: str
     first_fill_time: Optional[datetime]
     time_exit_at: Optional[datetime]
     minutes_to_time_exit: Optional[float]
     entries: list[EntryStatus]
     realized_pnl: float
     floating_pnl: float
-    action: str                          # HOLD / WATCH (no overlay-driven actions yet)
+    action: str                          # HOLD | WATCH
     notes: list[str] = field(default_factory=list)
-    # Wall-clock placement time (chart tz) if the caller recorded one.
-    # When present, render_report shows "Executed: ... (X min late)" so the
-    # user can see how their human lag deviates from the strategy's ideal
-    # (instant-at-signal-time) execution assumption.
-    executed_at: Optional[datetime] = None
+    executed_at: Optional[datetime] = None   # wall-clock placement; renders "X min late"
 
 
 @dataclass
 class Recommendation:
-    generated_at: datetime               # in chart timezone (GMT+3)
+    generated_at: datetime               # chart timezone (GMT+3)
     equity: float
     new_signal: NewSignalPlan
     open_positions: list[PositionStatus]
@@ -141,7 +106,7 @@ class Recommendation:
 
 
 # ---------------------------------------------------------------------------
-# the decision function
+# decide
 # ---------------------------------------------------------------------------
 
 def decide(
@@ -156,37 +121,29 @@ def decide(
     """Produce a Recommendation for the given signal.
 
     `now` defaults to the timestamp of the latest bar in the chart source
-    (or the signal time, if the chart has no later bar yet). All times are
-    chart timezone (GMT+3).
+    (or the signal time, if the chart has no later bar yet). All times
+    are chart timezone (GMT+3).
     """
-    # Resolve "now" first, then mark-to-market against the latest bar that
-    # is actually at or before "now".
     if now is None:
         last_bar = chart.latest()
         now = last_bar.time if last_bar is not None else signal.signal_time_chart
     else:
         last_bar = chart.latest(at_or_before=now)
 
-    # --- 1. Bring every existing open position up to "now" ---------------
+    # Advance every existing open position up to "now".
     open_positions = positions.open_positions()
     for pos in open_positions:
         start = pos.last_processed_time or pos.activation_time
         if start <= now:
             advance_window = chart.bars_between(start + timedelta(minutes=0), now)
             advance_bars(pos, advance_window, config, contract_size)
-
-    # Keep only those that are still in flight after advancement.
     still_open = [p for p in open_positions if not p.is_terminal()]
 
-    # --- 2. Build the plan for the new signal ---------------------------
-    # The chart is passed in so the validity gate can replay the signal
-    # from activation_time to now and detect already-played-out signals.
     plan = _build_new_signal_plan(
         signal, positions.equity(), config, contract_size,
         now=now, chart=chart,
     )
 
-    # --- 3. Snapshot existing positions ---------------------------------
     last_bid = last_bar.close if last_bar is not None else None
     last_spread = last_bar.spread_price if last_bar is not None else 0.0
     statuses = [
@@ -201,7 +158,7 @@ def decide(
 
 
 # ---------------------------------------------------------------------------
-# helpers
+# plan builder
 # ---------------------------------------------------------------------------
 
 def _build_new_signal_plan(
@@ -209,23 +166,6 @@ def _build_new_signal_plan(
         now: Optional[datetime] = None,
         chart: Optional[ChartSource] = None,
 ) -> NewSignalPlan:
-    """Build the order placement plan for one signal, with two pre-flight gates.
-
-    Gate order:
-      1. SKIP_EXPIRED       -- now >= pending_expires_at. Cheap, runs first.
-      2. Replay-based filtering (chart must be provided):
-           - All entries terminal in replay        -> SKIP_INVALIDATED
-           - Some entries terminal, others not     -> FOLLOW (partial: only
-                                                      the still-PENDING/OPEN
-                                                      entries are placed)
-           - All entries still PENDING / OPEN      -> FOLLOW (standard)
-      3. FOLLOW (no replay performed; chart was None) -- legacy path.
-
-    The replay-based filtering is what the user requested with the rule
-    "always execute signals if the status of the entry is still OPEN and
-    Pending in backtest results". The replay's per-entry status is the
-    authoritative source for which entries should reach MT5.
-    """
     lot, base_stop_distance = compute_lot(equity, signal, config, contract_size)
     orders: list[PlannedOrder] = []
     side = signal.side
@@ -242,10 +182,7 @@ def _build_new_signal_plan(
     expires = activation + timedelta(minutes=config.pending_expiry_minutes)
     total_risk = sum(o.risk_dollars for o in orders)
 
-    # ---- Gate 1: SKIP_EXPIRED ----
-    # Pending window already closed by the time we're deciding. Don't
-    # bother placing -- the orders would just be cancelled on the next
-    # manage cycle. Cheap to check, runs before the replay.
+    # Gate 1: SKIP_EXPIRED
     if now is not None and now >= expires:
         minutes_past = (now - expires).total_seconds() / 60.0
         return NewSignalPlan(
@@ -263,20 +200,12 @@ def _build_new_signal_plan(
             replay_position=None,
         )
 
-    # ---- Gate 2: replay-based per-entry filtering ----
-    # Replay the signal from activation_time to now. Per-entry status
-    # determines which orders make it to MT5:
-    #   PENDING / OPEN      -> placeable (entry still in play in backtest)
-    #   terminal {SL, LOCK_TP1, TP1, TP2, TP3, TIME_EXIT, NO_FILL}
-    #                       -> filter out (entry already played out)
-    #
-    # Skipped when chart is unavailable (legacy callers) so the old all-or-
-    # nothing behavior is preserved.
+    # Gate 2: per-entry replay filtering.
+    # PENDING / OPEN -> placeable; terminal -> filtered. Skipped when chart
+    # is None (legacy callers) so the old all-or-nothing path is preserved.
     replay_pos: Optional[Position] = None
     if chart is not None and now is not None:
         replay_pos = open_position(signal, equity, config, contract_size)
-        # If activation is still in the future, no bars to advance through;
-        # all entries stay PENDING -> all placeable -> standard FOLLOW.
         if replay_pos.activation_time <= now:
             advance_bars(
                 replay_pos,
@@ -321,9 +250,8 @@ def _build_new_signal_plan(
                 total_initial_risk_dollars=filtered_risk,
                 replay_position=replay_pos,
             )
-        # All entries placeable -- fall through to standard FOLLOW below.
 
-    # ---- Gate 3: FOLLOW ----
+    # Gate 3: standard FOLLOW.
     return NewSignalPlan(
         signal=signal, action="FOLLOW",
         rationale=(
@@ -344,17 +272,10 @@ def _build_new_signal_plan(
 def format_replay_outcome(replay: Position, indent: str = "    ") -> list[str]:
     """Render a per-entry outcome breakdown for a replayed signal.
 
-    Used by render_report (SKIP_INVALIDATED case AND partial-FOLLOW case)
-    and by the CLI auto/decide EXECUTION log. Returns just the per-entry
-    lines plus a "Backtest realized so far" summary -- callers add their
-    own context about what will/won't be placed, since that depends on
-    the surrounding gate logic.
-
-    Output looks like:
+    Output:
         #0 (4702.00): filled 11:22, SL at 12:18, pnl -$56.70
-        #1 (4703.50): filled 11:31, SL at 12:18, pnl -$45.36
-        #2 (4705.00): NO_FILL (pending expired)
-        Backtest realized so far: -$102.06
+        #1 (4703.50): NO_FILL (pending expired)
+        Backtest realized so far: -$56.70
     """
     lines: list[str] = []
     for e in replay.entries:
@@ -371,7 +292,7 @@ def format_replay_outcome(replay: Position, indent: str = "    ") -> list[str]:
                 f"{indent}#{e.entry_index} ({e.entry_price:g}): NO_FILL "
                 f"(pending expired)"
             )
-        else:  # terminal exit (SL, LOCK_TP1, TP1/2/3, TIME_EXIT)
+        else:
             fill_str = f"{e.fill_time:%H:%M}" if e.fill_time is not None else "?"
             exit_str = f"{e.exit_time:%H:%M}" if e.exit_time is not None else "?"
             pnl_str = f"${e.pnl:+.2f}" if e.pnl is not None else "-"
@@ -383,6 +304,10 @@ def format_replay_outcome(replay: Position, indent: str = "    ") -> list[str]:
     lines.append(f"{indent}Backtest realized so far: ${realized:+.2f}")
     return lines
 
+
+# ---------------------------------------------------------------------------
+# snapshot helpers
+# ---------------------------------------------------------------------------
 
 def _stage_label(position: Position, config: StrategyConfig) -> str:
     if not position.filled_entries():
@@ -464,7 +389,6 @@ def _fmt_money(x: Optional[float]) -> str:
 
 
 def _fmt_lateness(executed_at: datetime, signal_time: datetime) -> str:
-    """Return a 'on time' / 'X min late' / 'X min early' annotation."""
     delta_min = (executed_at - signal_time).total_seconds() / 60.0
     if delta_min >= 0.5:
         return f"({delta_min:.1f} min late)"
@@ -484,7 +408,6 @@ def render_report(rec: Recommendation) -> str:
     )
     lines.append("=" * 70)
 
-    # New signal --------------------------------------------------------
     lines.append("")
     lines.append("NEW SIGNAL")
     lines.append("-" * 70)
@@ -501,7 +424,6 @@ def render_report(rec: Recommendation) -> str:
     lines.append(f"  Reason: {rec.new_signal.rationale}")
 
     if rec.new_signal.action == "FOLLOW":
-        # Order plan -- only meaningful when we'd actually place.
         lines.append("")
         lines.append("  Orders to place:")
         for o in rec.new_signal.orders:
@@ -525,8 +447,7 @@ def render_report(rec: Recommendation) -> str:
             f"{_fmt_money(-rec.new_signal.total_initial_risk_dollars)} "
             f"({rec.config.risk_per_signal * 100:.1f}% of equity)"
         )
-        # If partial, show the per-entry replay so the user can see what
-        # was filtered out and why.
+        # Partial FOLLOW: show the per-entry replay so the user can see what got filtered.
         rp = rec.new_signal.replay_position
         if rp is not None and len(rec.new_signal.orders) < len(rp.entries):
             lines.append("")
@@ -538,15 +459,12 @@ def render_report(rec: Recommendation) -> str:
             f"{_fmt_time(rec.new_signal.pending_expires_at)} GMT+3"
         )
     elif rec.new_signal.action == "SKIP_INVALIDATED":
-        # Per-entry replay outcome breakdown. The replay_position is set
-        # whenever SKIP_INVALIDATED fires, so this block is safe to assume.
         rp = rec.new_signal.replay_position
         if rp is not None:
             lines.append("")
             lines.append("  Backtest replay outcome:")
             lines.extend(format_replay_outcome(rp, indent="    "))
 
-    # Open positions ----------------------------------------------------
     lines.append("")
     lines.append(f"OPEN POSITIONS  ({len(rec.open_positions)})")
     lines.append("-" * 70)
@@ -558,8 +476,6 @@ def render_report(rec: Recommendation) -> str:
             f"  Signal {s.signal_key}  {s.side} {s.r1:g}-{s.r2:g}  "
             f"issued {_fmt_time(s.signal_time_chart)}"
         )
-        # Show actual placement time when we recorded one (decide --execute
-        # captures it; legacy registry entries without it just skip this line).
         if p.executed_at is not None:
             lines.append(
                 f"    Executed: {_fmt_time(p.executed_at)} GMT+3 "
@@ -598,7 +514,6 @@ def render_report(rec: Recommendation) -> str:
         for n in p.notes:
             lines.append(f"      - {n}")
 
-    # Summary -----------------------------------------------------------
     lines.append("")
     lines.append("SUMMARY")
     lines.append("-" * 70)

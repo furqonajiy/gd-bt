@@ -1,10 +1,7 @@
-"""Source adapters.
+"""Source adapters — the boundary between the engine and the outside world.
 
-Boundary between the engine (pure logic) and the outside world (CSVs today,
-MT5 tomorrow). The engine only ever talks to these abstract interfaces.
-
-To plug in MT5 later, write `Mt5ChartSource` and `Mt5PositionSource` that
-satisfy the same contracts. No engine code has to change.
+The engine talks only to these abstract interfaces. The CSV impls live
+here; the MT5 impl lives in io/mt5_adapter.py with the same contract.
 """
 from __future__ import annotations
 from abc import ABC, abstractmethod
@@ -26,20 +23,17 @@ class ChartSource(ABC):
     """Abstract source of 1-minute bars in chart timezone (GMT+3)."""
 
     @abstractmethod
-    def latest(self, at_or_before: Optional[datetime] = None) -> Optional[Bar]:
-        """Most recent bar at or before the given moment."""
+    def latest(self, at_or_before: Optional[datetime] = None) -> Optional[Bar]: ...
 
     @abstractmethod
     def bars_between(self, start: datetime, end: datetime) -> Iterable[Bar]:
         """Bars in [start, end] inclusive, chronologically."""
 
     @abstractmethod
-    def first_time(self) -> Optional[datetime]:
-        """Time of the very first available bar."""
+    def first_time(self) -> Optional[datetime]: ...
 
     @abstractmethod
-    def last_time(self) -> Optional[datetime]:
-        """Time of the very last available bar."""
+    def last_time(self) -> Optional[datetime]: ...
 
 
 class CsvChartSource(ChartSource):
@@ -77,8 +71,7 @@ class PositionSource(ABC):
     """Abstract source of currently-open Positions."""
 
     @abstractmethod
-    def open_positions(self) -> list[Position]:
-        """Return all positions still in flight (not fully terminal)."""
+    def open_positions(self) -> list[Position]: ...
 
     @abstractmethod
     def equity(self) -> float:
@@ -88,9 +81,8 @@ class PositionSource(ABC):
 class ManualPositionSource(PositionSource):
     """In-memory source. The caller passes positions and equity in directly.
 
-    For backtest use, the runner mutates these between signals. For live
-    forward-mode use, the user (or an MT5 adapter later) constructs and
-    passes them per call.
+    The backtest runner mutates these between signals. Live forward-mode
+    constructs and passes them per call.
     """
 
     def __init__(self, equity: float, positions: Optional[list[Position]] = None):
@@ -103,7 +95,6 @@ class ManualPositionSource(PositionSource):
     def equity(self) -> float:
         return self._equity
 
-    # mutators used by the backtest runner
     def add(self, position: Position) -> None:
         self._positions.append(position)
 

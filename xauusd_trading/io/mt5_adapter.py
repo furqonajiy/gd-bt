@@ -1,26 +1,15 @@
-"""MT5 adapter — pulls live M1 bars and account equity from MetaTrader 5.
+"""MT5 adapter — live M1 bars and account equity from MetaTrader 5.
 
-Drop-in replacement for `CsvChartSource` when you want to run `decide()`
-against a running MT5 terminal instead of CSV files.
+Drop-in replacement for `CsvChartSource` when running against a live MT5
+terminal. Windows-only at runtime; the module imports cleanly elsewhere
+because `MetaTrader5` is lazy-imported inside Mt5Connection.
 
-Requirements:
-    pip install MetaTrader5
+Broker timezone: MT5 returns bar timestamps in server local time. Most
+XAUUSD brokers run on GMT+3 (default `server_offset_hours=3`, no shift
+needed). Set explicitly if your broker is different.
 
-The MetaTrader5 Python package is Windows-only and requires the MT5 terminal
-to be installed and (typically) running. The terminal must allow algorithmic
-trading and Python access (Tools -> Options -> Expert Advisors).
-
-Timezone notes
---------------
-MT5 returns bar timestamps in the BROKER server's local time. Most XAUUSD
-brokers run their server on GMT+3 (matches the project's chart timezone),
-so the default `server_offset_hours=3` means no shift. If your broker is on
-a different timezone, set `server_offset_hours` accordingly.
-
-Symbol notes
-------------
-The symbol name varies by broker: "XAUUSD", "XAUUSD.r", "GOLD", "XAUUSDm",
-etc. Check your Market Watch in MT5 and pass the exact name via `symbol=`.
+Symbol name varies by broker ("XAUUSD", "XAUUSD.r", "GOLD", "XAUUSDm",
+...). Check Market Watch and pass the exact name via `symbol=`.
 """
 from __future__ import annotations
 import calendar
@@ -31,18 +20,17 @@ from xauusd_trading import ChartSource
 from xauusd_trading import Bar
 from xauusd_trading import POINT_VALUE
 
-# MT5 Python interprets naive datetimes as the Python process's LOCAL time,
-# and even tz-aware datetimes can be re-routed through local time on some
-# versions before being epoch-encoded. To eliminate any ambiguity we compute
-# the broker-naive-time-as-UTC-epoch ourselves with calendar.timegm() and
-# pass an INT to MT5. Ints have no timezone interpretation.
+# MT5 Python interprets naive datetimes as the host's LOCAL time, and even
+# tz-aware datetimes can be re-routed through local time on some versions
+# before being epoch-encoded. To eliminate ambiguity, we pass UTC-epoch ints
+# (calendar.timegm) — ints have no timezone interpretation.
 _UTC = timezone.utc
 
 
 def _broker_naive_to_mt5_epoch(broker_naive: datetime) -> int:
-    """Encode a broker-naive datetime as the UTC-epoch integer that MT5
-    uses internally for bar.time. `calendar.timegm` treats its input as
-    UTC, so the result is independent of the caller's local timezone.
+    """Encode a broker-naive datetime as the UTC-epoch int that MT5 uses
+    internally for bar.time. `calendar.timegm` treats input as UTC, so
+    the result is independent of the caller's local timezone.
     """
     return calendar.timegm(broker_naive.timetuple())
 
@@ -54,9 +42,8 @@ def _chart_time_to_mt5_epoch(chart_naive: datetime, server_offset_hours: int) ->
     return _broker_naive_to_mt5_epoch(broker_naive)
 
 
-# Lazy import lives inside class init so this module is importable on
-# non-Windows machines (where MetaTrader5 cannot be installed).
 def _import_mt5():
+    """Lazy import so this module loads on non-Windows machines."""
     try:
         import MetaTrader5 as mt5
     except ImportError as e:
@@ -68,11 +55,11 @@ def _import_mt5():
 
 
 # ---------------------------------------------------------------------------
-# initialize / shutdown helper (shared connection)
+# connection
 # ---------------------------------------------------------------------------
 
 class Mt5Connection:
-    """Manages the global MT5 terminal connection.
+    """Manages the MT5 terminal connection.
 
     Use as a context manager:
 
@@ -82,9 +69,9 @@ class Mt5Connection:
     """
 
     def __init__(
-        self, path: Optional[str] = None,
-        login: Optional[int] = None, password: Optional[str] = None,
-        server: Optional[str] = None, timeout: int = 60_000,
+            self, path: Optional[str] = None,
+            login: Optional[int] = None, password: Optional[str] = None,
+            server: Optional[str] = None, timeout: int = 60_000,
     ):
         self._mt5 = _import_mt5()
         self._kwargs = {"timeout": timeout}
@@ -128,36 +115,29 @@ class Mt5ChartSource(ChartSource):
     """ChartSource backed by MT5 1-minute bars."""
 
     def __init__(
-        self, connection: Mt5Connection, symbol: str = "XAUUSD",
-        server_offset_hours: int = 3, history_bars: int = 5_000,
+            self, connection: Mt5Connection, symbol: str = "XAUUSD",
+            server_offset_hours: int = 3, history_bars: int = 5_000,
     ):
         """
-        Parameters
-        ----------
         connection : an initialized Mt5Connection.
-        symbol : exact symbol string as it appears in MT5 Market Watch.
+        symbol : exact symbol string from MT5 Market Watch.
         server_offset_hours : broker server timezone offset from UTC.
             Most XAUUSD brokers use 3. Common alternatives: 2, 0.
-        history_bars : how many M1 bars to pre-load on startup. The engine
-            re-queries the latest bar on every call; this just bounds the
-            backfill window for replaying prior open positions.
+        history_bars : bounds the backfill window for replaying prior
+            open positions. The engine re-queries the latest bar on
+            every call regardless.
         """
-        self._conn = connection
         self._mt5 = connection.mt5
         self._symbol = symbol
         self._server_offset = server_offset_hours
         self._history_bars = history_bars
-        # GMT+3 is the project's chart timezone. shift converts MT5 server
-        # naive datetimes into chart-time naive datetimes.
         self._shift = timedelta(hours=3 - server_offset_hours)
-        # Make sure the symbol is selected in Market Watch.
         if not self._mt5.symbol_select(symbol, True):
             raise RuntimeError(
                 f"Symbol {symbol!r} not found in Market Watch. "
                 f"Check the exact name (e.g. XAUUSD, XAUUSD.r, GOLD)."
             )
 
-    # internal time helpers ----------------------------------------------
     def _to_chart_time(self, mt5_epoch: int) -> datetime:
         # MT5 returns server-local-time-as-if-it-were-UTC.
         broker_naive = datetime.utcfromtimestamp(int(mt5_epoch))
@@ -175,11 +155,10 @@ class Mt5ChartSource(ChartSource):
             spread_points=spread, spread_price=spread * POINT_VALUE,
         )
 
-    # ChartSource interface ----------------------------------------------
     def first_time(self) -> Optional[datetime]:
         rates = self._mt5.copy_rates_from_pos(
             self._symbol, self._mt5.TIMEFRAME_M1, self._history_bars - 1, 1,
-        )
+                                                  )
         if rates is None or len(rates) == 0:
             return None
         return self._to_chart_time(rates[0]["time"])
@@ -223,7 +202,7 @@ class Mt5ChartSource(ChartSource):
 # ---------------------------------------------------------------------------
 
 def mt5_equity(connection: Mt5Connection) -> float:
-    """Return current account equity from MT5."""
+    """Current account equity from MT5."""
     info = connection.mt5.account_info()
     if info is None:
         raise RuntimeError(f"account_info() failed: {connection.mt5.last_error()}")
@@ -231,17 +210,16 @@ def mt5_equity(connection: Mt5Connection) -> float:
 
 
 # ---------------------------------------------------------------------------
-# positions (sketch — read-only diagnostic)
+# diagnostic: open positions / pending orders
 # ---------------------------------------------------------------------------
 
 def mt5_open_positions_summary(connection: Mt5Connection, symbol: str = "XAUUSD") -> list[dict]:
     """List currently-open MT5 positions and pending orders for the symbol.
 
-    This is a diagnostic helper; the engine's Position model needs full
-    signal context (TP1/2/3, SL distance, side, time) which MT5 alone does
-    not store. For the engine, keep using `positions.json` to declare which
-    *signals* are currently active. This helper just lets you sanity-check
-    that MT5 reflects what your JSON says.
+    Read-only diagnostic. The engine's Position model needs full signal
+    context (TP1/2/3, side, time) that MT5 alone does not store; for the
+    engine, `positions.json` is the source of truth. This helper just
+    lets you sanity-check that MT5 reflects what the JSON says.
     """
     mt5 = connection.mt5
     out = []
@@ -277,12 +255,11 @@ def _order_type_name(mt5, type_id: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# M1 archive: per-month CSV files in MT5 export format
+# M1 archive — per-month CSV files in MT5 export format
 # ---------------------------------------------------------------------------
 
-# CSV header matches the MT5 platform's "Save As CSV" output, so files written
-# by this archiver are interchangeable with manually-exported MT5 files (and
-# slot directly into `--charts` for backtests).
+# Header matches MT5's "Save As CSV", so archived files are interchangeable
+# with manual exports and slot directly into `--charts` for backtests.
 _MT5_EXPORT_COLUMNS = [
     "<DATE>", "<TIME>", "<OPEN>", "<HIGH>", "<LOW>",
     "<CLOSE>", "<TICKVOL>", "<VOL>", "<SPREAD>",
@@ -290,10 +267,8 @@ _MT5_EXPORT_COLUMNS = [
 
 
 def _rates_to_export_df(rates, server_offset_hours: int):
-    """Convert an MT5 numpy rates array to an MT5-export-format DataFrame.
-
-    All times are converted into chart time (GMT+3) so the resulting CSVs
-    match the project's existing data files.
+    """Convert an MT5 numpy rates array to an MT5-export-format DataFrame
+    with times shifted into chart time (GMT+3).
     """
     import pandas as pd
     if rates is None or len(rates) == 0:
@@ -315,8 +290,8 @@ def _rates_to_export_df(rates, server_offset_hours: int):
 
 
 def _merge_with_existing(new_df, existing_path):
-    """Union new and existing bars, dedup by (DATE, TIME) keeping the new
-    fetch on collision, sort, and return as a fresh DataFrame.
+    """Union new and existing bars, dedup by (DATE, TIME) keeping new
+    on collision, sort, return a fresh DataFrame.
     """
     import pandas as pd
     if not existing_path.exists():
@@ -324,10 +299,8 @@ def _merge_with_existing(new_df, existing_path):
     try:
         existing = pd.read_csv(existing_path, sep="\t")
     except Exception:
-        # Corrupt or empty file — ignore and overwrite.
         return new_df
     if not set(_MT5_EXPORT_COLUMNS).issubset(existing.columns):
-        # Header mismatch — overwrite.
         return new_df
     combined = pd.concat([existing[_MT5_EXPORT_COLUMNS], new_df], ignore_index=True)
     combined = combined.drop_duplicates(subset=["<DATE>", "<TIME>"], keep="last")
@@ -336,7 +309,7 @@ def _merge_with_existing(new_df, existing_path):
 
 
 def _month_iter(until: datetime, months_back: int):
-    """Yield (year, month) pairs for the last `months_back` months ending at
+    """(year, month) pairs for the last `months_back` months ending at
     `until`'s year-month, oldest first.
     """
     y, m = until.year, until.month
@@ -357,23 +330,19 @@ def _first_of_next_month(year: int, month: int) -> datetime:
 
 
 def archive_m1_by_month(
-    connection: Mt5Connection, symbol: str, output_dir,
-    months_back: int = 4, until_chart_time: Optional[datetime] = None,
-    server_offset_hours: int = 3, overwrite: bool = False,
+        connection: Mt5Connection, symbol: str, output_dir,
+        months_back: int = 4, until_chart_time: Optional[datetime] = None,
+        server_offset_hours: int = 3, overwrite: bool = False,
 ) -> list[dict]:
     """Pull M1 bars from MT5 and save one CSV per year-month.
 
-    For each year-month in the last `months_back` calendar months (anchored
-    to `until_chart_time`, which defaults to "now" in chart timezone), this:
+    For each year-month in the last `months_back` months (anchored to
+    `until_chart_time`, default "now"), this queries MT5, converts to
+    chart time and MT5-export-CSV format, and either merges with the
+    existing file (default; safe for boundary months) or overwrites it.
+    Output: `<output_dir>/<symbol>_M1_YYYYMM.csv`.
 
-      1. Queries MT5 for that month's bars.
-      2. Converts to chart time and to MT5-export-CSV format.
-      3. Either merges with the existing file (default; safe for boundary
-         months partially outside MT5's history window) or overwrites it
-         (`overwrite=True`; can lose data when MT5's window has shifted).
-      4. Writes the result to `<output_dir>/<symbol>_M1_YYYYMM.csv`.
-
-    Returns a list of `{"month", "path", "bars_written", "bars_added", "bars_existing"}`.
+    Returns a list of `{month, path, bars_written, bars_fetched, bars_existing}`.
     """
     from pathlib import Path
     output_dir = Path(output_dir)
@@ -381,7 +350,6 @@ def archive_m1_by_month(
     mt5 = connection.mt5
 
     if until_chart_time is None:
-        # Latest server bar time, in chart timezone.
         rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 1)
         if rates is None or len(rates) == 0:
             now_utc = datetime.utcnow()
@@ -393,11 +361,9 @@ def archive_m1_by_month(
     summary: list[dict] = []
     for year, month in _month_iter(until_chart_time, months_back):
         chart_start = datetime(year, month, 1)
-        # Exclusive month end: last bar we want is HH:59 of the last day,
-        # i.e. one minute before the next month begins. This keeps the
-        # boundary bar (e.g. April 1 00:00) out of March's file.
+        # Exclusive month end: last bar is HH:59 of the last day, one minute
+        # before the next month begins. Keeps the boundary bar out of M's file.
         chart_end = _first_of_next_month(year, month) - timedelta(minutes=1)
-        # Epoch ints are immune to MT5 Python's local-time conversion.
         start_epoch = _chart_time_to_mt5_epoch(chart_start, server_offset_hours)
         end_epoch = _chart_time_to_mt5_epoch(chart_end, server_offset_hours)
         rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_epoch, end_epoch)
@@ -418,7 +384,6 @@ def archive_m1_by_month(
             final_df = _merge_with_existing(new_df, path)
 
         if len(final_df) == 0 and not path.exists():
-            # Nothing fetched and no file to update — skip.
             continue
 
         final_df.to_csv(path, sep="\t", index=False)

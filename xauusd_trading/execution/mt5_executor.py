@@ -1,48 +1,22 @@
 """MT5 trade execution and active position management.
 
 Used by `decide --execute` and `auto`. Places fresh signals as N LIMIT
-orders (where N is the configured entry_count) with SL and the configured
-final-target TP attached, manages the TP1-lock by modifying SL once TP1 has
-been touched, cancels expired pendings, and time-closes positions past the
-configured max-hold deadline.
+orders with SL and final-target TP, manages the TP1-lock, cancels expired
+pendings, and time-closes positions past max-hold.
 
-Tagging: each signal gets a unique 31-bit magic number derived from its
-signal_key (e.g. "2026-05-07#01"), and its signal_key is written to the
-order/position comment so MT5 itself becomes the source of truth for "what's
-currently active". A small JSON registry (positions.json) maps magic ->
-signal text so we can replay engine state on later runs.
+Tagging: each signal gets a stable 31-bit magic from its signal_key, and
+the signal_key is written to the order comment — so MT5 itself becomes
+the source of truth for "what's currently active". A small JSON registry
+(positions.json) maps magic -> signal text so engine state can be rebuilt
+on later runs.
 
-Re-entry protection: `place_signal` consults TWO guards before sending any
-LIMITs:
-  1. positions.json membership (checked in cli.py before calling here)
-  2. find_orders / find_positions  -- magic has a current MT5 footprint
-
-The engine's `_build_new_signal_plan` is the primary placement gate: it
-filters `plan.orders` based on per-entry backtest-replay status. Only
-entries whose replay status is PENDING or OPEN reach this method; terminal
-entries are filtered out upstream. The two guards above are orthogonal:
-they check current live state to prevent duplicate placement within a
-session, even if the registry was manually edited or pruned.
-
-The registry also persists `executed_at` (wall-clock placement time in chart
-tz). This lets `manage` and `decide` show "X min late" annotations and
-replay the position from your real placement moment to reflect what MT5
-actually sees -- because the engine's default replay-from-signal-time
-assumption is the strategy's ideal, not what happens when a human or a
-slow cycle is late.
-
-Divergence reconciliation: `reconcile_with_mt5` patches the engine's
-PENDING entries from MT5's actual open positions when the bar-by-bar replay
-missed a fill (typically a same-minute fill at executed_at, or positive
-slippage). This is a per-signal correction, not a cross-signal overlay --
-backtest is unaffected.
-
-Late TP1 catch-up: `manage_position` closes at market any MT5 positions
-whose engine replay says LOCK_TP1 but whose broker-side SL hasn't yet been
-moved to TP1 (because an earlier manage cycle didn't run in the window
-between TP1 touch and the next return-to-TP1). Caps divergence from the
-backtest path -- you take the current price as your exit instead of risking
-a full original-SL loss.
+Three divergence-correction mechanisms (none are cross-signal overlays):
+  - `reconcile_with_mt5` — patches PENDING entries from MT5's actual fills
+    when the bar replay missed them (same-minute fills, positive slippage).
+  - `place_signal` re-entry guard — skips if MT5 already has orders or
+    positions tagged with this signal's magic.
+  - `manage_position` Late TP1 catch-up — closes at market when the engine
+    has LOCK_TP1 entries but the broker SL hasn't moved to TP1 yet.
 """
 from __future__ import annotations
 import hashlib
@@ -74,15 +48,13 @@ def signal_to_magic(signal_key: str) -> int:
 def round_lot(lot: float, min_lot: float = 0.01, lot_step: float = 0.01) -> float:
     """Floor `lot` to a multiple of `lot_step` and enforce `min_lot`.
 
-    Always returns a clean multiple of 0.01 (no floating-point dust like
-    0.15000000000000002). Uses a small epsilon on the floor so values that
-    are *already* on the step don't drop a step (e.g. 0.15 -> 0.14 due to FP).
-    Returns 0.0 if the floored value is below `min_lot`.
+    Epsilon on the floor prevents FP dust (0.15 → 0.14). Returns 0.0 if
+    floored value is below `min_lot`.
     """
     if lot <= 0:
         return 0.0
     steps = math.floor(lot / lot_step + 1e-9)
-    rounded = round(steps * lot_step, 2)  # 2 decimals = clean 0.01 multiples
+    rounded = round(steps * lot_step, 2)
     if rounded < min_lot - 1e-9:
         return 0.0
     return rounded
@@ -107,19 +79,12 @@ class ExecutionLog:
 
 
 class SignalRegistry:
-    """Tiny JSON-file registry of currently-tracked signals.
+    """JSON-file registry of currently-tracked signals.
 
-    Each entry: {"signal_key": str, "signal": str, "date": "YYYY-MM-DD",
-                 "tz": int, "equity_at_open": float,
-                 "executed_at": "YYYY-MM-DDTHH:MM:SS" (chart tz, optional)}
-    Auto-pruned: entries whose magic has zero MT5 orders AND zero MT5 positions
-    are removed on each call.
-
-    `executed_at` is set by `decide --execute` and `auto` immediately after
-    `place_signal` reports a successful placement. Older entries written
-    before this field existed will be missing it; downstream tooling treats
-    that as "unknown lateness" and falls back to the ideal-execution replay
-    (signal-time start).
+    Entry shape: {"signal_key", "signal", "date", "tz", "equity_at_open",
+                  "executed_at" (optional, chart-tz ISO)}
+    Auto-pruned: entries whose magic has no MT5 footprint are removed on
+    each manage/auto cycle.
     """
 
     def __init__(self, path: Path):
@@ -138,11 +103,7 @@ class SignalRegistry:
 
     def add(self, signal: Signal, equity: float,
             executed_at: Optional[datetime] = None) -> None:
-        """Insert or replace the registry entry for this signal.
-
-        `executed_at` is the wall-clock placement time in chart tz (GMT+3).
-        Pass None to omit (e.g. when migrating legacy code paths).
-        """
+        """Insert or replace the entry for this signal."""
         entries = self.load()
         entries = [e for e in entries if e.get("signal_key") != signal.signal_key]
         record = {
@@ -158,7 +119,7 @@ class SignalRegistry:
         self.save(entries)
 
     def prune(self, alive_magics: set[int]) -> int:
-        """Remove entries whose magic is NOT in alive_magics. Returns count removed."""
+        """Remove entries whose magic is not in alive_magics. Returns count removed."""
         entries = self.load()
         before = len(entries)
         entries = [e for e in entries
@@ -175,6 +136,10 @@ def _reconstruct_signal_text(s: Signal) -> str:
             f"{s.source_time_text}")
 
 
+# ---------------------------------------------------------------------------
+# Mt5Executor
+# ---------------------------------------------------------------------------
+
 class Mt5Executor:
     """Place and manage trades for the validated strategy."""
 
@@ -183,15 +148,12 @@ class Mt5Executor:
                  lot_step: float = DEFAULT_LOT_STEP,
                  server_offset_hours: int = 3):
         """
-        Parameters
-        ----------
         conn : initialized Mt5Connection.
-        symbol : exact symbol string as in MT5 Market Watch.
+        symbol : exact symbol string from MT5 Market Watch.
         min_lot, lot_step : broker rounding constraints.
-        server_offset_hours : broker server timezone offset from UTC. Most
-            XAUUSD brokers run GMT+3 year-round, which is the project default.
-            Used by `reconcile_with_mt5` to convert MT5's `position.time`
-            back into chart-tz.
+        server_offset_hours : broker server tz offset from UTC. Most XAUUSD
+            brokers are GMT+3. Used by `reconcile_with_mt5` to convert
+            MT5's position.time back into chart tz.
         """
         self.conn = conn
         self.mt5 = conn.mt5
@@ -227,7 +189,7 @@ class Mt5Executor:
             errors.append(f"Trading disabled for {self.symbol}")
         self._sym_info = sym
 
-        # Detect closed market: no fresh tick or zero bid/ask.
+        # No fresh tick or zero bid/ask = market closed.
         tick = self.mt5.symbol_info_tick(self.symbol)
         if tick is None or (tick.bid == 0 and tick.ask == 0):
             errors.append(f"No live tick for {self.symbol} (market may be closed)")
@@ -279,12 +241,11 @@ class Mt5Executor:
     # ---- reconciliation ------------------------------------------------
 
     def _broker_epoch_to_chart_time(self, epoch: int) -> datetime:
-        """Convert MT5's broker-time-as-UTC-epoch to chart-tz naive datetime.
+        """MT5's broker-time-as-UTC-epoch -> chart-tz naive datetime.
 
-        Mirrors mt5_adapter.Mt5ChartSource._to_chart_time. MT5 stores times
-        (bar.time, position.time, deal.time) as Unix-style epoch ints but
-        interprets them as broker-local-time treated as UTC. To get chart-tz
-        (GMT+3 naive), shift by (3 - server_offset_hours).
+        Mirrors Mt5ChartSource._to_chart_time. MT5 stores times as Unix
+        epoch ints but interprets them as broker-local-time-treated-as-UTC,
+        so getting chart-tz back requires shifting by (3 - server_offset).
         """
         broker_naive = datetime.utcfromtimestamp(int(epoch))
         return broker_naive + timedelta(hours=3 - self.server_offset_hours)
@@ -295,33 +256,12 @@ class Mt5Executor:
     ) -> ExecutionLog:
         """Sync engine_pos's PENDING entries with MT5's actual open positions.
 
-        When the engine's bar-by-bar replay misses an MT5 fill (most commonly
-        because the fill happened in the same M1 bar as placement, or because
-        positive slippage took the fill price below the planned entry), MT5
-        has positions the engine still thinks are PENDING. This method queries
-        MT5 directly, maps positions to engine entry slots by chronological
-        order (laddered LIMITs fire in deterministic price order, so the
-        time-order they fill in matches the slot-order in the engine), and
-        patches PENDING entries to OPEN using MT5's actual fill price, lot,
-        and time.
-
-        The engine's `initial_sl` is left unchanged. Combined with the
-        broker-side SL that was attached at placement (also unchanged), this
-        preserves the original planned stop distance. Positive slippage on
-        the entry then translates directly to improved R:R, not a wider stop.
-
-        After patching, re-advances the engine through chart bars from the
-        earliest patched fill time to `now`, so stage transitions (TP1 touch
-        -> stage 1) catch up. Safe to re-process bars: fill checks skip
-        non-PENDING entries; stop/target checks on terminal entries are no-ops.
-
-        Idempotent: nothing happens if all entries are already in sync.
-        Per-signal divergence correction, not a cross-signal overlay -- does
-        not change which signals the strategy fills, only reconciles when
-        bar-replay misses MT5 reality. Backtest is unaffected because it
-        doesn't go through this code path.
-
-        Returns an ExecutionLog noting any patches made (empty if none).
+        Maps MT5 positions to engine entry slots by chronological order
+        (laddered LIMITs fire in deterministic price order; their time
+        order matches the slot order in the engine). Patches PENDING
+        entries to OPEN using MT5's actual fill price, lot, and time.
+        Re-advances the position from the earliest patched fill to `now`
+        so stage transitions catch up. Idempotent.
         """
         log = ExecutionLog()
         magic = signal_to_magic(engine_pos.signal.signal_key)
@@ -347,8 +287,7 @@ class Mt5Executor:
         for i, mt5_pos in enumerate(mt5_positions):
             entry = engine_pos.entries[i]
             if entry.status != "PENDING":
-                # Already in sync (OPEN) or terminal (SL / TP / TIME_EXIT /
-                # LOCK_TP1 / NO_FILL). Don't overwrite.
+                # Already OPEN or terminal — don't overwrite.
                 continue
 
             fill_time_chart = self._broker_epoch_to_chart_time(mt5_pos.time)
@@ -367,10 +306,9 @@ class Mt5Executor:
             entry.fill_time = fill_time_chart
             entry.entry_price = actual_price
             entry.lot = actual_lot
-            # entry.initial_sl intentionally NOT recomputed -- preserves the
-            # planned stop distance, which matches the broker-side SL that
-            # was attached at placement. Positive slippage = better R:R, not
-            # a wider stop.
+            # initial_sl NOT recomputed — preserves the planned stop distance
+            # that matches the broker-side SL attached at placement. Positive
+            # slippage = better R:R, not a wider stop.
 
             if earliest_patched is None or fill_time_chart < earliest_patched:
                 earliest_patched = fill_time_chart
@@ -378,10 +316,9 @@ class Mt5Executor:
         if earliest_patched is None:
             return log
 
-        # Anchor first_fill_time / time_exit_deadline off the real MT5 fill.
-        # Only update if our anchor is earlier than what's already there
-        # (preserves any first_fill_time the bar-replay correctly caught on
-        # a different ladder entry).
+        # Anchor first_fill_time / time_exit_deadline off the real MT5 fill
+        # only if our anchor is earlier than what's there (preserves any
+        # first_fill_time the bar-replay correctly caught on another entry).
         if (engine_pos.first_fill_time is None
                 or earliest_patched < engine_pos.first_fill_time):
             engine_pos.first_fill_time = earliest_patched
@@ -389,10 +326,8 @@ class Mt5Executor:
                 minutes=config.max_hold_minutes
             )
 
-        # Re-advance through bars from the earliest patched fill to now.
-        # Bars before are unaffected; bars in between may now trigger stage
-        # transitions or stop/target exits on the newly-OPEN entries that
-        # the first replay couldn't see.
+        # Re-advance from the earliest patched fill to now so stage
+        # transitions and stop/target checks fire on newly-OPEN entries.
         bars = chart.bars_between(earliest_patched, now)
         advance_bars(engine_pos, bars, config)
 
@@ -401,27 +336,14 @@ class Mt5Executor:
     # ---- placement -----------------------------------------------------
 
     def place_signal(self, signal: Signal, plan: NewSignalPlan) -> ExecutionLog:
-        """Place LIMIT orders for the planned entries, with SL and final-target TP.
-
-        One idempotency guard runs in this method before anything is sent:
-          - Live MT5 footprint (find_orders / find_positions): magic has
-            current MT5 orders or positions -> skip.
-
-        Plus the positions.json membership check that runs upstream in
-        cli.py before this method is called.
-
-        Both guards check current live state. The engine's
-        `_build_new_signal_plan` is the primary placement gate; it filters
-        `plan.orders` to only entries whose backtest-replay status is
-        PENDING or OPEN, so terminal entries never reach this method.
-        """
+        """Place LIMIT orders for the planned entries, with SL and TP attached."""
         log = ExecutionLog()
         magic = signal_to_magic(signal.signal_key)
         comment = signal.signal_key[:31]
 
-        # Guard: currently-live orders or open positions for this magic.
-        # Prevents duplicate placement within the same session, even if the
-        # registry was manually edited or pruned.
+        # Re-entry guard: don't place if MT5 already has a footprint for
+        # this magic (defends against duplicate placement within a session
+        # even when the registry was manually edited or pruned).
         if self.find_orders(magic) or self.find_positions(magic):
             log.actions.append(
                 f"Signal {signal.signal_key} already has MT5 orders/positions; "
@@ -482,13 +404,9 @@ class Mt5Executor:
                         chart_now: datetime) -> ExecutionLog:
         """Reconcile MT5 with engine state for one tracked signal.
 
-        Pass the position you want MT5 actions to be driven by. When a
-        signal has a recorded `executed_at`, the caller should pass the
-        *actual* replay (started at executed_at, not signal time) so the
-        engine's stage/fill state matches what MT5 actually saw.
-
-        For best results, call `reconcile_with_mt5` on the same position
-        first so any MT5 fills the bar-replay missed have been patched in.
+        Pass the *actual* replay (started at executed_at when present, not
+        signal time) so engine stage/fill state matches MT5 reality. Call
+        `reconcile_with_mt5` first to absorb any same-minute fills.
         """
         log = ExecutionLog()
         magic = signal_to_magic(engine_pos.signal.signal_key)
@@ -512,19 +430,11 @@ class Mt5Executor:
                     )
 
         # 2. Late TP1 catch-up.
-        # When the engine's replay has LOCK_TP1 entries, the SL-at-TP1 lock
-        # would have closed those positions at breakeven-plus in backtest. If
-        # MT5 still has open positions for this magic whose SL is NOT yet at
-        # TP1, manage was late: the lock never made it to the broker. Rather
-        # than wait for the SL-lock step below to try (which gets rejected by
-        # the broker if price has moved past TP1) and possibly leave the
-        # position exposed to the original SL, close them at market now. This
-        # caps the divergence from the backtest path -- you take the current
-        # price as your exit instead of risking a full original-SL loss.
-        #
-        # Positions whose SL is already at TP1 (lock applied on some earlier
-        # cycle) are left alone -- the broker will trigger them when price
-        # returns to TP1, matching backtest's LOCK_TP1 exit precisely.
+        # If the engine replay has LOCK_TP1 entries but MT5 positions for
+        # this magic still have SL != TP1, the previous manage cycle was
+        # too late to lock. Close at market now instead of leaving them
+        # exposed to the original SL. Positions already locked at TP1 are
+        # left alone — the broker triggers them naturally on next return.
         target_sl = round(engine_pos.signal.tp1, digits)
         if any(e.status == "LOCK_TP1" for e in engine_pos.entries):
             unlocked = [
@@ -532,8 +442,7 @@ class Mt5Executor:
                 if abs(p.sl - target_sl) > 10 ** (-digits)
             ]
             if unlocked:
-                # Compute the engine's would-have-been LOCK_TP1 outcome so we
-                # can log the gap between backtest and live for each close.
+                # Engine's would-have-been LOCK_TP1 P&L for the log.
                 backtest_lock_pnl = sum(
                     e.pnl or 0.0
                     for e in engine_pos.entries
@@ -577,10 +486,9 @@ class Mt5Executor:
                             f"{res.comment if res else self.mt5.last_error()}"
                         )
 
-        # 3. Move SL to TP1 if engine is in stage 1 (TP1 was touched).
-        # This handles the "TP1 touched but hasn't returned to TP1 yet" case
-        # (stage 1, no LOCK_TP1 entries yet). Once a LOCK_TP1 entry appears,
-        # step 2 above takes precedence and closes at market instead.
+        # 3. Move SL to TP1 if engine is in stage 1 (TP1 touched, no
+        # LOCK_TP1 entries yet). Once a LOCK_TP1 entry appears, step 2
+        # takes precedence and closes at market.
         if config.lock_after_tp1 and engine_pos.stage >= 1:
             for p in self.find_positions(magic):
                 if abs(p.sl - target_sl) <= 10 ** (-digits):
@@ -604,7 +512,7 @@ class Mt5Executor:
                         f"{res.comment if res else self.mt5.last_error()}"
                     )
 
-        # 4. Time-exit: close still-open positions if engine deadline passed.
+        # 4. Time-exit: close still-open positions past the engine deadline.
         if (engine_pos.time_exit_deadline is not None
                 and chart_now >= engine_pos.time_exit_deadline):
             for p in self.find_positions(magic):
@@ -641,7 +549,7 @@ class Mt5Executor:
                         f"  FAILED time-exit close on #{p.ticket}: "
                         f"{res.comment if res else self.mt5.last_error()}"
                     )
-            # Also kill any leftover pendings from this signal.
+            # Also kill any leftover pendings for this signal.
             for o in self.find_orders(magic):
                 self.mt5.order_send({
                     "action": self.mt5.TRADE_ACTION_REMOVE, "order": o.ticket,

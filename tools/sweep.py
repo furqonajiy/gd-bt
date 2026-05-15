@@ -1,63 +1,22 @@
 #!/usr/bin/env python3
-"""
-sweep.py -- Parameter sweep for the validated XAUUSD engine.
+"""Parameter sweep for the XAUUSD engine.
 
-Runs every configuration through the same `advance_one_bar` simulator the
-smoke test locks (no lookahead, strict-touch arming, same-bar worst-case
-stop wins, spread-aware triggers). The current v2 baseline was selected
-from a 3-stage sweep over ~7,900 configs; you can re-tune from here.
+Every configuration runs through the same `advance_one_bar` simulator
+the smoke test locks — no lookahead, strict-touch arming, same-bar
+worst-case stop wins, spread-aware triggers. The v2 baseline is always
+included as an anchor.
 
-What it sweeps
---------------
-- risk_per_signal           - 2 / 3 / 5 / 7 / 10 % per signal
-- entry_count               - 3 / 5 / 7 / 10 entries per signal
-- entry_ladder              - "range_uniform" (entries spread inside the
-                              given range) or "range_to_sl" (entries
-                              extended toward the signal's SL with a $gap)
-- entry_sl_gap              - $1 / $2 / $5 buffer between deepest entry
-                              and the signal's SL (range_to_sl only)
-- activation_delay_minutes  - 0 / 1 / 2 / 5
-- pending_expiry_minutes    - 20 / 30 / 60 / 120 / 240
-- max_hold_minutes          - 30 / 60 / 90 / 120 / 180
-- sl_multiplier             - 0.75 / 1.0 / 1.25 / 1.5 / 2.0
-- final_target              - TP1 / TP2 / TP3
-- lock_after_tp1            - True / False
+Usage:
+    python tools/sweep.py --signals signals.txt \\
+                          --charts data/XAUUSD_M1_*.csv \\
+                          --output sweep_results.csv
 
-Important caveat on stop sizing
--------------------------------
-The engine anchors stop *distance* to the first entry's distance to SL,
-multiplied by sl_multiplier, then applies the SAME distance below every
-entry. Pushing entries toward the signal's SL via `range_to_sl` does NOT
-shrink per-entry risk -- it just lets later entries fill on deeper
-pullbacks while keeping the same stop distance below them.
+    # Smaller grid:
+    python tools/sweep.py --signals signals.txt --charts data/*.csv \\
+                          --risks 0.05 --entry-counts 3,5
 
-If you want per-entry stops anchored to the signal's literal SL (so deep
-entries can be sized much larger), that's an engine change, not a sweep.
-Ask for "sl_mode=signal_sl" support and I'll add it as a follow-up.
-
-Train/test split
-----------------
-By default signals before 2026-04-01 are training (in-sample), on/after
-are out-of-sample. Each side runs as a SEPARATE backtest from $1,000 so
-the OOS number is "what would this config do starting fresh in April?".
-This is the safest filter against overfitting -- a config that explodes
-on full-period equity but loses money in OOS-only is overfit.
-
-Top configs are printed sorted by OOS final equity, then by full-period.
-
-Usage
------
-    python sweep.py --signals signals.txt \\
-                    --charts data/XAUUSD_M1_*.csv \\
-                    --output sweep_results.csv
-
-    # Smaller / quicker grid:
-    python sweep.py --signals signals.txt --charts data/*.csv \\
-                    --risks 0.05 --entry-counts 3,5 \\
-                    --ladders range_to_sl --sl-gaps 1.0,2.0
-
-    # Just count combinations without running:
-    python sweep.py --signals signals.txt --charts data/*.csv --dry-run
+    # Count combinations without running:
+    python tools/sweep.py --signals signals.txt --charts data/*.csv --dry-run
 """
 from __future__ import annotations
 
@@ -74,8 +33,9 @@ from typing import Any
 
 import pandas as pd
 
-# Make `xauusd_trading` importable when running this file directly from the repo root.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Make `xauusd_trading` importable when running this script directly.
+# sweep.py lives at <repo>/tools/, so the repo root is two parents up.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from xauusd_trading import (  # noqa: E402
     CsvChartSource, StrategyConfig, parse_signals_file, run_backtest,
@@ -84,8 +44,7 @@ from xauusd_trading import Signal  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Default sweep grid -- override via CLI flags. Keep ~1-2k combos so a laptop
-# finishes in tens of minutes; widen via JSON or comma-separated CLI flags.
+# default grid — override via CLI flags
 # ---------------------------------------------------------------------------
 
 DEFAULT_GRID: dict[str, list[Any]] = {
@@ -101,7 +60,7 @@ DEFAULT_GRID: dict[str, list[Any]] = {
     "lock_after_tp1":           [True],
 }
 
-# The current v2 baseline, always added to the run as an anchor for comparison.
+# v2 baseline — always included as an anchor for comparison.
 BASELINE = {
     "risk_per_signal": 0.05,
     "entry_count": 3,
@@ -115,7 +74,6 @@ BASELINE = {
     "lock_after_tp1": True,
 }
 
-# Every key in BASELINE/DEFAULT_GRID maps directly to a StrategyConfig field.
 _STRATEGY_FIELDS = {
     "risk_per_signal", "entry_count", "entry_ladder", "entry_sl_gap",
     "activation_delay_minutes", "pending_expiry_minutes", "max_hold_minutes",
@@ -124,11 +82,11 @@ _STRATEGY_FIELDS = {
 
 
 # ---------------------------------------------------------------------------
-# Worker pool plumbing
+# worker pool plumbing
 # ---------------------------------------------------------------------------
 
-# Globals populated by the multiprocessing initializer. Each worker loads the
-# chart and signals once at startup; subsequent configs reuse the cached data.
+# Globals populated by the multiprocessing initializer. Each worker loads
+# the chart and signals once at startup; subsequent configs reuse the cache.
 _CHART: CsvChartSource | None = None
 _SIGNALS: list[Signal] | None = None
 _SPLIT_TIME: pd.Timestamp | None = None
@@ -154,12 +112,7 @@ def _backtest_subset(signals: list[Signal], config: StrategyConfig) -> dict:
 
 
 def _eval_config(combo: dict) -> dict:
-    """Evaluate one configuration. Runs full-period + IS + OOS = 3 backtests.
-
-    Entry prices are computed by the engine via `compute_entries(signal, config)`,
-    so all sweep axes -- including entry_ladder and entry_sl_gap -- flow through
-    the StrategyConfig directly. No signal mutation needed.
-    """
+    """Evaluate one configuration: full-period + IS + OOS = 3 backtests."""
     assert _CHART is not None and _SIGNALS is not None
 
     config = StrategyConfig(**{k: combo[k] for k in _STRATEGY_FIELDS})
@@ -207,14 +160,14 @@ def _eval_config(combo: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Grid expansion & dedup
+# grid expansion
 # ---------------------------------------------------------------------------
 
 def expand_grid(grid: dict[str, list]) -> list[dict]:
     """Cartesian product of grid values, with redundant combos removed.
 
-    `entry_sl_gap` is irrelevant for `range_uniform`, so we collapse all
-    range_uniform variants to a single sl_gap value (the first in the grid).
+    entry_sl_gap is irrelevant for range_uniform, so all range_uniform
+    variants collapse to a single sl_gap value (the first in the grid).
     """
     keys = list(grid.keys())
     seen: set[tuple] = set()
@@ -232,11 +185,11 @@ def expand_grid(grid: dict[str, list]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# CLI helpers
 # ---------------------------------------------------------------------------
 
 def _parse_csv_list(spec: str | None, type_):
-    """Parse a comma-separated CLI value into a typed list, or return None."""
+    """Parse a comma-separated CLI value into a typed list, or None."""
     if spec is None:
         return None
     items = []
@@ -292,6 +245,10 @@ def _print_top(df: pd.DataFrame, n: int, title: str, sort_col: str) -> None:
         print(sub[available].to_string(index=False))
 
 
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
 def main() -> int:
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -327,8 +284,7 @@ def main() -> int:
                    help="e.g. 'True,False'")
 
     p.add_argument("--split-date", default="2026-04-01",
-                   help="ISO date splitting train (before) and test (on/after). "
-                        "Default 2026-04-01 catches the April-only overfit pattern.")
+                   help="ISO date splitting train (before) and test (on/after).")
     p.add_argument("--no-split", action="store_true",
                    help="Skip the IS/OOS split, only run full-period.")
     p.add_argument("--workers", type=int,
@@ -341,7 +297,6 @@ def main() -> int:
                    help="Print combo count and exit.")
     args = p.parse_args()
 
-    # 1. Load grid
     if args.grid:
         grid = json.loads(Path(args.grid).read_text())
     else:
@@ -365,7 +320,6 @@ def main() -> int:
 
     combos = expand_grid(grid)
 
-    # 2. Always include the v2 baseline as anchor
     if BASELINE not in combos:
         combos.insert(0, dict(BASELINE))
 
@@ -378,7 +332,6 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    # 3. Resolve charts and prepare workers
     chart_paths = _expand_chart_paths(args.charts)
     split_iso = None if args.no_split else args.split_date
     print(f"Workers: {args.workers}")
@@ -388,13 +341,12 @@ def main() -> int:
     else:
         print("No train/test split.")
 
-    # 4. Run pool
     start = time.time()
     results: list[dict] = []
     with mp.Pool(
-        processes=args.workers,
-        initializer=_init_worker,
-        initargs=(chart_paths, args.signals, split_iso),
+            processes=args.workers,
+            initializer=_init_worker,
+            initargs=(chart_paths, args.signals, split_iso),
     ) as pool:
         step = max(1, len(combos) // 50)
         for i, r in enumerate(pool.imap_unordered(_eval_config, combos, chunksize=1), start=1):
@@ -410,13 +362,11 @@ def main() -> int:
     print(f"\nCompleted {len(results)} configs in {elapsed:.0f}s "
           f"({elapsed / max(len(results),1):.2f}s per config).")
 
-    # 5. Save full CSV
     df = pd.DataFrame(results)
     out_path = Path(args.output)
     df.to_csv(out_path, index=False)
     print(f"\nSaved full results: {out_path.resolve()}")
 
-    # 6. Top tables
     if "oos_final_equity" in df.columns:
         _print_top(df, args.top,
                    f"TOP {args.top} BY OUT-OF-SAMPLE FINAL EQUITY  "
@@ -428,19 +378,17 @@ def main() -> int:
                f"Compare with OOS table above; large IS/OOS gap = overfit.",
                "full_final_equity")
 
-    # 7. Save best (by OOS if available, else full) as JSON
     sort_col = "oos_final_equity" if "oos_final_equity" in df.columns else "full_final_equity"
     best = df.sort_values(sort_col, ascending=False).iloc[0].to_dict()
     json_path = out_path.with_suffix(".best.json")
     json_path.write_text(json.dumps(best, indent=2, default=str))
     print(f"\nBest config (by {sort_col}) saved to: {json_path.resolve()}")
 
-    # 8. Final reminder
     print()
     print("Reminder: every config above ran through the same advance_one_bar")
-    print("simulator that the smoke test locks. No lookahead, no marketable")
-    print("fills, no skipped cancellations. The OOS column is the number to")
-    print("trust if you're picking a config to actually trade.")
+    print("simulator the smoke test locks. No lookahead, no marketable fills,")
+    print("no skipped cancellations. OOS is the column to trust when picking")
+    print("a config to actually trade.")
     return 0
 
 

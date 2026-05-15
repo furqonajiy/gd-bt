@@ -1,7 +1,6 @@
-"""Tests for Mt5Executor.reconcile_with_mt5 -- the divergence-correction step
-that patches engine entry state from MT5's actual open positions when the
-bar-by-bar replay missed a fill (e.g. MT5 fill in the same minute as
-placement, or positive slippage taking the fill below the planned price).
+"""Tests for Mt5Executor.reconcile_with_mt5 — the divergence-correction
+step that patches engine entry state from MT5's actual open positions
+when the bar-by-bar replay missed a fill.
 """
 from __future__ import annotations
 import calendar
@@ -14,7 +13,9 @@ from xauusd_trading import Mt5Executor, signal_to_magic
 from xauusd_trading import advance_bars, open_position
 
 
-# --- fakes (no real MT5 needed) -----------------------------------------
+# ---------------------------------------------------------------------------
+# fakes (no real MT5 needed)
+# ---------------------------------------------------------------------------
 
 class _FakeMt5Position:
     def __init__(self, *, ticket, magic, type_, price_open, sl, tp, volume, time):
@@ -76,8 +77,7 @@ def _bar(t, o, h, l, c, spread_points=20):
 
 
 def _mt5_epoch(chart_time, server_offset=3):
-    """Chart-time (GMT+3) -> MT5's broker-tz-as-UTC epoch.
-    With server_offset=3, broker-tz == chart-tz so this is just timegm."""
+    """Chart-time (GMT+3) → MT5's broker-tz-as-UTC epoch."""
     broker_naive = chart_time - timedelta(hours=3 - server_offset)
     return calendar.timegm(broker_naive.timetuple())
 
@@ -89,15 +89,16 @@ def _make_executor(positions):
     )
 
 
-# --- the test cases -----------------------------------------------------
+# ---------------------------------------------------------------------------
+# tests
+# ---------------------------------------------------------------------------
 
 def test_reconcile_patches_pending_entry_when_mt5_filled_in_same_minute():
-    """The 14 May 2026 scenario: order placed at 07:00:03, MT5 fills at
+    """14 May 2026 scenario: order placed at 07:00:03, MT5 fills at
     07:00:38 at 4668.44 (positive slippage from 4670 limit), price runs
-    straight up to TP1 without re-touching entry. The bar replay from
-    07:00:03 forward misses the fill (07:00 bar is excluded; later bars
-    are above the limit). Reconcile must patch entry #0 to OPEN at 4668.44
-    and re-advance so the subsequent TP1 touch transitions stage to 1.
+    straight up to TP1 without re-touching entry. The bar replay misses
+    the fill. Reconcile must patch entry #0 to OPEN at 4668.44 and
+    re-advance so the subsequent TP1 touch transitions stage to 1.
     """
     signal = parse_one_signal(
         "1. BUY XAUUSD 4670 - 4668 SL 4663 TP1 4678 TP2 4688 TP3 4708 10:44 AM",
@@ -107,13 +108,11 @@ def test_reconcile_patches_pending_entry_when_mt5_filled_in_same_minute():
 
     pos = open_position(signal, equity=7083.11, config=DEFAULT_CONFIG)
     assert pos.entries[0].entry_price == 4670
-    assert pos.entries[0].initial_sl == 4663  # 4670 - 7 (base stop distance)
+    assert pos.entries[0].initial_sl == 4663
     assert pos.entries[0].status == "PENDING"
 
-    # Bars chosen so the engine's bar-replay sees no fill on entry #0
-    # (low never reaches 4670 - 0.20 = 4669.80) but does see TP1 touched
-    # and price holding above TP1 so the position stays OPEN after the
-    # stage-1 transition.
+    # Engine's bar-replay sees no fill on entry #0 (low never reaches
+    # 4670 - 0.20 = 4669.80), but TP1 IS touched and price holds above it.
     bars = [
         _bar(datetime(2026, 5, 14, 7, 1), 4672, 4676, 4670, 4675),
         _bar(datetime(2026, 5, 14, 7, 2), 4675, 4678.5, 4674, 4678),
@@ -123,11 +122,10 @@ def test_reconcile_patches_pending_entry_when_mt5_filled_in_same_minute():
     chart = _FakeChart(bars)
     now = datetime(2026, 5, 14, 7, 10)
 
-    # First replay (the "actual" replay): mirrors _replay_tracked_signal,
-    # starts at executed_at and walks forward.
+    # Actual replay (from executed_at) misses the fill.
     executed_at = datetime(2026, 5, 14, 7, 0, 3)
     advance_bars(pos, chart.bars_between(executed_at, now), DEFAULT_CONFIG)
-    assert pos.entries[0].status == "PENDING"  # missed the fill
+    assert pos.entries[0].status == "PENDING"
     assert pos.first_fill_time is None
     assert pos.stage == 0
 
@@ -143,40 +141,36 @@ def test_reconcile_patches_pending_entry_when_mt5_filled_in_same_minute():
 
     log = executor.reconcile_with_mt5(pos, DEFAULT_CONFIG, chart, now)
 
-    # Entry #0 patched to OPEN with the actual MT5 values.
     assert pos.entries[0].status == "OPEN"
     assert pos.entries[0].fill_time == fill_time_chart
     assert pos.entries[0].entry_price == 4668.44
     assert pos.entries[0].lot == 0.16
-    # initial_sl unchanged -- preserves the planned $7 stop distance from
-    # 4670 (so the $1.56-cheaper fill gives better R:R, not a wider stop).
+    # initial_sl unchanged — the cheaper fill gives better R:R, not a wider stop.
     assert pos.entries[0].initial_sl == 4663
 
     # Stage transitioned to 1 because TP1 was touched on the 07:02 bar
     # during the re-advance.
     assert pos.stage == 1
 
-    # first_fill_time / time_exit_deadline anchored off the real MT5 fill.
     assert pos.first_fill_time == fill_time_chart
     assert pos.time_exit_deadline == (
             fill_time_chart + timedelta(minutes=DEFAULT_CONFIG.max_hold_minutes)
     )
 
-    # Reconciliation action was logged.
     assert any("Reconciled #0" in a for a in log.actions)
 
 
 def test_reconcile_is_noop_when_engine_already_in_sync():
-    """If the bar-replay already correctly registered the fill, reconcile
-    should leave the entry alone."""
+    """If the bar-replay already registered the fill, reconcile leaves
+    the entry alone.
+    """
     signal = parse_one_signal(
         "1. BUY XAUUSD 4670 - 4668 SL 4663 TP1 4678 TP2 4688 TP3 4708 10:44 AM",
         source_date="2026-05-14", source_offset=7,
     )
     pos = open_position(signal, equity=7083.11, config=DEFAULT_CONFIG)
 
-    # Bars include one that dips low enough to fill entry #0
-    # (4670 - 0.20 = 4669.80; need low <= 4669.80, so low=4669 works).
+    # Low=4669 reaches 4670 - 0.20 = 4669.80, so entry #0 fills.
     bars = [
         _bar(datetime(2026, 5, 14, 7, 1), 4672, 4675, 4669, 4673),
         _bar(datetime(2026, 5, 14, 7, 2), 4673, 4676, 4672, 4674),
@@ -208,9 +202,10 @@ def test_reconcile_is_noop_when_engine_already_in_sync():
 
 
 def test_reconcile_warns_when_mt5_has_more_positions_than_slots():
-    """Defensive check: if MT5 has more positions for a magic than the
-    engine has slots (out-of-sync registry, manual placement, etc.), skip
-    reconciliation rather than mis-mapping positions to slots."""
+    """Defensive: if MT5 has more positions for a magic than the engine
+    has slots (out-of-sync registry, manual placement), skip reconciliation
+    rather than mis-mapping positions to slots.
+    """
     signal = parse_one_signal(
         "1. BUY XAUUSD 4670 - 4668 SL 4663 TP1 4678 TP2 4688 TP3 4708 10:44 AM",
         source_date="2026-05-14", source_offset=7,
@@ -218,7 +213,6 @@ def test_reconcile_warns_when_mt5_has_more_positions_than_slots():
     pos = open_position(signal, equity=7083.11, config=DEFAULT_CONFIG)
     magic = signal_to_magic(signal.signal_key)
 
-    # 4 MT5 positions, 3 engine slots.
     mt5_positions = [
         _FakeMt5Position(
             ticket=10000 + i, magic=magic, type_=0,
@@ -235,5 +229,5 @@ def test_reconcile_warns_when_mt5_has_more_positions_than_slots():
         datetime(2026, 5, 14, 7, 10),
     )
 
-    assert all(e.status == "PENDING" for e in pos.entries)  # nothing patched
+    assert all(e.status == "PENDING" for e in pos.entries)
     assert any("MT5 has" in w for w in log.warnings)

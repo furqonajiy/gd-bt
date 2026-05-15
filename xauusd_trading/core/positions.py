@@ -1,21 +1,18 @@
-"""Position lifecycle.
+"""Position lifecycle — the only place that owns state transitions.
 
-A Position wraps one Signal and its entry slots (count driven by config).
-State is advanced bar by bar via `advance_one_bar`, which mirrors the
-validated backtest logic exactly:
+`advance_one_bar` mirrors the validated backtest logic exactly:
 
     1. Try fills on PENDING entries during the pending window using the
        strict-touch arming rule (no marketable / no stale fills).
     2. After the pending window closes, mark unfilled entries NO_FILL.
     3. For OPEN entries, evaluate stop and target with same-bar worst-case
        priority (stop wins when both trigger).
-    4. If TP1 was touched while at least one entry is OPEN, lock to stage 1
-       (remaining and any future late-fill stops move to TP1).
+    4. If TP1 is touched while at least one entry is OPEN, advance to
+       stage 1 (remaining and any future late-fill stops move to TP1).
     5. After max_hold_minutes from first fill, time-exit any still-OPEN
        entries at bar close.
 
-This module is the only place that owns these state transitions. The engine
-and backtest runner both call it.
+Both the engine and the backtest runner call into here.
 """
 from __future__ import annotations
 import math
@@ -31,7 +28,6 @@ from .triggers import (
 )
 
 
-# Terminal entry states (no further evolution possible).
 TERMINAL = {"NO_FILL", "SL", "LOCK_TP1", "TP1", "TP2", "TP3", "TIME_EXIT"}
 
 
@@ -44,9 +40,9 @@ class Entry:
     """One entry slot of a Position."""
     entry_index: int
     entry_price: float
-    initial_sl: float            # planned SL applied while position is in stage 0
+    initial_sl: float            # SL applied while position is in stage 0
     lot: float
-    status: str = "PENDING"      # PENDING | OPEN | NO_FILL | SL | LOCK_TP1 | TP2 | TIME_EXIT
+    status: str = "PENDING"      # PENDING | OPEN | NO_FILL | SL | LOCK_TP1 | TP1 | TP2 | TP3 | TIME_EXIT
     fill_time: Optional[datetime] = None
     exit_time: Optional[datetime] = None
     exit_price: Optional[float] = None
@@ -68,11 +64,9 @@ class Position:
     first_fill_time: Optional[datetime] = None
     time_exit_deadline: Optional[datetime] = None
     last_processed_time: Optional[datetime] = None
-    # Wall-clock placement time (chart tz, GMT+3). Pure metadata: not used by
-    # `advance_one_bar` or any state-transition logic. Callers set it after
-    # construction so live tooling can render "X min late" and compare an
-    # ideal-execution replay (from activation_time) with an actual-execution
-    # replay (from executed_at). Optional; backtest leaves it None.
+    # Wall-clock placement time (chart tz). Pure metadata: not used by
+    # advance_one_bar. Live tooling uses it to render "X min late" and
+    # compare ideal-vs-actual replays. Backtest leaves it None.
     executed_at: Optional[datetime] = None
 
     def is_terminal(self) -> bool:
@@ -99,10 +93,7 @@ class Position:
 # ---------------------------------------------------------------------------
 
 def _floor_to_step(value: float, step: float) -> float:
-    """FP-safe floor to a multiple of `step`. Returns a clean 2-decimal float
-    when step == 0.01 (no 0.15 -> 0.14 floating-point dust). For other steps,
-    rounds to 8 decimals.
-    """
+    """FP-safe floor to a multiple of `step`."""
     if step <= 0:
         return value
     steps = math.floor(value / step + 1e-9)
@@ -118,17 +109,10 @@ def compute_lot(
 ) -> tuple[float, float]:
     """Return (lot_per_entry, base_stop_distance).
 
-    Entries are computed from (signal, config) via compute_entries().
-    All entries get the same lot, sized so total initial-SL price-risk across
-    all planned entries equals risk_per_signal x equity, then floored to the
-    broker lot step and clamped to the broker minimum.
-
-    Lot rounding is UNCONDITIONAL: if `config.lot_step` is 0 (disabled), the
-    engine still falls back to a 0.01 step so backtest output and live orders
-    are always clean multiples. Same for `minimum_lot`. To use a coarser step
-    (e.g. 0.1), set the config value above 0.01 -- it always wins.
-
-    Realized loss can be smaller if not all entries fill before SL.
+    All entries get the same lot, sized so total initial-SL price-risk
+    equals risk_per_signal x equity, then floored to the broker lot step
+    and clamped to the broker minimum. Lot rounding is unconditional —
+    if config.lot_step is 0, it falls back to 0.01.
     """
     entries = compute_entries(signal, config)
     if not entries:
@@ -147,8 +131,6 @@ def compute_lot(
         return 0.0, base_stop_distance
     lot = risk_amount / (total_price_risk * contract_size)
 
-    # Always round to a step. Config can choose a larger step (e.g. 0.1) but
-    # cannot disable rounding -- 0.01 is the floor everywhere.
     step = config.lot_step if config.lot_step > 0 else 0.01
     min_lot = config.minimum_lot if config.minimum_lot > 0 else 0.01
     lot = _floor_to_step(lot, step)
@@ -190,7 +172,7 @@ def open_position(
 
 
 # ---------------------------------------------------------------------------
-# bar-by-bar advancement (the validated logic)
+# bar-by-bar advancement
 # ---------------------------------------------------------------------------
 
 def _close_entry(
@@ -228,9 +210,8 @@ def advance_one_bar(
                 if opened_safe:
                     e.armed_for_touch = True
                 elif returned_safe:
-                    # Bar visited safe side; OHLC alone can't tell us in what
-                    # order. Arm now and require an actual touch on a later
-                    # bar. This avoids stale/marketable fills.
+                    # Bar visited safe side; OHLC alone can't order events
+                    # within the bar. Arm and require a touch on a later bar.
                     e.armed_for_touch = True
                     continue
                 else:
@@ -248,7 +229,7 @@ def advance_one_bar(
             if e.status == "PENDING":
                 e.status = "NO_FILL"
 
-    # 3. Stop / target evaluation. Worst-case: stop wins same bar.
+    # 3. Stop / target. Worst-case: stop wins same bar.
     open_entries = position.open_entries()
     if open_entries:
         tp1_hit = target_trigger(side, h, l, position.signal.tp1, sp)
@@ -275,7 +256,7 @@ def advance_one_bar(
         if config.lock_after_tp1 and position.stage == 0 and tp1_hit:
             position.stage = 1
 
-    # 5. Time exit: at first bar at/after the deadline, close at close.
+    # 5. Time exit at first bar at/after the deadline; closes at bar close.
     if position.time_exit_deadline is not None and bar.time >= position.time_exit_deadline:
         for e in position.entries:
             if e.status == "OPEN":
