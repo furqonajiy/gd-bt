@@ -1,34 +1,16 @@
 """Command-line interface.
 
 Subcommands:
-    xauusd backtest   --signals SIGNALS_FILE --charts CSV [CSV ...] [--output-dir DIR]
-                      (always fetches latest 2 months of M1 from MT5 first if available)
+    backtest    Run historical backtest. Auto-fetches recent M1 from MT5 first.
+    decide      Decide on one signal. --execute places + manages on MT5.
+    manage      Manage tracked signals only; no new placement. Supports --watch.
+    auto        Continuous live trading: read signals.txt, execute, manage.
+    mt5-info    Diagnostic: latest bar, equity, open MT5 objects.
+    fetch       Pull recent M1 to per-month CSVs.
 
-    xauusd decide     --signal "..." --signal-date YYYY-MM-DD --signal-tz N [--execute]
-                      (default: print-only. With --execute: places + manages on MT5.
-                       Whenever MT5 is reachable, reconciliation runs before manage
-                       to patch any PENDING entries the bar-replay missed -- e.g.
-                       MT5 fills with positive slippage like 4670 limit filling at
-                       4668.44. Backtest is unaffected; this only runs live.
-
-                       The engine filters orders by per-entry backtest-replay
-                       status: only entries whose replay status is PENDING or
-                       OPEN are placed. Terminal entries are filtered out; if
-                       ALL are terminal, the engine returns SKIP_INVALIDATED.)
-
-    xauusd manage     [--execute] [--watch]
-                      (manage existing tracked signals only; no new signal placement.
-                       Reconciliation always runs first so the dashboard reflects
-                       MT5 reality even when bar-replay missed a fill.)
-
-    xauusd auto       --signals signals.txt
-                      (one-command live trading. Loops forever: reads signals.txt for
-                       new signals to execute, manages all tracked positions on each
-                       cycle. Reconciliation runs on every iteration to keep engine
-                       state in lockstep with MT5. Exits only on Ctrl+C.)
-
-    xauusd mt5-info   diagnostic
-    xauusd fetch      pull M1 to per-month CSVs (no decision)
+Reconciliation runs on every MT5-connected cycle (decide / manage / auto)
+to patch PENDING entries the bar-replay missed (same-minute fills, positive
+slippage). Backtest is unaffected.
 """
 from __future__ import annotations
 import argparse
@@ -48,10 +30,14 @@ from xauusd_trading import decide, format_replay_outcome, render_report
 from xauusd_trading import Position, advance_bars, open_position
 from xauusd_trading import parse_one_signal, parse_signals_file
 
-# Hardcoded archive policy (per project preference: minimal flags).
+
 ARCHIVE_DIR = "data"
 ARCHIVE_MONTHS = 2
 
+
+# ---------------------------------------------------------------------------
+# path helpers
+# ---------------------------------------------------------------------------
 
 def _expand_chart_paths(patterns: list[str]) -> list[Path]:
     if not patterns:
@@ -72,9 +58,7 @@ def _expand_chart_paths(patterns: list[str]) -> list[Path]:
 
 
 def _try_archive_from_mt5(symbol: str, server_offset: int) -> None:
-    """Best-effort: pull last ARCHIVE_MONTHS from MT5 to ARCHIVE_DIR.
-    Soft-fail (warn and continue) if MT5 isn't reachable.
-    """
+    """Best-effort archive pull. Soft-fail (warn and continue) on errors."""
     try:
         from xauusd_trading import (
             Mt5Connection, archive_m1_by_month, render_archive_summary,
@@ -97,7 +81,7 @@ def _try_archive_from_mt5(symbol: str, server_offset: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# tracked-signal replay (used by decide, manage, and auto)
+# tracked-signal replay (used by decide, manage, auto)
 # ---------------------------------------------------------------------------
 
 def _chart_now() -> datetime:
@@ -106,7 +90,6 @@ def _chart_now() -> datetime:
 
 
 def _parse_executed_at(raw) -> datetime | None:
-    """Parse an executed_at field from the registry. None on missing/invalid."""
     if not raw:
         return None
     try:
@@ -118,7 +101,11 @@ def _parse_executed_at(raw) -> datetime | None:
 def _replay_tracked_signal(item: dict, chart, replay_end: datetime,
                            config: StrategyConfig
                            ) -> tuple[Position, Position, datetime | None]:
-    """Replay one registry entry, returning (pos_ideal, pos_actual, executed_at)."""
+    """Replay one registry entry. Returns (pos_ideal, pos_actual, executed_at).
+
+    pos_actual is a distinct Position only when executed_at is recorded
+    AND it's later than activation_time; otherwise pos_actual is pos_ideal.
+    """
     psig = parse_one_signal(item["signal"], item["date"], int(item["tz"]))
     equity_at_open = float(item.get("equity_at_open", 0.0))
     executed_at = _parse_executed_at(item.get("executed_at"))
@@ -146,7 +133,6 @@ def _replay_tracked_signal(item: dict, chart, replay_end: datetime,
 
 
 def _print_reconcile_log(reconcile_log) -> None:
-    """Print a RECONCILIATION block from an ExecutionLog if non-empty."""
     if not reconcile_log.actions and not reconcile_log.warnings:
         return
     print("RECONCILIATION:")
@@ -158,7 +144,7 @@ def _print_reconcile_log(reconcile_log) -> None:
 
 
 def _is_partial_placement(rec) -> bool:
-    """True iff this is a partial FOLLOW (some entries filtered out by replay)."""
+    """True iff this is a partial FOLLOW (some entries filtered by replay)."""
     if rec.new_signal.action != "FOLLOW":
         return False
     rp = rec.new_signal.replay_position
@@ -168,11 +154,7 @@ def _is_partial_placement(rec) -> bool:
 
 
 def _partial_placement_log_lines(signal_key: str, rec) -> list[str]:
-    """Render an EXECUTION-log block describing a partial placement.
-
-    Includes the per-entry replay breakdown so the user can see exactly
-    which entries were filtered out and why.
-    """
+    """EXECUTION-log block describing a partial placement, with per-entry breakdown."""
     rp = rec.new_signal.replay_position
     placed = len(rec.new_signal.orders)
     total = len(rp.entries)
@@ -190,7 +172,6 @@ def _partial_placement_log_lines(signal_key: str, rec) -> list[str]:
 
 
 def _skip_invalidated_log_lines(signal_key: str, rec) -> list[str]:
-    """Render an EXECUTION-log block for SKIP_INVALIDATED."""
     rp = rec.new_signal.replay_position
     lines = [
         f"Signal {signal_key}: every entry has already played out in "
@@ -206,7 +187,6 @@ def _skip_invalidated_log_lines(signal_key: str, rec) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _format_lateness(executed_at: datetime, signal_time: datetime) -> str:
-    """Return '(X.X min late)' / '(on time)' / '(X.X min early)' annotation."""
     delta_min = (executed_at - signal_time).total_seconds() / 60.0
     if delta_min >= 0.5:
         return f"({delta_min:.1f} min late)"
@@ -311,7 +291,7 @@ def _format_position_status(
         executed_at: datetime | None, now: datetime,
         bid: float, ask: float, contract_size: float,
 ) -> tuple[str, float, float]:
-    """Render one tracked-signal block. Returns (text, floating, realized)."""
+    """One tracked-signal block. Returns (text, floating, realized)."""
     s = pos_ideal.signal
     lines: list[str] = []
 
@@ -329,6 +309,7 @@ def _format_position_status(
 
     lines.append(f"    Pending until: {pos_ideal.expiry_time}  GMT+3")
 
+    # Dual-view replay when actual placement was meaningfully later than ideal.
     if pos_actual is not pos_ideal:
         lines.append("")
         lines.append(
@@ -475,10 +456,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
         for item in prior_entries:
             tracked.append(_replay_tracked_signal(item, chart, replay_end, config))
 
-    # Reconcile actual replay with MT5 reality. Patches PENDING entries that
-    # the bar-replay missed (MT5 fills that happened in the same minute as
-    # placement, or with positive slippage). Always runs in MT5 mode; CSV-only
-    # mode skips. Only queries MT5, never modifies it.
+    # Reconcile actual replay with MT5 reality. CSV-only mode skips.
     if executor is not None and tracked:
         reconcile_log = ExecutionLog()
         for _ideal, actual, _exec_at in tracked:
@@ -533,8 +511,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
                 _skip_invalidated_log_lines(signal.signal_key, rec)
             ))
         else:
-            # FOLLOW (possibly partial). When partial, surface the per-entry
-            # replay breakdown so the user can see what's being filtered.
+            # FOLLOW (possibly partial).
             if _is_partial_placement(rec):
                 log.actions.append("\n".join(
                     _partial_placement_log_lines(signal.signal_key, rec)
@@ -567,8 +544,8 @@ def cmd_decide(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 def cmd_manage(args: argparse.Namespace) -> int:
-    """Manage tracked signals on MT5. Reconciliation runs first so dashboard
-    reflects MT5 reality; with --execute, manage actions follow.
+    """Manage tracked signals on MT5. Reconciliation runs first so the
+    dashboard reflects MT5 reality; with --execute, manage actions follow.
     """
     config = _config_from_args(args)
 
@@ -582,6 +559,8 @@ def cmd_manage(args: argparse.Namespace) -> int:
             )
             return 2
         if interval < 2.0:
+            # M1 strategy: worst-case reversal window is 60s, so 5s gives
+            # a 12x safety margin. Anything below 2s is a soft warning.
             print(
                 f"WARNING: --watch-interval {interval}s is aggressive. The "
                 f"strategy is M1 so the worst-case reversal window is 60s; "
@@ -628,7 +607,7 @@ def cmd_manage(args: argparse.Namespace) -> int:
 
 def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
                  conn, chart) -> tuple[int, int]:
-    """Run one manage cycle. Returns (exit_code, n_alive_on_mt5)."""
+    """One manage cycle. Returns (exit_code, n_alive_on_mt5)."""
     from xauusd_trading import mt5_equity
     from xauusd_trading import (
         Mt5Executor, SignalRegistry, signal_to_magic,
@@ -687,8 +666,7 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
         for _ideal, actual, _exec_at in tracked
     }
 
-    # Reconcile actual replay with MT5 reality BEFORE rendering the dashboard
-    # so displayed state matches what MT5 has. Always runs; only queries MT5.
+    # Reconcile before rendering so the dashboard matches MT5.
     reconcile_log = ExecutionLog()
     for _ideal, actual, _exec_at in tracked:
         rlog = executor.reconcile_with_mt5(actual, config, chart, replay_end)
@@ -794,8 +772,8 @@ def _run_manage_watch(args: argparse.Namespace, config: StrategyConfig,
 # ---------------------------------------------------------------------------
 
 def cmd_auto(args: argparse.Namespace) -> int:
-    """One-command live trading. Reconciliation runs every iteration so the
-    engine's view of fills stays in lockstep with MT5 even when bars miss.
+    """Continuous live trading. Reconciles every iteration so engine state
+    stays in lockstep with MT5 even when bars miss fills.
     """
     config = _config_from_args(args)
 
@@ -939,16 +917,14 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         server_offset_hours=args.mt5_server_offset,
     )
 
-    # 6b. Reconcile actual replay with MT5 reality. Patches PENDING entries
-    # the bar-replay missed (MT5 fills in the same minute as placement, or
-    # with positive slippage). Always runs; only queries MT5, never modifies.
+    # 7. Reconcile before rendering so the dashboard reflects MT5.
     reconcile_log = ExecutionLog()
     for _ideal, actual, _exec_at in tracked:
         rlog = executor.reconcile_with_mt5(actual, config, chart, replay_end)
         reconcile_log.merge(rlog)
     _print_reconcile_log(reconcile_log)
 
-    # 7. Dashboard header.
+    # 8. Dashboard header.
     print("=" * 70)
     print("XAUUSD AUTO MODE  (signals + management)")
     print(f"Chart time:      {replay_end}  GMT+3")
@@ -958,7 +934,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         print(f"Live bid/ask:    {bid:g} / {ask:g}")
     print("=" * 70)
 
-    # 8. Per-signal status blocks.
+    # 9. Per-signal status blocks.
     total_floating = 0.0
     total_realized = 0.0
     if tracked:
@@ -982,7 +958,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         print("=" * 70)
     print()
 
-    # 9. Sanity checks.
+    # 10. Sanity checks.
     errors = executor.sanity_checks(expected_equity=equity)
     if errors:
         print("SANITY CHECKS FAILED -- skipping MT5 actions this iteration:")
@@ -992,19 +968,19 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
 
     log = ExecutionLog()
 
-    # 10. Manage tracked positions (drive from actual replay, reconciled above).
+    # 11. Manage tracked positions (drive from actual replay).
     for _ideal, actual, _exec_at in tracked:
         mlog = executor.manage_position(actual, config, replay_end)
         log.merge(mlog)
 
-    # 11. Re-read signals.txt.
+    # 12. Re-read signals.txt.
     try:
         all_signals = parse_signals_file(signals_path)
     except Exception as e:
         print(f"[signals] failed to parse {signals_path}: {e}")
         all_signals = []
 
-    # 12. Filter candidates.
+    # 13. Filter candidates (not expired, not already tracked).
     existing_keys = {item.get("signal_key") for item in registry.load()}
     age_cutoff = replay_end - timedelta(minutes=config.pending_expiry_minutes + 5)
 
@@ -1015,7 +991,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     ]
     candidates.sort(key=lambda s: s.signal_time_chart)
 
-    # 13. Process candidates.
+    # 14. Process candidates.
     for signal in candidates:
         positions_source = ManualPositionSource(
             equity=equity,
@@ -1037,9 +1013,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             ))
             continue
 
-        # FOLLOW (possibly partial). When partial, surface the per-entry
-        # replay breakdown so the user can see exactly what's filtered out
-        # and why.
+        # FOLLOW (possibly partial).
         if _is_partial_placement(rec):
             log.actions.append("\n".join(
                 _partial_placement_log_lines(signal.signal_key, rec)
@@ -1057,14 +1031,14 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                 f"{executed_at:%Y-%m-%d %H:%M:%S} GMT+3 {lateness}"
             )
 
-    # 14. Unknown-position warnings.
+    # 15. Unknown-position warnings.
     known_magics = {
         signal_to_magic(item.get("signal_key", "?"))
         for item in registry.load()
     }
     log.warnings.extend(executor.warn_on_unknown(known_magics))
 
-    # 15. Prune closed signals.
+    # 16. Prune closed signals.
     alive = executor.all_alive_magics()
     removed = registry.prune(alive)
     if removed:
@@ -1072,7 +1046,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             f"Pruned {removed} closed signal(s) from {registry_path.name}"
         )
 
-    # 16. Execution log.
+    # 17. Execution log.
     has_actions = (
             log.actions or log.warnings
             or log.placed > 0 or log.modified > 0
