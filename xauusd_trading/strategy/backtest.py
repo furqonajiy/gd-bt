@@ -13,6 +13,7 @@ strategy's plan), so calling it would be redundant. The same `core` modules
 power both code paths.
 """
 from __future__ import annotations
+
 import json
 from dataclasses import asdict
 from datetime import date, timedelta
@@ -20,11 +21,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from xauusd_trading import CsvChartSource
-from xauusd_trading import iter_bars, slice_bars
 from xauusd_trading import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
+from xauusd_trading import CsvChartSource
 from xauusd_trading import Position, advance_bars, open_position
 from xauusd_trading import Signal
+from xauusd_trading import iter_bars, slice_bars
 
 
 # ---------------------------------------------------------------------------
@@ -32,9 +33,9 @@ from xauusd_trading import Signal
 # ---------------------------------------------------------------------------
 
 def replay_signal(
-    signal: Signal, chart_df: pd.DataFrame, equity: float,
-    config: StrategyConfig = DEFAULT_CONFIG,
-    contract_size: float = CONTRACT_SIZE_OZ,
+        signal: Signal, chart_df: pd.DataFrame, equity: float,
+        config: StrategyConfig = DEFAULT_CONFIG,
+        contract_size: float = CONTRACT_SIZE_OZ,
 ) -> Position:
     """Advance one signal through its entire lifetime and return the Position."""
     pos = open_position(signal, equity, config, contract_size)
@@ -93,11 +94,11 @@ def _finalize_bucket(b: dict) -> None:
 
 
 def run_backtest(
-    signals: list[Signal], chart: CsvChartSource,
-    config: StrategyConfig = DEFAULT_CONFIG,
-    *,
-    exclude_structural_anomalies: bool = False,
-    contract_size: float = CONTRACT_SIZE_OZ,
+        signals: list[Signal], chart: CsvChartSource,
+        config: StrategyConfig = DEFAULT_CONFIG,
+        *,
+        exclude_structural_anomalies: bool = False,
+        contract_size: float = CONTRACT_SIZE_OZ,
 ) -> dict:
     chart_df = chart.dataframe
     chart_start = chart.first_time()
@@ -277,6 +278,12 @@ def run_backtest(
 def write_backtest_outputs(result: dict, output_dir: Path) -> None:
     """Write summary.json, signal_results.csv, entry_results.csv, and
     backtest_results.xlsx to the output directory.
+
+    Excel output is a soft dependency on openpyxl. If openpyxl is missing
+    we print a friendly note and continue (CSVs and JSON are always
+    written). Any OTHER ImportError -- broken module path, missing
+    function, renamed symbol -- is re-raised, because that's a real bug
+    masquerading as a soft-dep failure if we swallow it.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -292,11 +299,30 @@ def write_backtest_outputs(result: dict, output_dir: Path) -> None:
     # Daily CSV too -- handy for spreadsheets / charting tools.
     pd.DataFrame(result.get("daily", [])).to_csv(output_dir / "daily_results.csv", index=False)
 
-    # Excel report -- soft dependency.
+    # Excel report -- soft dependency on openpyxl.
+    #
+    # Note the import path: excel_report lives under reporting/ (a sibling
+    # subpackage of strategy/), so the relative path goes UP one level
+    # (..) into reporting/. Using `.excel_report` would resolve to
+    # `xauusd_trading.strategy.excel_report`, which doesn't exist.
     try:
-        from .excel_report import write_excel_report
-        write_excel_report(result, output_dir / "backtest_results.xlsx")
+        from ..reporting.excel_report import write_excel_report
     except ImportError as e:
-        # openpyxl not installed; xlsx is optional, CSVs always written.
-        print(f"[warn] Excel output skipped: {e}. "
-              f"Install with `pip install openpyxl` to enable.")
+        # Distinguish the legitimate soft-dep case (openpyxl actually
+        # missing) from any other structural import failure. e.name is
+        # the immediate module Python tried and failed to find; when
+        # openpyxl is missing, `reporting/excel_report.py`'s top-level
+        # `from openpyxl import Workbook` makes e.name start with
+        # "openpyxl". Anything else here means the import path itself
+        # is broken, and re-raising is the right move so the user sees
+        # the actual problem instead of a misleading "install openpyxl"
+        # message.
+        if (e.name or "").split(".", 1)[0] == "openpyxl":
+            print(
+                "[warn] Excel output skipped: openpyxl not installed. "
+                "Install with `pip install openpyxl` to enable."
+            )
+            return
+        raise
+
+    write_excel_report(result, output_dir / "backtest_results.xlsx")
