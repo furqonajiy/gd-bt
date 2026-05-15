@@ -6,6 +6,16 @@ Runs as a separate process from `xauusd_trading.cli auto`; the two communicate
 only through `signals.txt` (atomically written, so `auto` can never read a
 half-written file).
 
+Project layout note
+-------------------
+This script lives at `<repo-root>/listener/telegram_listener.py`. All of
+its runtime files (config, state, quarantine, session, and the shared
+signals.txt) live at the project root next to `xauusd_trading/`. The
+`REPO_ROOT` constant below resolves to that root by walking up two
+levels from `__file__` (one for the file itself, one for the `listener/`
+directory). Running the script from any CWD therefore works the same
+way -- relative paths to data files are not assumed.
+
 One-time set-up
 ---------------
 1.  Activate the conda env you already use:
@@ -17,11 +27,11 @@ One-time set-up
         Open https://my.telegram.org -> "API development tools" -> create app.
         Note the `api_id` (integer) and `api_hash` (string).
 
-3.  Copy the template, fill api_id + api_hash:
+3.  Copy the template, fill api_id + api_hash (paths are repo-root-relative):
         copy listener_config.example.json listener_config.json
 
 4.  Find the VICTOR channel's numeric id (one-shot):
-        python telegram_listener.py list-chats
+        python listener\\telegram_listener.py list-chats
     First run will prompt for your phone number, then SMS code, then 2FA
     password if you have one. A `.session` file is created so subsequent
     runs are silent.
@@ -30,7 +40,7 @@ One-time set-up
     `channel_id` (replace null).
 
 5.  Run the listener:
-        python telegram_listener.py
+        python listener\\telegram_listener.py
     From IntelliJ: open a second PowerShell terminal alongside the one
     running `xauusd_trading.cli auto`, both with the `xauusd` env active.
 
@@ -49,8 +59,8 @@ You'll get a `✅ Injected` reply on success or `❌ <reason>` on failure.
 You can also inject a brand-new signal at any time by sending a canonical
 line to Saved Messages, even without a Victor failure to respond to.
 
-Files
------
+Files (all at repo root, not in listener/)
+------------------------------------------
   signals.txt              read + append (atomic via os.replace)
   telegram_state.json      message_id -> parsed status; for dedup + edits
   telegram_quarantine.txt  appended raw text of every unparseable message
@@ -86,7 +96,17 @@ except ImportError:
 # Paths and constants
 # ---------------------------------------------------------------------------
 
-REPO_ROOT = Path(__file__).resolve().parent
+# The listener script now lives at <repo-root>/listener/telegram_listener.py.
+# Walk up TWO levels to reach the repo root where all runtime data files
+# (signals.txt, state, quarantine, session, config) live. This matches the
+# project's documented layout: listener-private files sit alongside the
+# shared signals.txt at repo root, so `xauusd_trading.cli auto` and the
+# listener read/write the same paths regardless of which CWD either was
+# launched from.
+#
+# If this script is ever moved deeper (or shallower), update the .parent
+# chain accordingly; the rest of the module uses REPO_ROOT exclusively.
+REPO_ROOT = Path(__file__).resolve().parent.parent
 SIGNALS_PATH = REPO_ROOT / "signals.txt"
 STATE_PATH = REPO_ROOT / "telegram_state.json"
 QUARANTINE_PATH = REPO_ROOT / "telegram_quarantine.txt"
@@ -117,8 +137,8 @@ class Config:
     def load(cls, path: Path) -> "Config":
         if not path.exists():
             sys.stderr.write(
-                f"Missing {path.name}. Copy listener_config.example.json -> "
-                f"{path.name} and fill api_id + api_hash.\n"
+                f"Missing {path}. Copy listener_config.example.json -> "
+                f"{path.name} (in repo root) and fill api_id + api_hash.\n"
             )
             sys.exit(1)
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -578,8 +598,9 @@ class Listener:
         if not matches:
             raise RuntimeError(
                 f"No chat title contains {self.cfg.channel_title_pattern!r}. "
-                f"Run `python telegram_listener.py list-chats` and put the "
-                f"numeric id into listener_config.json under `channel_id`."
+                f"Run `python listener\\telegram_listener.py list-chats` and "
+                f"put the numeric id into listener_config.json (repo root) "
+                f"under `channel_id`."
             )
         if len(matches) > 1:
             titles = ", ".join(f"{d.id}={d.title!r}" for d in matches)
@@ -854,8 +875,9 @@ async def _cmd_list_chats(cfg: Config) -> int:
         print(f"{dialog.id:>20}  {kind:<10} {title!r}")
     await client.disconnect()
     print()
-    print("Copy the ID of the VICTOR channel into listener_config.json under "
-          "`channel_id`, then run `python telegram_listener.py`.")
+    print("Copy the ID of the VICTOR channel into listener_config.json "
+          "(repo root) under `channel_id`, then run "
+          "`python listener\\telegram_listener.py`.")
     return 0
 
 
@@ -873,10 +895,10 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Telegram listener for VICTOR - GOLD PRIORITY signals.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Examples:\n"
-            "  python telegram_listener.py list-chats    # find channel id\n"
-            "  python telegram_listener.py               # start listening\n"
-            "  python telegram_listener.py --dry-run     # parse but don't write\n"
+            "Examples (run from repo root):\n"
+            "  python listener\\telegram_listener.py list-chats    # find channel id\n"
+            "  python listener\\telegram_listener.py               # start listening\n"
+            "  python listener\\telegram_listener.py --dry-run     # parse but don't write\n"
         ),
     )
     sub = p.add_subparsers(dest="cmd")
