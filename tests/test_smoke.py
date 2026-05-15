@@ -1,14 +1,11 @@
-"""Smoke test: backtest must reproduce the re-validated April-2026 baseline.
+"""Smoke test: backtest must reproduce the locked April-2026 baseline.
+
+If this fails, the strategy has drifted. Either revert the change or
+re-validate via tools/sweep.py, then update EXPECTED below from the
+"Actuals:" line the test prints on failure.
 
 Run from repo root:
     python -m pytest tests/ -s
-
-Re-validation flow (one-time, after data refresh):
-    1. Make sure data/XAUUSD_M1_202604.csv is in place.
-    2. Run:   python -m pytest tests/test_smoke.py -s
-       The test will fail and print the actual numbers under "Actuals:".
-    3. Paste those numbers into the EXPECTED dict below.
-    4. Re-run pytest; it should now pass and stay locked.
 """
 from __future__ import annotations
 import math
@@ -21,11 +18,6 @@ from xauusd_trading import (
 REPO = Path(__file__).resolve().parents[1]
 CHART_FILE = REPO / "data" / "XAUUSD_M1_202604.csv"
 
-
-# ============================================================================
-# RE-VALIDATED BASELINE — April 2026 only
-# Replace the placeholders below after the first run. See module docstring.
-# ============================================================================
 EXPECTED = {
     'final_equity': 50493.00999999989,
     'wins': 115,
@@ -33,7 +25,7 @@ EXPECTED = {
     'no_fills': 61,
     'open': 0,
     'signals_included': 232,
-    'win_rate_pct': 67.2514619883041
+    'win_rate_pct': 67.2514619883041,
 }
 
 
@@ -57,12 +49,6 @@ def test_backtest_matches_validated_baseline():
         "win_rate_pct":     result["win_rate_pct"],
     }
     print("\nActuals:", actuals)
-
-    if any(v is None for v in EXPECTED.values()):
-        raise AssertionError(
-            "Baseline placeholders are still None. Paste 'Actuals' (above) "
-            "into EXPECTED in tests/test_smoke.py and re-run."
-        )
 
     assert math.isclose(result["final_equity"], EXPECTED["final_equity"], abs_tol=1e-6)
     assert result["wins"]             == EXPECTED["wins"]
