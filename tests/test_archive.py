@@ -1,11 +1,10 @@
-"""Tests for the M1 archive merge/overwrite logic."""
+"""Tests for the M1 archive merge logic."""
 from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
-from xauusd_trading.mt5_adapter import (
+from xauusd_trading import (
     _MT5_EXPORT_COLUMNS, _merge_with_existing,
 )
 
@@ -26,9 +25,9 @@ def test_merge_creates_new_file_when_none_exists(tmp_path: Path):
 
 
 def test_merge_preserves_existing_bars_not_in_new_fetch(tmp_path: Path):
-    """The boundary-month case: prior fetch saved early-month bars, new
-    fetch only covers later-month bars (because MT5 window has shifted).
-    Merge must keep both halves."""
+    """Boundary-month case: prior fetch saved early-month bars; new fetch
+    only covers later bars (MT5 window has shifted). Both halves must
+    survive the merge."""
     p = tmp_path / "month.csv"
     pd.DataFrame([
         _row("2026.04.01", "10:00:00", 4500.0),
@@ -45,8 +44,8 @@ def test_merge_preserves_existing_bars_not_in_new_fetch(tmp_path: Path):
 
 
 def test_merge_keeps_new_value_on_timestamp_collision(tmp_path: Path):
-    """If MT5 returns corrected/updated values for a timestamp we already
-    have, the new fetch wins."""
+    """MT5 sometimes returns corrected values for a timestamp we already
+    have. New fetch wins."""
     p = tmp_path / "month.csv"
     pd.DataFrame([_row("2026.04.10", "09:00:00", 4500.0)]).to_csv(p, sep="\t", index=False)
     new = pd.DataFrame([_row("2026.04.10", "09:00:00", 9999.0)])

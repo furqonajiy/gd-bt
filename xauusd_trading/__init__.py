@@ -1,51 +1,175 @@
-"""xauusd_trading -- validated XAUUSD strategy as a reusable engine.
+"""xauusd_trading — public re-export surface.
 
-Public entry points:
+All callers (internal submodules, cli, tests, tools, listener) import
+from `xauusd_trading` directly rather than from nested module paths.
+Moving a function between files only requires updating this file.
 
-    from xauusd_trading import (
-        decide, render_report, run_backtest,
-        DEFAULT_CONFIG, StrategyConfig,
-        Signal, parse_signals_file, parse_one_signal, compute_entries,
-        CsvChartSource, ManualPositionSource,
-    )
-
-The same `core` modules (signal, chart, triggers, positions) power both the
-backtest runner and the live decision engine, so behavior is guaranteed
-identical.
+Re-exports are ordered by dependency: each block can only reference
+names defined by blocks above it. Reordering will break submodule
+imports.
 """
-from .config import DEFAULT_CONFIG, StrategyConfig
-from .signal import Signal, parse_signals_file, parse_one_signal, compute_entries
-from .chart import Bar
-from .adapters import (
-    ChartSource, CsvChartSource,
-    PositionSource, ManualPositionSource,
-)
-from .positions import Entry, Position, open_position, advance_one_bar, advance_bars
-from .engine import (
-    decide, render_report, Recommendation, NewSignalPlan,
-    PositionStatus, EntryStatus, PlannedOrder,
-)
-from .backtest import run_backtest, replay_signal, position_status
+from __future__ import annotations
 
-# Optional MT5 executor exports (Windows-only; soft-fail on import).
-try:
-    from .mt5_executor import (
-        Mt5Executor, SignalRegistry, signal_to_magic,
-        round_lot, ExecutionLog, render_execution_log,
-    )
-    _MT5_EXEC_EXPORTS = [
-        "Mt5Executor", "SignalRegistry", "signal_to_magic",
-        "round_lot", "ExecutionLog", "render_execution_log",
-    ]
-except Exception:
-    _MT5_EXEC_EXPORTS = []
+# 1. core.config
+from .core.config import (
+    CHART_TIMEZONE_OFFSET,
+    CONTRACT_SIZE_OZ,
+    DEFAULT_CONFIG,
+    POINT_VALUE,
+    StrategyConfig,
+)
+
+# 2. core.chart
+from .core.chart import (
+    Bar,
+    iter_bars,
+    latest_bar,
+    load_chart,
+    slice_bars,
+)
+
+# 3. core.signal
+from .core.signal import (
+    Signal,
+    compute_entries,
+    parse_one_signal,
+    parse_signal_line,
+    parse_signals_file,
+)
+
+# 4. core.triggers
+from .core.triggers import (
+    fill_trigger,
+    initial_stop_for_entry,
+    stop_trigger,
+    target_trigger,
+)
+
+# 5. core.positions
+from .core.positions import (
+    TERMINAL,
+    Entry,
+    Position,
+    advance_bars,
+    advance_one_bar,
+    compute_lot,
+    open_position,
+)
+
+# 6. io.adapters
+from .io.adapters import (
+    ChartSource,
+    CsvChartSource,
+    ManualPositionSource,
+    PositionSource,
+)
+
+# 7. strategy.engine
+from .strategy.engine import (
+    EntryStatus,
+    NewSignalPlan,
+    PlannedOrder,
+    PositionStatus,
+    Recommendation,
+    decide,
+    format_replay_outcome,
+    render_report,
+)
+
+# 8. strategy.backtest
+from .strategy.backtest import (
+    position_status,
+    replay_signal,
+    run_backtest,
+    write_backtest_outputs,
+)
+
+# 9. io.mt5_adapter
+# Module imports cleanly on any OS; MetaTrader5 is lazy-imported inside
+# Mt5Connection.__init__, not at module load.
+from .io.mt5_adapter import (
+    Mt5ChartSource,
+    Mt5Connection,
+    archive_m1_by_month,
+    mt5_equity,
+    mt5_open_positions_summary,
+    render_archive_summary,
+)
+
+# 10. execution.mt5_executor
+from .execution.mt5_executor import (
+    ExecutionLog,
+    Mt5Executor,
+    SignalRegistry,
+    render_execution_log,
+    round_lot,
+    signal_to_magic,
+)
+
 
 __all__ = [
-    "DEFAULT_CONFIG", "StrategyConfig",
-    "Signal", "parse_signals_file", "parse_one_signal", "compute_entries", "Bar",
-    "ChartSource", "CsvChartSource", "PositionSource", "ManualPositionSource",
-    "Entry", "Position", "open_position", "advance_one_bar", "advance_bars",
-    "decide", "render_report",
-    "Recommendation", "NewSignalPlan", "PositionStatus", "EntryStatus", "PlannedOrder",
-    "run_backtest", "replay_signal", "position_status",
-] + _MT5_EXEC_EXPORTS
+    # core.config
+    "CHART_TIMEZONE_OFFSET",
+    "CONTRACT_SIZE_OZ",
+    "DEFAULT_CONFIG",
+    "POINT_VALUE",
+    "StrategyConfig",
+    # core.chart
+    "Bar",
+    "iter_bars",
+    "latest_bar",
+    "load_chart",
+    "slice_bars",
+    # core.signal
+    "Signal",
+    "compute_entries",
+    "parse_one_signal",
+    "parse_signal_line",
+    "parse_signals_file",
+    # core.triggers
+    "fill_trigger",
+    "initial_stop_for_entry",
+    "stop_trigger",
+    "target_trigger",
+    # core.positions
+    "TERMINAL",
+    "Entry",
+    "Position",
+    "advance_bars",
+    "advance_one_bar",
+    "compute_lot",
+    "open_position",
+    # io.adapters
+    "ChartSource",
+    "CsvChartSource",
+    "ManualPositionSource",
+    "PositionSource",
+    # strategy.engine
+    "EntryStatus",
+    "NewSignalPlan",
+    "PlannedOrder",
+    "PositionStatus",
+    "Recommendation",
+    "decide",
+    "format_replay_outcome",
+    "render_report",
+    # strategy.backtest
+    "position_status",
+    "replay_signal",
+    "run_backtest",
+    "write_backtest_outputs",
+    # io.mt5_adapter
+    "Mt5ChartSource",
+    "Mt5Connection",
+    "archive_m1_by_month",
+    "mt5_equity",
+    "mt5_open_positions_summary",
+    "render_archive_summary",
+    # execution.mt5_executor
+    "ExecutionLog",
+    "Mt5Executor",
+    "SignalRegistry",
+    "render_execution_log",
+    "round_lot",
+    "signal_to_magic",
+]

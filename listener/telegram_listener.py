@@ -1,61 +1,19 @@
-"""telegram_listener.py - VICTOR - GOLD PRIORITY signal listener.
+"""telegram_listener.py — VICTOR - GOLD PRIORITY signal listener.
 
 Watches one Telegram channel for new XAUUSD signals, parses them, and
-appends to the project's `signals.txt` in the format `xauusd_trading` expects.
-Runs as a separate process from `xauusd_trading.cli auto`; the two communicate
-only through `signals.txt` (atomically written, so `auto` can never read a
+appends to `signals.txt` in the format `xauusd_trading` expects. Runs as
+a separate process from `xauusd_trading.cli auto`; the two communicate
+only through `signals.txt` (atomically written so `auto` never reads a
 half-written file).
 
-One-time set-up
----------------
-1.  Activate the conda env you already use:
-        conda activate xauusd
-    Then install Telethon:
-        pip install telethon
+Files (all at repo root, not in listener/):
+    signals.txt              read + append (atomic via os.replace)
+    telegram_state.json      message_id -> parsed status; dedup + edit handling
+    telegram_quarantine.txt  raw text of every unparseable message
+    listener_config.json     api_id, api_hash, channel_id
+    telegram.session         Telethon auth token (created on first run)
 
-2.  Get API credentials:
-        Open https://my.telegram.org -> "API development tools" -> create app.
-        Note the `api_id` (integer) and `api_hash` (string).
-
-3.  Copy the template, fill api_id + api_hash:
-        copy listener_config.example.json listener_config.json
-
-4.  Find the VICTOR channel's numeric id (one-shot):
-        python telegram_listener.py list-chats
-    First run will prompt for your phone number, then SMS code, then 2FA
-    password if you have one. A `.session` file is created so subsequent
-    runs are silent.
-    Find the row whose TITLE is "VICTOR - GOLD PRIORITY" (or whatever the
-    channel is called now). Copy the ID into `listener_config.json` under
-    `channel_id` (replace null).
-
-5.  Run the listener:
-        python telegram_listener.py
-    From IntelliJ: open a second PowerShell terminal alongside the one
-    running `xauusd_trading.cli auto`, both with the `xauusd` env active.
-
-Holiday correction workflow
----------------------------
-When the listener can't parse a VICTOR message, it sends a notification to
-your own Saved Messages with the raw text and a pre-filled correction line.
-On your phone:
-  - Open Saved Messages.
-  - Edit the suggested line until it's correct.
-  - Send it.
-The listener validates it against the engine's strict format, renumbers it
-to the next free index in today's section of signals.txt, and appends.
-You'll get a `✅ Injected` reply on success or `❌ <reason>` on failure.
-
-You can also inject a brand-new signal at any time by sending a canonical
-line to Saved Messages, even without a Victor failure to respond to.
-
-Files
------
-  signals.txt              read + append (atomic via os.replace)
-  telegram_state.json      message_id -> parsed status; for dedup + edits
-  telegram_quarantine.txt  appended raw text of every unparseable message
-  listener_config.json     api_id, api_hash, channel_id
-  telegram.session         Telethon auth token (auto-created on first run)
+Setup and corrections workflow live in docs/MT5_SETUP.md.
 """
 from __future__ import annotations
 
@@ -71,7 +29,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-# Telethon is required. Give a helpful error if it's missing.
 try:
     from telethon import TelegramClient, events
 except ImportError:
@@ -83,19 +40,21 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Paths and constants
+# paths and constants
 # ---------------------------------------------------------------------------
 
-REPO_ROOT = Path(__file__).resolve().parent
+# Script lives at <repo-root>/listener/telegram_listener.py — walk up two
+# levels to find the repo root where all runtime files live. The rest of
+# the module uses REPO_ROOT exclusively, so CWD doesn't matter.
+REPO_ROOT = Path(__file__).resolve().parent.parent
 SIGNALS_PATH = REPO_ROOT / "signals.txt"
 STATE_PATH = REPO_ROOT / "telegram_state.json"
 QUARANTINE_PATH = REPO_ROOT / "telegram_quarantine.txt"
 CONFIG_PATH = REPO_ROOT / "listener_config.json"
-SESSION_NAME = str(REPO_ROOT / "telegram")  # creates telegram.session in repo root
+SESSION_NAME = str(REPO_ROOT / "telegram")
 
-# VICTOR posts in GMT+7. This matches every existing section header in
-# signals.txt. If the channel ever changes timezone, change this AND
-# the existing signals.txt headers together.
+# VICTOR posts in GMT+7. Must match the existing section headers in
+# signals.txt; if the channel ever changes timezone, change both together.
 SIGNAL_SOURCE_TZ_OFFSET = 7
 SIGNAL_SOURCE_TZ = timezone(timedelta(hours=SIGNAL_SOURCE_TZ_OFFSET))
 
@@ -103,7 +62,7 @@ log = logging.getLogger("telegram_listener")
 
 
 # ---------------------------------------------------------------------------
-# Configuration
+# configuration
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -117,8 +76,8 @@ class Config:
     def load(cls, path: Path) -> "Config":
         if not path.exists():
             sys.stderr.write(
-                f"Missing {path.name}. Copy listener_config.example.json -> "
-                f"{path.name} and fill api_id + api_hash.\n"
+                f"Missing {path}. Copy listener_config.example.json -> "
+                f"{path.name} (in repo root) and fill api_id + api_hash.\n"
             )
             sys.exit(1)
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -131,19 +90,18 @@ class Config:
 
 
 # ---------------------------------------------------------------------------
-# Signal parsing (VICTOR's raw format -> structured fields)
+# signal parsing (VICTOR's raw format -> structured fields)
 # ---------------------------------------------------------------------------
 
-# The single distinguishing marker for a NEW SIGNAL message in the VICTOR
-# channel. Update messages, "Move SL to X", and commentary do NOT contain
-# this combination. Confirmed across every sample in messages.html.
+# Distinguishing marker for a NEW SIGNAL message. Update messages,
+# "Move SL to X", and commentary do NOT contain this combination.
 NEW_SIGNAL_MARKER = re.compile(
     r"\U0001F947\s*(?P<side>BUY|SELL)\s+XAUUSD",
     re.IGNORECASE | re.UNICODE,
     )
 
-# Lenient field extractors. Run after _normalize_text(), so commas are still
-# in place (they're handled by the num() converter).
+# Lenient field extractors. Run after _normalize_text(), so commas are
+# still in place — handled by the num() converter.
 _NUM = r"\d+(?:[.,]\d+)?"
 RANGE_RE = re.compile(
     rf"(?:BUY|SELL)\s+XAUUSD\s+({_NUM})\s*-\s*({_NUM})",
@@ -154,9 +112,8 @@ TP1_RE = re.compile(rf"TP\s*1\s+({_NUM})", re.IGNORECASE)
 TP2_RE = re.compile(rf"TP\s*2\s+({_NUM})", re.IGNORECASE)
 TP3_RE = re.compile(rf"TP\s*3\s+({_NUM})", re.IGNORECASE)
 
-# Strict canonical signals.txt line, used to validate manually-injected
-# corrections from Saved Messages. MUST match `signal._SIGNAL_RE` in
-# xauusd_trading exactly, or the engine will reject injected lines.
+# Strict canonical signals.txt line — validates manually-injected corrections
+# from Saved Messages. MUST match `signal._SIGNAL_RE` in xauusd_trading exactly.
 STRICT_LINE_RE = re.compile(
     r"^\s*(?P<id>\d+)\.\s*"
     r"(?P<side>BUY|SELL)\s+XAUUSD\s+"
@@ -193,15 +150,14 @@ class ParsedSignal:
 
 
 def _fmt_price(x: float) -> str:
-    """Render a price the way signals.txt does: '4700' for integers, '4707.50'
-    for fractional. Two decimals are preserved (matches existing entries)."""
+    """Match signals.txt formatting: '4700' for integers, '4707.50' for fractional."""
     if x == int(x):
         return str(int(x))
     return f"{x:.2f}"
 
 
 def _normalize_text(text: str) -> str:
-    """Safe normalizations: unicode dashes -> ASCII, NBSP -> space."""
+    """Unicode dashes -> ASCII, NBSP -> space."""
     for dash in "\u2013\u2014\u2212":  # en-dash, em-dash, minus sign
         text = text.replace(dash, "-")
     text = text.replace("\u00a0", " ")
@@ -211,11 +167,10 @@ def _normalize_text(text: str) -> str:
 def parse_victor_signal(raw_text: str) -> Optional[ParsedSignal]:
     """Return a ParsedSignal if `raw_text` is a NEW VICTOR signal, else None.
 
-    - None  -> the message isn't a new signal (update, commentary, etc.) and
-              should be silently ignored.
-    - Raises ValueError -> the message LOOKS like a new signal (has the 🥇
-              marker) but at least one required field couldn't be extracted.
-              Caller treats this as a parse failure: quarantine + notify.
+    - None  -> not a new signal (update, commentary, etc); silently ignore.
+    - Raises ValueError -> message looks like a new signal (has the 🥇
+      marker) but at least one required field couldn't be extracted.
+      Caller treats this as a parse failure: quarantine + notify.
     """
     if not NEW_SIGNAL_MARKER.search(raw_text):
         return None
@@ -255,8 +210,7 @@ def parse_victor_signal(raw_text: str) -> Optional[ParsedSignal]:
 
 
 def _format_time(dt: datetime) -> str:
-    """Render time the way signals.txt does: '10:44 AM', '1:01 PM' (no
-    leading zero on single-digit hours)."""
+    """Render time the way signals.txt does: '10:44 AM', '1:01 PM'."""
     t = dt.strftime("%I:%M %p")
     if t.startswith("0"):
         t = t[1:]
@@ -264,7 +218,7 @@ def _format_time(dt: datetime) -> str:
 
 
 # ---------------------------------------------------------------------------
-# signals.txt I/O (with atomic writes)
+# signals.txt I/O (atomic writes)
 # ---------------------------------------------------------------------------
 
 DATE_HEADER_RE = re.compile(
@@ -280,8 +234,8 @@ def _read_signals_lines() -> list[str]:
 
 
 def _atomic_write_lines(lines: list[str]) -> None:
-    """Write atomically via temp file + os.replace. Guarantees readers
-    (xauusd auto) never see a half-written file."""
+    """Atomic via temp file + os.replace. Readers (xauusd auto) never see
+    a half-written file."""
     tmp = SIGNALS_PATH.with_suffix(SIGNALS_PATH.suffix + ".tmp")
     content = "\n".join(lines).rstrip() + "\n"
     tmp.write_text(content, encoding="utf-8")
@@ -289,7 +243,7 @@ def _atomic_write_lines(lines: list[str]) -> None:
 
 
 def _find_section(lines: list[str], date_str: str) -> Optional[int]:
-    """Index of the date-header line for `date_str`, or None if absent."""
+    """Index of the date-header line for `date_str`, or None."""
     for i, line in enumerate(lines):
         m = DATE_HEADER_RE.match(line)
         if m and m.group("date") == date_str:
@@ -302,16 +256,18 @@ def _section_signal_count(lines: list[str], header_idx: int) -> int:
     count = 0
     for line in lines[header_idx + 1:]:
         if DATE_HEADER_RE.match(line):
-            break  # next section
+            break
         if SIGNAL_LINE_RE.match(line):
             count += 1
     return count
 
 
 class DuplicateSignalError(ValueError):
-    """Raised by append_manual_signal when the content already exists in
-    today's section. Distinct from a format-validation ValueError so the
-    Saved Messages reply can be a friendlier 'already there' instead of '❌'."""
+    """Raised by append_manual_signal when the content already exists.
+
+    Distinct from a format-validation ValueError so the Saved Messages
+    reply can be a friendlier 'already there' instead of '❌'.
+    """
 
     def __init__(self, existing_line: str, existing_index: int):
         super().__init__(
@@ -326,16 +282,12 @@ def _find_matching_signal_in_section(
         side: str, r1: float, r2: float, sl: float,
         tp1: float, tp2: float, tp3: float, time_text: str,
 ) -> Optional[tuple[str, int]]:
-    """Content-based dedup. Walk the section starting at `header_idx` and
-    return (existing_line, existing_index) if a signal with the SAME side,
-    SAME prices, AND SAME time already exists. Returns None otherwise.
-
-    Acts as a defensive backup to state-based dedup so that even if
-    telegram_state.json is deleted, corrupted, or out of sync, the listener
-    won't re-write a signal that's already in signals.txt.
-
-    Time is part of the comparison so a legitimate same-price signal posted
-    at a different time of day is NOT treated as a duplicate.
+    """Content-based dedup. Walk the section and return (existing_line,
+    existing_index) if a signal with same side, prices, AND time already
+    exists. Defensive backup to state-based dedup — survives a deleted
+    or corrupt telegram_state.json. Time is part of the key, so a
+    legitimate same-price signal posted at a different time of day is
+    NOT a duplicate.
     """
     norm_time = time_text.upper().replace(" ", "")
     for line in lines[header_idx + 1:]:
@@ -359,14 +311,12 @@ def _find_matching_signal_in_section(
 def _insert_into_section(
         lines: list[str], header_idx: int, signal_line: str,
 ) -> list[str]:
-    """Insert `signal_line` at the end of the section starting at
-    `header_idx`, before any trailing blank lines."""
+    """Insert `signal_line` at the end of the section, before trailing blanks."""
     end = len(lines)
     for j in range(header_idx + 1, len(lines)):
         if DATE_HEADER_RE.match(lines[j]):
             end = j
             break
-    # Trim trailing blanks within the section.
     insert_at = end
     while insert_at > header_idx + 1 and lines[insert_at - 1].strip() == "":
         insert_at -= 1
@@ -376,11 +326,10 @@ def _insert_into_section(
 def _append_new_section(
         lines: list[str], date_str: str, tz_offset: int, signal_line: str,
 ) -> list[str]:
-    """Append a new date section at the end of the file."""
     while lines and lines[-1].strip() == "":
         lines.pop()
     if lines:
-        lines.append("")  # blank line separator between sections
+        lines.append("")  # separator between sections
     tz_label = f"GMT+{tz_offset}" if tz_offset >= 0 else f"GMT{tz_offset}"
     lines.append(f"{date_str} {tz_label}")
     lines.append(signal_line)
@@ -392,10 +341,10 @@ def write_signal_to_file(
 ) -> tuple[str, int, bool]:
     """Append a parsed VICTOR signal to signals.txt.
 
-    Returns (signal_line, day_index, was_duplicate).
-    When was_duplicate is True, no write happened; (signal_line, day_index)
-    refer to the existing entry that matched. The caller should still update
-    state to 'written' for that message_id so future events skip it cleanly.
+    Returns (signal_line, day_index, was_duplicate). When was_duplicate,
+    no write happened and (signal_line, day_index) refer to the matched
+    existing entry; caller should still mark the message_id 'written'
+    so future events skip it.
     """
     date_str = signal_dt_gmt7.strftime("%Y-%m-%d")
     time_text = _format_time(signal_dt_gmt7)
@@ -403,8 +352,8 @@ def write_signal_to_file(
     lines = _read_signals_lines()
     header_idx = _find_section(lines, date_str)
 
-    # Content-based dedup: defensive backup to state-based dedup. Catches
-    # the case where state was lost/reset but the signal is already in file.
+    # Content-based dedup: catches the case where state was lost/reset
+    # but the signal is already in file.
     if header_idx is not None:
         match = _find_matching_signal_in_section(
             lines, header_idx,
@@ -431,16 +380,16 @@ def write_signal_to_file(
 
 
 def append_manual_signal(line: str) -> tuple[str, int]:
-    """Append a strict-canonical signal line (from Saved Messages) to
-    signals.txt. The day-index in `line` is IGNORED and replaced with the
-    next free index in today's section, so it's impossible to accidentally
-    double-write `5.` when `5.` already exists.
+    """Append a strict-canonical signal line (from Saved Messages).
+
+    The day-index in `line` is REPLACED with the next free index in
+    today's section, so it's impossible to double-write `5.` when `5.`
+    already exists.
 
     Returns (rendered_line, day_index_used).
     Raises:
-      ValueError              -- the line doesn't match the canonical format.
-      DuplicateSignalError    -- an identical signal (same side, prices, time)
-                                 is already in today's section.
+      ValueError           — line doesn't match the canonical format.
+      DuplicateSignalError — identical signal already in today's section.
     """
     m = STRICT_LINE_RE.match(line.strip())
     if not m:
@@ -455,8 +404,6 @@ def append_manual_signal(line: str) -> tuple[str, int]:
     lines = _read_signals_lines()
     header_idx = _find_section(lines, date_str)
 
-    # Content-based dedup. Same rule as auto-write path: if a signal with
-    # the same side, prices, and time already exists, don't add a second.
     if header_idx is not None:
         match = _find_matching_signal_in_section(
             lines, header_idx,
@@ -474,8 +421,7 @@ def append_manual_signal(line: str) -> tuple[str, int]:
         else _section_signal_count(lines, header_idx) + 1
     )
 
-    # Re-render the user's line with the corrected index. Keep everything
-    # after the `N.` as-is so user's chosen prices/time stand.
+    # Re-render with the corrected index; keep everything after the `N.` as-is.
     _, rest = line.split(".", 1)
     renumbered = f"{new_index}.{rest}".strip()
     if not STRICT_LINE_RE.match(renumbered):
@@ -500,7 +446,7 @@ def next_day_index(date_str: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# State (dedup + edit handling)
+# state (dedup + edit handling)
 # ---------------------------------------------------------------------------
 
 def load_state() -> dict:
@@ -530,7 +476,7 @@ def state_set(state: dict, message_id: int, record: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Quarantine
+# quarantine
 # ---------------------------------------------------------------------------
 
 def quarantine(message_id: int, raw_text: str, reason: str, dt_utc: datetime) -> None:
@@ -544,7 +490,7 @@ def quarantine(message_id: int, raw_text: str, reason: str, dt_utc: datetime) ->
 
 
 # ---------------------------------------------------------------------------
-# Listener
+# listener
 # ---------------------------------------------------------------------------
 
 class Listener:
@@ -554,7 +500,7 @@ class Listener:
         self.client = TelegramClient(SESSION_NAME, cfg.api_id, cfg.api_hash)
         self.state = load_state()
         self.channel_id: Optional[int] = cfg.channel_id
-        self.saved_id: Optional[int] = None  # filled at setup time
+        self.saved_id: Optional[int] = None  # filled at setup
         self._lock = asyncio.Lock()  # serialises file I/O between handlers
 
     async def _resolve_channel(self) -> int:
@@ -578,8 +524,9 @@ class Listener:
         if not matches:
             raise RuntimeError(
                 f"No chat title contains {self.cfg.channel_title_pattern!r}. "
-                f"Run `python telegram_listener.py list-chats` and put the "
-                f"numeric id into listener_config.json under `channel_id`."
+                f"Run `python listener\\telegram_listener.py list-chats` and "
+                f"put the numeric id into listener_config.json (repo root) "
+                f"under `channel_id`."
             )
         if len(matches) > 1:
             titles = ", ".join(f"{d.id}={d.title!r}" for d in matches)
@@ -598,7 +545,6 @@ class Listener:
         self.saved_id = me.id
         self.channel_id = await self._resolve_channel()
 
-        # Event handlers: channel new, channel edit, Saved Messages new.
         self.client.add_event_handler(
             self._on_channel_new,
             events.NewMessage(chats=self.channel_id),
@@ -614,9 +560,8 @@ class Listener:
         )
 
     async def catch_up(self, lookback_hours: int = 24) -> None:
-        """On startup, process any channel messages that arrived while the
-        listener was down. Walks back until we hit a message we've already
-        seen or `lookback_hours` of history (whichever comes first)."""
+        """Process channel messages that arrived while the listener was down.
+        Walks back until we hit a seen message_id or lookback_hours."""
         last_id = self.state.get("last_processed_message_id", 0)
         cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
         log.info(f"Catch-up: looking for channel messages with id > {last_id} "
@@ -643,9 +588,9 @@ class Listener:
         text = (event.message.message or "").strip()
         if not text:
             return
-        # Only react to messages that look like canonical signal lines.
-        # Everything else in Saved Messages (notes to self, the listener's
-        # own warning messages, suggestion templates) is ignored.
+        # Only react to canonical signal lines. Everything else in Saved
+        # Messages (notes to self, the listener's own warning messages,
+        # suggestion templates) is ignored.
         if not STRICT_LINE_RE.match(text):
             return
         async with self._lock:
@@ -689,17 +634,10 @@ class Listener:
         async with self._lock:
             existing = state_get(self.state, message_id)
 
-            # ------------------------------------------------------------------
-            # Universal dedup. We bypass all parsing if state shows this
-            # message was already handled successfully. This covers:
-            #   * catch_up re-processing the same message_ids after a restart
-            #   * Telegram redelivering an event after a reconnect
-            #   * the user accidentally starting two listener processes
-            #   * any other path that double-fires for the same message_id
-            # The previous version only ran this check for is_edit=True, which
-            # let new-message events from catch_up sneak past and write
-            # duplicates with fresh day-indices.
-            # ------------------------------------------------------------------
+            # Universal dedup: skip if already handled successfully. Covers
+            # catch_up re-processing after restart, Telegram redelivering
+            # an event after reconnect, accidentally starting two listener
+            # processes, and any other double-fire path.
             if existing and existing.get("status") == "written":
                 log.debug(
                     f"Message {message_id} already written as "
@@ -708,10 +646,9 @@ class Listener:
                 )
                 return
 
-            # For previously-quarantined messages, only re-parse on EDIT
-            # events (Victor might have fixed a typo). New-message events
-            # are usually catch_up replays of the original; the user was
-            # already notified once, so skip silently.
+            # For previously-quarantined messages, re-parse only on EDIT.
+            # New-message events are usually catch_up replays — the user
+            # was already notified once, so skip silently.
             if (existing
                     and existing.get("status") in ("quarantined", "write_failed")
                     and not is_edit):
@@ -743,7 +680,7 @@ class Listener:
                 return
 
             if parsed is None:
-                # Not a new signal -- update, "Move SL", commentary, etc.
+                # Not a new signal — update, "Move SL", commentary, etc.
                 # Silent no-op; don't pollute state file.
                 return
 
@@ -765,8 +702,7 @@ class Listener:
                     if was_duplicate:
                         # Content-based dedup caught it. Record as 'written'
                         # pointing at the existing entry so we never look at
-                        # this message_id again, and don't bother the user
-                        # with a notification.
+                        # this message_id again, and skip the user notification.
                         log.info(
                             f"Message {message_id} matches existing "
                             f"{signal_key}: {signal_line} -- skipping write"
@@ -854,8 +790,9 @@ async def _cmd_list_chats(cfg: Config) -> int:
         print(f"{dialog.id:>20}  {kind:<10} {title!r}")
     await client.disconnect()
     print()
-    print("Copy the ID of the VICTOR channel into listener_config.json under "
-          "`channel_id`, then run `python telegram_listener.py`.")
+    print("Copy the ID of the VICTOR channel into listener_config.json "
+          "(repo root) under `channel_id`, then run "
+          "`python listener\\telegram_listener.py`.")
     return 0
 
 
@@ -873,10 +810,10 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Telegram listener for VICTOR - GOLD PRIORITY signals.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Examples:\n"
-            "  python telegram_listener.py list-chats    # find channel id\n"
-            "  python telegram_listener.py               # start listening\n"
-            "  python telegram_listener.py --dry-run     # parse but don't write\n"
+            "Examples (run from repo root):\n"
+            "  python listener\\telegram_listener.py list-chats    # find channel id\n"
+            "  python listener\\telegram_listener.py               # start listening\n"
+            "  python listener\\telegram_listener.py --dry-run     # parse but don't write\n"
         ),
     )
     sub = p.add_subparsers(dest="cmd")

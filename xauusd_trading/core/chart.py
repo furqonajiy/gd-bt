@@ -1,8 +1,8 @@
-"""Chart loading. MT5 1-minute bars in tab-separated CSV.
+"""Chart loading — MT5 1-minute bars in tab-separated CSV.
 
 CSV columns: <DATE> <TIME> <OPEN> <HIGH> <LOW> <CLOSE> <TICKVOL> <VOL> <SPREAD>
 
-All prices are Bid. SPREAD is in points, 1 point = $0.01. Ask = Bid + spread.
+All prices are Bid. SPREAD is in points; 1 point = $0.01. Ask = Bid + spread.
 Times are GMT+3 (chart timezone).
 """
 from __future__ import annotations
@@ -13,12 +13,12 @@ from typing import Iterable, Iterator, Optional
 
 import pandas as pd
 
-from .config import POINT_VALUE
+from xauusd_trading import POINT_VALUE
 
 
 @dataclass(frozen=True)
 class Bar:
-    """One 1-minute bar. All prices Bid. spread_price is in dollars."""
+    """One 1-minute bar. Prices are Bid; spread_price is dollars."""
     time: datetime
     open: float
     high: float
@@ -29,7 +29,7 @@ class Bar:
 
 
 def load_chart(paths: Iterable[Path]) -> pd.DataFrame:
-    """Load and concatenate one or more MT5 M1 CSV files. Returns a DataFrame
+    """Load and concatenate one or more MT5 M1 CSV files into a DataFrame
     with columns: time, open, high, low, close, spread, spread_price.
     """
     frames = []
@@ -43,7 +43,7 @@ def load_chart(paths: Iterable[Path]) -> pd.DataFrame:
         df["time"] = pd.to_datetime(
             df["DATE"].astype(str) + " " + df["TIME"].astype(str),
             format="%Y.%m.%d %H:%M:%S",
-        )
+            )
         for c in ("OPEN", "HIGH", "LOW", "CLOSE", "SPREAD"):
             df[c.lower()] = pd.to_numeric(df[c], errors="coerce")
         df["spread_price"] = df["spread"] * POINT_VALUE
@@ -62,7 +62,6 @@ def slice_bars(chart: pd.DataFrame, start: datetime, end: datetime) -> pd.DataFr
 
 
 def iter_bars(df: pd.DataFrame) -> Iterator[Bar]:
-    """Yield Bar objects from a chart DataFrame."""
     for r in df.itertuples(index=False):
         t = r.time.to_pydatetime() if hasattr(r.time, "to_pydatetime") else r.time
         yield Bar(

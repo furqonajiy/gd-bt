@@ -1,31 +1,27 @@
 """Historical backtest runner.
 
-Walks signals chronologically. For each signal, opens a Position and advances
-it through bars from activation to expiry+max_hold (the same window the
-original backtester used). Equity compounds with realized P&L.
+Walks signals chronologically. For each signal, opens a Position and
+advances it through bars from activation to expiry+max_hold. Equity
+compounds with realized P&L; the next signal sees the updated equity.
 
-Cross-signal interaction is unchanged from the original code: each signal is
-processed in time order; equity for the next signal reflects the previous one.
-The engine's `decide()` is not called inside the loop because we want a
-faithful reproduction of the original backtest result. The engine produces
-identical orders for each signal anyway (it always returns FOLLOW with the
-strategy's plan), so calling it would be redundant. The same `core` modules
-power both code paths.
+`decide()` is not invoked here — the engine always returns FOLLOW with
+the strategy's plan for backtest-eligible signals, so calling it would
+be redundant. Both code paths share the same `core` modules.
 """
 from __future__ import annotations
+
 import json
 from dataclasses import asdict
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Iterable, Optional
 
 import pandas as pd
 
-from .adapters import CsvChartSource
-from .chart import iter_bars, slice_bars
-from .config import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
-from .positions import Position, advance_bars, open_position
-from .signal import Signal, parse_signals_file
+from xauusd_trading import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
+from xauusd_trading import CsvChartSource
+from xauusd_trading import Position, advance_bars, open_position
+from xauusd_trading import Signal
+from xauusd_trading import iter_bars, slice_bars
 
 
 # ---------------------------------------------------------------------------
@@ -33,11 +29,11 @@ from .signal import Signal, parse_signals_file
 # ---------------------------------------------------------------------------
 
 def replay_signal(
-    signal: Signal, chart_df: pd.DataFrame, equity: float,
-    config: StrategyConfig = DEFAULT_CONFIG,
-    contract_size: float = CONTRACT_SIZE_OZ,
+        signal: Signal, chart_df: pd.DataFrame, equity: float,
+        config: StrategyConfig = DEFAULT_CONFIG,
+        contract_size: float = CONTRACT_SIZE_OZ,
 ) -> Position:
-    """Advance one signal through its entire lifetime and return the Position."""
+    """Advance one signal through its lifetime and return the Position."""
     pos = open_position(signal, equity, config, contract_size)
     end = pos.expiry_time + timedelta(minutes=config.max_hold_minutes + 5)
     chart_end = chart_df["time"].iloc[-1].to_pydatetime()
@@ -49,9 +45,9 @@ def replay_signal(
 
 
 def position_status(pos: Position) -> tuple[str, float]:
-    """Classify a fully-replayed position. Returns (status, realized_pnl).
+    """Classify a fully-replayed position.
 
-    status: WIN | LOSS | BREAKEVEN | NO_FILL | OPEN
+    Returns (status, realized_pnl). status: WIN | LOSS | BREAKEVEN | NO_FILL | OPEN.
     """
     open_entries = pos.open_entries()
     if open_entries:
@@ -75,7 +71,6 @@ _STATUS_TO_KEY = {"WIN": "wins", "LOSS": "losses",
 
 
 def _new_bucket(key_name: str, key_value: str, equity_start: float) -> dict:
-    """Empty period bucket (monthly or daily) with equity_start prefilled."""
     return {
         key_name: key_value, "signals": 0, "wins": 0, "losses": 0,
         "no_fills": 0, "open": 0, "pnl": 0.0,
@@ -84,7 +79,7 @@ def _new_bucket(key_name: str, key_value: str, equity_start: float) -> dict:
 
 
 def _finalize_bucket(b: dict) -> None:
-    """Compute derived percentages on a bucket. Mutates in place."""
+    """Compute derived percentages. Mutates in place."""
     wl = b["wins"] + b["losses"]
     b["win_rate_pct"] = b["wins"] / wl * 100.0 if wl else 0.0
     if b["equity_start"] and b["equity_start"] > 0:
@@ -94,11 +89,11 @@ def _finalize_bucket(b: dict) -> None:
 
 
 def run_backtest(
-    signals: list[Signal], chart: CsvChartSource,
-    config: StrategyConfig = DEFAULT_CONFIG,
-    *,
-    exclude_structural_anomalies: bool = False,
-    contract_size: float = CONTRACT_SIZE_OZ,
+        signals: list[Signal], chart: CsvChartSource,
+        config: StrategyConfig = DEFAULT_CONFIG,
+        *,
+        exclude_structural_anomalies: bool = False,
+        contract_size: float = CONTRACT_SIZE_OZ,
 ) -> dict:
     chart_df = chart.dataframe
     chart_start = chart.first_time()
@@ -130,7 +125,7 @@ def run_backtest(
             "equity_before": equity, "equity_after": equity_after,
         })
 
-        # Per-entry detail rows. One row per Entry slot (3 per signal).
+        # Per-entry rows (one row per Entry slot).
         tz_label = (f"GMT+{sig.source_tz_offset}" if sig.source_tz_offset >= 0
                     else f"GMT{sig.source_tz_offset}")
         for e in pos.entries:
@@ -191,12 +186,7 @@ def run_backtest(
             if dd < max_dd_pct:
                 max_dd_pct = dd
 
-    # ------------------------------------------------------------------
-    # Monthly breakdown -- bucketed by signal_time_chart (GMT+3).
-    # equity_start = first signal's equity_before in that month
-    # equity_end   = last signal's equity_after in that month
-    # pnl_pct      = pnl / equity_start * 100  (this month's return)
-    # ------------------------------------------------------------------
+    # Monthly breakdown — bucket by signal_time_chart (GMT+3).
     monthly: dict[str, dict] = {}
     for r in rows:
         mk = r["signal_time_chart"].strftime("%Y-%m")
@@ -212,13 +202,8 @@ def run_backtest(
     for b in monthly_rows:
         _finalize_bucket(b)
 
-    # ------------------------------------------------------------------
-    # Daily breakdown -- bucketed by signal_time_chart's date.
-    # First aggregate rows by date, then walk the full chart-range date
-    # window and fill in zero rows (carrying equity forward) for any day
-    # with no signals. This matches the user's request to "include every
-    # calendar day with zeros".
-    # ------------------------------------------------------------------
+    # Daily breakdown — every calendar day in the chart range, carrying
+    # equity forward across no-signal days.
     daily_by_key: dict[str, dict] = {}
     for r in rows:
         dk = r["signal_time_chart"].strftime("%Y-%m-%d")
@@ -240,17 +225,13 @@ def run_backtest(
             dk = cur.strftime("%Y-%m-%d")
             if dk in daily_by_key:
                 b = daily_by_key[dk]
-                # Trust the bucket's equity_start (first signal's equity_before
-                # that day), which equals the running_equity coming in.
                 running_equity = b["equity_end"]
             else:
                 b = _new_bucket("date", dk, running_equity)
-                # equity_end already set to equity_start by _new_bucket
             _finalize_bucket(b)
             daily_rows.append(b)
             cur += timedelta(days=1)
     else:
-        # No chart range available -- fall back to whatever days had signals.
         for b in sorted(daily_by_key.values(), key=lambda x: x["date"]):
             _finalize_bucket(b)
             daily_rows.append(b)
@@ -276,28 +257,31 @@ def run_backtest(
 
 
 def write_backtest_outputs(result: dict, output_dir: Path) -> None:
-    """Write summary.json, signal_results.csv, entry_results.csv, and
-    backtest_results.xlsx to the output directory.
+    """Write summary.json, the three CSVs, and backtest_results.xlsx.
+
+    Excel output is soft-dep on openpyxl: if missing, log a note and
+    continue (CSVs + JSON are always written). Non-openpyxl ImportErrors
+    are re-raised so real bugs aren't masked.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Summary JSON (everything except the heavy row data).
-    summary = {k: v for k, v in result.items()
-               if k not in {"rows", "entry_rows"}}
+    summary = {k: v for k, v in result.items() if k not in {"rows", "entry_rows"}}
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
 
-    # CSVs for tooling.
     pd.DataFrame(result["rows"]).to_csv(output_dir / "signal_results.csv", index=False)
     pd.DataFrame(result["entry_rows"]).to_csv(output_dir / "entry_results.csv", index=False)
-    # Daily CSV too -- handy for spreadsheets / charting tools.
     pd.DataFrame(result.get("daily", [])).to_csv(output_dir / "daily_results.csv", index=False)
 
-    # Excel report -- soft dependency.
     try:
-        from .excel_report import write_excel_report
-        write_excel_report(result, output_dir / "backtest_results.xlsx")
+        from ..reporting.excel_report import write_excel_report
     except ImportError as e:
-        # openpyxl not installed; xlsx is optional, CSVs always written.
-        print(f"[warn] Excel output skipped: {e}. "
-              f"Install with `pip install openpyxl` to enable.")
+        if (e.name or "").split(".", 1)[0] == "openpyxl":
+            print(
+                "[warn] Excel output skipped: openpyxl not installed. "
+                "Install with `pip install openpyxl` to enable."
+            )
+            return
+        raise
+
+    write_excel_report(result, output_dir / "backtest_results.xlsx")

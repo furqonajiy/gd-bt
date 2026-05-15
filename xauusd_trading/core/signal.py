@@ -1,11 +1,8 @@
 """Signal parsing.
 
-Reads the human-format signal file and produces Signal objects with chart-time
-(GMT+3) timestamps and the legacy 3-entry ladder pre-computed.
-
-For runtime entry generation under the active StrategyConfig, use
-`compute_entries(signal, config)` -- this lets the same parsed signal be
-evaluated with different ladder/count/gap settings without re-parsing.
+Reads the human-format signal file and produces Signal objects with
+chart-time (GMT+3) timestamps. Use `compute_entries(signal, config)`
+for runtime entry prices under the active StrategyConfig.
 
 Signal file format:
 
@@ -13,8 +10,8 @@ Signal file format:
     1. BUY XAUUSD 4567 - 4565 SL 4560 TP1 4572 TP2 4579 TP3 4589 10:36 AM
     2. SELL XAUUSD 4600 - 4602 SL 4606 TP1 4597 TP2 4592 TP3 4585 11:04 AM
 
-Range entries follow the legacy 3-entry rule for parsing/validation only:
-BUY range H/L -> [H, H-1, L]; SELL range L/H -> [L, L+1, H].
+The legacy 3-entry ladder stored on Signal.entries is for parse-time
+validation only; trading uses compute_entries() instead.
 """
 from __future__ import annotations
 import math
@@ -24,10 +21,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from .config import CHART_TIMEZONE_OFFSET
+from xauusd_trading import CHART_TIMEZONE_OFFSET
 
 if TYPE_CHECKING:
-    from .config import StrategyConfig
+    from xauusd_trading import StrategyConfig
 
 
 _DATE_RE = re.compile(
@@ -57,14 +54,14 @@ class Signal:
     source_time_text: str
     signal_time_source: datetime
     signal_time_chart: datetime
-    side: str            # "BUY" or "SELL"
+    side: str
     r1: float
     r2: float
     sl: float
     tp1: float
     tp2: float
     tp3: float
-    entries: list[float]                 # legacy 3-entry ladder, used for validation
+    entries: list[float]                 # legacy 3-entry ladder; parse-time validation only
     anomalies: list[str] = field(default_factory=list)
     structural_anomaly: bool = False
 
@@ -82,7 +79,7 @@ class Signal:
 
 
 # ---------------------------------------------------------------------------
-# entry-price generation -- config-driven, used at trade time
+# entry-price generation (used at trade time)
 # ---------------------------------------------------------------------------
 
 def _linspace(start: float, stop: float, n: int) -> list[float]:
@@ -98,14 +95,11 @@ def _linspace(start: float, stop: float, n: int) -> list[float]:
 def compute_entries(signal: Signal, config: "StrategyConfig") -> list[float]:
     """Return entry prices for one signal under the given config's ladder.
 
-    range_uniform: spread n entries evenly inside the signal's range
-        (BUY: high -> low; SELL: low -> high).
-
+    range_uniform: spread n entries evenly inside the signal's range.
     range_to_sl: spread n entries from the best price toward the signal SL,
-        leaving entry_sl_gap dollars between the deepest entry and the SL
-        (BUY: high -> sl + gap; SELL: low -> sl - gap).
-        If the gap would put the deepest entry outside the range
-        (anomalous signal, e.g. SL on wrong side), falls back to range_uniform.
+        leaving entry_sl_gap dollars between the deepest entry and the SL.
+        If the gap would put the deepest entry outside the range (anomalous
+        signal, e.g. SL on wrong side), falls back to range_uniform.
     """
     n = config.entry_count
     if n < 1:
@@ -124,7 +118,7 @@ def compute_entries(signal: Signal, config: "StrategyConfig") -> list[float]:
     if ladder == "range_to_sl":
         if signal.side == "BUY":
             far = signal.sl + gap
-            if far >= signal.range_high:        # SL anomaly: fall back gracefully
+            if far >= signal.range_high:
                 return _linspace(signal.range_high, signal.range_low, n)
             return _linspace(signal.range_high, far, n)
         far = signal.sl - gap
@@ -136,7 +130,7 @@ def compute_entries(signal: Signal, config: "StrategyConfig") -> list[float]:
 
 
 # ---------------------------------------------------------------------------
-# legacy 3-entry rule, kept for parsing-time validation only
+# parsing
 # ---------------------------------------------------------------------------
 
 def _gmt_offset(sign: str, offset: str) -> int:
@@ -149,7 +143,7 @@ def _to_chart_tz(dt: datetime, source_offset: int) -> datetime:
 
 
 def _entries_for(side: str, r1: float, r2: float) -> list[float]:
-    """Legacy 3-entry rule used during parsing/validation only."""
+    """Legacy 3-entry rule. BUY: [H, H-1, L]; SELL: [L, L+1, H]."""
     high, low = max(r1, r2), min(r1, r2)
     return [high, high - 1.0, low] if side == "BUY" else [low, low + 1.0, high]
 
@@ -177,12 +171,12 @@ def _validate(side, r1, r2, sl, tp1, tp2, tp3, entries):
 
 
 def parse_signal_line(
-    line: str,
-    source_date: str,
-    source_offset: int,
-    global_id: int,
+        line: str,
+        source_date: str,
+        source_offset: int,
+        global_id: int,
 ) -> Optional[Signal]:
-    """Parse a single signal line. Returns None if line does not match."""
+    """Parse one signal line. Returns None if the line does not match."""
     m = _SIGNAL_RE.match(line.strip())
     if not m:
         return None
@@ -206,7 +200,7 @@ def parse_signal_line(
 
 
 def parse_signals_file(path: Path) -> list[Signal]:
-    """Parse a multi-day signals text file. Returns signals in chart-time order."""
+    """Parse a multi-day signals file. Returns signals in chart-time order."""
     signals: list[Signal] = []
     current_date: Optional[str] = None
     current_offset: Optional[int] = None
@@ -236,8 +230,8 @@ def parse_signals_file(path: Path) -> list[Signal]:
 def parse_one_signal(text: str, source_date: str, source_offset: int) -> Signal:
     """Parse a single line provided directly (e.g. from the live decide CLI).
 
-    `source_date` must be ISO-format (YYYY-MM-DD) in the same timezone as the
-    line's clock time. `source_offset` is the GMT offset of that clock time.
+    `source_date` is ISO (YYYY-MM-DD) in the same timezone as the line's
+    clock time. `source_offset` is the GMT offset of that clock time.
     """
     sig = parse_signal_line(text, source_date, source_offset, global_id=1)
     if sig is None:

@@ -1,17 +1,12 @@
 """Excel report writer for backtest results.
 
 Three sheets:
+  1. Summary           — config, overall stats, monthly breakdown with P&L %
+  2. Daily Breakdown   — one row per calendar day in the chart range
+  3. Per-Entry Detail  — one row per Entry slot, color-coded by outcome
 
-  Sheet 1 "Summary"          -- config, overall stats, monthly breakdown
-                                (now with a P&L % column).
-  Sheet 2 "Daily Breakdown"  -- one row per calendar day in the chart range
-                                (zero-activity days included), with P&L %.
-  Sheet 3 "Per-Entry Detail" -- one row per Entry slot (3 per signal),
-                                color-coded by outcome.
-
-Soft dependency on openpyxl. Importing this module raises ImportError if
-openpyxl is missing; the backtest CLI catches that and proceeds without
-Excel output.
+Soft dependency on openpyxl; importing this module raises ImportError if
+missing, and the backtest CLI catches that to skip Excel output gracefully.
 """
 from __future__ import annotations
 from datetime import datetime
@@ -33,27 +28,24 @@ HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
 SUBHEADER_FILL = PatternFill("solid", fgColor="D9E1F2")
 SUBHEADER_FONT = Font(bold=True, color="000000", size=11)
 
-# Status colors. Tuned to be readable but visually distinct.
 STATUS_FILL = {
-    # Signal-level statuses
-    "WIN":      PatternFill("solid", fgColor="C6EFCE"),
-    "LOSS":     PatternFill("solid", fgColor="FFC7CE"),
-    "NO_FILL":  PatternFill("solid", fgColor="EAEAEA"),
-    "OPEN":     PatternFill("solid", fgColor="FFEB9C"),
-    "BREAKEVEN":PatternFill("solid", fgColor="DDEBF7"),
-    # Entry-level statuses
+    # Signal-level
+    "WIN":       PatternFill("solid", fgColor="C6EFCE"),
+    "LOSS":      PatternFill("solid", fgColor="FFC7CE"),
+    "NO_FILL":   PatternFill("solid", fgColor="EAEAEA"),
+    "OPEN":      PatternFill("solid", fgColor="FFEB9C"),
+    "BREAKEVEN": PatternFill("solid", fgColor="DDEBF7"),
+    # Entry-level
     "TP1":       PatternFill("solid", fgColor="C6EFCE"),
     "TP2":       PatternFill("solid", fgColor="C6EFCE"),
     "TP3":       PatternFill("solid", fgColor="C6EFCE"),
     "SL":        PatternFill("solid", fgColor="FFC7CE"),
-    "LOCK_TP1":  PatternFill("solid", fgColor="DDEBF7"),  # locked breakeven+
+    "LOCK_TP1":  PatternFill("solid", fgColor="DDEBF7"),
     "TIME_EXIT": PatternFill("solid", fgColor="FFEB9C"),
     "PENDING":   PatternFill("solid", fgColor="EAEAEA"),
 }
 
-# Lighter gray for "no signals on this day" rows in the Daily sheet -- visually
-# distinct from the NO_FILL gray used elsewhere so a quiet day doesn't look
-# like a failed entry.
+# Distinct from NO_FILL gray so a quiet day doesn't look like a failed entry.
 QUIET_DAY_FILL = PatternFill("solid", fgColor="F5F5F5")
 
 THIN = Side(border_style="thin", color="BFBFBF")
@@ -65,7 +57,6 @@ GRID = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 # ---------------------------------------------------------------------------
 
 def _fmt_dt(value: Any) -> Optional[str]:
-    """Return an ISO-ish string for datetimes; pass through None."""
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -116,12 +107,10 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
     ws.title = "Summary"
     cfg = result.get("config", {})
 
-    # Title --------------------------------------------------------------
     ws["A1"] = "XAUUSD BACKTEST RESULTS"
     ws["A1"].font = Font(bold=True, size=14, color="305496")
     ws.merge_cells("A1:D1")
 
-    # Configuration ------------------------------------------------------
     row = 3
     ws.cell(row=row, column=1, value="Configuration").font = SUBHEADER_FONT
     ws.cell(row=row, column=1).fill = SUBHEADER_FILL
@@ -147,7 +136,6 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
         ws.cell(row=row, column=2, value=value)
         row += 1
 
-    # Overall stats ------------------------------------------------------
     row += 1
     ws.cell(row=row, column=1, value="Overall Performance").font = SUBHEADER_FONT
     ws.cell(row=row, column=1).fill = SUBHEADER_FILL
@@ -179,11 +167,9 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
         ws.cell(row=row, column=2, value=value)
         row += 1
 
-    # Monthly breakdown -------------------------------------------------
     row += 1
     ws.cell(row=row, column=1, value="Monthly Breakdown").font = SUBHEADER_FONT
     ws.cell(row=row, column=1).fill = SUBHEADER_FILL
-    # Subheader spans the 9 data columns now (added "P&L %").
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
     row += 1
     headers = ["Month", "Signals", "Wins", "Losses", "No-fills",
@@ -209,7 +195,7 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
         for c, v in enumerate(cells, start=1):
             cell = ws.cell(row=row, column=c, value=v)
             cell.border = GRID
-            if c in (7, 9):  # P&L and Equity columns
+            if c in (7, 9):
                 cell.number_format = money_fmt
         row += 1
 
@@ -251,8 +237,7 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
             if c_idx in (7, 9):
                 cell.number_format = money_fmt
 
-        # Row coloring: gray for zero-activity days, green for net positive,
-        # red for net negative, default white for active-but-flat days.
+        # Row coloring: gray = no activity, green = net positive, red = net negative.
         if signals == 0:
             _apply_row_fill(ws, r_idx, len(headers), QUIET_DAY_FILL)
         elif pnl > 0:
@@ -312,7 +297,7 @@ def _write_entries_sheet(ws: Worksheet, result: dict) -> None:
 
     money_fmt = '"$"#,##0.00;[Red]-"$"#,##0.00'
     price_fmt = "#,##0.00"
-    lot_fmt = "0.00"   # lots are floored to broker step (default 0.01)
+    lot_fmt = "0.00"
 
     rows = result.get("entry_rows", []) or []
     for r_idx, row in enumerate(rows, start=2):
@@ -341,13 +326,7 @@ def _write_entries_sheet(ws: Worksheet, result: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def write_excel_report(result: dict, output_path: Path | str) -> Path:
-    """Render the backtest result to a styled .xlsx file. Returns the path.
-
-    Sheets, in order:
-      1. Summary           (config + overall + monthly breakdown w/ P&L %)
-      2. Daily Breakdown   (every calendar day in the chart range)
-      3. Per-Entry Detail  (one row per Entry slot, color-coded)
-    """
+    """Render the backtest result to a styled .xlsx file."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
