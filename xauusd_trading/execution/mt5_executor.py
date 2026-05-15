@@ -1,10 +1,10 @@
 """MT5 trade execution and active position management.
 
-Used by `decide --execute`. Places fresh signals as N LIMIT orders (where N
-is the configured entry_count) with SL and the configured final-target TP
-attached, manages the TP1-lock by modifying SL once TP1 has been touched,
-cancels expired pendings, and time-closes positions past the configured
-max-hold deadline.
+Used by `decide --execute` and `auto`. Places fresh signals as N LIMIT
+orders (where N is the configured entry_count) with SL and the configured
+final-target TP attached, manages the TP1-lock by modifying SL once TP1 has
+been touched, cancels expired pendings, and time-closes positions past the
+configured max-hold deadline.
 
 Tagging: each signal gets a unique 31-bit magic number derived from its
 signal_key (e.g. "2026-05-07#01"), and its signal_key is written to the
@@ -17,34 +17,34 @@ LIMITs:
   1. positions.json membership (checked in cli.py before calling here)
   2. find_orders / find_positions  -- magic has a current MT5 footprint
 
-The third layer that used to live here (a 12h MT5-history lookback) has been
-removed. The engine's `_build_new_signal_plan` now filters placed entries
-based on the backtest replay's per-entry status: entries whose replay status
-is PENDING or OPEN reach this method; entries whose replay status is terminal
-never do. With the engine's replay as the authoritative source for the
-place/skip decision, the magic-level history guard is redundant in the normal
-case and over-restrictive in the user's case (re-entry after a manual clear,
-where the replay correctly says "still in play" but history shows old deals).
-
-The remaining two guards continue to check current live state, not history,
-so they're orthogonal to the replay and still useful as duplicate-prevention.
-`has_recent_history` is retained below for diagnostic scripts (e.g.
-diagnose_history.py) but is no longer called from `place_signal`.
+The engine's `_build_new_signal_plan` is the primary placement gate: it
+filters `plan.orders` based on per-entry backtest-replay status. Only
+entries whose replay status is PENDING or OPEN reach this method; terminal
+entries are filtered out upstream. The two guards above are orthogonal:
+they check current live state to prevent duplicate placement within a
+session, even if the registry was manually edited or pruned.
 
 The registry also persists `executed_at` (wall-clock placement time in chart
 tz). This lets `manage` and `decide` show "X min late" annotations and
-optionally replay the position from your real placement moment to reflect
-what MT5 actually sees -- because the engine's default replay-from-signal-time
-assumption is the strategy's ideal, not what happens when a human is slow.
+replay the position from your real placement moment to reflect what MT5
+actually sees -- because the engine's default replay-from-signal-time
+assumption is the strategy's ideal, not what happens when a human or a
+slow cycle is late.
 
 Divergence reconciliation: `reconcile_with_mt5` patches the engine's
 PENDING entries from MT5's actual open positions when the bar-by-bar replay
 missed a fill (typically a same-minute fill at executed_at, or positive
 slippage). This is a per-signal correction, not a cross-signal overlay --
 backtest is unaffected.
+
+Late TP1 catch-up: `manage_position` closes at market any MT5 positions
+whose engine replay says LOCK_TP1 but whose broker-side SL hasn't yet been
+moved to TP1 (because an earlier manage cycle didn't run in the window
+between TP1 touch and the next return-to-TP1). Caps divergence from the
+backtest path -- you take the current price as your exit instead of risking
+a full original-SL loss.
 """
 from __future__ import annotations
-import calendar
 import hashlib
 import json
 import math
@@ -63,12 +63,6 @@ from xauusd_trading import Signal
 DEFAULT_MIN_LOT = 0.01
 DEFAULT_LOT_STEP = 0.01
 DEFAULT_REGISTRY = "positions.json"
-# Lookback used by the (now-diagnostic-only) has_recent_history function.
-# Kept here so external scripts that import the constant (e.g.
-# diagnose_history.py at the repo root) continue to work. The constant
-# is no longer consulted by place_signal -- the engine's per-entry replay
-# filtering supersedes it.
-HISTORY_LOOKBACK_HOURS = 12
 
 
 def signal_to_magic(signal_key: str) -> int:
@@ -121,10 +115,11 @@ class SignalRegistry:
     Auto-pruned: entries whose magic has zero MT5 orders AND zero MT5 positions
     are removed on each call.
 
-    `executed_at` is set by `decide --execute` immediately after `place_signal`
-    reports a successful placement. Older entries written before this field
-    existed will be missing it; downstream tooling treats that as "unknown
-    lateness" and falls back to the ideal-execution replay (signal-time start).
+    `executed_at` is set by `decide --execute` and `auto` immediately after
+    `place_signal` reports a successful placement. Older entries written
+    before this field existed will be missing it; downstream tooling treats
+    that as "unknown lateness" and falls back to the ideal-execution replay
+    (signal-time start).
     """
 
     def __init__(self, path: Path):
@@ -195,10 +190,8 @@ class Mt5Executor:
         min_lot, lot_step : broker rounding constraints.
         server_offset_hours : broker server timezone offset from UTC. Most
             XAUUSD brokers run GMT+3 year-round, which is the project default.
-            Used by `reconcile_with_mt5` to convert MT5's `position.time` back
-            into chart-tz, and by the (diagnostic-only) `has_recent_history`
-            to build query windows in the broker-time-as-UTC epoch space MT5
-            stores history in.
+            Used by `reconcile_with_mt5` to convert MT5's `position.time`
+            back into chart-tz.
         """
         self.conn = conn
         self.mt5 = conn.mt5
@@ -405,61 +398,28 @@ class Mt5Executor:
 
         return log
 
-    def has_recent_history(
-            self, magic: int, lookback_hours: int = HISTORY_LOOKBACK_HOURS,
-    ) -> bool:
-        """True if MT5 history shows any closed orders/deals for this magic.
-
-        NOTE: Retained for diagnostic scripts (e.g. diagnose_history.py at
-        the repo root) but NO LONGER called from `place_signal`. The engine's
-        `_build_new_signal_plan` performs per-entry filtering based on the
-        backtest replay, which supersedes this guard. See module docstring
-        for the rationale.
-
-        Builds the query window in broker-time-pretending-to-be-UTC epoch
-        ints, the same space MT5 uses internally to store history.time
-        fields (see mt5_adapter._chart_time_to_mt5_epoch for the matching
-        trick on the chart side).
-
-        Soft-fails (returns False) if the MT5 history calls error out.
-        """
-        try:
-            broker_now = datetime.utcnow() + timedelta(hours=self.server_offset_hours)
-            to_epoch = calendar.timegm(
-                (broker_now + timedelta(minutes=1)).timetuple()
-            )
-            from_epoch = calendar.timegm(
-                (broker_now - timedelta(hours=lookback_hours)).timetuple()
-            )
-            orders = self.mt5.history_orders_get(from_epoch, to_epoch) or []
-            if any(getattr(o, "magic", None) == magic for o in orders):
-                return True
-            deals = self.mt5.history_deals_get(from_epoch, to_epoch) or []
-            return any(getattr(d, "magic", None) == magic for d in deals)
-        except Exception:
-            return False
-
     # ---- placement -----------------------------------------------------
 
     def place_signal(self, signal: Signal, plan: NewSignalPlan) -> ExecutionLog:
         """Place LIMIT orders for the planned entries, with SL and final-target TP.
 
-        ONE idempotency guard runs before anything is sent:
-          1. Live MT5 footprint (find_orders / find_positions) -- magic has
-             current MT5 orders or positions.
+        One idempotency guard runs in this method before anything is sent:
+          - Live MT5 footprint (find_orders / find_positions): magic has
+            current MT5 orders or positions -> skip.
 
-        Plus the positions.json membership check that runs upstream in cli.py.
+        Plus the positions.json membership check that runs upstream in
+        cli.py before this method is called.
 
-        The 12h MT5-history guard that used to live here has been removed:
-        the engine's `_build_new_signal_plan` now filters `plan.orders` based
-        on per-entry backtest-replay status (only PENDING / OPEN entries
-        reach this method), which supersedes the magic-level history check.
+        Both guards check current live state. The engine's
+        `_build_new_signal_plan` is the primary placement gate; it filters
+        `plan.orders` to only entries whose backtest-replay status is
+        PENDING or OPEN, so terminal entries never reach this method.
         """
         log = ExecutionLog()
         magic = signal_to_magic(signal.signal_key)
         comment = signal.signal_key[:31]
 
-        # Guard 1: currently-live orders or open positions for this magic.
+        # Guard: currently-live orders or open positions for this magic.
         # Prevents duplicate placement within the same session, even if the
         # registry was manually edited or pruned.
         if self.find_orders(magic) or self.find_positions(magic):
@@ -644,7 +604,7 @@ class Mt5Executor:
                         f"{res.comment if res else self.mt5.last_error()}"
                     )
 
-        # 3. Time-exit: close still-open positions if engine deadline passed.
+        # 4. Time-exit: close still-open positions if engine deadline passed.
         if (engine_pos.time_exit_deadline is not None
                 and chart_now >= engine_pos.time_exit_deadline):
             for p in self.find_positions(magic):

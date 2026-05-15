@@ -49,6 +49,7 @@ conda create -n xauusd python=3.12 -y
 conda activate xauusd
 conda install -c conda-forge pandas pytest openpyxl -y
 pip install MetaTrader5
+pip install telethon
 ```
 
 For every PowerShell session afterwards, just activate the env:
@@ -61,6 +62,52 @@ conda activate xauusd
 backtick `` ` `` at the end of each line. That's the PowerShell continuation
 character. Copy the whole block including the backticks and it works.
 Don't substitute `\` (Bash) or `^` (cmd).
+
+## Project layout
+
+```
+xauusd_trading/
+├── __init__.py            Public re-exports (stable import surface)
+├── cli.py                 backtest / decide / manage / auto / fetch / mt5-info
+├── core/
+│   ├── config.py          StrategyConfig + chart constants. Single source of truth.
+│   ├── signal.py          Signal dataclass + parser + compute_entries(signal, config).
+│   ├── chart.py           Bar dataclass + MT5 M1 CSV loader.
+│   ├── triggers.py        Spread-aware fill / SL / TP predicates.
+│   └── positions.py       Entry, Position (with executed_at), advance_one_bar.
+├── strategy/
+│   ├── engine.py          decide() + render_report() — live decision API.
+│   └── backtest.py        Historical replay + monthly/daily aggregation.
+├── io/
+│   ├── adapters.py        ChartSource / PositionSource bases + CSV impls.
+│   └── mt5_adapter.py     Live MT5 chart, equity, archive (Windows-only).
+├── execution/
+│   └── mt5_executor.py    Placement + management + reconcile + late-TP1 catch-up.
+└── reporting/
+    └── excel_report.py    Excel report writer (soft dep on openpyxl).
+
+(repo root)
+├── listener/
+│   └── telegram_listener.py    Telethon-based Victor channel ingestion.
+├── tools/
+│   └── sweep.py                Parameter sweep utility.
+├── tests/
+│   ├── test_smoke.py           Locked v2 baseline (April-2026).
+│   ├── test_archive.py         M1 archive merge logic.
+│   └── test_reconcile.py       reconcile_with_mt5 behaviour.
+├── docs/
+│   ├── MT5_SETUP.md            First-time MT5 setup guide.
+│   └── OPERATIONS_PLAYBOOK.md  Daily live-trading runbook.
+├── data/                       MT5 M1 archive (per-month CSVs).
+├── signals.txt                 Signal feed (listener writes, engine reads).
+├── positions.json              Tracked-signal registry.
+└── README.md
+```
+
+`advance_one_bar` in `core/positions.py` is the only place that owns state
+transitions. Entry prices are computed by `compute_entries(signal, config)`
+in `core/signal.py`. Both backtest and live `decide` use both, so they
+cannot disagree.
 
 ## Quick start — most common commands
 
@@ -79,21 +126,14 @@ Writes the following to `backtest_output\`:
 - `signal_results.csv` — one row per signal
 - `entry_results.csv` — one row per entry slot (3 per signal)
 - `daily_results.csv` — one row per calendar day in the chart range
-- `backtest_results.xlsx` — three-sheet styled report (Summary,
-  Daily Breakdown, Per-Entry Detail)
+- `backtest_results.xlsx` — three-sheet styled report
 
 The CLI expands the `*` glob itself, so the same command works on cmd, Bash,
 or PowerShell. If MT5 is running, the backtest auto-fetches the latest 2
 months into `data\` first. If MT5 isn't running, it skips the fetch and
 uses whatever CSVs are already in `data\`.
 
-### 2. Decide on a BUY signal (preview, no order placed)
-
-A new BUY signal arrives in your Telegram, e.g.:
-
-> 1. BUY XAUUSD 4717 - 4715 SL 4710 TP1 4725 TP2 4735 TP3 4750 6:24 PM
-
-Send it to the engine to see the order plan:
+### 2. Decide on a signal (preview, no orders placed)
 
 ```powershell
 python -m xauusd_trading.cli decide `
@@ -104,33 +144,22 @@ python -m xauusd_trading.cli decide `
     --positions-json positions.json
 ```
 
-The `--signal-tz 7` says the time `6:24 PM` is in GMT+7 (your local time);
-the engine converts it to GMT+3 (chart time) internally. The
-`--positions-json` flag lets the engine replay any signals already open so
-the report shows their current stage / floating P&L alongside the new plan.
+The `--signal-tz 7` says the time `6:24 PM` is in GMT+7 (Victor's tz); the
+engine converts it to GMT+3 (chart time) internally. The `--positions-json`
+flag lets the engine replay any signals already open so the report shows
+their current stage / floating P&L alongside the new plan.
 
-The preview report shows `Action: FOLLOW` for fresh signals or
-`Action: SKIP_EXPIRED` for signals whose 4-hour pending window has already
-closed by the time you ran the command — so you can see whether
-`--execute` would actually place anything before adding the flag.
+The preview report shows `Action:` as one of:
 
-### 3. Decide on a SELL signal
+- **`FOLLOW`** — standard, all 3 orders to be placed
+- **`FOLLOW` (partial)** — only a subset will be placed; some entries already
+  played out in the backtest replay. Per-entry breakdown is appended
+- **`SKIP_EXPIRED`** — 4-hour pending window already closed; no orders
+- **`SKIP_INVALIDATED`** — every entry already played out in replay; no orders
 
-Same as BUY, just paste the SELL line in:
+### 3. Decide and execute on MT5
 
-```powershell
-python -m xauusd_trading.cli decide `
-    --signal "2. SELL XAUUSD 4738 - 4740 SL 4745 TP1 4730 TP2 4720 TP3 4700 2:06 PM" `
-    --signal-date 2026-05-07 `
-    --signal-tz 7 `
-    --mt5 --equity-from-mt5 `
-    --positions-json positions.json
-```
-
-### 4. Execute a signal directly on MT5
-
-Add `--execute` to actually place the orders. This implies `--mt5` and
-auto-fetches your equity from MT5, so you can drop those flags:
+Same command + `--execute`. Real orders, no confirmation prompt:
 
 ```powershell
 python -m xauusd_trading.cli decide `
@@ -144,21 +173,21 @@ python -m xauusd_trading.cli decide `
 What `--execute` does, in order:
 
 1. Sanity-checks the MT5 account (equity > 0, trading enabled, market open,
-   live tick available, your account equity within 50% of the engine's
-   expectation — guards against running on the wrong account)
-2. Manages every signal in `positions.json`: cancels expired pendings,
-   moves SL to TP1 on positions that already touched TP1, time-closes
-   positions past the 90-minute deadline
-3. Places 3 BUY/SELL LIMIT orders for the new signal, with SL and TP2
-   attached to each — **unless** the signal is `SKIP_EXPIRED` or one of
-   the three re-entry guards fires (see "Re-entry protection" below)
-4. Adds the new signal to `positions.json` and prunes any signals whose
-   MT5 footprint is already gone
+   live tick available, equity within 50% of the engine's expectation —
+   guards against running on the wrong account)
+2. Reconciles each tracked signal with MT5 (patches PENDING entries the
+   bar-replay missed; see "Reconciliation" below)
+3. Manages every tracked signal: cancels expired pendings, performs Late
+   TP1 catch-up closes where needed, locks SL to TP1 on positions in stage 1,
+   time-closes positions past the 90-minute deadline
+4. Places LIMIT orders for the new signal — only entries whose backtest-
+   replay status is PENDING or OPEN; terminal entries are filtered out
+5. Stamps `executed_at` (wall-clock placement time, chart-tz) on the
+   registry entry and prunes any signals whose MT5 footprint is gone
 
-If sanity checks fail, the executor aborts before placing anything and
-prints what's wrong.
+If sanity checks fail, the executor aborts before placing anything.
 
-### 5. Manage existing tracked signals (no new placement)
+### 4. Manage existing tracked signals (no new placement)
 
 ```powershell
 python -m xauusd_trading.cli manage `
@@ -167,32 +196,67 @@ python -m xauusd_trading.cli manage `
 ```
 
 Reads `positions.json`, replays each tracked signal against the live MT5
-chart up to "now", and (with `--execute`) applies engine-driven changes
-**without placing anything new**:
+chart up to "now", reconciles with MT5, and (with `--execute`) applies
+engine-driven changes **without placing anything new**:
 
 - Cancels pending orders past the 4-hour expiry
+- Late TP1 catch-up closes (see below)
 - Locks SL to TP1 on filled positions where TP1 was touched
 - Time-closes positions past the 90-minute max-hold deadline
 - Auto-prunes `positions.json` of closed signals
 
-Without `--execute`, prints status only — safe to run any time.
+Without `--execute`, prints status only.
 
-**Suggested cadence: every 1 minute via Windows Task Scheduler.**
-The SL-to-TP1 lock is the time-critical piece; a 5-minute gap risks the
-lock landing late if price spikes to TP1 and reverses to SL.
-
-Quick `manage.ps1` for Task Scheduler:
+`manage` supports `--watch` to loop the sweep every N seconds (default 5,
+min 1) on a single persistent MT5 connection. It exits when the registry
+has no live MT5 footprint or on Ctrl+C:
 
 ```powershell
-# manage.ps1 -- run every minute via Task Scheduler
-$ErrorActionPreference = 'Continue'
-Set-Location 'C:\path\to\your\repo'
-& conda run -n xauusd python -m xauusd_trading.cli manage `
-    --execute --positions-json positions.json `
-    *>> manage.log
+python -m xauusd_trading.cli manage --execute --watch
 ```
 
-### 6. Quick MT5 diagnostic
+The watch interval is M1-aware: 5s gives a 12× safety margin against the
+worst-case 60s TP1-touch-to-reversal window. Under 2s emits a soft warning;
+under 1s is rejected outright. Use `--no-clear` to disable the ANSI
+clear-screen between iterations if your terminal doesn't render it.
+
+### 5. Auto mode — continuous live trading
+
+```powershell
+python -m xauusd_trading.cli auto `
+    --signals signals.txt `
+    --positions-json positions.json
+```
+
+Loops forever. Each iteration: reconcile → render dashboard → manage
+tracked positions → re-read `signals.txt` → for each new signal not already
+tracked, run `decide` and act on the result (skip / partial FOLLOW / full
+FOLLOW). Exits on Ctrl+C. Same `--watch-interval` and `--no-clear` flags
+as `manage`.
+
+**Recommended live setup**: two PowerShell windows — window 1 runs the
+Telegram listener (below), window 2 runs `auto`. Both leave persistent
+output; both exit on Ctrl+C.
+
+### 6. Telegram listener — auto-ingest Victor signals
+
+```powershell
+python listener\telegram_listener.py
+```
+
+Watches the VICTOR Telegram channel and appends new signals to
+`signals.txt` as they're posted. First-run setup (creating an API app at
+my.telegram.org, finding your channel id, etc.) is in `docs/MT5_SETUP.md`'s
+sibling section — see also the inline comments in
+`listener/telegram_listener.py` for the corrections workflow via
+Saved Messages.
+
+The listener and the engine never share in-memory state — they communicate
+only through `signals.txt` (atomic writes from the listener, polling reads
+from `auto`). Either side can be stopped or replaced without coordinated
+change to the other.
+
+### 7. Quick MT5 diagnostic
 
 ```powershell
 python -m xauusd_trading.cli mt5-info --mt5-symbol XAUUSD
@@ -203,94 +267,131 @@ positions/pending orders for the symbol. Use this to verify MT5 is
 connected, your symbol name is right, and the broker timezone offset is
 correct (the bar time should match what you see in MT5's chart window).
 
-### 7. Bulk fetch M1 history without running a decision
+### 8. Bulk fetch M1 history
 
 ```powershell
 python -m xauusd_trading.cli fetch --mt5-symbol XAUUSD
 ```
 
 Pulls the last 2 months of M1 from MT5 into per-month CSVs at
-`data\XAUUSD_M1_YYYYMM.csv`. Useful as a daily Task Scheduler job to keep
-the archive fresh — MT5 only retains ~103 days of M1 history per broker,
-so accumulating your own archive over time gives you backtest data that
-goes further back than MT5 itself remembers. Bars merge with existing
-files; nothing is overwritten.
+`data\XAUUSD_M1_YYYYMM.csv`. Useful as a daily Task Scheduler job — MT5
+only retains ~103 days of M1 history per broker, so accumulating your own
+archive over time gives you backtest data that goes further back than MT5
+itself remembers. Bars merge with existing files; nothing is overwritten.
 
-## SKIP_EXPIRED gate
+## Engine gates: SKIP_EXPIRED, SKIP_INVALIDATED, partial FOLLOW
 
-The engine refuses to place orders for a signal whose 4-hour pending
-window has already closed. If you run `decide --execute` on a signal that
-was issued 5 hours ago, the executor will log:
+`decide()` runs two pre-flight gates per signal before reaching the "place
+all orders" path:
+
+- **`SKIP_EXPIRED`** — `now >= pending_expires_at`. The signal's 4-hour
+  pending window has already passed. No orders placed.
+- **`SKIP_INVALIDATED`** — backtest replay from `activation_time` to `now`
+  shows **every** entry has reached a terminal status (SL, LOCK_TP1,
+  TP1/2/3, TIME_EXIT, NO_FILL). Nothing left to place; orders would diverge
+  from the backtest path. The execution log includes a per-entry breakdown.
+- **`FOLLOW` (full)** — every entry is still PENDING or OPEN; all planned
+  orders are placed.
+- **`FOLLOW` (partial)** — mix of terminal and still-PENDING/OPEN entries.
+  Only the placeable entries are sent to MT5; terminal entries are filtered
+  out. The execution log surfaces the per-entry replay breakdown.
+
+**The rule, stated bluntly:** place an entry if and only if its backtest
+replay status is `PENDING` or `OPEN`. The replay is the authoritative source
+for which entries should reach MT5.
+
+None of these gates is a cross-signal overlay. They're per-signal
+divergence-correction mechanisms — they don't change which signals the
+backtest would fill, only how live placement aligns with the backtest path
+when `decide` runs late.
+
+## Re-entry protection (2 layers)
+
+`decide --execute` and `auto` are idempotent by design. Two guards prevent
+the same signal from being placed twice within a session:
+
+1. **`positions.json` membership** (in `cli.py`) — if the signal is
+   already tracked, it's managed (not re-placed).
+2. **Live MT5 footprint** (`find_orders` / `find_positions` in
+   `Mt5Executor.place_signal`) — if MT5 still has open orders or positions
+   tagged with this signal's magic, skip.
+
+The engine's per-entry replay filter (above) supersedes any history-based
+guard: entries whose replay status is terminal never reach `place_signal`
+in the first place. The two guards above check current live state, not
+history, so they're orthogonal to the replay decision.
+
+If the backtest replay is wrong (rare — same-minute fills or positive
+slippage that the bar replay missed) and MT5 has deals the replay thinks
+didn't happen, `reconcile_with_mt5` patches the engine's state from MT5
+reality on each cycle. See below.
+
+## Reconciliation (`reconcile_with_mt5`)
+
+Runs on every `decide`, `manage`, and `auto` cycle that has MT5 access.
+When the bar-by-bar replay misses an MT5 fill (typically a same-minute
+fill at placement, or positive slippage), MT5 has positions the engine
+still thinks are PENDING. Reconciliation queries MT5 directly, patches
+those entries to OPEN using MT5's actual fill price, lot, and time, then
+re-advances the position through chart bars from the earliest patched fill
+so stage transitions catch up.
+
+The engine's `initial_sl` is left unchanged so the broker-side SL still
+matches the planned stop distance — positive slippage on entry becomes
+better R:R, not a wider stop.
+
+## Late TP1 catch-up
+
+If the engine's replay shows any entry in status `LOCK_TP1` but MT5 has
+positions whose SL is NOT yet at TP1 (because an earlier `manage` cycle
+didn't fire in the window between TP1 touch and the next return-to-TP1),
+those positions are closed at market on the next cycle via
+`TRADE_ACTION_DEAL`. Positions whose SL is already at TP1 are left alone —
+the broker triggers them naturally when price returns to TP1, matching
+backtest's LOCK_TP1 exit precisely.
+
+The execution log records:
 
 ```
-Signal 2026-05-07#08: pending window already closed at 2026-05-07 16:13 GMT+3
-(now 2026-05-07 17:30 GMT+3). Skipped placement to avoid orders that would
-be cancelled immediately.
+Late TP1 catch-up closed #{ticket} @ {price} ({signal_key};
+backtest LOCK_TP1 would have realized ${expected_pnl} --
+actual close at current market)
 ```
-
-This is visible in the preview (no `--execute`) too — the report shows
-`Action: SKIP_EXPIRED` instead of `Action: FOLLOW`, so you can see what
-will happen before risking it.
-
-## Re-entry protection (3 layers)
-
-`decide --execute` is idempotent by design. Three guards in `place_signal`
-prevent the same signal from being placed twice:
-
-1. **`positions.json` membership** — if the signal is already tracked,
-   it's managed (not re-placed).
-2. **Live MT5 footprint** — if MT5 still has open orders/positions tagged
-   with this signal's magic, skip.
-3. **Recent MT5 history** (12-hour lookback) — if MT5's history shows any
-   closed orders/deals for this magic in the last 12 hours, skip. This is
-   what catches "the signal already SL'd and the registry was pruned, but
-   I'm running `decide --execute` again because price kept moving."
-
-Together they mean re-running the same `decide --execute` command after
-SL/TP/time-exit will not silently re-enter the same trade, regardless of
-whether `positions.json` was pruned between attempts.
-
-If you genuinely need to re-enter a same-day signal that closed less than
-12 hours ago, wait out the lookback window — but in normal operation the
-channel will just issue a new signal with a new number/timestamp.
 
 ## Position management — `positions.json`
 
-The engine uses a small JSON file to remember which signals are currently
-in flight. Each entry has the original signal text, its date, its source
-timezone, and the equity at the time you placed it:
+The engine uses a JSON file to remember which signals are currently in
+flight:
 
 ```json
 [
   {
+    "signal_key": "2026-05-07#01",
     "signal": "1. BUY XAUUSD 4717 - 4715 SL 4710 TP1 4725 TP2 4735 TP3 4750 6:24 PM",
     "date": "2026-05-07",
     "tz": 7,
-    "equity_at_open": 50000.0
+    "equity_at_open": 50000.0,
+    "executed_at": "2026-05-07T15:24:18"
   }
 ]
 ```
 
-When you run `decide --execute` or `manage --execute`, the engine:
+Under `--execute` or `auto`, the engine adds new signals on successful
+placement and auto-prunes entries whose MT5 footprint is gone (closed by
+TP, SL, time-exit, Late TP1 catch-up, or manually). Under preview mode,
+it just reads.
 
-- Replays each entry against the live chart up to "now" to reconstruct its
-  current stage (pending / filled / TP1 locked / closed)
-- Manages each one (cancel/lock/timeout) on MT5 as needed
-- Appends new signals on successful placement (decide only)
-- Auto-prunes entries whose MT5 orders+positions are all gone (TP hit, SL
-  hit, time-closed, or manually closed)
-
-In dry-run mode (no `--execute`), the engine still replays them and prints
-the report, but doesn't touch MT5 or the JSON file.
-
-You can edit `positions.json` by hand if needed — it's just a list. If MT5
-shows orders/positions that aren't in the JSON, `--execute` will print a
-WARNING line about each unknown one but proceed anyway.
+`executed_at` is the wall-clock placement time (chart tz, GMT+3). When
+present, `manage` and `auto` show a dual-view replay: an *ideal* execution
+replay (from `activation_time`, matching backtest semantics) and an
+*actual* execution replay (from `executed_at`, matching MT5 reality), with
+a "lateness cost so far" summary line. MT5 actions are driven by the
+*actual* replay; the ideal view is diagnostic only.
 
 ## Strategy overrides
 
 Both `backtest` and `decide` accept these flags to test alternative
-configurations without editing `config.py`. Defaults match the v2 baseline.
+configurations without editing `core/config.py`. Defaults match v2.
 
 ```powershell
 --initial-capital 1000.0       # starting equity for backtest sizing
@@ -300,25 +401,15 @@ configurations without editing `config.py`. Defaults match the v2 baseline.
 --entry-sl-gap 2.0             # $ between deepest entry and signal SL
 ```
 
-Example — see what happens with 5 entries and a $5 SL gap:
-
-```powershell
-python -m xauusd_trading.cli backtest `
-    --signals signals.txt `
-    --charts data\XAUUSD_M1_*.csv `
-    --output-dir backtest_5entries `
-    --entries 5 --entry-sl-gap 5.0
-```
-
-For exhaustive parameter exploration use `sweep.py` at the repo root, not
-overrides on the CLI — it runs many configs in parallel and produces a
-ranked CSV. Don't change `config.py` defaults without re-running the sweep
-and re-locking the smoke test.
+For exhaustive parameter exploration use `tools/sweep.py`, not overrides
+on the CLI — it runs many configs in parallel and produces a ranked CSV.
+Don't change `core/config.py` defaults without re-running the sweep and
+re-locking the smoke test.
 
 ## CSV-only mode (no MT5)
 
-If MT5 isn't available (Linux, Mac, no terminal installed, paper-trading on
-your laptop), use `--charts` instead of `--mt5` for `decide`:
+If MT5 isn't available (Linux, Mac, no terminal installed, paper-trading
+on your laptop), use `--charts` instead of `--mt5` for `decide`:
 
 ```powershell
 python -m xauusd_trading.cli decide `
@@ -349,79 +440,7 @@ Verify with `mt5-info` first — the printed "Latest bar" time should match
 the time you see in MT5's chart window. If it doesn't, your offset is
 wrong.
 
-For first-time MT5 setup (allowing Python access in MT5 Tools, finding
-your symbol name, optional non-interactive login), see **`MT5_SETUP.md`**.
-
-## Excel report layout
-
-`backtest_results.xlsx` has three sheets:
-
-1. **Summary** — configuration block, overall performance block, monthly
-   breakdown table. The monthly table includes a `P&L %` column showing
-   each month's standalone return on its starting equity (e.g.
-   `+25.00%` for a $1,000 → $1,250 month).
-
-2. **Daily Breakdown** — one row per calendar day in the chart range,
-   with the same columns as monthly: Date, Signals, Wins, Losses,
-   No-fills, Win rate, P&L, P&L %, Equity end-of-day. Every day
-   appears, including weekends and quiet days with no signals (those
-   show `-` for Win rate, $0 P&L, 0.00% return, and the previous day's
-   equity carried forward). Rows are color-coded: green for net positive
-   active days, red for net negative, light gray for zero-activity.
-
-3. **Per-Entry Detail** — 31 columns × 3 rows per signal, color-coded by
-   entry status (green=TP, red=SL, gray=NoFill, yellow=TimeExit,
-   blue=LockTP1).
-
-## Smoke test
-
-Run after any change in `xauusd_trading\` to verify the engine still
-matches the locked v2 baseline:
-
-```powershell
-python -m pytest tests\
-```
-
-The smoke test asserts exact equity, win/loss/no-fill counts, and win rate
-on April 2026 only. If it fails, the engine has drifted — either revert the
-change or re-validate by running the full sweep and locking new numbers.
-
-## Re-tuning the strategy
-
-Use `sweep.py` at the repo root to explore configurations:
-
-```powershell
-python sweep.py --signals signals.txt --charts data\XAUUSD_M1_*.csv `
-    --output sweep_results.csv
-```
-
-Every config runs through the same `advance_one_bar` simulator the smoke
-test locks, so all results are honest (strict-touch arming, same-bar
-worst-case stop wins, spread-aware triggers — no lookahead). See
-`python sweep.py --help` for the full set of axes you can vary.
-
-## Project layout
-
-```
-xauusd_trading/
-├── config.py        StrategyConfig + chart constants. Single source of truth.
-├── signal.py        Signal dataclass + parser + compute_entries(signal, config).
-├── chart.py         Bar dataclass + MT5 M1 CSV loader.
-├── triggers.py      Spread-aware fill / SL / TP predicates.
-├── positions.py     Entry, Position, advance_one_bar — the simulator core.
-├── adapters.py      ChartSource / PositionSource abstract bases + CSV impls.
-├── mt5_adapter.py   Live MT5 chart, equity, archive (Windows-only).
-├── mt5_executor.py  Order placement and management on MT5 (3-layer re-entry guard).
-├── engine.py        decide() + render_report() — live decision API, SKIP_EXPIRED gate.
-├── backtest.py      Historical replay + monthly/daily aggregation.
-├── excel_report.py  Excel report writer (soft dep on openpyxl).
-└── cli.py           backtest / decide / manage / fetch / mt5-info subcommands.
-```
-
-`advance_one_bar` in `positions.py` is the only place that owns state
-transitions. Entry prices are computed by `compute_entries(signal, config)`
-in `signal.py`. Both backtest and live decide use both, so they cannot
-disagree.
+For first-time MT5 setup, see **`docs/MT5_SETUP.md`**.
 
 ## Importable API
 
@@ -440,7 +459,7 @@ positions = ManualPositionSource(equity=50000.0, positions=[])
 recommendation = decide(signal, chart, positions, DEFAULT_CONFIG)
 print(render_report(recommendation))
 
-# recommendation.new_signal.action is "FOLLOW" or "SKIP_EXPIRED"
+# recommendation.new_signal.action is "FOLLOW" / "SKIP_EXPIRED" / "SKIP_INVALIDATED"
 ```
 
 ## What this engine does NOT do
@@ -451,16 +470,16 @@ Those decisions are not part of the strategy that produced the validated
 result. Adding them now without re-validating against the historical
 dataset would risk degrading the outcome.
 
-The `SKIP_EXPIRED` action and the 3-layer re-entry guards in the executor
-are **not** overlays — they're per-signal idempotency checks that change
-nothing about which signals the strategy would fill in backtest. They
-just prevent obviously-wasted broker round-trips and accidental
-double-entries.
+`SKIP_EXPIRED`, `SKIP_INVALIDATED`, partial FOLLOW, the 2-layer re-entry
+guards, the Late TP1 catch-up, and `reconcile_with_mt5` are **not**
+overlays — they're per-signal idempotency / divergence-correction
+mechanisms that change nothing about which signals the strategy would
+fill in backtest.
 
 If you want to add real overlay rules later, they belong in a separate
-layer that wraps `decide()`, not inside the engine itself, and they
-should be re-validated end-to-end against the historical dataset before
-going live.
+layer that wraps `decide()`, not inside the engine itself, and they should
+be re-validated end-to-end against the historical dataset before going
+live.
 
 The engine also does **not** auto-detect open positions from MT5 alone.
 MT5 stores ticket / open price / SL / TP / comment / magic, but not the
@@ -468,30 +487,73 @@ original signal's TP1/TP2/TP3 range and issue time — which the engine
 needs. `positions.json` is the canonical source of truth for active
 signals; `mt5-info` is a sanity check, not a substitute.
 
+## Smoke test
+
+Run after any change in `xauusd_trading\` to verify the engine still
+matches the locked v2 baseline:
+
+```powershell
+python -m pytest tests\
+```
+
+The smoke test asserts exact equity, win/loss/no-fill counts, and win
+rate on April 2026 only. If it fails, the engine has drifted — either
+revert the change or re-validate by running the full sweep and locking
+new numbers.
+
+## Re-tuning the strategy
+
+Use `tools/sweep.py` to explore configurations:
+
+```powershell
+python tools\sweep.py --signals signals.txt --charts data\XAUUSD_M1_*.csv `
+    --output sweep_results.csv
+```
+
+Every config runs through the same `advance_one_bar` simulator the smoke
+test locks, so all results are honest (strict-touch arming, same-bar
+worst-case stop wins, spread-aware triggers — no lookahead). See
+`python tools\sweep.py --help` for the full set of axes you can vary.
+
 ## Common gotchas
 
-- **`--execute` writes real orders to MT5.** There is no confirmation
-  prompt. Test with the dry-run version first (drop `--execute`).
+- **`--execute` and `auto` write real orders to MT5.** There is no
+  confirmation prompt. Test with the dry-run version first.
 - **Backtest equity ≠ live equity.** The same engine on the original
   validation CSVs gives different numbers from your broker's CSVs because
   tick prices differ. Both are correct outputs; broker data is what
   predicts live performance.
 - **Backtest doesn't model overlapping positions.** Signals run
-  sequentially in the historical replay; live, you'll typically have
-  3–5 open at once. Concurrent same-direction signals can compound
-  losses faster than the backtest's -42.8% max DD implies.
+  sequentially in historical replay; live, 3–5 concurrent is normal.
+  Risk per signal × N concurrent = effective combined risk; the backtest's
+  -42.8% max DD doesn't fully model this.
 - **PowerShell does not expand glob wildcards.** The CLI expands them
-  itself, so `data\XAUUSD_M1_*.csv` works. If you write your own scripts,
-  pass paths through `(Get-ChildItem ...).FullName` or list files
-  explicitly.
+  itself, so `data\XAUUSD_M1_*.csv` works.
 - **MT5 only retains ~103 days of M1 per broker.** Run `fetch` daily (or
-  every `decide --mt5` / `manage` will do it for you) to accumulate an
-  archive past that window.
+  let `decide --mt5` / `manage` / `auto` do it) to accumulate an archive
+  past that window.
 - **`MetaTrader5` package is Windows-only.** On macOS or Linux, only the
   CSV-mode flows (`backtest`, `decide --charts`) work; `--mt5`, `fetch`,
-  `mt5-info`, `manage`, and `--execute` raise an import error.
-- **The 12-hour history lookback in re-entry protection can false-block
-  intentional re-entry.** Rare in practice (signal_keys are date-stamped
-  so tomorrow's `#08` isn't the same magic as today's `#08`), but if you
-  hit it, wait out the window or change `HISTORY_LOOKBACK_HOURS` in
-  `mt5_executor.py`.
+  `mt5-info`, `manage`, `auto`, and `--execute` raise an import error.
+- **Late TP1 catch-up doesn't exactly tie to backtest's LOCK_TP1.**
+  Backtest models the lock SL triggering at exactly TP1; the catch-up
+  closes at current market price (the realistic divergence cost).
+- **Engine view of "Realized" can mismatch MT5 right before a catch-up
+  fires.** When actual replay declares entries `LOCK_TP1` (terminal) but
+  MT5 still has them open, the engine shows backtest figures, not what
+  MT5 has actually realized yet.
+- **Watch mode + Task Scheduler racing.** Pick one cadence mechanism per
+  session for `manage --execute` / `auto`.
+- **ANSI clear-screen requires a VT-aware terminal.** Watch mode's
+  default clear-screen uses `\x1b[H\x1b[J`. Pass `--no-clear` if literal
+  characters show up.
+- **Listener state file is precious.** `telegram_state.json` makes Layer 1
+  dedup work. Don't delete it casually. If you do, Layer 2 (content
+  dedup) still catches duplicates, but `catch_up` will log a "matched
+  existing entry by content" line for every previously-seen signal.
+- **`xauusd_listener.session` and `listener_config.json` are
+  credentials.** `.gitignore` them; don't sync via cloud drives.
+
+## License
+
+Private project. Not for redistribution.
