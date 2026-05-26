@@ -26,7 +26,8 @@ import json
 import sys
 import time
 import traceback
-from datetime import datetime, timedelta
+from dataclasses import replace
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from xauusd_trading import CsvChartSource, ManualPositionSource
@@ -438,6 +439,65 @@ def _format_position_status(
 
 
 # ---------------------------------------------------------------------------
+# scenario helpers (backtest --scenario)
+# ---------------------------------------------------------------------------
+
+def _parse_scenario_arg(arg: str) -> dict:
+    """Parse 'capital=1500,start=2026-05-19' into a scenario dict."""
+    out: dict = {}
+    for token in arg.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "=" not in token:
+            raise SystemExit(
+                f"Bad --scenario token {token!r}; expected key=value pairs."
+            )
+        k, v = token.split("=", 1)
+        k = k.strip().lower()
+        v = v.strip()
+        if k == "capital":
+            try:
+                out["capital"] = float(v)
+            except ValueError:
+                raise SystemExit(f"--scenario capital must be numeric, got {v!r}.")
+        elif k == "start":
+            try:
+                out["start"] = datetime.strptime(v, "%Y-%m-%d").date()
+            except ValueError:
+                raise SystemExit(
+                    f"--scenario start must be YYYY-MM-DD, got {v!r}."
+                )
+        else:
+            raise SystemExit(
+                f"Unknown --scenario key {k!r}; supported: capital, start."
+            )
+    if "capital" not in out:
+        raise SystemExit("--scenario requires 'capital=' (e.g. capital=1500).")
+    if "start" not in out:
+        raise SystemExit("--scenario requires 'start=' (e.g. start=2026-05-19).")
+    return out
+
+
+def _filter_signals_by_start(signals: list, start_date: date) -> list:
+    """Keep signals whose signal_time_chart (GMT+3) is at or after
+    start_date 00:00 GMT+3.
+
+    Boundary is chart-tz. A GMT+7 signal at 02:00 AM May 19 has
+    signal_time_chart = May 18 22:00 GMT+3 and is excluded for
+    start=2026-05-19.
+    """
+    threshold = datetime(start_date.year, start_date.month, start_date.day)
+    return [s for s in signals if s.signal_time_chart >= threshold]
+
+
+def _scenario_filename(scenario: dict) -> str:
+    cap = scenario["capital"]
+    cap_str = f"{int(cap)}" if cap == int(cap) else f"{cap:g}"
+    return f"backtest_results_{cap_str}_{scenario['start'].isoformat()}.xlsx"
+
+
+# ---------------------------------------------------------------------------
 # subcommand: backtest
 # ---------------------------------------------------------------------------
 
@@ -447,6 +507,8 @@ def cmd_backtest(args: argparse.Namespace) -> int:
 
     signals = parse_signals_file(Path(args.signals))
     chart = CsvChartSource(_expand_chart_paths(args.charts))
+
+    # Default run: full signal set, configured initial capital.
     result = run_backtest(
         signals, chart, config,
         exclude_structural_anomalies=args.exclude_structural_anomalies,
@@ -454,8 +516,41 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     summary = {k: v for k, v in result.items() if k not in {"rows", "entry_rows"}}
     print(json.dumps(summary, indent=2, default=str))
     if args.output_dir:
-        write_backtest_outputs(result, Path(args.output_dir))
-        print(f"\nWrote outputs to {Path(args.output_dir).resolve()}", file=sys.stderr)
+        path = write_backtest_outputs(result, Path(args.output_dir))
+        print(f"\nWrote default run to {path.resolve()}", file=sys.stderr)
+
+    # Extra scenarios: same strategy parameters, different capital and signal window.
+    scenarios = [_parse_scenario_arg(s) for s in (args.scenario or [])]
+    for scen in scenarios:
+        scen_config = replace(config, initial_capital=scen["capital"])
+        scen_signals = _filter_signals_by_start(signals, scen["start"])
+
+        scen_label = f"capital=${scen['capital']:g}, start={scen['start'].isoformat()}"
+        print(f"\n--- Scenario {scen_label} ---")
+        print(f"Signals after filter: {len(scen_signals)} of {len(signals)}")
+        if not scen_signals:
+            print(
+                "No signals remain after the start-date filter; "
+                "skipping this scenario."
+            )
+            continue
+
+        scen_result = run_backtest(
+            scen_signals, chart, scen_config,
+            exclude_structural_anomalies=args.exclude_structural_anomalies,
+        )
+        scen_summary = {
+            k: v for k, v in scen_result.items()
+            if k not in {"rows", "entry_rows"}
+        }
+        print(json.dumps(scen_summary, indent=2, default=str))
+        if args.output_dir:
+            fname = _scenario_filename(scen)
+            path = write_backtest_outputs(
+                scen_result, Path(args.output_dir), filename=fname,
+            )
+            print(f"Wrote scenario to {path.resolve()}", file=sys.stderr)
+
     return 0
 
 
@@ -1343,6 +1438,13 @@ def build_parser() -> argparse.ArgumentParser:
     pb.add_argument("--charts", required=True, nargs="+")
     pb.add_argument("--output-dir", default=None)
     pb.add_argument("--exclude-structural-anomalies", action="store_true")
+    pb.add_argument(
+        "--scenario", action="append", default=None, metavar="KV",
+        help="Extra parallel backtest with different capital and signal "
+             "start date. Repeatable. Format: 'capital=1500,start=2026-05-19'. "
+             "Writes backtest_results_{capital}_{start}.xlsx alongside the "
+             "default output.",
+    )
     _add_strategy_overrides(pb)
     _add_mt5_flags(pb)
     pb.set_defaults(func=cmd_backtest)
