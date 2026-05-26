@@ -220,7 +220,7 @@ def test_reconcile_warns_when_mt5_has_more_positions_than_slots():
             volume=0.1,
             time=_mt5_epoch(datetime(2026, 5, 14, 7, 0, i)),
         )
-        for i in range(4)
+        for i in range(len(pos.entries) + 1)
     ]
     executor = _make_executor(mt5_positions)
 

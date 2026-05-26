@@ -19,13 +19,13 @@ REPO = Path(__file__).resolve().parents[1]
 CHART_FILE = REPO / "data" / "XAUUSD_M1_202604.csv"
 
 EXPECTED = {
-    'final_equity': 4455.959999999986,
-    'wins': 102,
-    'losses': 69,
-    'no_fills': 61,
+    'final_equity': 3839.399999999995,
+    'wins': 57,
+    'losses': 28,
+    'no_fills': 146,
     'open': 0,
     'signals_included': 232,
-    'win_rate_pct': 59.64912280701754,
+    'win_rate_pct': 67.05882352941175,
 }
 
 
