@@ -7,8 +7,11 @@
     2. After the pending window closes, mark unfilled entries NO_FILL.
     3. For OPEN entries, evaluate stop and target with same-bar worst-case
        priority (stop wins when both trigger).
-    4. If TP1 is touched while at least one entry is OPEN, advance to
-       stage 1 (remaining and any future late-fill stops move to TP1).
+    4. When TP1 is touched while an entry is OPEN, advance to stage 1 and
+       record the touch time. An entry's stop locks to TP1 only if it was
+       already OPEN at that touch; an entry that fills later keeps its own
+       initial SL and is managed normally. A late fill is never handed an
+       instant TP1 exit — that would be lookahead.
     5. After max_hold_minutes from first fill, time-exit any still-OPEN
        entries at bar close.
 
@@ -61,6 +64,7 @@ class Position:
     activation_time: datetime
     expiry_time: datetime              # pending orders die after this
     stage: int = 0                     # 0 = initial SL; 1 = locked at TP1
+    stage1_time: Optional[datetime] = None  # bar time TP1 was touched (stage 0->1)
     first_fill_time: Optional[datetime] = None
     time_exit_deadline: Optional[datetime] = None
     last_processed_time: Optional[datetime] = None
@@ -81,9 +85,25 @@ class Position:
     def realized_pnl(self) -> float:
         return sum(e.pnl for e in self.entries if e.pnl is not None)
 
+    def lock_eligible(self, entry: Entry, lock_after_tp1: bool) -> bool:
+        """True iff `entry` was already OPEN when TP1 was touched.
+
+        Only such entries lock their stop to TP1 in stage 1. An entry
+        that fills *after* the touch keeps its own initial SL: locking it
+        would let bar replay exit it at TP1 in its own fill bar — a price
+        not guaranteed reachable after the fill (lookahead).
+        """
+        return (
+                lock_after_tp1
+                and self.stage >= 1
+                and self.stage1_time is not None
+                and entry.fill_time is not None
+                and entry.fill_time <= self.stage1_time
+        )
+
     def effective_stop_for(self, entry: Entry, lock_after_tp1: bool) -> float:
         """The stop price currently protecting this entry."""
-        if lock_after_tp1 and self.stage >= 1:
+        if self.lock_eligible(entry, lock_after_tp1):
             return self.signal.tp1
         return entry.initial_sl
 
@@ -236,25 +256,26 @@ def advance_one_bar(
         target_hit = target_trigger(side, h, l, position.target_level, sp)
 
         for e in list(open_entries):
-            stop_level = (
-                position.signal.tp1
-                if (config.lock_after_tp1 and position.stage >= 1)
-                else e.initial_sl
-            )
+            # An entry locks to TP1 only if it was OPEN when TP1 was
+            # touched. A later fill keeps its own initial SL — otherwise
+            # the locked stop sits past the entry price and the replay
+            # exits it at TP1 in its fill bar, a price not guaranteed
+            # reachable after the fill (lookahead).
+            locked = position.lock_eligible(e, config.lock_after_tp1)
+            stop_level = position.signal.tp1 if locked else e.initial_sl
             if stop_trigger(side, h, l, stop_level, sp):
-                if (config.lock_after_tp1 and position.stage >= 1
-                        and math.isclose(stop_level, position.signal.tp1, abs_tol=1e-9)):
-                    status = "LOCK_TP1"
-                else:
-                    status = "SL"
+                status = "LOCK_TP1" if locked else "SL"
                 _close_entry(e, status, bar.time, stop_level, side, contract_size, stop_level)
             elif target_hit:
                 _close_entry(e, config.final_target.upper(), bar.time, position.target_level,
                              side, contract_size)
 
-        # 4. Stage advance: TP1 touched in stage 0 -> stage 1.
+        # 4. Stage advance: TP1 touched while an entry is OPEN -> stage 1.
+        #    stage1_time pins the touch so lock_eligible can tell entries
+        #    open-at-touch from later fills.
         if config.lock_after_tp1 and position.stage == 0 and tp1_hit:
             position.stage = 1
+            position.stage1_time = bar.time
 
     # 5. Time exit at first bar at/after the deadline; closes at bar close.
     if position.time_exit_deadline is not None and bar.time >= position.time_exit_deadline:
