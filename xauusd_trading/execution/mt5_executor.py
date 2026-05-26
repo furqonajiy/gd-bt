@@ -17,6 +17,11 @@ Three divergence-correction mechanisms (none are cross-signal overlays):
     positions tagged with this signal's magic.
   - `manage_position` Late TP1 catch-up — closes at market when the engine
     has LOCK_TP1 entries but the broker SL hasn't moved to TP1 yet.
+
+Observability:
+  - `notifier` (optional): every action point emits a Saved Messages event.
+  - `forensic` (optional): every action point emits a structured JSONL
+    event with request + response + outcome, plus reconcile patches.
 """
 from __future__ import annotations
 import hashlib
@@ -32,6 +37,8 @@ from xauusd_trading import NewSignalPlan
 from xauusd_trading import Mt5Connection
 from xauusd_trading import Position, advance_bars
 from xauusd_trading import Signal
+from xauusd_trading import Notifier
+from xauusd_trading import ForensicLog
 
 
 DEFAULT_MIN_LOT = 0.01
@@ -146,7 +153,9 @@ class Mt5Executor:
     def __init__(self, conn: Mt5Connection, symbol: str,
                  min_lot: float = DEFAULT_MIN_LOT,
                  lot_step: float = DEFAULT_LOT_STEP,
-                 server_offset_hours: int = 3):
+                 server_offset_hours: int = 3,
+                 notifier: Optional[Notifier] = None,
+                 forensic: Optional[ForensicLog] = None):
         """
         conn : initialized Mt5Connection.
         symbol : exact symbol string from MT5 Market Watch.
@@ -154,6 +163,10 @@ class Mt5Executor:
         server_offset_hours : broker server tz offset from UTC. Most XAUUSD
             brokers are GMT+3. Used by `reconcile_with_mt5` to convert
             MT5's position.time back into chart tz.
+        notifier : optional Notifier; action outcomes are emitted as Saved
+            Messages events.
+        forensic : optional ForensicLog; every order_send + reconcile patch
+            is appended as a JSONL event for post-mortem analysis.
         """
         self.conn = conn
         self.mt5 = conn.mt5
@@ -161,7 +174,16 @@ class Mt5Executor:
         self.min_lot = min_lot
         self.lot_step = lot_step
         self.server_offset_hours = server_offset_hours
+        self.notifier = notifier
+        self.forensic = forensic
         self._sym_info = None
+
+    def _log_order_send(self, signal_key: str, action: str,
+                        request: dict, response, *, success: bool) -> None:
+        if self.forensic is not None:
+            self.forensic.order_send(signal_key=signal_key, action=action,
+                                     request=request, response=response,
+                                     success=success)
 
     # ---- pre-flight ----------------------------------------------------
 
@@ -265,6 +287,7 @@ class Mt5Executor:
         """
         log = ExecutionLog()
         magic = signal_to_magic(engine_pos.signal.signal_key)
+        signal_key = engine_pos.signal.signal_key
 
         mt5_positions = sorted(
             self.find_positions(magic),
@@ -274,12 +297,17 @@ class Mt5Executor:
             return log
 
         if len(mt5_positions) > len(engine_pos.entries):
-            log.warnings.append(
-                f"Magic {magic} ({engine_pos.signal.signal_key}): MT5 has "
-                f"{len(mt5_positions)} positions but engine has only "
-                f"{len(engine_pos.entries)} entry slots. Skipping "
-                f"reconciliation to avoid mis-mapping."
-            )
+            msg = (f"Magic {magic} ({signal_key}): MT5 has "
+                   f"{len(mt5_positions)} positions but engine has only "
+                   f"{len(engine_pos.entries)} entry slots. Skipping "
+                   f"reconciliation to avoid mis-mapping.")
+            log.warnings.append(msg)
+            if self.forensic is not None:
+                self.forensic.reconcile_skipped(
+                    signal_key=signal_key, reason=msg,
+                    mt5_count=len(mt5_positions),
+                    engine_count=len(engine_pos.entries),
+                )
             return log
 
         earliest_patched: Optional[datetime] = None
@@ -288,6 +316,17 @@ class Mt5Executor:
             entry = engine_pos.entries[i]
             if entry.status != "PENDING":
                 # Already OPEN or terminal — don't overwrite.
+                if self.forensic is not None and entry.status != "OPEN":
+                    # OPEN is the normal case after first reconcile; only
+                    # log terminal-status skips for diagnostic value.
+                    self.forensic.reconcile_skipped(
+                        signal_key=signal_key,
+                        reason=f"slot {i} not PENDING (status={entry.status})",
+                        entry_index=i,
+                        entry_status=entry.status,
+                        mt5_ticket=int(mt5_pos.ticket),
+                        mt5_price_open=float(mt5_pos.price_open),
+                    )
                 continue
 
             fill_time_chart = self._broker_epoch_to_chart_time(mt5_pos.time)
@@ -296,11 +335,23 @@ class Mt5Executor:
             planned_price = entry.entry_price
 
             log.actions.append(
-                f"  Reconciled #{i} ({engine_pos.signal.signal_key}): "
+                f"  Reconciled #{i} ({signal_key}): "
                 f"MT5 fill at {actual_price:g} lot={actual_lot:.2f} at "
                 f"{fill_time_chart:%Y-%m-%d %H:%M:%S} GMT+3 "
                 f"(engine had PENDING at planned {planned_price:g})"
             )
+            if self.forensic is not None:
+                self.forensic.reconcile_action(
+                    signal_key=signal_key,
+                    entry_index=i,
+                    before_status="PENDING",
+                    after_status="OPEN",
+                    mt5_ticket=int(mt5_pos.ticket),
+                    fill_price=actual_price,
+                    fill_time=fill_time_chart,
+                    lot=actual_lot,
+                    planned_price=planned_price,
+                )
 
             entry.status = "OPEN"
             entry.fill_time = fill_time_chart
@@ -322,12 +373,11 @@ class Mt5Executor:
         if (engine_pos.first_fill_time is None
                 or earliest_patched < engine_pos.first_fill_time):
             engine_pos.first_fill_time = earliest_patched
-            engine_pos.time_exit_deadline = earliest_patched + timedelta(
-                minutes=config.max_hold_minutes
+            engine_pos.time_exit_deadline = (
+                earliest_patched + timedelta(minutes=config.max_hold_minutes)
             )
 
-        # Re-advance from the earliest patched fill to now so stage
-        # transitions and stop/target checks fire on newly-OPEN entries.
+        # Re-advance from earliest patched fill so stage/exits catch up.
         bars = chart.bars_between(earliest_patched, now)
         advance_bars(engine_pos, bars, config)
 
@@ -336,7 +386,9 @@ class Mt5Executor:
     # ---- placement -----------------------------------------------------
 
     def place_signal(self, signal: Signal, plan: NewSignalPlan) -> ExecutionLog:
-        """Place LIMIT orders for the planned entries, with SL and TP attached."""
+        """Place all PENDING entries from `plan` as LIMIT orders with the
+        signal's magic and the strategy's SL/TP attached.
+        """
         log = ExecutionLog()
         magic = signal_to_magic(signal.signal_key)
         comment = signal.signal_key[:31]
@@ -355,6 +407,8 @@ class Mt5Executor:
                       else self.mt5.ORDER_TYPE_SELL_LIMIT)
         sym = self._sym_info if self._sym_info is not None else self.mt5.symbol_info(self.symbol)
         digits = sym.digits
+
+        place_failures: list[tuple[int, float, str]] = []
 
         for o in plan.orders:
             lot = round_lot(o.lot, self.min_lot, self.lot_step)
@@ -379,16 +433,22 @@ class Mt5Executor:
                 "type_filling": self.mt5.ORDER_FILLING_RETURN,
             }
             res = self.mt5.order_send(request)
+            success = bool(res is not None
+                           and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+            self._log_order_send(signal.signal_key, "place_pending",
+                                 request, res, success=success)
             if res is None:
+                reason = str(self.mt5.last_error())
                 log.actions.append(
-                    f"  #{o.entry_index}: FAILED order_send returned None: "
-                    f"{self.mt5.last_error()}"
+                    f"  #{o.entry_index}: FAILED order_send returned None: {reason}"
                 )
+                place_failures.append((o.entry_index, o.entry_price, reason))
             elif res.retcode != self.mt5.TRADE_RETCODE_DONE:
+                reason = f"retcode={res.retcode} comment={res.comment!r}"
                 log.actions.append(
-                    f"  #{o.entry_index}: FAILED retcode={res.retcode} "
-                    f"comment={res.comment!r}"
+                    f"  #{o.entry_index}: FAILED {reason}"
                 )
+                place_failures.append((o.entry_index, o.entry_price, reason))
             else:
                 log.placed += 1
                 log.actions.append(
@@ -396,6 +456,13 @@ class Mt5Executor:
                     f"@ {request['price']:g} lot={lot} "
                     f"SL={request['sl']:g} TP={request['tp']:g}"
                 )
+
+        if self.notifier is not None and place_failures:
+            self.notifier.place_failed(
+                signal_key=signal.signal_key,
+                side=signal.side,
+                failures=place_failures,
+            )
         return log
 
     # ---- management ----------------------------------------------------
@@ -411,30 +478,36 @@ class Mt5Executor:
         log = ExecutionLog()
         magic = signal_to_magic(engine_pos.signal.signal_key)
         digits = self.mt5.symbol_info(self.symbol).digits
+        signal_key = engine_pos.signal.signal_key
+        side = engine_pos.signal.side
 
         # 1. Cancel pending orders that should have expired.
         if chart_now > engine_pos.expiry_time:
+            cancel_failures: list[tuple[int, str]] = []
             for o in self.find_orders(magic):
                 req = {"action": self.mt5.TRADE_ACTION_REMOVE, "order": o.ticket}
                 res = self.mt5.order_send(req)
-                if res and res.retcode == self.mt5.TRADE_RETCODE_DONE:
+                success = bool(res is not None
+                               and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+                self._log_order_send(signal_key, "cancel_pending_expired",
+                                     req, res, success=success)
+                if success:
                     log.cancelled += 1
                     log.actions.append(
-                        f"  Cancelled expired pending #{o.ticket} "
-                        f"({engine_pos.signal.signal_key})"
+                        f"  Cancelled expired pending #{o.ticket} ({signal_key})"
                     )
                 else:
+                    reason = str(res.comment if res else self.mt5.last_error())
                     log.actions.append(
-                        f"  FAILED to cancel pending #{o.ticket}: "
-                        f"{res.comment if res else self.mt5.last_error()}"
+                        f"  FAILED to cancel pending #{o.ticket}: {reason}"
                     )
+                    cancel_failures.append((o.ticket, reason))
+            if self.notifier is not None and cancel_failures:
+                self.notifier.cancel_failed(
+                    signal_key=signal_key, side=side, failures=cancel_failures,
+                )
 
         # 2. Late TP1 catch-up.
-        # If the engine replay has LOCK_TP1 entries but MT5 positions for
-        # this magic still have SL != TP1, the previous manage cycle was
-        # too late to lock. Close at market now instead of leaving them
-        # exposed to the original SL. Positions already locked at TP1 are
-        # left alone — the broker triggers them naturally on next return.
         target_sl = round(engine_pos.signal.tp1, digits)
         if any(e.status == "LOCK_TP1" for e in engine_pos.entries):
             unlocked = [
@@ -442,12 +515,13 @@ class Mt5Executor:
                 if abs(p.sl - target_sl) > 10 ** (-digits)
             ]
             if unlocked:
-                # Engine's would-have-been LOCK_TP1 P&L for the log.
                 backtest_lock_pnl = sum(
                     e.pnl or 0.0
                     for e in engine_pos.entries
                     if e.status == "LOCK_TP1"
                 )
+                catchup_closed: list[tuple[int, float]] = []
+                catchup_failed: list[tuple[int, str]] = []
                 for p in unlocked:
                     tick = self.mt5.symbol_info_tick(self.symbol)
                     if tick is None:
@@ -455,6 +529,7 @@ class Mt5Executor:
                             f"  Late TP1 catch-up on #{p.ticket}: no tick "
                             f"available, skipping"
                         )
+                        catchup_failed.append((p.ticket, "no tick available"))
                         continue
                     if p.type == self.mt5.POSITION_TYPE_BUY:
                         close_type, price = self.mt5.ORDER_TYPE_SELL, tick.bid
@@ -468,28 +543,41 @@ class Mt5Executor:
                         "type":         close_type,
                         "price":        price,
                         "magic":        magic,
-                        "comment":      f"{engine_pos.signal.signal_key}/late-tp1"[:31],
+                        "comment":      f"{signal_key}/late-tp1"[:31],
                         "type_filling": self.mt5.ORDER_FILLING_RETURN,
                     }
                     res = self.mt5.order_send(req)
-                    if res and res.retcode == self.mt5.TRADE_RETCODE_DONE:
+                    success = bool(res is not None
+                                   and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+                    self._log_order_send(signal_key, "close_catchup_tp1",
+                                         req, res, success=success)
+                    if success:
                         log.closed += 1
                         log.actions.append(
                             f"  Late TP1 catch-up closed #{p.ticket} @ {price:g} "
-                            f"({engine_pos.signal.signal_key}; backtest LOCK_TP1 "
-                            f"would have realized ${backtest_lock_pnl:+.2f} -- "
-                            f"actual close at current market)"
+                            f"({signal_key}; backtest LOCK_TP1 would have realized "
+                            f"${backtest_lock_pnl:+.2f} -- actual close at current market)"
                         )
+                        catchup_closed.append((p.ticket, price))
                     else:
+                        reason = str(res.comment if res else self.mt5.last_error())
                         log.actions.append(
-                            f"  FAILED late TP1 catch-up close on #{p.ticket}: "
-                            f"{res.comment if res else self.mt5.last_error()}"
+                            f"  FAILED late TP1 catch-up close on #{p.ticket}: {reason}"
                         )
+                        catchup_failed.append((p.ticket, reason))
+                if self.notifier is not None:
+                    self.notifier.late_tp1_catchup(
+                        signal_key=signal_key, side=side,
+                        closed=catchup_closed, failed=catchup_failed,
+                        backtest_pnl=backtest_lock_pnl,
+                    )
 
         # 3. Move SL to TP1 if engine is in stage 1 (TP1 touched, no
         # LOCK_TP1 entries yet). Once a LOCK_TP1 entry appears, step 2
         # takes precedence and closes at market.
         if config.lock_after_tp1 and engine_pos.stage >= 1:
+            locked_tickets: list[int] = []
+            lock_failures: list[tuple[int, str]] = []
             for p in self.find_positions(magic):
                 if abs(p.sl - target_sl) <= 10 ** (-digits):
                     continue  # already locked
@@ -500,27 +588,41 @@ class Mt5Executor:
                     "tp":       p.tp,
                 }
                 res = self.mt5.order_send(req)
-                if res and res.retcode == self.mt5.TRADE_RETCODE_DONE:
+                success = bool(res is not None
+                               and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+                self._log_order_send(signal_key, "modify_sl_to_tp1",
+                                     req, res, success=success)
+                if success:
                     log.modified += 1
                     log.actions.append(
-                        f"  Locked SL on #{p.ticket} to TP1 {target_sl:g} "
-                        f"({engine_pos.signal.signal_key})"
+                        f"  Locked SL on #{p.ticket} to TP1 {target_sl:g} ({signal_key})"
                     )
+                    locked_tickets.append(p.ticket)
                 else:
+                    reason = str(res.comment if res else self.mt5.last_error())
                     log.actions.append(
-                        f"  FAILED SL-lock on #{p.ticket}: "
-                        f"{res.comment if res else self.mt5.last_error()}"
+                        f"  FAILED SL-lock on #{p.ticket}: {reason}"
                     )
+                    lock_failures.append((p.ticket, reason))
+            if self.notifier is not None:
+                self.notifier.tp1_lock(
+                    signal_key=signal_key, side=side,
+                    locked=locked_tickets, failed=lock_failures,
+                    sl=target_sl,
+                )
 
         # 4. Time-exit: close still-open positions past the engine deadline.
         if (engine_pos.time_exit_deadline is not None
                 and chart_now >= engine_pos.time_exit_deadline):
+            timeout_closed: list[tuple[int, float]] = []
+            timeout_failed: list[tuple[int, str]] = []
             for p in self.find_positions(magic):
                 tick = self.mt5.symbol_info_tick(self.symbol)
                 if tick is None:
                     log.actions.append(
                         f"  Time-exit on #{p.ticket}: no tick available, skipping"
                     )
+                    timeout_failed.append((p.ticket, "no tick available"))
                     continue
                 if p.type == self.mt5.POSITION_TYPE_BUY:
                     close_type, price = self.mt5.ORDER_TYPE_SELL, tick.bid
@@ -534,26 +636,39 @@ class Mt5Executor:
                     "type":         close_type,
                     "price":        price,
                     "magic":        magic,
-                    "comment":      f"{engine_pos.signal.signal_key}/timeout"[:31],
+                    "comment":      f"{signal_key}/timeout"[:31],
                     "type_filling": self.mt5.ORDER_FILLING_RETURN,
                 }
                 res = self.mt5.order_send(req)
-                if res and res.retcode == self.mt5.TRADE_RETCODE_DONE:
+                success = bool(res is not None
+                               and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+                self._log_order_send(signal_key, "close_time_exit",
+                                     req, res, success=success)
+                if success:
                     log.closed += 1
                     log.actions.append(
-                        f"  Time-exit closed #{p.ticket} @ {price:g} "
-                        f"({engine_pos.signal.signal_key})"
+                        f"  Time-exit closed #{p.ticket} @ {price:g} ({signal_key})"
                     )
+                    timeout_closed.append((p.ticket, price))
                 else:
+                    reason = str(res.comment if res else self.mt5.last_error())
                     log.actions.append(
-                        f"  FAILED time-exit close on #{p.ticket}: "
-                        f"{res.comment if res else self.mt5.last_error()}"
+                        f"  FAILED time-exit close on #{p.ticket}: {reason}"
                     )
+                    timeout_failed.append((p.ticket, reason))
+            if self.notifier is not None:
+                self.notifier.time_exit(
+                    signal_key=signal_key, side=side,
+                    closed=timeout_closed, failed=timeout_failed,
+                )
             # Also kill any leftover pendings for this signal.
             for o in self.find_orders(magic):
-                self.mt5.order_send({
-                    "action": self.mt5.TRADE_ACTION_REMOVE, "order": o.ticket,
-                })
+                req = {"action": self.mt5.TRADE_ACTION_REMOVE, "order": o.ticket}
+                res = self.mt5.order_send(req)
+                success = bool(res is not None
+                               and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+                self._log_order_send(signal_key, "cancel_after_timeout",
+                                     req, res, success=success)
         return log
 
 
