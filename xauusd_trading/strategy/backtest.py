@@ -10,7 +10,6 @@ be redundant. Both code paths share the same `core` modules.
 """
 from __future__ import annotations
 
-import json
 from dataclasses import asdict
 from datetime import date, timedelta
 from pathlib import Path
@@ -125,7 +124,6 @@ def run_backtest(
             "equity_before": equity, "equity_after": equity_after,
         })
 
-        # Per-entry rows (one row per Entry slot).
         tz_label = (f"GMT+{sig.source_tz_offset}" if sig.source_tz_offset >= 0
                     else f"GMT{sig.source_tz_offset}")
         for e in pos.entries:
@@ -256,32 +254,17 @@ def run_backtest(
     }
 
 
-def write_backtest_outputs(result: dict, output_dir: Path) -> None:
-    """Write summary.json, the three CSVs, and backtest_results.xlsx.
+def write_backtest_outputs(
+        result: dict, output_dir: Path,
+        filename: str = "backtest_results.xlsx",
+) -> Path:
+    """Write the backtest result as a styled .xlsx file.
 
-    Excel output is soft-dep on openpyxl: if missing, log a note and
-    continue (CSVs + JSON are always written). Non-openpyxl ImportErrors
-    are re-raised so real bugs aren't masked.
+    `filename` defaults to `backtest_results.xlsx`; scenario runs pass
+    a distinguishing name like `backtest_results_1500_2026-05-19.xlsx`.
+    Returns the path written. openpyxl is required.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    summary = {k: v for k, v in result.items() if k not in {"rows", "entry_rows"}}
-    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
-
-    pd.DataFrame(result["rows"]).to_csv(output_dir / "signal_results.csv", index=False)
-    pd.DataFrame(result["entry_rows"]).to_csv(output_dir / "entry_results.csv", index=False)
-    pd.DataFrame(result.get("daily", [])).to_csv(output_dir / "daily_results.csv", index=False)
-
-    try:
-        from ..reporting.excel_report import write_excel_report
-    except ImportError as e:
-        if (e.name or "").split(".", 1)[0] == "openpyxl":
-            print(
-                "[warn] Excel output skipped: openpyxl not installed. "
-                "Install with `pip install openpyxl` to enable."
-            )
-            return
-        raise
-
-    write_excel_report(result, output_dir / "backtest_results.xlsx")
+    from ..reporting.excel_report import write_excel_report
+    return write_excel_report(result, output_dir / filename)

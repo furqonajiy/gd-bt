@@ -11,6 +11,13 @@ Subcommands:
 Reconciliation runs on every MT5-connected cycle (decide / manage / auto)
 to patch PENDING entries the bar-replay missed (same-minute fills, positive
 slippage). Backtest is unaffected.
+
+Observability:
+  --notifications PATH / --no-notifications -- engine -> listener Saved
+      Messages event stream (forwarded by the Telegram listener).
+  --forensic-log PATH  / --no-forensic       -- engine -> JSONL post-mortem
+      log of every cycle, snapshot, and order_send. Inspect with
+      `python tools/dump_forensic.py [...]`.
 """
 from __future__ import annotations
 import argparse
@@ -18,6 +25,7 @@ import glob
 import json
 import sys
 import time
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -29,6 +37,10 @@ from xauusd_trading import (
 from xauusd_trading import decide, format_replay_outcome, render_report
 from xauusd_trading import Position, advance_bars, open_position
 from xauusd_trading import parse_one_signal, parse_signals_file
+from xauusd_trading import (
+    DEFAULT_NOTIFICATIONS_PATH, Notifier, summarize_closed_position,
+)
+from xauusd_trading import DEFAULT_FORENSIC_PATH, ForensicLog
 
 
 ARCHIVE_DIR = "data"
@@ -78,6 +90,72 @@ def _try_archive_from_mt5(symbol: str, server_offset: int) -> None:
             print()
     except Exception as e:
         print(f"[mt5] skipped archive ({e})", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# observability helpers (notifier + forensic)
+# ---------------------------------------------------------------------------
+
+def _make_notifier(args: argparse.Namespace) -> Notifier:
+    if getattr(args, "no_notifications", False):
+        return Notifier(path=None)
+    path = getattr(args, "notifications", None) or DEFAULT_NOTIFICATIONS_PATH
+    return Notifier(path=path)
+
+
+def _make_forensic(args: argparse.Namespace) -> ForensicLog:
+    if getattr(args, "no_forensic", False):
+        return ForensicLog(path=None)
+    path = getattr(args, "forensic_log", None) or DEFAULT_FORENSIC_PATH
+    return ForensicLog(path=path)
+
+
+def _emit_per_signal_snapshots(forensic: ForensicLog, executor, tracked: list) -> None:
+    """For each tracked signal, capture engine state + MT5 footprint."""
+    if not forensic.enabled:
+        return
+    from xauusd_trading import signal_to_magic
+    for _ideal, actual, _exec_at in tracked:
+        magic = signal_to_magic(actual.signal.signal_key)
+        forensic.engine_snapshot(actual)
+        try:
+            orders = executor.find_orders(magic)
+            positions = executor.find_positions(magic)
+            forensic.mt5_snapshot(actual.signal.signal_key, magic, orders, positions)
+        except Exception as e:
+            forensic.error("mt5_snapshot",
+                           f"{type(e).__name__}: {e}",
+                           traceback.format_exc())
+
+
+def _handle_closures(notifier: Notifier, forensic: ForensicLog,
+                     tracked: list, alive: set[int]) -> None:
+    """For each tracked signal whose magic disappeared, emit notification
+    and forensic event. Called BEFORE registry.prune so `tracked` still
+    contains the soon-to-be-pruned signals."""
+    from xauusd_trading import signal_to_magic
+    for _ideal, actual, _exec_at in tracked:
+        magic = signal_to_magic(actual.signal.signal_key)
+        if magic in alive:
+            continue
+        summary, per_entry = summarize_closed_position(actual)
+        realized = actual.realized_pnl()
+        if notifier.path is not None:
+            notifier.signal_closed(
+                signal_key=actual.signal.signal_key,
+                side=actual.signal.side,
+                summary=summary,
+                realized_pnl=realized,
+                per_entry=per_entry,
+            )
+        if forensic.enabled:
+            forensic.closure_detected(
+                signal_key=actual.signal.signal_key,
+                side=actual.signal.side,
+                summary=summary,
+                realized_pnl=realized,
+                per_entry=per_entry,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +465,8 @@ def cmd_backtest(args: argparse.Namespace) -> int:
 
 def cmd_decide(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
+    notifier = _make_notifier(args)
+    forensic = _make_forensic(args)
 
     use_mt5 = bool(args.mt5) or bool(args.execute)
     conn = None
@@ -427,6 +507,8 @@ def cmd_decide(args: argparse.Namespace) -> int:
             min_lot=config.minimum_lot or 0.01,
             lot_step=config.lot_step or 0.01,
             server_offset_hours=args.mt5_server_offset,
+            notifier=notifier,
+            forensic=forensic,
         )
         equity = mt5_equity(conn) if (args.equity_from_mt5 or args.execute) else args.equity
     else:
@@ -456,6 +538,12 @@ def cmd_decide(args: argparse.Namespace) -> int:
         for item in prior_entries:
             tracked.append(_replay_tracked_signal(item, chart, replay_end, config))
 
+    forensic.start_cycle(
+        subcommand="decide", iteration=1,
+        chart_time=replay_end, equity=equity,
+        tracked_count=len(tracked),
+    )
+
     # Reconcile actual replay with MT5 reality. CSV-only mode skips.
     if executor is not None and tracked:
         reconcile_log = ExecutionLog()
@@ -464,11 +552,21 @@ def cmd_decide(args: argparse.Namespace) -> int:
             reconcile_log.merge(rlog)
         _print_reconcile_log(reconcile_log)
 
+    # Forensic snapshots: engine + MT5 state per tracked signal, post-reconcile.
+    if executor is not None and tracked:
+        _emit_per_signal_snapshots(forensic, executor, tracked)
+
     open_positions = [t[1] for t in tracked]
 
     positions = ManualPositionSource(equity=equity, positions=open_positions)
     rec = decide(signal, chart, positions, config, now=now)
     print(render_report(rec))
+
+    forensic.decision(
+        signal_key=signal.signal_key,
+        action=rec.new_signal.action,
+        rationale=getattr(rec.new_signal, "rationale", "") or "",
+    )
 
     if args.execute:
         from xauusd_trading import (
@@ -481,6 +579,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
             print("SANITY CHECKS FAILED -- aborting execution:")
             for e in errors:
                 print(f"  ! {e}")
+            forensic.end_cycle(errors=1)
             conn.shutdown()
             return 2
 
@@ -528,11 +627,16 @@ def cmd_decide(args: argparse.Namespace) -> int:
                 )
 
         alive = executor.all_alive_magics()
+        _handle_closures(notifier, forensic, tracked, alive)
         removed = registry.prune(alive)
         if removed:
             log.actions.append(f"Pruned {removed} closed signal(s) from {registry_path.name}")
 
         print(render_execution_log(log))
+        forensic.end_cycle(placed=log.placed, modified=log.modified,
+                           cancelled=log.cancelled, closed=log.closed)
+    else:
+        forensic.end_cycle()
 
     if conn is not None:
         conn.shutdown()
@@ -599,14 +703,14 @@ def cmd_manage(args: argparse.Namespace) -> int:
 
         if args.watch:
             return _run_manage_watch(args, config, conn, chart)
-        exit_code, _ = _manage_pass(args, config, conn, chart)
+        exit_code, _ = _manage_pass(args, config, conn, chart, iteration=1)
         return exit_code
     finally:
         conn.shutdown()
 
 
 def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
-                 conn, chart) -> tuple[int, int]:
+                 conn, chart, iteration: int = 1) -> tuple[int, int]:
     """One manage cycle. Returns (exit_code, n_alive_on_mt5)."""
     from xauusd_trading import mt5_equity
     from xauusd_trading import (
@@ -614,10 +718,14 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
         render_execution_log, ExecutionLog,
     )
 
+    notifier = _make_notifier(args)
+    forensic = _make_forensic(args)
+
     try:
         equity = mt5_equity(conn)
     except Exception as e:
         print(f"[mt5] account_info() failed: {e}", file=sys.stderr)
+        forensic.error("manage_pass.mt5_equity", str(e), traceback.format_exc())
         return 2, 0
 
     registry_path = Path(args.positions_json or "positions.json")
@@ -629,6 +737,7 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
         prior_entries = json.loads(registry_path.read_text(encoding="utf-8"))
     except Exception as e:
         print(f"Could not read {registry_path}: {e}", file=sys.stderr)
+        forensic.error("manage_pass.read_registry", str(e), traceback.format_exc())
         return 2, 0
 
     if not prior_entries:
@@ -638,6 +747,7 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
     replay_end = chart.last_time()
     if replay_end is None:
         print("[mt5] no chart data available; aborting.", file=sys.stderr)
+        forensic.error("manage_pass.no_chart_data", "chart.last_time() = None")
         return 2, 0
 
     tracked: list[tuple[Position, Position, datetime | None]] = []
@@ -660,11 +770,19 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
         min_lot=config.minimum_lot or 0.01,
         lot_step=config.lot_step or 0.01,
         server_offset_hours=args.mt5_server_offset,
+        notifier=notifier,
+        forensic=forensic,
     )
     tracked_magics = {
         signal_to_magic(actual.signal.signal_key)
         for _ideal, actual, _exec_at in tracked
     }
+
+    forensic.start_cycle(
+        subcommand="manage", iteration=iteration,
+        chart_time=replay_end, equity=equity,
+        bid=bid, ask=ask, tracked_count=len(tracked),
+    )
 
     # Reconcile before rendering so the dashboard matches MT5.
     reconcile_log = ExecutionLog()
@@ -672,6 +790,9 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
         rlog = executor.reconcile_with_mt5(actual, config, chart, replay_end)
         reconcile_log.merge(rlog)
     _print_reconcile_log(reconcile_log)
+
+    # Snapshots (engine + MT5) per tracked signal, post-reconcile.
+    _emit_per_signal_snapshots(forensic, executor, tracked)
 
     print("=" * 70)
     print("XAUUSD POSITION MANAGEMENT")
@@ -707,6 +828,7 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
             print("SANITY CHECKS FAILED -- aborting execution:")
             for e in errors:
                 print(f"  ! {e}")
+            forensic.end_cycle(errors=1)
             return 2, len(tracked_magics)
 
         registry = SignalRegistry(registry_path)
@@ -719,14 +841,18 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
         log.warnings.extend(executor.warn_on_unknown(tracked_magics))
 
         alive = executor.all_alive_magics()
+        _handle_closures(notifier, forensic, tracked, alive)
         removed = registry.prune(alive)
         if removed:
             log.actions.append(f"Pruned {removed} closed signal(s) from {registry_path.name}")
 
         print(render_execution_log(log))
+        forensic.end_cycle(placed=log.placed, modified=log.modified,
+                           cancelled=log.cancelled, closed=log.closed)
     else:
         alive = executor.all_alive_magics()
         print("(read-only -- pass --execute to apply changes to MT5)")
+        forensic.end_cycle()
 
     n_alive = len(tracked_magics & alive)
     return 0, n_alive
@@ -750,7 +876,8 @@ def _run_manage_watch(args: argparse.Namespace, config: StrategyConfig,
                 f"{datetime.now():%Y-%m-%d %H:%M:%S} local -- "
                 f"interval {interval:g}s]"
             )
-            exit_code, n_alive = _manage_pass(args, config, conn, chart)
+            exit_code, n_alive = _manage_pass(args, config, conn, chart,
+                                              iteration=iteration)
             if exit_code != 0:
                 return exit_code
             if n_alive == 0:
@@ -856,7 +983,8 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
                 f"{datetime.now():%Y-%m-%d %H:%M:%S} local -- "
                 f"interval {interval:g}s -- signals: {signals_path}]"
             )
-            exit_code = _auto_pass(args, config, conn, chart, signals_path)
+            exit_code = _auto_pass(args, config, conn, chart,
+                                   signals_path, iteration=iteration)
             if exit_code != 0:
                 return exit_code
             time.sleep(interval)
@@ -867,18 +995,22 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
 
 
 def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
-               conn, chart, signals_path: Path) -> int:
+               conn, chart, signals_path: Path, iteration: int = 1) -> int:
     from xauusd_trading import mt5_equity
     from xauusd_trading import (
         Mt5Executor, SignalRegistry, signal_to_magic,
         render_execution_log, ExecutionLog,
     )
 
+    notifier = _make_notifier(args)
+    forensic = _make_forensic(args)
+
     # 1. Account equity.
     try:
         equity = mt5_equity(conn)
     except Exception as e:
         print(f"[mt5] account_info() failed: {e}", file=sys.stderr)
+        forensic.error("auto_pass.mt5_equity", str(e), traceback.format_exc())
         return 2
 
     # 2. Registry.
@@ -915,6 +1047,14 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         min_lot=config.minimum_lot or 0.01,
         lot_step=config.lot_step or 0.01,
         server_offset_hours=args.mt5_server_offset,
+        notifier=notifier,
+        forensic=forensic,
+    )
+
+    forensic.start_cycle(
+        subcommand="auto", iteration=iteration,
+        chart_time=replay_end, equity=equity,
+        bid=bid, ask=ask, tracked_count=len(tracked),
     )
 
     # 7. Reconcile before rendering so the dashboard reflects MT5.
@@ -923,6 +1063,9 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         rlog = executor.reconcile_with_mt5(actual, config, chart, replay_end)
         reconcile_log.merge(rlog)
     _print_reconcile_log(reconcile_log)
+
+    # Snapshots (engine + MT5) per tracked signal, post-reconcile.
+    _emit_per_signal_snapshots(forensic, executor, tracked)
 
     # 8. Dashboard header.
     print("=" * 70)
@@ -964,6 +1107,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         print("SANITY CHECKS FAILED -- skipping MT5 actions this iteration:")
         for e in errors:
             print(f"  ! {e}")
+        forensic.end_cycle(errors=1)
         return 0
 
     log = ExecutionLog()
@@ -978,6 +1122,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         all_signals = parse_signals_file(signals_path)
     except Exception as e:
         print(f"[signals] failed to parse {signals_path}: {e}")
+        forensic.error("auto_pass.parse_signals", str(e), traceback.format_exc())
         all_signals = []
 
     # 13. Filter candidates (not expired, not already tracked).
@@ -998,6 +1143,13 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             positions=[t[1] for t in tracked],
         )
         rec = decide(signal, chart, positions_source, config)
+
+        forensic.decision(
+            signal_key=signal.signal_key,
+            action=rec.new_signal.action,
+            rationale=getattr(rec.new_signal, "rationale", "") or "",
+            is_partial=_is_partial_placement(rec),
+        )
 
         if rec.new_signal.action == "SKIP_EXPIRED":
             log.actions.append(
@@ -1038,8 +1190,9 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     }
     log.warnings.extend(executor.warn_on_unknown(known_magics))
 
-    # 16. Prune closed signals.
+    # 16. Detect closures, then prune.
     alive = executor.all_alive_magics()
+    _handle_closures(notifier, forensic, tracked, alive)
     removed = registry.prune(alive)
     if removed:
         log.actions.append(
@@ -1055,6 +1208,8 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     if has_actions:
         print(render_execution_log(log))
 
+    forensic.end_cycle(placed=log.placed, modified=log.modified,
+                       cancelled=log.cancelled, closed=log.closed)
     return 0
 
 
@@ -1151,6 +1306,34 @@ def _add_mt5_flags(p: argparse.ArgumentParser) -> None:
     g.add_argument("--mt5-server", default=None)
 
 
+def _add_notification_flags(p: argparse.ArgumentParser) -> None:
+    g = p.add_argument_group("Telegram notifications (Saved Messages via listener)")
+    g.add_argument(
+        "--notifications", default=DEFAULT_NOTIFICATIONS_PATH,
+        help=(f"Path to engine notifications JSONL "
+              f"(default: {DEFAULT_NOTIFICATIONS_PATH}). Listener tails this "
+              f"file and forwards each event to Saved Messages."),
+    )
+    g.add_argument(
+        "--no-notifications", action="store_true",
+        help="Disable engine notifications entirely.",
+    )
+
+
+def _add_forensic_flags(p: argparse.ArgumentParser) -> None:
+    g = p.add_argument_group("Forensic JSONL log (post-mortem analysis)")
+    g.add_argument(
+        "--forensic-log", default=DEFAULT_FORENSIC_PATH,
+        help=(f"Path to structured JSONL event log "
+              f"(default: {DEFAULT_FORENSIC_PATH}). "
+              f"Filter with `python tools/dump_forensic.py`."),
+    )
+    g.add_argument(
+        "--no-forensic", action="store_true",
+        help="Disable forensic logging entirely.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="xauusd")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1180,6 +1363,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Place orders on MT5 directly (no confirmation prompt). Implies --mt5.")
     _add_strategy_overrides(pd_)
     _add_mt5_flags(pd_)
+    _add_notification_flags(pd_)
+    _add_forensic_flags(pd_)
     pd_.set_defaults(func=cmd_decide)
 
     pmg = sub.add_parser("manage",
@@ -1195,6 +1380,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="In watch mode, disable the screen clear between iterations.")
     _add_strategy_overrides(pmg)
     _add_mt5_flags(pmg)
+    _add_notification_flags(pmg)
+    _add_forensic_flags(pmg)
     pmg.set_defaults(func=cmd_manage)
 
     pa = sub.add_parser("auto",
@@ -1205,6 +1392,8 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--no-clear", action="store_true")
     _add_strategy_overrides(pa)
     _add_mt5_flags(pa)
+    _add_notification_flags(pa)
+    _add_forensic_flags(pa)
     pa.set_defaults(func=cmd_auto)
 
     pm = sub.add_parser("mt5-info", help="Diagnostic: latest bar, equity, open MT5 objects")

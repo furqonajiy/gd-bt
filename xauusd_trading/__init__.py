@@ -87,6 +87,9 @@ from .strategy.backtest import (
 # 9. io.mt5_adapter
 # Module imports cleanly on any OS; MetaTrader5 is lazy-imported inside
 # Mt5Connection.__init__, not at module load.
+# _MT5_EXPORT_COLUMNS and _merge_with_existing are private archive helpers
+# re-exported here so tests/test_archive.py can import them from the
+# package root; they are not part of the public surface (not in __all__).
 from .io.mt5_adapter import (
     Mt5ChartSource,
     Mt5Connection,
@@ -94,9 +97,24 @@ from .io.mt5_adapter import (
     mt5_equity,
     mt5_open_positions_summary,
     render_archive_summary,
+    _MT5_EXPORT_COLUMNS,
+    _merge_with_existing,
 )
 
-# 10. execution.mt5_executor
+# 10. notifications (leaf -- engine -> listener Saved Messages stream)
+from .notifications import (
+    DEFAULT_NOTIFICATIONS_PATH,
+    Notifier,
+    summarize_closed_position,
+)
+
+# 11. forensic (leaf -- engine -> JSONL post-mortem log)
+from .forensic import (
+    DEFAULT_FORENSIC_PATH,
+    ForensicLog,
+)
+
+# 12. execution.mt5_executor
 from .execution.mt5_executor import (
     ExecutionLog,
     Mt5Executor,
@@ -165,6 +183,13 @@ __all__ = [
     "mt5_equity",
     "mt5_open_positions_summary",
     "render_archive_summary",
+    # notifications
+    "DEFAULT_NOTIFICATIONS_PATH",
+    "Notifier",
+    "summarize_closed_position",
+    # forensic
+    "DEFAULT_FORENSIC_PATH",
+    "ForensicLog",
     # execution.mt5_executor
     "ExecutionLog",
     "Mt5Executor",
