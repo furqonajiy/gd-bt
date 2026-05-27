@@ -14,6 +14,11 @@ and same-bar worst-case stop priority.
 
 By default, sizing is fixed at 0.5 lot per entry. This keeps the sweep focused
 on execution rules rather than money-management effects.
+
+During long sweeps, the script prints and saves the current best parameters
+immediately whenever a new best quality score or net P&L is found. This lets you
+inspect `*.live_best_quality.json` and `*.live_best_pnl.json` before the full
+grid completes.
 """
 from __future__ import annotations
 
@@ -87,6 +92,24 @@ _STRATEGY_FIELDS = {
     "activation_delay_minutes", "pending_expiry_minutes", "max_hold_minutes",
     "sl_multiplier", "final_target", "lock_after_tp1", "lock_after_tp2",
 }
+
+_CONFIG_PRINT_FIELDS = [
+    "sizing_mode", "lot_per_entry", "risk_per_signal",
+    "entry_count", "entry_ladder", "entry_sl_gap",
+    "activation_delay_minutes", "pending_expiry_minutes", "max_hold_minutes",
+    "sl_multiplier", "final_target", "lock_after_tp1", "lock_after_tp2",
+]
+
+_LIVE_BEST_FIELDS = [
+    "preset_name",
+    *_CONFIG_PRINT_FIELDS,
+    "net_profit", "quality_score", "max_drawdown_pct",
+    "win_rate_pct", "profit_factor", "avg_pnl_per_signal",
+    "positive_month_rate_pct", "profitable_months", "losing_months",
+    "worst_month", "worst_month_pnl", "best_month", "best_month_pnl",
+    "positive_year_rate_pct", "worst_year", "worst_year_pnl",
+    "monthly_pnl_json", "yearly_pnl_json",
+]
 
 # Scoring values are set by CLI in main() before multiprocessing starts.
 _SCORING = {
@@ -465,7 +488,7 @@ def expand_grid(grid: dict[str, list]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# CLI helpers
+# CLI helpers and progress reporting
 # ---------------------------------------------------------------------------
 
 def _parse_csv_list(spec: str | None, type_):
@@ -527,6 +550,83 @@ def _progress_line(done: int, total: int, start: float, results: list[dict]) -> 
         f"elapsed {_fmt_duration(elapsed)}  ETA {eta_text}  "
         f"{rate_text}  {best_text}"
     )
+
+
+def _best_snapshot(row: dict) -> dict:
+    """Compact JSON snapshot for a best-so-far result."""
+    return {k: row.get(k) for k in _LIVE_BEST_FIELDS if k in row}
+
+
+def _strategy_config_block(row: dict) -> str:
+    """Copy-paste-ready StrategyConfig body from a sweep result."""
+    lines = []
+    for k in _CONFIG_PRINT_FIELDS:
+        if k in row:
+            value = row[k]
+            if isinstance(value, str):
+                hint = ": str"
+            elif isinstance(value, bool):
+                hint = ": bool"
+            elif isinstance(value, int):
+                hint = ": int"
+            elif isinstance(value, float):
+                hint = ": float"
+            else:
+                hint = ""
+            lines.append(f"    {k}{hint} = {value!r}")
+    return "\n".join(lines)
+
+
+def _format_new_best(label: str, row: dict, done: int, total: int, start: float) -> str:
+    """Human-readable best-so-far config printed during the sweep."""
+    elapsed = _fmt_duration(time.time() - start)
+    lines = [
+        "",
+        "=" * 120,
+        f"NEW BEST {label} at [{done}/{total}] elapsed {elapsed}",
+        "=" * 120,
+        (
+            "Metrics: "
+            f"net_profit={float(row.get('net_profit', 0.0)):,.2f}, "
+            f"quality={float(row.get('quality_score', 0.0)):,.2f}, "
+            f"max_dd={float(row.get('max_drawdown_pct', 0.0)):,.2f}%, "
+            f"win_rate={float(row.get('win_rate_pct', 0.0)):,.2f}%, "
+            f"profit_factor={float(row.get('profit_factor', 0.0)):,.2f}, "
+            f"positive_month_rate={float(row.get('positive_month_rate_pct', 0.0)):,.2f}%, "
+            f"losing_months={int(row.get('losing_months', 0))}, "
+            f"worst_month={row.get('worst_month', '')} "
+            f"({float(row.get('worst_month_pnl', 0.0)):,.2f})"
+        ),
+        "",
+        "Current best parameters:",
+    ]
+    for k in _CONFIG_PRINT_FIELDS:
+        if k in row:
+            lines.append(f"  {k} = {row[k]!r}")
+
+    lines.extend([
+        "",
+        "Copy-paste StrategyConfig body:",
+        _strategy_config_block(row),
+        "",
+        f"monthly_pnl_json = {row.get('monthly_pnl_json', '{}')}",
+    ])
+    return "\n".join(lines)
+
+
+def _write_live_best_json(row: dict, path: Path) -> None:
+    """Write best-so-far JSON immediately, before the sweep finishes."""
+    path.write_text(json.dumps(_best_snapshot(row), indent=2, default=str))
+
+
+def _write_live_best_config(row: dict, path: Path) -> None:
+    """Write copy-paste-ready StrategyConfig field assignments."""
+    text = "\n".join([
+        "# Copy these values into xauusd_trading/core/config.py StrategyConfig",
+        _strategy_config_block(row),
+        "",
+    ])
+    path.write_text(text)
 
 
 def _print_top(df: pd.DataFrame, n: int, title: str, sort_col: str) -> None:
@@ -682,17 +782,24 @@ def main() -> int:
         return 0
 
     chart_paths = _expand_chart_paths(args.charts)
+    out_path = Path(args.output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
     print(f"Workers: {args.workers}")
     print(f"Chart files: {len(chart_paths)}")
     if args.progress_interval_minutes > 0:
         print(f"Progress heartbeat: every {args.progress_interval_minutes:g} minutes")
     else:
         print("Progress heartbeat: disabled; completion-step progress only")
+    print(f"Live best files: {out_path.with_suffix('.live_best_pnl.json').resolve()} and "
+          f"{out_path.with_suffix('.live_best_quality.json').resolve()}")
 
     start = time.time()
     results: list[dict] = []
     completed = 0
     total = len(combos)
+    best_quality_seen = float("-inf")
+    best_pnl_seen = float("-inf")
     progress_interval = max(0.0, args.progress_interval_minutes) * 60.0
     next_heartbeat = start + progress_interval if progress_interval > 0 else float("inf")
     step = max(1, total // 50)
@@ -714,6 +821,22 @@ def main() -> int:
                 results.append(result)
                 completed += 1
                 got_result = True
+
+                quality = float(result.get("quality_score", float("-inf")))
+                pnl = float(result.get("net_profit", float("-inf")))
+
+                if quality > best_quality_seen:
+                    best_quality_seen = quality
+                    print(_format_new_best("QUALITY", result, completed, total, start), flush=True)
+                    _write_live_best_json(result, out_path.with_suffix(".live_best_quality.json"))
+                    _write_live_best_config(result, out_path.with_suffix(".live_best_quality_config.py"))
+
+                if pnl > best_pnl_seen:
+                    best_pnl_seen = pnl
+                    print(_format_new_best("PNL", result, completed, total, start), flush=True)
+                    _write_live_best_json(result, out_path.with_suffix(".live_best_pnl.json"))
+                    _write_live_best_config(result, out_path.with_suffix(".live_best_pnl_config.py"))
+
             except mp.TimeoutError:
                 pass
 
@@ -740,8 +863,6 @@ def main() -> int:
           f"({elapsed / max(len(results), 1):.2f}s per config).")
 
     df = pd.DataFrame(results)
-    out_path = Path(args.output)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_path, index=False)
     print(f"\nSaved full results: {out_path.resolve()}")
 
