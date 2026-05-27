@@ -19,10 +19,11 @@ Validated high-growth contract from the uploaded provider signal sample:
 - SL x1.5
 - TP3 final target
 - TP1 and TP2 stop locks enabled
+- closed-lot bonus/rebate: $3 per closed lot
 
 Observed snapshot from backtest on the uploaded sample:
 
-- max drawdown stayed just below 50%
+- max drawdown stayed just below 50% before the stricter 40% objective
 - average monthly return was above 20%
 - this is aggressive and should be forward-tested before live size
 """
@@ -46,6 +47,10 @@ class StrategyConfig:
     risk_per_signal: float = 0.12
     minimum_lot: float = 0.01
     lot_step: float = 0.01
+
+    # Bonus/rebate. Broker bonus is modeled as cash received for every lot that
+    # closes. Set to 0.0 to reproduce pure trading P&L.
+    bonus_per_closed_lot: float = 3.0
 
     # Entry plan.
     entry_count: int = 3
