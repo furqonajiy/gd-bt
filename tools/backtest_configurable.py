@@ -17,6 +17,7 @@ Example:
       --max-hold 90 \
       --sl-multiplier 1.5 \
       --final-target TP3 \
+      --bonus-per-closed-lot 3 \
       --max-drawdown-limit-pct 40
 """
 from __future__ import annotations
@@ -70,6 +71,7 @@ def _config_from_args(args: argparse.Namespace) -> StrategyConfig:
         risk_per_signal=args.risk,
         minimum_lot=args.minimum_lot,
         lot_step=args.lot_step,
+        bonus_per_closed_lot=args.bonus_per_closed_lot,
         entry_count=args.entries,
         entry_ladder=args.entry_ladder,
         entry_sl_gap=args.entry_sl_gap,
@@ -150,6 +152,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--risk", type=float, default=DEFAULT_CONFIG.risk_per_signal)
     p.add_argument("--minimum-lot", type=float, default=DEFAULT_CONFIG.minimum_lot)
     p.add_argument("--lot-step", type=float, default=DEFAULT_CONFIG.lot_step)
+    p.add_argument(
+        "--bonus-per-closed-lot",
+        type=float,
+        default=DEFAULT_CONFIG.bonus_per_closed_lot,
+        help="Cash bonus/rebate per closed lot. Use 3 for $3/lot, or 0 for pure trading P&L.",
+    )
 
     p.add_argument("--entries", type=int, default=DEFAULT_CONFIG.entry_count)
     p.add_argument(
