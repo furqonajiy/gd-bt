@@ -1,32 +1,35 @@
 """Strategy configuration.
 
-Default strategy: latest sweep Best PnL candidate.
+Default strategy: bonus-aware high-growth provider execution contract.
 
-The default mirrors the current broad-sweep highest-PnL candidate supplied from
-`sweep_risk`:
+This branch is optimized for provider-style VICTOR XAUUSD signals filtered by
+``high_growth_hour_side``. The same defaults are used by backtest, ``decide``,
+``manage``, and ``auto`` unless explicitly overridden.
 
-- fixed sizing at 0.5 lot per entry
-- 3 signal-range entries
+Current best bonus-aware candidate from the uploaded provider signal sample:
+
+- filtered signal file using high_growth_hour_side
+- initial capital: 10,000
+- sizing: risk mode
+- risk per signal: 10%
+- 4 range-uniform entries
 - 2-minute activation delay
 - 5-minute pending TIF
 - 90-minute max hold
 - SL x1.5
 - TP3 final target
 - TP1 and TP2 stop locks enabled
+- closed-lot bonus/rebate: $3 per closed lot
 
-Latest observed sweep snapshot:
+Observed snapshot from local validation on the uploaded sample:
 
-- net_profit: 59,339.50
-- quality_score: 54,866.06
-- max_drawdown_pct: -76.67
-- win_rate_pct: 66.59
-- profit_factor: 1.24
-- positive_month_rate_pct: 61.54
-- losing_months: 10
-- worst_month: 2025-05 (-4,038.50)
+- net profit including bonus: about +$1.475M
+- trading P&L: about +$1.457M
+- closed-lot bonus: about +$18.4k
+- max drawdown: about -39.75%
 
-Note: this is the highest-PnL default, not necessarily the safest drawdown
-profile. Re-run tools/sweep.py after material signal/chart-data changes.
+This is extremely aggressive and should be paper/forward-tested before live
+size. Use LOWER_RISK_PROVIDER_CONFIG for warm-up.
 """
 from __future__ import annotations
 from dataclasses import dataclass, replace
@@ -39,20 +42,23 @@ CHART_TIMEZONE_OFFSET = 3      # MT5 CSV is GMT+3
 
 @dataclass(frozen=True)
 class StrategyConfig:
-    initial_capital: float = 1000.0
+    initial_capital: float = 10_000.0
 
-    # Sizing. Default is fixed-lot because the selected best-PnL candidate was
-    # evaluated with fixed 0.5 lot per entry. Set sizing_mode="risk" to use
-    # risk_per_signal instead.
-    sizing_mode: str = "fixed"             # "fixed" | "risk"
+    # High-growth provider contract uses risk sizing. This makes live auto scale
+    # lots from current MT5 equity and match the risk-mode backtest behavior.
+    sizing_mode: str = "risk"              # "fixed" | "risk"
     lot_per_entry: float = 0.5
-    risk_per_signal: float = 0.05
+    risk_per_signal: float = 0.10
     minimum_lot: float = 0.01
     lot_step: float = 0.01
 
+    # Bonus/rebate. Broker bonus is modeled as cash received for every lot that
+    # closes. Set to 0.0 to reproduce pure trading P&L.
+    bonus_per_closed_lot: float = 3.0
+
     # Entry plan.
-    entry_count: int = 3
-    entry_ladder: str = "signal_range_3"   # "signal_range_3" | "range_uniform" | "range_to_sl"
+    entry_count: int = 4
+    entry_ladder: str = "range_uniform"    # "signal_range_3" | "range_uniform" | "range_to_sl"
     entry_sl_gap: float = 2.0               # only used when entry_ladder="range_to_sl"
 
     # Execution timing.
@@ -71,10 +77,17 @@ DEFAULT_CONFIG = StrategyConfig()
 BEST_PNL_CONFIG = DEFAULT_CONFIG
 BALANCED_LIVE_CONFIG = DEFAULT_CONFIG
 
+# Safer reference for paper/live warm-up.
+LOWER_RISK_PROVIDER_CONFIG = replace(
+    DEFAULT_CONFIG,
+    risk_per_signal=0.02,
+)
+
 # Reference variants that should always be compared in sweeps.
 HIGHEST_PROFIT_CONFIG = replace(
     DEFAULT_CONFIG,
     entry_count=3,
+    entry_ladder="signal_range_3",
     activation_delay_minutes=0,
     pending_expiry_minutes=20,
     max_hold_minutes=30,

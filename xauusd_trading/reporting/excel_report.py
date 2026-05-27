@@ -47,6 +47,11 @@ STATUS_FILL = {
 
 # Distinct from NO_FILL gray so a quiet day doesn't look like a failed entry.
 QUIET_DAY_FILL = PatternFill("solid", fgColor="F5F5F5")
+PROFIT_FILL = PatternFill("solid", fgColor="C6EFCE")
+LOSS_FILL = PatternFill("solid", fgColor="FFC7CE")
+WARNING_FILL = PatternFill("solid", fgColor="FCE4D6")
+BONUS_FILL = PatternFill("solid", fgColor="DDEBF7")
+LOTS_FILL = PatternFill("solid", fgColor="E2F0D9")
 
 THIN = Side(border_style="thin", color="BFBFBF")
 GRID = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
@@ -99,6 +104,25 @@ def _apply_status_fill(ws: Worksheet, row: int, ncols: int, status: str) -> None
     _apply_row_fill(ws, row, ncols, fill)
 
 
+def _style_money_cell(cell, money_fmt: str, value: float | None = None) -> None:
+    cell.number_format = money_fmt
+    if value is None:
+        return
+    if value > 0:
+        cell.font = Font(color="006100", bold=True)
+    elif value < 0:
+        cell.font = Font(color="9C0006", bold=True)
+
+
+def _style_pct_cell(cell, value: float | None = None) -> None:
+    if value is None:
+        return
+    if value > 0:
+        cell.font = Font(color="006100", bold=True)
+    elif value < 0:
+        cell.font = Font(color="9C0006", bold=True)
+
+
 # ---------------------------------------------------------------------------
 # Summary sheet
 # ---------------------------------------------------------------------------
@@ -118,14 +142,18 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
     row += 1
     config_pairs = [
         ("Initial capital", f"${cfg.get('initial_capital', 0):,.2f}"),
+        ("Sizing mode", cfg.get("sizing_mode")),
         ("Risk per signal", f"{cfg.get('risk_per_signal', 0) * 100:.2f}%"),
         ("Entry count", cfg.get("entry_count")),
+        ("Entry ladder", cfg.get("entry_ladder")),
         ("Activation delay (min)", cfg.get("activation_delay_minutes")),
         ("Pending expiry (min)", cfg.get("pending_expiry_minutes")),
         ("Max hold (min)", cfg.get("max_hold_minutes")),
         ("SL multiplier", cfg.get("sl_multiplier")),
         ("Final target", cfg.get("final_target")),
         ("Lock after TP1", cfg.get("lock_after_tp1")),
+        ("Lock after TP2", cfg.get("lock_after_tp2")),
+        ("Bonus / closed lot", f"${cfg.get('bonus_per_closed_lot', 0):,.2f}"),
         ("Minimum lot", cfg.get("minimum_lot")),
         ("Lot step", cfg.get("lot_step")),
         ("Chart start", result.get("chart_start")),
@@ -149,7 +177,10 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
 
     perf_pairs = [
         ("Final equity", f"${final:,.2f}"),
-        ("Net profit", f"${net:,.2f}"),
+        ("Net profit incl. bonus", f"${net:,.2f}"),
+        ("Trading P&L", f"${result.get('trading_pnl', 0):,.2f}"),
+        ("Closed-lot bonus", f"${result.get('bonus', 0):,.2f}"),
+        ("Closed lots", f"{result.get('closed_lots', 0):,.2f}"),
         ("Return", f"{return_pct:+.2f}%"),
         ("Realized P&L", f"${result.get('realized_pnl', 0):,.2f}"),
         ("Max drawdown", f"{result.get('max_drawdown_pct', 0):.2f}%"),
@@ -170,33 +201,54 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
     row += 1
     ws.cell(row=row, column=1, value="Monthly Breakdown").font = SUBHEADER_FONT
     ws.cell(row=row, column=1).fill = SUBHEADER_FILL
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=12)
     row += 1
     headers = ["Month", "Signals", "Wins", "Losses", "No-fills",
-               "Win rate", "P&L", "P&L %", "Equity end-of-month"]
+               "Win rate", "Trading P&L", "Bonus", "Closed lots",
+               "Net P&L", "P&L %", "Equity end-of-month"]
     _write_header(ws, row, headers)
     row += 1
 
     money_fmt = '"$"#,##0.00;[Red]-"$"#,##0.00'
+    lot_fmt = "0.00"
 
     monthly = result.get("monthly", []) or []
     for m in monthly:
+        pnl = m.get("pnl", 0.0) or 0.0
+        pnl_pct = m.get("pnl_pct", 0.0) or 0.0
+        signals = m.get("signals", 0) or 0
         cells = [
             m.get("month"),
-            m.get("signals"),
+            signals,
             m.get("wins"),
             m.get("losses"),
             m.get("no_fills"),
             f"{m.get('win_rate_pct', 0):.1f}%",
-            m.get("pnl", 0.0),
-            f"{m.get('pnl_pct', 0):+.2f}%",
+            m.get("trading_pnl", pnl - (m.get("bonus", 0.0) or 0.0)),
+            m.get("bonus", 0.0),
+            m.get("closed_lots", 0.0),
+            pnl,
+            f"{pnl_pct:+.2f}%",
             m.get("equity_end"),
         ]
+        if signals == 0:
+            _apply_row_fill(ws, row, len(headers), QUIET_DAY_FILL)
+        elif pnl > 0:
+            _apply_row_fill(ws, row, len(headers), PROFIT_FILL)
+        elif pnl < 0:
+            _apply_row_fill(ws, row, len(headers), LOSS_FILL)
         for c, v in enumerate(cells, start=1):
             cell = ws.cell(row=row, column=c, value=v)
             cell.border = GRID
-            if c in (7, 9):
-                cell.number_format = money_fmt
+            if c in (7, 8, 10, 12):
+                _style_money_cell(cell, money_fmt, float(v or 0.0) if isinstance(v, (int, float)) else None)
+            elif c == 9:
+                cell.number_format = lot_fmt
+                cell.fill = LOTS_FILL
+            elif c == 11:
+                _style_pct_cell(cell, pnl_pct)
+            if c == 8:
+                cell.fill = BONUS_FILL
         row += 1
 
     ws.freeze_panes = "A2"
@@ -210,15 +262,26 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
 def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
     ws.title = "Daily Breakdown"
     headers = ["Date", "Signals", "Wins", "Losses", "No-fills",
-               "Win rate", "P&L", "P&L %", "Equity end-of-day"]
+               "Win rate", "Trading P&L", "Bonus", "Closed lots",
+               "Net P&L", "P&L %", "Equity end-of-day", "Drawdown %"]
     _write_header(ws, 1, headers)
 
     money_fmt = '"$"#,##0.00;[Red]-"$"#,##0.00'
+    lot_fmt = "0.00"
     daily = result.get("daily", []) or []
+    peak_equity = (result.get("config", {}) or {}).get("initial_capital", 0) or 0
 
     for r_idx, d in enumerate(daily, start=2):
         signals = d.get("signals", 0) or 0
         pnl = d.get("pnl", 0.0) or 0.0
+        trading_pnl = d.get("trading_pnl", pnl - (d.get("bonus", 0.0) or 0.0)) or 0.0
+        bonus = d.get("bonus", 0.0) or 0.0
+        closed_lots = d.get("closed_lots", 0.0) or 0.0
+        equity_end = d.get("equity_end", 0.0) or 0.0
+        if equity_end > peak_equity:
+            peak_equity = equity_end
+        drawdown_pct = (equity_end - peak_equity) / peak_equity * 100.0 if peak_equity else 0.0
+        pnl_pct = d.get("pnl_pct", 0.0) or 0.0
 
         cells = [
             d.get("date"),
@@ -227,23 +290,41 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
             d.get("losses", 0),
             d.get("no_fills", 0),
             f"{d.get('win_rate_pct', 0):.1f}%" if signals else "-",
+            trading_pnl,
+            bonus,
+            closed_lots,
             pnl,
-            f"{d.get('pnl_pct', 0):+.2f}%",
-            d.get("equity_end"),
+            f"{pnl_pct:+.2f}%",
+            equity_end,
+            f"{drawdown_pct:.2f}%",
         ]
+
+        # Row coloring: gray = no activity, green = net positive, red = net negative.
+        # Orange warning = active day with drawdown below -20%.
+        if signals == 0:
+            _apply_row_fill(ws, r_idx, len(headers), QUIET_DAY_FILL)
+        elif drawdown_pct <= -20.0:
+            _apply_row_fill(ws, r_idx, len(headers), WARNING_FILL)
+        elif pnl > 0:
+            _apply_row_fill(ws, r_idx, len(headers), PROFIT_FILL)
+        elif pnl < 0:
+            _apply_row_fill(ws, r_idx, len(headers), LOSS_FILL)
+
         for c_idx, v in enumerate(cells, start=1):
             cell = ws.cell(row=r_idx, column=c_idx, value=v)
             cell.border = GRID
-            if c_idx in (7, 9):
-                cell.number_format = money_fmt
-
-        # Row coloring: gray = no activity, green = net positive, red = net negative.
-        if signals == 0:
-            _apply_row_fill(ws, r_idx, len(headers), QUIET_DAY_FILL)
-        elif pnl > 0:
-            _apply_row_fill(ws, r_idx, len(headers), STATUS_FILL["WIN"])
-        elif pnl < 0:
-            _apply_row_fill(ws, r_idx, len(headers), STATUS_FILL["LOSS"])
+            if c_idx in (7, 8, 10, 12):
+                _style_money_cell(cell, money_fmt, float(v or 0.0) if isinstance(v, (int, float)) else None)
+            elif c_idx == 9:
+                cell.number_format = lot_fmt
+                cell.fill = LOTS_FILL
+            elif c_idx in (11, 13):
+                _style_pct_cell(cell, pnl_pct if c_idx == 11 else drawdown_pct)
+            if c_idx == 8:
+                cell.fill = BONUS_FILL
+            if c_idx == 13 and drawdown_pct <= -20.0:
+                cell.fill = WARNING_FILL
+                cell.font = Font(color="9C6500", bold=True)
 
     ws.freeze_panes = "A2"
     if daily:
@@ -281,7 +362,10 @@ ENTRY_COLUMNS = [
     ("exit_time", "Exit Time", "datetime"),
     ("exit_price", "Exit Price", "price"),
     ("stop_at_exit", "Stop @ Exit", "price"),
-    ("pnl", "P&L", "money"),
+    ("trading_pnl", "Trading P&L", "money"),
+    ("closed_lots", "Closed Lots", "lot"),
+    ("bonus", "Bonus", "money"),
+    ("pnl", "Net P&L", "money"),
     ("first_fill_time", "1st Fill (sig)", "datetime"),
     ("time_exit_deadline", "Time Exit Deadline", "datetime"),
     ("signal_status", "Sig Status", None),
@@ -308,12 +392,21 @@ def _write_entries_sheet(ws: Worksheet, result: dict) -> None:
             cell = ws.cell(row=r_idx, column=c_idx, value=value)
             cell.border = GRID
             if kind == "money":
-                cell.number_format = money_fmt
+                _style_money_cell(cell, money_fmt, float(value or 0.0) if isinstance(value, (int, float)) else None)
             elif kind == "price":
                 cell.number_format = price_fmt
             elif kind == "lot":
                 cell.number_format = lot_fmt
+            if key == "bonus":
+                cell.fill = BONUS_FILL
+            elif key == "closed_lots":
+                cell.fill = LOTS_FILL
         _apply_status_fill(ws, r_idx, len(headers), row.get("entry_status", ""))
+        # Re-highlight bonus and closed-lot cells after status row fill.
+        bonus_col = [c[0] for c in ENTRY_COLUMNS].index("bonus") + 1
+        lots_col = [c[0] for c in ENTRY_COLUMNS].index("closed_lots") + 1
+        ws.cell(row=r_idx, column=bonus_col).fill = BONUS_FILL
+        ws.cell(row=r_idx, column=lots_col).fill = LOTS_FILL
 
     ws.freeze_panes = "A2"
     if rows:
