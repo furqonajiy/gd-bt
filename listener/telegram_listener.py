@@ -216,29 +216,30 @@ def parse_victor_signal(raw_text: str) -> Optional[ParsedSignal]:
 
 
 # ---------------------------------------------------------------------------
-# signal sanity auto-correction
+# signal sanity auto-correction + RR classification
 # ---------------------------------------------------------------------------
 #
-# IMPORTANT:
-# Do NOT force VICTOR signals into fixed geometry like:
-#   BUY  SL = entry - 5, TP1 +10, TP2 +20, TP3 +40
-#   SELL SL = entry + 5, TP1 -10, TP2 -20, TP3 -40
+# The listener must NOT rewrite signals just to improve risk:reward.
 #
-# Based on manual review, the correct rule is:
-#   1. Preserve the posted SL/TP values whenever they are structurally valid.
-#   2. Correct only obvious typos:
-#      - range width not equal to 2
-#      - SL on the wrong side
-#      - TP on the wrong side
-#      - TP order inconsistent
-#      - extra zero / wrong hundreds digit, e.g. 47802 -> 4802
-#      - RR to TP3 below 1:2
-#   3. Enforce minimum RR to TP3 >= 1:2 across all 3 planned entries.
+# Correct only impossible/obvious typo cases:
+#   - SL on the wrong side of the range
+#   - TP on the wrong side of the range
+#   - TP order inconsistent with BUY/SELL direction
+#   - extra-zero / wrong-hundreds typo, e.g. 47802 -> 4802
+#   - range typo only when it makes SL/TP structurally impossible
+#
+# After correction, classify the signal using the BEST laddered entry:
+#   BUY  best entry = lowest entry
+#   SELL best entry = highest entry
+#
+#   GOOD_TP1_RR if TP1 reward from best entry >= risk to SL
+#   LOW_TP1_RR  otherwise
+#
+# LOW_TP1_RR is a warning/filter for backtesting. It is not an auto-correction.
 
 _CORRECTION_TOL = 1e-6
 _EXPECTED_RANGE_WIDTH = 2.0
-_MIN_TP3_RR = 2.0
-_MIN_STOP_DISTANCE_FROM_RANGE = 3.0
+_MIN_TP1_RR_BEST_ENTRY = 1.0
 
 _LEVEL_STEPS = (
     -500.0, -400.0, -300.0, -200.0, -100.0,
@@ -248,22 +249,23 @@ _LEVEL_STEPS = (
     100.0, 200.0, 300.0, 400.0, 500.0,
 )
 _RANGE_SHIFT_STEPS = (-500.0, -400.0, -300.0, -200.0, -100.0, 0.0, 100.0, 200.0, 300.0, 400.0, 500.0)
-_COMMON_STOP_DISTANCES = (4.0, 5.0, 6.0, 7.0, 7.5, 8.0, 10.0, 12.0, 15.0, 20.0)
 
 
 @dataclass
 class GeometryFix:
-    """Result of signal sanity correction.
-
-    Kept as GeometryFix so the rest of telegram_listener.py does not need
-    to change. `changes` is used by the existing notification flow.
-    """
+    """Result of signal sanity correction and RR classification."""
     corrected: ParsedSignal
     changes: list[str]
+    rr_bucket: str = "UNKNOWN_RR"
+    tp1_rr_best_entry: Optional[float] = None
 
     @property
     def changed(self) -> bool:
         return bool(self.changes)
+
+    @property
+    def is_low_tp1_rr(self) -> bool:
+        return self.rr_bucket == "LOW_TP1_RR"
 
 
 def _price_key(x: float) -> str:
@@ -299,6 +301,13 @@ def _entry_levels(side: str, r1: float, r2: float) -> list[float]:
     return [low, low + 1.0, high]
 
 
+def _best_ladder_entry(side: str, r1: float, r2: float) -> float:
+    entries = _entry_levels(side, r1, r2)
+    if side == "BUY":
+        return min(entries)
+    return max(entries)
+
+
 def _tp_order_ok(side: str, r1: float, r2: float, tp1: float, tp2: float, tp3: float) -> bool:
     high, low = _range_bounds(r1, r2)
     if side == "BUY":
@@ -313,43 +322,20 @@ def _sl_side_ok(side: str, r1: float, r2: float, sl: float) -> bool:
     return sl > high
 
 
-def _stop_distance_ok(side: str, r1: float, r2: float, sl: float) -> bool:
-    high, low = _range_bounds(r1, r2)
-    if side == "BUY":
-        return (low - sl) >= _MIN_STOP_DISTANCE_FROM_RANGE
-    return (sl - high) >= _MIN_STOP_DISTANCE_FROM_RANGE
-
-
-def _tp3_rr_values(side: str, r1: float, r2: float, sl: float, tp3: float) -> list[float]:
-    ratios: list[float] = []
-    for entry in _entry_levels(side, r1, r2):
-        if side == "BUY":
-            risk = entry - sl
-            reward = tp3 - entry
-        else:
-            risk = sl - entry
-            reward = entry - tp3
-        if risk <= 0 or reward <= 0:
-            return []
-        ratios.append(reward / risk)
-    return ratios
-
-
-def _tp3_rr_ok(side: str, r1: float, r2: float, sl: float, tp3: float) -> bool:
-    ratios = _tp3_rr_values(side, r1, r2, sl, tp3)
-    return bool(ratios) and min(ratios) + _CORRECTION_TOL >= _MIN_TP3_RR
+def _structural_ok(side: str, r1: float, r2: float, sl: float, tp1: float, tp2: float, tp3: float) -> bool:
+    return _sl_side_ok(side, r1, r2, sl) and _tp_order_ok(side, r1, r2, tp1, tp2, tp3)
 
 
 def _logic_error_count(side: str, r1: float, r2: float, sl: float, tp1: float, tp2: float, tp3: float) -> int:
+    """Lower is better. RR is intentionally NOT part of correction scoring."""
     errors = 0
     if not _range_width_ok(r1, r2):
-        errors += 100
+        # Width 3 may be valid historically, so keep it as a weak penalty only.
+        errors += 1 if abs(abs(r1 - r2) - 3.0) <= _CORRECTION_TOL else 20
     if not _sl_side_ok(side, r1, r2, sl):
         errors += 30
     if not _tp_order_ok(side, r1, r2, tp1, tp2, tp3):
         errors += 30
-    if not _tp3_rr_ok(side, r1, r2, sl, tp3):
-        errors += 10
     return errors
 
 
@@ -382,14 +368,15 @@ def _choose_price(current: float, candidates: list[float], predicate: Callable[[
 
 
 def _choose_range(parsed: ParsedSignal) -> tuple[float, float]:
-    """Choose the most plausible corrected range.
+    """Correct range only when the original makes SL/TP structurally impossible.
 
-    If the range already has width 2 and the surrounding SL/TP are valid,
-    it is preserved. If a wrong-hundreds typo is obvious from SL/TP, both
-    range values can shift. If only the second range value is mistyped, r1
-    is trusted and r2 is repaired to r1 +/- 2.
+    Historical VICTOR signals sometimes have width 3. Do not force those to
+    width 2 if SL/TP direction is already valid.
     """
     side = parsed.side.upper()
+    if _structural_ok(side, parsed.r1, parsed.r2, parsed.sl, parsed.tp1, parsed.tp2, parsed.tp3):
+        return parsed.r1, parsed.r2
+
     candidates: list[tuple[float, float]] = []
 
     def add(r1: float, r2: float) -> None:
@@ -409,29 +396,17 @@ def _choose_range(parsed: ParsedSignal) -> tuple[float, float]:
             add(sr1, sr1 + 2.0)
             add(sr1, sr1 - 2.0)
 
-    def score(pair: tuple[float, float]) -> tuple[int, float, float]:
+    def score(pair: tuple[float, float]) -> tuple[int, float]:
         r1, r2 = pair
         errors = _logic_error_count(side, r1, r2, parsed.sl, parsed.tp1, parsed.tp2, parsed.tp3)
-        if _range_width_ok(parsed.r1, parsed.r2):
-            direction_penalty = 0.0
-        elif side == "BUY":
-            direction_penalty = 0.0 if r2 <= r1 else 1.0
-        else:
-            direction_penalty = 0.0 if r2 >= r1 else 1.0
         movement = abs(r1 - parsed.r1) + abs(r2 - parsed.r2)
-        return errors, direction_penalty, movement
+        return errors, movement
 
     return min(candidates, key=score)
 
 
 def _tp3_outlier(side: str, tp1: float, tp2: float, tp3: float) -> bool:
-    """Flag likely wrong-hundreds TP3 typos that are directionally valid.
-
-    Example found in the historical feed:
-      BUY 4560 - 4558 ... TP1 4568 TP2 4578 TP3 4698
-    TP3 is on the correct side, but it is ~120 above TP2 while the normal
-    TP step is ~10-20. This should become 4598, not stay 4698.
-    """
+    """Flag likely wrong-hundreds TP3 typos that are directionally valid."""
     normal_step = max(abs(tp2 - tp1), 1.0)
     max_expected_step = max(50.0, normal_step * 4.0)
     if side == "BUY":
@@ -444,63 +419,58 @@ def _fix_tp_levels(side: str, r1: float, r2: float, sl: float, tp1: float, tp2: 
     anchor = (r1 + r2) / 2.0
 
     if side == "BUY":
-        tp1 = _choose_price(tp1, _candidate_prices(tp1, anchor), lambda c: c > high and c < tp2, anchor)
-        tp2 = _choose_price(tp2, _candidate_prices(tp2, anchor), lambda c: c > tp1 and c < tp3, anchor)
-        tp3_candidates = _candidate_prices(tp3, anchor)
-        if _tp3_outlier(side, tp1, tp2, tp3):
-            tp3_candidates = [c for c in tp3_candidates if abs(c - tp3) > _CORRECTION_TOL]
-        tp3 = _choose_price(tp3, tp3_candidates, lambda c: c > tp2, anchor)
+        if not (tp1 > high and tp1 < tp2):
+            tp1 = _choose_price(tp1, _candidate_prices(tp1, anchor), lambda c: c > high and c < tp2, anchor)
+        if not (tp2 > tp1 and tp2 < tp3):
+            tp2 = _choose_price(tp2, _candidate_prices(tp2, anchor), lambda c: c > tp1 and c < tp3, anchor)
+        if not (tp3 > tp2) or _tp3_outlier(side, tp1, tp2, tp3):
+            tp3_candidates = _candidate_prices(tp3, anchor)
+            if _tp3_outlier(side, tp1, tp2, tp3):
+                tp3_candidates = [c for c in tp3_candidates if abs(c - tp3) > _CORRECTION_TOL]
+            tp3 = _choose_price(tp3, tp3_candidates, lambda c: c > tp2, anchor)
     else:
-        tp1 = _choose_price(tp1, _candidate_prices(tp1, anchor), lambda c: c < low and c > tp2, anchor)
-        tp2 = _choose_price(tp2, _candidate_prices(tp2, anchor), lambda c: c < tp1 and c > tp3, anchor)
-        tp3_candidates = _candidate_prices(tp3, anchor)
-        if _tp3_outlier(side, tp1, tp2, tp3):
-            tp3_candidates = [c for c in tp3_candidates if abs(c - tp3) > _CORRECTION_TOL]
-        tp3 = _choose_price(tp3, tp3_candidates, lambda c: c < tp2, anchor)
+        if not (tp1 < low and tp1 > tp2):
+            tp1 = _choose_price(tp1, _candidate_prices(tp1, anchor), lambda c: c < low and c > tp2, anchor)
+        if not (tp2 < tp1 and tp2 > tp3):
+            tp2 = _choose_price(tp2, _candidate_prices(tp2, anchor), lambda c: c < tp1 and c > tp3, anchor)
+        if not (tp3 < tp2) or _tp3_outlier(side, tp1, tp2, tp3):
+            tp3_candidates = _candidate_prices(tp3, anchor)
+            if _tp3_outlier(side, tp1, tp2, tp3):
+                tp3_candidates = [c for c in tp3_candidates if abs(c - tp3) > _CORRECTION_TOL]
+            tp3 = _choose_price(tp3, tp3_candidates, lambda c: c < tp2, anchor)
 
     return tp1, tp2, tp3
 
 
-def _rr_boundary_sl(side: str, r1: float, r2: float, tp3: float) -> float:
-    entries = _entry_levels(side, r1, r2)
-    if side == "BUY":
-        return max(entry - ((tp3 - entry) / _MIN_TP3_RR) for entry in entries)
-    return min(entry + ((entry - tp3) / _MIN_TP3_RR) for entry in entries)
-
-
-def _fix_sl_level(side: str, r1: float, r2: float, sl: float, tp3: float) -> float:
+def _fix_sl_level(side: str, r1: float, r2: float, sl: float) -> float:
+    """Fix SL only when it is on the wrong side. RR never moves SL."""
     high, low = _range_bounds(r1, r2)
     anchor = (r1 + r2) / 2.0
     candidates = _candidate_prices(sl, anchor)
 
     if side == "BUY":
-        candidates.extend(low - d for d in _COMMON_STOP_DISTANCES)
-        candidates.append(_rr_boundary_sl(side, r1, r2, tp3))
+        return _choose_price(sl, candidates, lambda c: c < low, anchor)
+    return _choose_price(sl, candidates, lambda c: c > high, anchor)
+
+
+def _classify_tp1_rr(parsed: ParsedSignal) -> tuple[str, Optional[float]]:
+    side = parsed.side.upper()
+    entry = _best_ladder_entry(side, parsed.r1, parsed.r2)
+
+    if side == "BUY":
+        risk = entry - parsed.sl
+        reward = parsed.tp1 - entry
     else:
-        candidates.extend(high + d for d in _COMMON_STOP_DISTANCES)
-        candidates.append(_rr_boundary_sl(side, r1, r2, tp3))
+        risk = parsed.sl - entry
+        reward = entry - parsed.tp1
 
-    candidates = _dedupe_prices(candidates)
+    if risk <= 0 or reward <= 0:
+        return "INVALID_RR", None
 
-    def strict_predicate(c: float) -> bool:
-        return (
-                _sl_side_ok(side, r1, r2, c)
-                and _stop_distance_ok(side, r1, r2, c)
-                and _tp3_rr_ok(side, r1, r2, c, tp3)
-        )
-
-    fixed = _choose_price(sl, candidates, strict_predicate, anchor)
-    if fixed != sl:
-        return fixed
-
-    def rr_predicate(c: float) -> bool:
-        return _sl_side_ok(side, r1, r2, c) and _tp3_rr_ok(side, r1, r2, c, tp3)
-
-    fixed = _choose_price(sl, candidates, rr_predicate, anchor)
-    if fixed != sl:
-        return fixed
-
-    return _choose_price(sl, candidates, lambda c: _sl_side_ok(side, r1, r2, c), anchor)
+    rr = reward / risk
+    if rr + _CORRECTION_TOL >= _MIN_TP1_RR_BEST_ENTRY:
+        return "GOOD_TP1_RR", rr
+    return "LOW_TP1_RR", rr
 
 
 def _add_change(changes: list[str], field: str, old: float, new: float) -> None:
@@ -509,16 +479,16 @@ def _add_change(changes: list[str], field: str, old: float, new: float) -> None:
 
 
 def apply_signal_corrections(parsed: ParsedSignal) -> GeometryFix:
-    """Apply flexible sanity correction to a parsed Telegram signal.
+    """Apply logic-only correction, then classify RR.
 
-    This intentionally does NOT convert every signal to fixed -5/+10/+20/+40
-    geometry. It preserves valid variable SL/TP signals.
+    This intentionally does NOT tighten SL or change TP values just to improve
+    risk:reward. LOW_TP1_RR is only a warning/filter for backtesting.
     """
     side = parsed.side.upper()
     changes: list[str] = []
 
     if side not in ("BUY", "SELL"):
-        return GeometryFix(corrected=parsed, changes=[])
+        return GeometryFix(corrected=parsed, changes=[], rr_bucket="UNKNOWN_RR", tp1_rr_best_entry=None)
 
     new_r1, new_r2 = _choose_range(parsed)
     if abs(new_r1 - parsed.r1) > _CORRECTION_TOL or abs(new_r2 - parsed.r2) > _CORRECTION_TOL:
@@ -534,16 +504,12 @@ def apply_signal_corrections(parsed: ParsedSignal) -> GeometryFix:
     _add_change(changes, "TP3", parsed.tp3, new_tp3)
 
     new_sl = parsed.sl
-    needs_sl_fix = (
-            not _sl_side_ok(side, new_r1, new_r2, new_sl)
-            or not _stop_distance_ok(side, new_r1, new_r2, new_sl)
-            or not _tp3_rr_ok(side, new_r1, new_r2, new_sl, new_tp3)
-    )
-    if needs_sl_fix:
-        new_sl = _fix_sl_level(side, new_r1, new_r2, new_sl, new_tp3)
+    if not _sl_side_ok(side, new_r1, new_r2, new_sl):
+        new_sl = _fix_sl_level(side, new_r1, new_r2, new_sl)
     _add_change(changes, "SL", parsed.sl, new_sl)
 
     corrected = ParsedSignal(side=side, r1=new_r1, r2=new_r2, sl=new_sl, tp1=new_tp1, tp2=new_tp2, tp3=new_tp3)
+    rr_bucket, tp1_rr = _classify_tp1_rr(corrected)
 
     final_errors = _logic_error_count(
         side,
@@ -554,10 +520,10 @@ def apply_signal_corrections(parsed: ParsedSignal) -> GeometryFix:
         corrected.tp2,
         corrected.tp3,
     )
-    if final_errors:
-        changes.append("REVIEW: auto-correction could not fully validate range/SL/TP/RR logic")
+    if final_errors >= 30:
+        changes.append("REVIEW: auto-correction could not fully validate range/SL/TP logic")
 
-    return GeometryFix(corrected=corrected, changes=changes)
+    return GeometryFix(corrected=corrected, changes=changes, rr_bucket=rr_bucket, tp1_rr_best_entry=tp1_rr)
 
 
 def _format_time(dt: datetime) -> str:
@@ -704,11 +670,11 @@ def write_signal_to_file(parsed: ParsedSignal, signal_dt_gmt7: datetime) -> tupl
     return signal_line, day_index, False
 
 
-def append_manual_signal(line: str) -> tuple[str, int, list[str]]:
+def append_manual_signal(line: str) -> tuple[str, int, list[str], str, Optional[float]]:
     """Append a strict-canonical signal line from Saved Messages.
 
     The day-index in `line` is replaced with the next free index in today's
-    section. Flexible sanity corrections are applied before writing.
+    section. Logic-only sanity corrections are applied before writing.
     """
     m = STRICT_LINE_RE.match(line.strip())
     if not m:
@@ -752,7 +718,7 @@ def append_manual_signal(line: str) -> tuple[str, int, list[str]]:
     else:
         lines = _insert_into_section(lines, header_idx, rendered)
     _atomic_write_lines(lines)
-    return rendered, new_index, fix.changes
+    return rendered, new_index, fix.changes, fix.rr_bucket, fix.tp1_rr_best_entry
 
 
 def next_day_index(date_str: str) -> int:
@@ -898,15 +864,19 @@ class Listener:
                     log.info(f"[dry-run] would inject manual signal: {text}")
                     await self._reply_saved(f"✅ [dry-run] would inject: `{text}`")
                 else:
-                    rendered, idx, changes = append_manual_signal(text)
+                    rendered, idx, changes, rr_bucket, tp1_rr = append_manual_signal(text)
+                    rr_text = f"{rr_bucket}" + (f" TP1_RR={tp1_rr:.2f}" if tp1_rr is not None else "")
                     if changes:
-                        log.info(f"Manual injection #{idx} (auto-corrected {', '.join(changes)}): {rendered}")
+                        log.info(f"Manual injection #{idx} (auto-corrected {', '.join(changes)}; {rr_text}): {rendered}")
                         await self._reply_saved(
-                            f"✅ Injected as #{idx} (auto-corrected: {', '.join(changes)}):\n`{rendered}`"
+                            f"✅ Injected as #{idx} (auto-corrected: {', '.join(changes)}; {rr_text}):\n`{rendered}`"
                         )
+                    elif rr_bucket == "LOW_TP1_RR":
+                        log.info(f"Manual injection #{idx} ({rr_text}): {rendered}")
+                        await self._reply_saved(f"⚠️ Injected as #{idx}, but classified {rr_text}:\n`{rendered}`")
                     else:
-                        log.info(f"Manual injection #{idx}: {rendered}")
-                        await self._reply_saved(f"✅ Injected as #{idx} in today's section:\n`{rendered}`")
+                        log.info(f"Manual injection #{idx} ({rr_text}): {rendered}")
+                        await self._reply_saved(f"✅ Injected as #{idx} in today's section ({rr_text}):\n`{rendered}`")
             except DuplicateSignalError as e:
                 log.info(f"Manual injection is a duplicate: matches #{e.existing_index} ({e.existing_line})")
                 await self._reply_saved(f"ℹ️ Already in signals.txt as #{e.existing_index}:\n`{e.existing_line}`")
@@ -961,11 +931,13 @@ class Listener:
             if parsed_raw is None:
                 return
 
-            # Apply flexible sanity correction. Preserve variable SL/TP values
-            # unless the signal violates range, side, TP-order, or RR logic.
+            # Correct only impossible SL/TP mistakes. RR is only classified.
             fix = apply_signal_corrections(parsed_raw)
             if fix.changed:
                 log.warning(f"Auto-corrected message {message_id}: {', '.join(fix.changes)}")
+            if fix.is_low_tp1_rr:
+                rr_display = f"{fix.tp1_rr_best_entry:.2f}" if fix.tp1_rr_best_entry is not None else "n/a"
+                log.warning(f"Message {message_id} classified LOW_TP1_RR (best-entry TP1 RR={rr_display})")
             parsed = fix.corrected
 
             try:
@@ -974,29 +946,30 @@ class Listener:
                         next_day_index(msg_dt_gmt7.strftime("%Y-%m-%d")),
                         _format_time(msg_dt_gmt7),
                     )
-                    log.info(f"[dry-run] would append: {line_preview}")
-                    state_set(self.state, message_id, {"status": "dry-run", "line": line_preview})
+                    log.info(f"[dry-run] would append: {line_preview} [{fix.rr_bucket}]")
+                    state_set(self.state, message_id, {"status": "dry-run", "line": line_preview, "rr_bucket": fix.rr_bucket})
                 else:
                     signal_line, day_index, was_duplicate = write_signal_to_file(parsed, msg_dt_gmt7)
                     signal_key = f"{msg_dt_gmt7:%Y-%m-%d}#{day_index:02d}"
+                    state_payload = {
+                        "status": "written",
+                        "signal_key": signal_key,
+                        "line": signal_line,
+                        "rr_bucket": fix.rr_bucket,
+                        "tp1_rr_best_entry": fix.tp1_rr_best_entry,
+                        **({"auto_corrected": fix.changes} if fix.changed else {}),
+                    }
                     if was_duplicate:
                         log.info(f"Message {message_id} matches existing {signal_key}: {signal_line} -- skipping write")
-                        state_set(self.state, message_id, {
-                            "status": "written",
-                            "signal_key": signal_key,
-                            "line": signal_line,
-                            "note": "matched existing entry by content",
-                        })
+                        state_payload["note"] = "matched existing entry by content"
+                        state_set(self.state, message_id, state_payload)
                     else:
-                        state_set(self.state, message_id, {
-                            "status": "written",
-                            "signal_key": signal_key,
-                            "line": signal_line,
-                            **({"auto_corrected": fix.changes} if fix.changed else {}),
-                        })
-                        log.info(f"Wrote {signal_key}: {signal_line}")
+                        state_set(self.state, message_id, state_payload)
+                        log.info(f"Wrote {signal_key}: {signal_line} [{fix.rr_bucket}]")
                         if fix.changed:
                             await self._notify_correction(raw, signal_key, signal_line, fix.changes)
+                        if fix.is_low_tp1_rr:
+                            await self._notify_low_rr(raw, signal_key, signal_line, fix.tp1_rr_best_entry)
                 save_state(self.state)
             except Exception as e:
                 log.error(f"Write failed on message {message_id}: {e}")
@@ -1039,6 +1012,25 @@ class Listener:
             await self.client.send_message(self.saved_id, body)
         except Exception as e:
             log.warning(f"Saved Messages correction notice failed: {e}")
+
+    async def _notify_low_rr(self, raw: str, signal_key: str, signal_line: str, tp1_rr: Optional[float]) -> None:
+        """Warn that the signal was saved but has LOW_TP1_RR.
+
+        This is not a correction. It is only a backtest/filter classification.
+        """
+        rr_display = f"{tp1_rr:.2f}" if tp1_rr is not None else "n/a"
+        truncated = raw[:600] + ("..." if len(raw) > 600 else "")
+        body = (
+            f"⚠️ LOW_TP1_RR saved for {signal_key}:\n"
+            f"`{signal_line}`\n"
+            f"Best laddered entry TP1 RR = {rr_display}\n"
+            f"Signal was saved unchanged except any impossible SL/TP typo correction.\n"
+            f"\nOriginal raw:\n```\n{truncated}\n```"
+        )
+        try:
+            await self.client.send_message(self.saved_id, body)
+        except Exception as e:
+            log.warning(f"Saved Messages LOW_TP1_RR notice failed: {e}")
 
     async def _reply_saved(self, text: str) -> None:
         try:
