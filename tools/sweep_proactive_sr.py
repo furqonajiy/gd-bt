@@ -2,7 +2,7 @@
 """Sweep proactive S/R generator parameters and backtest each combination.
 
 This is the next step after manual generators: search combinations, rank them,
-and reject unstable results.  It uses generated signal files internally so every
+and reject unstable results. It uses generated signal files internally so every
 candidate still goes through the same parser and backtest engine used elsewhere.
 
 Example:
@@ -24,6 +24,7 @@ import csv
 import glob
 import itertools
 import sys
+import threading
 import time
 from dataclasses import replace
 from datetime import datetime
@@ -75,9 +76,88 @@ def _fmt_duration(seconds: float) -> str:
     return f"{s:d}s"
 
 
+class SweepHeartbeat:
+    """Timed progress heartbeat for long-running sweep combinations."""
+
+    def __init__(self, total: int, interval_minutes: float):
+        self.total = total
+        self.interval_seconds = max(0.0, float(interval_minutes)) * 60.0
+        self.started = time.time()
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self.current_idx = 0
+        self.stage = "initializing"
+        self.best_row: dict | None = None
+        self.last_completed = 0
+
+    @property
+    def enabled(self) -> bool:
+        return self.interval_seconds > 0
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        print(
+            f"[sweep-heartbeat] enabled every {_fmt_duration(self.interval_seconds)}",
+            file=sys.stderr,
+            flush=True,
+        )
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if not self.enabled:
+            return
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+
+    def update(self, *, idx: int | None = None, stage: str | None = None,
+               completed: int | None = None, best_row: dict | None = None) -> None:
+        with self._lock:
+            if idx is not None:
+                self.current_idx = idx
+            if stage is not None:
+                self.stage = stage
+            if completed is not None:
+                self.last_completed = completed
+            if best_row is not None:
+                self.best_row = dict(best_row)
+
+    def print_now(self, prefix: str = "sweep") -> None:
+        with self._lock:
+            idx = self.current_idx
+            stage = self.stage
+            completed = self.last_completed
+            best = dict(self.best_row) if self.best_row is not None else None
+        elapsed = time.time() - self.started
+        pct = completed / self.total * 100.0 if self.total else 0.0
+        if completed > 0:
+            rate = completed / elapsed
+            eta = (self.total - completed) / rate if rate > 0 else None
+        else:
+            eta = None
+        if best is None:
+            best_txt = "best=none yet"
+        else:
+            best_txt = (
+                f"best cand={best['candidate']} score={best['rank_score']:.1f} "
+                f"pnl={best['full_net_profit']:.2f} dd={best['full_max_dd_pct']:.2f}%"
+            )
+        print(
+            f"[{prefix}] combo={idx:,}/{self.total:,} completed={completed:,} ({pct:5.1f}%) "
+            f"stage={stage} elapsed={_fmt_duration(elapsed)} ETA={_fmt_duration(eta) if eta is not None else 'calculating'} | {best_txt}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_seconds):
+            self.print_now(prefix="sweep-heartbeat")
+
+
 def _base_generator_args(args: argparse.Namespace) -> SimpleNamespace:
-    # Defaults mirror generate_proactive_sr_signals.py but keep this tool
-    # independent from that script's required CLI arguments.
     return SimpleNamespace(
         charts=args.charts,
         output="",
@@ -176,7 +256,6 @@ def _metrics(result: dict) -> dict:
 
 def _score(full: dict, train: dict, test: dict | None, max_dd_limit: float) -> float:
     full_dd = abs(min(0.0, full["max_dd"]))
-    train_dd = abs(min(0.0, train["max_dd"]))
     test_dd = abs(min(0.0, test["max_dd"])) if test else 0.0
     dd_penalty = max(0.0, full_dd - max_dd_limit) * 500.0
     score = full["net_profit"] + 0.50 * train["net_profit"] - 20.0 * full_dd - dd_penalty
@@ -213,8 +292,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-combos", type=int, default=0, help="0 = all combinations.")
     p.add_argument("--keep-signal-files", action="store_true")
     p.add_argument("--progress-every", type=int, default=5)
+    p.add_argument(
+        "--progress-interval-minutes",
+        type=float,
+        default=5.0,
+        help="Print timed heartbeat every N minutes even if a combo is still running. Use 0 to disable.",
+    )
 
-    # Backtest strategy controls.
     p.add_argument("--initial-capital", type=float, default=10_000.0)
     p.add_argument("--sizing-mode", default="risk", choices=["fixed", "risk"])
     p.add_argument("--lot", type=float, default=0.5)
@@ -230,7 +314,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-lock-after-tp2", action="store_true")
     p.add_argument("--max-drawdown-limit-pct", type=float, default=40.0)
 
-    # Generator sweep grid: comma-separated values.
     p.add_argument("--cooldowns", default="5,10,15")
     p.add_argument("--level-cooldowns", default="20,45,90")
     p.add_argument("--max-spreads", default="40,60,80")
@@ -278,84 +361,89 @@ def main(argv: list[str] | None = None) -> int:
 
     rows: list[dict] = []
     best_row: dict | None = None
-    for idx, combo in enumerate(grid, start=1):
-        cooldown, level_cooldown, max_spread, min_distance, max_distance, stop_distance, min_room_rr, rr3 = combo
-        gen_args = SimpleNamespace(**vars(base_gen))
-        gen_args.cooldown_minutes = cooldown
-        gen_args.level_cooldown_minutes = level_cooldown
-        gen_args.max_spread_points = max_spread
-        gen_args.min_distance = min_distance
-        gen_args.max_distance = max_distance
-        gen_args.stop_distance = stop_distance
-        gen_args.min_room_rr = min_room_rr
-        gen_args.rr3 = rr3
-        gen_args.rr2 = min(1.5, (1.0 + rr3) / 2.0)
+    heartbeat = SweepHeartbeat(total, args.progress_interval_minutes)
+    heartbeat.start()
+    try:
+        for idx, combo in enumerate(grid, start=1):
+            cooldown, level_cooldown, max_spread, min_distance, max_distance, stop_distance, min_room_rr, rr3 = combo
+            gen_args = SimpleNamespace(**vars(base_gen))
+            gen_args.cooldown_minutes = cooldown
+            gen_args.level_cooldown_minutes = level_cooldown
+            gen_args.max_spread_points = max_spread
+            gen_args.min_distance = min_distance
+            gen_args.max_distance = max_distance
+            gen_args.stop_distance = stop_distance
+            gen_args.min_room_rr = min_room_rr
+            gen_args.rr3 = rr3
+            gen_args.rr2 = min(1.5, (1.0 + rr3) / 2.0)
 
-        signals_raw = generate_signals(chart.dataframe, gen_args)
-        signal_file = work_dir / f"candidate_{idx:04d}.txt"
-        _write_signal_file(signals_raw, signal_file)
-        parsed = parse_signals_file(signal_file)
-        train_sigs, test_sigs = _split_signals(parsed, args.train_end, args.test_start)
+            heartbeat.update(idx=idx, stage="generating signals")
+            signals_raw = generate_signals(chart.dataframe, gen_args)
+            signal_file = work_dir / f"candidate_{idx:04d}.txt"
 
-        full_result = run_backtest(parsed, chart, cfg)
-        train_result = run_backtest(train_sigs, chart, cfg) if train_sigs else None
-        test_result = run_backtest(test_sigs, chart, cfg) if test_sigs else None
-        full_m = _metrics(full_result)
-        train_m = _metrics(train_result) if train_result else _metrics({})
-        test_m = _metrics(test_result) if test_result else None
-        score = _score(full_m, train_m, test_m, args.max_drawdown_limit_pct)
-        passes_dd = abs(min(0.0, full_m["max_dd"])) <= args.max_drawdown_limit_pct
-        stable = bool(test_m is None or (train_m["net_profit"] > 0 and test_m["net_profit"] > 0))
+            heartbeat.update(idx=idx, stage="writing/parsing signal file")
+            _write_signal_file(signals_raw, signal_file)
+            parsed = parse_signals_file(signal_file)
+            train_sigs, test_sigs = _split_signals(parsed, args.train_end, args.test_start)
 
-        row = {
-            "rank_score": score,
-            "passes_dd": passes_dd,
-            "stable_train_test": stable,
-            "candidate": idx,
-            "signals_generated": len(signals_raw),
-            "full_net_profit": full_m["net_profit"],
-            "full_max_dd_pct": full_m["max_dd"],
-            "full_signals": full_m["signals"],
-            "full_wins": full_m["wins"],
-            "full_losses": full_m["losses"],
-            "full_no_fills": full_m["no_fills"],
-            "full_win_rate_pct": full_m["win_rate"],
-            "train_net_profit": train_m["net_profit"],
-            "train_max_dd_pct": train_m["max_dd"],
-            "test_net_profit": test_m["net_profit"] if test_m else None,
-            "test_max_dd_pct": test_m["max_dd"] if test_m else None,
-            "cooldown_minutes": cooldown,
-            "level_cooldown_minutes": level_cooldown,
-            "max_spread_points": max_spread,
-            "min_distance": min_distance,
-            "max_distance": max_distance,
-            "stop_distance": stop_distance,
-            "min_room_rr": min_room_rr,
-            "rr1": gen_args.rr1,
-            "rr2": gen_args.rr2,
-            "rr3": gen_args.rr3,
-            "signal_file": str(signal_file),
-        }
-        rows.append(row)
-        if best_row is None or row["rank_score"] > best_row["rank_score"]:
-            best_row = row
-        if not args.keep_signal_files:
-            try:
-                signal_file.unlink()
-            except FileNotFoundError:
-                pass
+            heartbeat.update(idx=idx, stage="full backtest")
+            full_result = run_backtest(parsed, chart, cfg)
+            heartbeat.update(idx=idx, stage="train backtest")
+            train_result = run_backtest(train_sigs, chart, cfg) if train_sigs else None
+            heartbeat.update(idx=idx, stage="test backtest")
+            test_result = run_backtest(test_sigs, chart, cfg) if test_sigs else None
 
-        if idx == 1 or idx % args.progress_every == 0 or idx == total:
-            elapsed = time.time() - started
-            best_txt = "none" if best_row is None else (
-                f"cand={best_row['candidate']} score={best_row['rank_score']:.1f} "
-                f"pnl={best_row['full_net_profit']:.2f} dd={best_row['full_max_dd_pct']:.2f}%"
-            )
-            print(
-                f"[sweep] {idx:,}/{total:,} combos | elapsed={_fmt_duration(elapsed)} | best {best_txt}",
-                file=sys.stderr,
-                flush=True,
-            )
+            full_m = _metrics(full_result)
+            train_m = _metrics(train_result) if train_result else _metrics({})
+            test_m = _metrics(test_result) if test_result else None
+            score = _score(full_m, train_m, test_m, args.max_drawdown_limit_pct)
+            passes_dd = abs(min(0.0, full_m["max_dd"])) <= args.max_drawdown_limit_pct
+            stable = bool(test_m is None or (train_m["net_profit"] > 0 and test_m["net_profit"] > 0))
+
+            row = {
+                "rank_score": score,
+                "passes_dd": passes_dd,
+                "stable_train_test": stable,
+                "candidate": idx,
+                "signals_generated": len(signals_raw),
+                "full_net_profit": full_m["net_profit"],
+                "full_max_dd_pct": full_m["max_dd"],
+                "full_signals": full_m["signals"],
+                "full_wins": full_m["wins"],
+                "full_losses": full_m["losses"],
+                "full_no_fills": full_m["no_fills"],
+                "full_win_rate_pct": full_m["win_rate"],
+                "train_net_profit": train_m["net_profit"],
+                "train_max_dd_pct": train_m["max_dd"],
+                "test_net_profit": test_m["net_profit"] if test_m else None,
+                "test_max_dd_pct": test_m["max_dd"] if test_m else None,
+                "cooldown_minutes": cooldown,
+                "level_cooldown_minutes": level_cooldown,
+                "max_spread_points": max_spread,
+                "min_distance": min_distance,
+                "max_distance": max_distance,
+                "stop_distance": stop_distance,
+                "min_room_rr": min_room_rr,
+                "rr1": gen_args.rr1,
+                "rr2": gen_args.rr2,
+                "rr3": gen_args.rr3,
+                "signal_file": str(signal_file),
+            }
+            rows.append(row)
+            if best_row is None or row["rank_score"] > best_row["rank_score"]:
+                best_row = row
+                heartbeat.update(best_row=best_row)
+            if not args.keep_signal_files:
+                try:
+                    signal_file.unlink()
+                except FileNotFoundError:
+                    pass
+
+            heartbeat.update(idx=idx, stage="completed combo", completed=idx, best_row=best_row)
+            if idx == 1 or idx % args.progress_every == 0 or idx == total:
+                heartbeat.print_now(prefix="sweep")
+    finally:
+        heartbeat.stop()
 
     rows.sort(key=lambda r: r["rank_score"], reverse=True)
     _write_rows(Path(args.output_csv), rows)
@@ -375,6 +463,7 @@ def main(argv: list[str] | None = None) -> int:
             f"spread={top['max_spread_points']}, distance={top['min_distance']}-{top['max_distance']}, "
             f"stop={top['stop_distance']}, room_rr={top['min_room_rr']}, rr3={top['rr3']}"
         )
+    print(f"Total elapsed: {_fmt_duration(time.time() - started)}")
     return 0
 
 
