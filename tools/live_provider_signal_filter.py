@@ -9,6 +9,9 @@ Recommended live architecture:
 
 This keeps backtest/live parity simple: the exact same filtered signal file can
 be passed to ``tools/backtest_configurable.py`` and to the live runner.
+
+Watch mode is intentionally quiet: it prints only when a new signal is kept by
+the filter, not on every polling interval.
 """
 from __future__ import annotations
 
@@ -65,6 +68,36 @@ def _parse_time(text: str):
 
 def _time_ampm(dt: datetime) -> str:
     return dt.strftime("%I:%M %p").lstrip("0")
+
+
+def _signal_key(sig: ProviderSignal) -> tuple:
+    return (
+        sig.source_date,
+        sig.source_id,
+        sig.side,
+        sig.r1,
+        sig.r2,
+        sig.sl,
+        sig.tp1,
+        sig.tp2,
+        sig.tp3,
+        sig.chart_time.isoformat(sep=" "),
+    )
+
+
+def _describe_signal(sig: ProviderSignal) -> str:
+    return (
+        f"{sig.chart_time:%Y-%m-%d} GMT+3 {sig.side} XAUUSD "
+        f"{sig.r1}-{sig.r2} SL {sig.sl} TP1 {sig.tp1} TP2 {sig.tp2} TP3 {sig.tp3} "
+        f"at {_time_ampm(sig.chart_time)} | {sig.filter_reason}"
+    )
+
+
+def _input_mtime_ns(path: Path) -> int | None:
+    try:
+        return path.stat().st_mtime_ns
+    except FileNotFoundError:
+        return None
 
 
 def parse_and_filter(input_path: Path, preset: str) -> tuple[list[ProviderSignal], int]:
@@ -141,10 +174,10 @@ def write_filtered(signals: list[ProviderSignal], output_path: Path) -> None:
     tmp.replace(output_path)
 
 
-def run_once(input_path: Path, output_path: Path, preset: str) -> tuple[int, int]:
+def run_once(input_path: Path, output_path: Path, preset: str) -> tuple[int, int, list[ProviderSignal]]:
     kept, total = parse_and_filter(input_path, preset)
     write_filtered(kept, output_path)
-    return total, len(kept)
+    return total, len(kept), kept
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -154,6 +187,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--preset", default="high_growth_hour_side", choices=["all", "no_bad_hours", "best_hours", "high_growth_hour_side", "research_month_hour_side"])
     p.add_argument("--watch", action="store_true", help="Keep filtering every --interval seconds.")
     p.add_argument("--interval", type=float, default=2.0)
+    p.add_argument(
+        "--print-existing-on-start",
+        action="store_true",
+        help="In watch mode, also print existing kept signals at startup. Default is quiet startup.",
+    )
     return p
 
 
@@ -162,14 +200,46 @@ def main(argv: list[str] | None = None) -> int:
     input_path = Path(args.input)
     output_path = Path(args.output)
 
-    while True:
-        total, kept = run_once(input_path, output_path, args.preset)
+    if not args.watch:
+        total, kept_count, _kept = run_once(input_path, output_path, args.preset)
         print(
-            f"[provider-filter] input={total:,} kept={kept:,} preset={args.preset} output={output_path}",
+            f"[provider-filter] input={total:,} kept={kept_count:,} preset={args.preset} output={output_path}",
             flush=True,
         )
-        if not args.watch:
-            return 0
+        return 0
+
+    seen: set[tuple] = set()
+    last_mtime: int | None = None
+    first_run = True
+    print(
+        f"[provider-filter] watching {input_path} -> {output_path} | preset={args.preset} | quiet until a new kept signal appears",
+        flush=True,
+    )
+
+    while True:
+        current_mtime = _input_mtime_ns(input_path)
+        if first_run or current_mtime != last_mtime:
+            total, kept_count, kept = run_once(input_path, output_path, args.preset)
+            kept_keys = {_signal_key(sig) for sig in kept}
+
+            if first_run:
+                seen = kept_keys
+                if args.print_existing_on_start:
+                    for sig in kept:
+                        print(f"[provider-filter][KEPT] {_describe_signal(sig)}", flush=True)
+                print(
+                    f"[provider-filter] ready | input={total:,} kept={kept_count:,} output={output_path}",
+                    flush=True,
+                )
+                first_run = False
+            else:
+                new_kept = [sig for sig in kept if _signal_key(sig) not in seen]
+                for sig in new_kept:
+                    print(f"[provider-filter][NEW KEPT] {_describe_signal(sig)}", flush=True)
+                seen = kept_keys
+
+            last_mtime = current_mtime
+
         time.sleep(max(0.5, float(args.interval)))
 
 
