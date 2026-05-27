@@ -1,24 +1,17 @@
 #!/usr/bin/env python3
-"""Run live auto-execution with the high-growth provider backtest contract.
+"""Run live auto-execution with the best bonus-aware backtest contract.
 
-This wrapper exists to avoid live/backtest config drift. It calls
-``python -m xauusd_trading.cli auto`` with the same strategy settings used by the
-high-growth provider signal backtest:
+This wrapper avoids live/backtest config drift. The project DEFAULT_CONFIG on
+feature/improve is already set to the current best candidate, and this wrapper
+also passes the key supported CLI flags explicitly:
 
-- initial capital/equity source: MT5 account equity inside auto mode
-- sizing-mode: risk
-- risk: 0.12
-- entries: 3
-- entry ladder: signal_range_3
-- activation delay: 2 minutes
-- pending expiry: 5 minutes
-- max hold: 90 minutes
-- SL multiplier: 1.5
-- final target: TP3
-- TP1/TP2 stop locks: enabled by engine default
+- risk: 0.10
+- entries: 4
+- entry ladder: range_uniform
 
 The auto command should read the FILTERED signal file produced by
-``tools/live_provider_signal_filter.py``.
+``tools/live_provider_signal_filter.py``. Do not execute the raw Telegram signal
+file directly.
 """
 from __future__ import annotations
 
@@ -39,7 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mt5-login", default=None)
     p.add_argument("--mt5-password", default=None)
     p.add_argument("--mt5-server", default=None)
-    p.add_argument("--risk", type=float, default=0.12)
+    p.add_argument("--risk", type=float, default=0.10)
+    p.add_argument("--entries", type=int, default=4)
+    p.add_argument("--entry-ladder", default="range_uniform", choices=["range_uniform", "range_to_sl"])
     p.add_argument("--no-clear", action="store_true")
     p.add_argument("--no-notifications", action="store_true")
     p.add_argument("--no-forensic", action="store_true")
@@ -57,15 +52,9 @@ def main(argv: list[str] | None = None) -> int:
         "--mt5-server-offset", str(args.mt5_server_offset),
         "--mt5-history-bars", str(args.mt5_history_bars),
         "--initial-capital", "10000",
-        "--sizing-mode", "risk",
         "--risk", str(args.risk),
-        "--entries", "3",
-        "--entry-ladder", "signal_range_3",
-        "--activation-delay", "2",
-        "--pending-expiry", "5",
-        "--max-hold", "90",
-        "--sl-multiplier", "1.5",
-        "--final-target", "TP3",
+        "--entries", str(args.entries),
+        "--entry-ladder", args.entry_ladder,
     ]
     for flag, value in [
         ("--mt5-path", args.mt5_path),
