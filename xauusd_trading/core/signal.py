@@ -92,9 +92,20 @@ def _linspace(start: float, stop: float, n: int) -> list[float]:
     return [float(start + step * i) for i in range(n)]
 
 
+def _signal_range_3_entries(signal: Signal) -> list[float]:
+    """Provider-native ladder. BUY: [H, H-1, L]; SELL: [L, L+1, H]."""
+    high, low = signal.range_high, signal.range_low
+    return [high, high - 1.0, low] if signal.side == "BUY" else [low, low + 1.0, high]
+
+
 def compute_entries(signal: Signal, config: "StrategyConfig") -> list[float]:
     """Return entry prices for one signal under the given config's ladder.
 
+    signal_range_3: provider-native entry rule. For 3 entries this is exactly
+        BUY [H, H-1, L] / SELL [L, L+1, H]. For 2 entries, use the first two
+        provider-native entries; for 1 entry, use the first/best entry. For
+        counts above 3, append range-uniform entries while preserving the
+        first three provider-native entries.
     range_uniform: spread n entries evenly inside the signal's range.
     range_to_sl: spread n entries from the best price toward the signal SL,
         leaving entry_sl_gap dollars between the deepest entry and the SL.
@@ -109,6 +120,19 @@ def compute_entries(signal: Signal, config: "StrategyConfig") -> list[float]:
 
     ladder = config.entry_ladder
     gap = config.entry_sl_gap
+
+    if ladder == "signal_range_3":
+        base = _signal_range_3_entries(signal)
+        if n <= 3:
+            return base[:n]
+        extra = _linspace(signal.range_high, signal.range_low, n) if signal.side == "BUY" else _linspace(signal.range_low, signal.range_high, n)
+        out: list[float] = []
+        for value in base + extra:
+            if not any(math.isclose(value, existing, abs_tol=1e-9) for existing in out):
+                out.append(value)
+            if len(out) == n:
+                return out
+        return out
 
     if ladder == "range_uniform":
         if signal.side == "BUY":
