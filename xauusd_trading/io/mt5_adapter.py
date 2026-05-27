@@ -329,6 +329,17 @@ def _first_of_next_month(year: int, month: int) -> datetime:
     return datetime(year, month + 1, 1)
 
 
+def _archive_filename(symbol: str, year: int, month: int, source: str = "ELEV8") -> str:
+    """Canonical chart archive filename.
+
+    Use the normalized project symbol in filenames even if the broker symbol
+    has a suffix, so all historical files sort together:
+        XAUUSD_M1_202605_ELEV8.csv
+        XAUUSD_M1_202401_INTERNET.csv
+    """
+    return f"XAUUSD_M1_{year:04d}{month:02d}_{source.upper()}.csv"
+
+
 def archive_m1_by_month(
         connection: Mt5Connection, symbol: str, output_dir,
         months_back: int = 4, until_chart_time: Optional[datetime] = None,
@@ -340,7 +351,7 @@ def archive_m1_by_month(
     `until_chart_time`, default "now"), this queries MT5, converts to
     chart time and MT5-export-CSV format, and either merges with the
     existing file (default; safe for boundary months) or overwrites it.
-    Output: `<output_dir>/<symbol>_M1_YYYYMM.csv`.
+    Output: `<output_dir>/XAUUSD_M1_YYYYMM_ELEV8.csv`.
 
     Returns a list of `{month, path, bars_written, bars_fetched, bars_existing}`.
     """
@@ -369,7 +380,7 @@ def archive_m1_by_month(
         rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_epoch, end_epoch)
         new_df = _rates_to_export_df(rates, server_offset_hours)
 
-        path = output_dir / f"{symbol}_M1_{year:04d}{month:02d}.csv"
+        path = output_dir / _archive_filename(symbol, year, month, "ELEV8")
         existing_count = 0
         if path.exists():
             try:

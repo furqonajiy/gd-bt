@@ -1,9 +1,17 @@
-"""Chart loading — MT5 1-minute bars in tab-separated CSV.
+"""Chart loading — MT5-compatible 1-minute bars in tab-separated CSV.
 
 CSV columns: <DATE> <TIME> <OPEN> <HIGH> <LOW> <CLOSE> <TICKVOL> <VOL> <SPREAD>
 
 All prices are Bid. SPREAD is in points; 1 point = $0.01. Ask = Bid + spread.
 Times are GMT+3 (chart timezone).
+
+Preferred file naming under data/:
+
+    XAUUSD_M1_YYYYMM_ELEV8.csv     # canonical broker/MT5 source
+    XAUUSD_M1_YYYYMM_INTERNET.csv  # shifted/reconciled internet fallback
+
+When both sources contain the same timestamp, ELEV8 wins over INTERNET.
+Legacy names like XAUUSD_M1_YYYYMM.csv are still accepted.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -14,6 +22,13 @@ from typing import Iterable, Iterator, Optional
 import pandas as pd
 
 from xauusd_trading import POINT_VALUE
+
+
+SOURCE_PRIORITY = {
+    "UNKNOWN": 0,
+    "INTERNET": 10,
+    "ELEV8": 20,
+}
 
 
 @dataclass(frozen=True)
@@ -28,12 +43,39 @@ class Bar:
     spread_price: float
 
 
+def chart_source_from_path(path: Path) -> str:
+    """Infer chart source label from filename.
+
+    Expected names:
+        XAUUSD_M1_202604_ELEV8.csv
+        XAUUSD_M1_202401_INTERNET.csv
+
+    Unknown/legacy files are accepted with lower priority.
+    """
+    stem = Path(path).stem.upper()
+    if stem.endswith("_ELEV8"):
+        return "ELEV8"
+    if stem.endswith("_INTERNET"):
+        return "INTERNET"
+    return "UNKNOWN"
+
+
 def load_chart(paths: Iterable[Path]) -> pd.DataFrame:
-    """Load and concatenate one or more MT5 M1 CSV files into a DataFrame
-    with columns: time, open, high, low, close, spread, spread_price.
+    """Load and concatenate one or more MT5-compatible M1 CSV files.
+
+    Returns columns: time, open, high, low, close, spread, spread_price,
+    source, source_file.
+
+    Duplicate timestamp rule:
+        ELEV8 > INTERNET > UNKNOWN; within the same source, later input file
+        wins. This lets backtests safely load both:
+            data/XAUUSD_M1_*_INTERNET.csv
+            data/XAUUSD_M1_*_ELEV8.csv
+        and use broker MT5/ELEV8 candles wherever available.
     """
     frames = []
-    for p in paths:
+    for input_order, p in enumerate(paths):
+        p = Path(p)
         df = pd.read_csv(p, sep="\t")
         df.columns = [c.strip("<>").upper() for c in df.columns]
         required = {"DATE", "TIME", "OPEN", "HIGH", "LOW", "CLOSE", "SPREAD"}
@@ -43,17 +85,26 @@ def load_chart(paths: Iterable[Path]) -> pd.DataFrame:
         df["time"] = pd.to_datetime(
             df["DATE"].astype(str) + " " + df["TIME"].astype(str),
             format="%Y.%m.%d %H:%M:%S",
-            )
+        )
         for c in ("OPEN", "HIGH", "LOW", "CLOSE", "SPREAD"):
             df[c.lower()] = pd.to_numeric(df[c], errors="coerce")
         df["spread_price"] = df["spread"] * POINT_VALUE
-        frames.append(df[["time", "open", "high", "low", "close", "spread", "spread_price"]])
+        df["source"] = chart_source_from_path(p)
+        df["source_file"] = p.name
+        df["source_priority"] = df["source"].map(SOURCE_PRIORITY).fillna(0).astype(int)
+        df["input_order"] = input_order
+        frames.append(df[[
+            "time", "open", "high", "low", "close", "spread", "spread_price",
+            "source", "source_file", "source_priority", "input_order",
+        ]])
     if not frames:
         raise ValueError("No chart files provided")
     chart = pd.concat(frames, ignore_index=True).dropna(
         subset=["time", "open", "high", "low", "close", "spread_price"]
     )
-    return chart.drop_duplicates(subset=["time"], keep="last").sort_values("time").reset_index(drop=True)
+    chart = chart.sort_values(["time", "source_priority", "input_order"])
+    chart = chart.drop_duplicates(subset=["time"], keep="last")
+    return chart.sort_values("time").reset_index(drop=True)
 
 
 def slice_bars(chart: pd.DataFrame, start: datetime, end: datetime) -> pd.DataFrame:

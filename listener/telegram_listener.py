@@ -27,7 +27,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 try:
     from telethon import TelegramClient, events
@@ -37,7 +37,6 @@ except ImportError:
         "    pip install telethon\n"
     )
     sys.exit(1)
-
 
 # ---------------------------------------------------------------------------
 # paths and constants
@@ -81,10 +80,12 @@ class Config:
             )
             sys.exit(1)
         data = json.loads(path.read_text(encoding="utf-8"))
+        raw_channel_id = data.get("channel_id")
+        channel_id = int(raw_channel_id) if raw_channel_id is not None else None
         return cls(
             api_id=int(data["api_id"]),
             api_hash=str(data["api_hash"]),
-            channel_id=data.get("channel_id"),
+            channel_id=channel_id,
             channel_title_pattern=str(data.get("channel_title_pattern") or "VICTOR"),
         )
 
@@ -98,7 +99,7 @@ class Config:
 NEW_SIGNAL_MARKER = re.compile(
     r"\U0001F947\s*(?P<side>BUY|SELL)\s+XAUUSD",
     re.IGNORECASE | re.UNICODE,
-    )
+)
 
 # Lenient field extractors. Run after _normalize_text(), so commas are
 # still in place — handled by the num() converter.
@@ -187,11 +188,16 @@ def parse_victor_signal(raw_text: str) -> Optional[ParsedSignal]:
     tp3_m = TP3_RE.search(text)
 
     missing = []
-    if not range_m: missing.append("entry range")
-    if not sl_m: missing.append("SL")
-    if not tp1_m: missing.append("TP1")
-    if not tp2_m: missing.append("TP2")
-    if not tp3_m: missing.append("TP3")
+    if not range_m:
+        missing.append("entry range")
+    if not sl_m:
+        missing.append("SL")
+    if not tp1_m:
+        missing.append("TP1")
+    if not tp2_m:
+        missing.append("TP2")
+    if not tp3_m:
+        missing.append("TP3")
     if missing:
         raise ValueError(f"Missing fields: {', '.join(missing)}")
 
@@ -202,99 +208,322 @@ def parse_victor_signal(raw_text: str) -> Optional[ParsedSignal]:
         side=side,
         r1=num(range_m.group(1)),  # type: ignore[union-attr]
         r2=num(range_m.group(2)),  # type: ignore[union-attr]
-        sl=num(sl_m.group(1)),     # type: ignore[union-attr]
-        tp1=num(tp1_m.group(1)),   # type: ignore[union-attr]
-        tp2=num(tp2_m.group(1)),   # type: ignore[union-attr]
-        tp3=num(tp3_m.group(1)),   # type: ignore[union-attr]
+        sl=num(sl_m.group(1)),  # type: ignore[union-attr]
+        tp1=num(tp1_m.group(1)),  # type: ignore[union-attr]
+        tp2=num(tp2_m.group(1)),  # type: ignore[union-attr]
+        tp3=num(tp3_m.group(1)),  # type: ignore[union-attr]
     )
 
 
 # ---------------------------------------------------------------------------
-# signal-geometry auto-correction
+# signal sanity auto-correction + RR classification
 # ---------------------------------------------------------------------------
+#
+# The listener must NOT rewrite signals just to improve risk:reward.
+#
+# Correct only impossible/obvious typo cases:
+#   - SL on the wrong side of the range
+#   - TP on the wrong side of the range
+#   - TP order inconsistent with BUY/SELL direction
+#   - extra-zero / wrong-hundreds typo, e.g. 47802 -> 4802
+#   - range typo only when it makes SL/TP structurally impossible
+#
+# After correction, classify the signal using the BEST laddered entry:
+#   BUY  best entry = lowest entry
+#   SELL best entry = highest entry
+#
+#   GOOD_TP1_RR if TP1 reward from best entry >= risk to SL
+#   LOW_TP1_RR  otherwise
+#
+# LOW_TP1_RR is a warning/filter for backtesting. It is not an auto-correction.
 
-# VICTOR's standard signal geometry. Every signal should satisfy:
-#
-#   BUY:  |r1 - r2| == 2,  ref = min(r1, r2)
-#         SL  = ref - 5
-#         TP1 = ref + 10,  TP2 = ref + 20,  TP3 = ref + 40
-#
-#   SELL: |r1 - r2| == 2,  ref = max(r1, r2)
-#         SL  = ref + 5
-#         TP1 = ref - 10,  TP2 = ref - 20,  TP3 = ref - 40
-#
-# When VICTOR mistypes (seen: TP3 off by 100, SL off by 10), we recover
-# the intended values by trusting `side` and `r1` and re-deriving the rest.
-# Range correction trusts r1 because it's the leading number in the line
-# and tends to be reliable; the trailing number after `-` is what gets
-# mistyped most often.
+_CORRECTION_TOL = 1e-6
+_EXPECTED_RANGE_WIDTH = 2.0
+_MIN_TP1_RR_BEST_ENTRY = 1.0
 
-_GEOMETRY_TOL = 1e-6
+_LEVEL_STEPS = (
+    -500.0, -400.0, -300.0, -200.0, -100.0,
+    -50.0, -40.0, -30.0, -20.0, -15.0, -10.0,
+    -7.5, -5.0,
+    5.0, 7.5, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0,
+    100.0, 200.0, 300.0, 400.0, 500.0,
+)
+_RANGE_SHIFT_STEPS = (-500.0, -400.0, -300.0, -200.0, -100.0, 0.0, 100.0, 200.0, 300.0, 400.0, 500.0)
 
 
 @dataclass
 class GeometryFix:
-    """Result of running VICTOR's expected geometry over a parsed signal."""
+    """Result of signal sanity correction and RR classification."""
     corrected: ParsedSignal
-    changes: list[str]   # human-readable, e.g. "SL: 4543 -> 4553"
+    changes: list[str]
+    rr_bucket: str = "UNKNOWN_RR"
+    tp1_rr_best_entry: Optional[float] = None
 
     @property
     def changed(self) -> bool:
         return bool(self.changes)
 
+    @property
+    def is_low_tp1_rr(self) -> bool:
+        return self.rr_bucket == "LOW_TP1_RR"
+
+
+def _price_key(x: float) -> str:
+    return f"{round(float(x), 2):.2f}"
+
+
+def _dedupe_prices(values: list[float]) -> list[float]:
+    out: list[float] = []
+    seen: set[str] = set()
+    for value in values:
+        value = round(float(value), 2)
+        if value <= 0:
+            continue
+        key = _price_key(value)
+        if key not in seen:
+            seen.add(key)
+            out.append(value)
+    return out
+
+
+def _range_bounds(r1: float, r2: float) -> tuple[float, float]:
+    return max(r1, r2), min(r1, r2)
+
+
+def _range_width_ok(r1: float, r2: float) -> bool:
+    return abs(abs(r1 - r2) - _EXPECTED_RANGE_WIDTH) <= _CORRECTION_TOL
+
+
+def _entry_levels(side: str, r1: float, r2: float) -> list[float]:
+    high, low = _range_bounds(r1, r2)
+    if side == "BUY":
+        return [high, high - 1.0, low]
+    return [low, low + 1.0, high]
+
+
+def _best_ladder_entry(side: str, r1: float, r2: float) -> float:
+    entries = _entry_levels(side, r1, r2)
+    if side == "BUY":
+        return min(entries)
+    return max(entries)
+
+
+def _tp_order_ok(side: str, r1: float, r2: float, tp1: float, tp2: float, tp3: float) -> bool:
+    high, low = _range_bounds(r1, r2)
+    if side == "BUY":
+        return tp1 > high and tp2 > tp1 and tp3 > tp2
+    return tp1 < low and tp2 < tp1 and tp3 < tp2
+
+
+def _sl_side_ok(side: str, r1: float, r2: float, sl: float) -> bool:
+    high, low = _range_bounds(r1, r2)
+    if side == "BUY":
+        return sl < low
+    return sl > high
+
+
+def _structural_ok(side: str, r1: float, r2: float, sl: float, tp1: float, tp2: float, tp3: float) -> bool:
+    return _sl_side_ok(side, r1, r2, sl) and _tp_order_ok(side, r1, r2, tp1, tp2, tp3)
+
+
+def _logic_error_count(side: str, r1: float, r2: float, sl: float, tp1: float, tp2: float, tp3: float) -> int:
+    """Lower is better. RR is intentionally NOT part of correction scoring."""
+    errors = 0
+    if not _range_width_ok(r1, r2):
+        # Width 3 may be valid historically, so keep it as a weak penalty only.
+        errors += 1 if abs(abs(r1 - r2) - 3.0) <= _CORRECTION_TOL else 20
+    if not _sl_side_ok(side, r1, r2, sl):
+        errors += 30
+    if not _tp_order_ok(side, r1, r2, tp1, tp2, tp3):
+        errors += 30
+    return errors
+
+
+def _candidate_prices(current: float, anchor: float) -> list[float]:
+    """Generate likely typo repairs around a field."""
+    values: list[float] = [current]
+    values.extend(current + step for step in _LEVEL_STEPS)
+
+    if abs(current - round(current)) <= _CORRECTION_TOL:
+        s = str(int(round(abs(current))))
+        if len(s) >= 5:
+            for i in range(len(s)):
+                repaired = s[:i] + s[i + 1:]
+                if repaired:
+                    values.append(float(repaired))
+
+        suffix = int(round(abs(current))) % 100
+        base = int(anchor // 100) * 100
+        for b in range(base - 600, base + 601, 100):
+            values.append(float(b + suffix))
+
+    return _dedupe_prices(values)
+
+
+def _choose_price(current: float, candidates: list[float], predicate: Callable[[float], bool], anchor: float) -> float:
+    valid = [c for c in candidates if predicate(c)]
+    if not valid:
+        return current
+    return min(valid, key=lambda c: (abs(c - current), abs(c - anchor)))
+
+
+def _choose_range(parsed: ParsedSignal) -> tuple[float, float]:
+    """Correct range only when the original makes SL/TP structurally impossible.
+
+    Historical VICTOR signals sometimes have width 3. Do not force those to
+    width 2 if SL/TP direction is already valid.
+    """
+    side = parsed.side.upper()
+    if _structural_ok(side, parsed.r1, parsed.r2, parsed.sl, parsed.tp1, parsed.tp2, parsed.tp3):
+        return parsed.r1, parsed.r2
+
+    candidates: list[tuple[float, float]] = []
+
+    def add(r1: float, r2: float) -> None:
+        pair = (round(r1, 2), round(r2, 2))
+        if pair not in candidates:
+            candidates.append(pair)
+
+    add(parsed.r1, parsed.r2)
+    for shift in _RANGE_SHIFT_STEPS:
+        sr1 = parsed.r1 + shift
+        sr2 = parsed.r2 + shift
+        add(sr1, sr2)
+        if side == "BUY":
+            add(sr1, sr1 - 2.0)
+            add(sr1, sr1 + 2.0)
+        else:
+            add(sr1, sr1 + 2.0)
+            add(sr1, sr1 - 2.0)
+
+    def score(pair: tuple[float, float]) -> tuple[int, float]:
+        r1, r2 = pair
+        errors = _logic_error_count(side, r1, r2, parsed.sl, parsed.tp1, parsed.tp2, parsed.tp3)
+        movement = abs(r1 - parsed.r1) + abs(r2 - parsed.r2)
+        return errors, movement
+
+    return min(candidates, key=score)
+
+
+def _tp3_outlier(side: str, tp1: float, tp2: float, tp3: float) -> bool:
+    """Flag likely wrong-hundreds TP3 typos that are directionally valid."""
+    normal_step = max(abs(tp2 - tp1), 1.0)
+    max_expected_step = max(50.0, normal_step * 4.0)
+    if side == "BUY":
+        return (tp3 - tp2) > max_expected_step
+    return (tp2 - tp3) > max_expected_step
+
+
+def _fix_tp_levels(side: str, r1: float, r2: float, sl: float, tp1: float, tp2: float, tp3: float) -> tuple[float, float, float]:
+    high, low = _range_bounds(r1, r2)
+    anchor = (r1 + r2) / 2.0
+
+    if side == "BUY":
+        if not (tp1 > high and tp1 < tp2):
+            tp1 = _choose_price(tp1, _candidate_prices(tp1, anchor), lambda c: c > high and c < tp2, anchor)
+        if not (tp2 > tp1 and tp2 < tp3):
+            tp2 = _choose_price(tp2, _candidate_prices(tp2, anchor), lambda c: c > tp1 and c < tp3, anchor)
+        if not (tp3 > tp2) or _tp3_outlier(side, tp1, tp2, tp3):
+            tp3_candidates = _candidate_prices(tp3, anchor)
+            if _tp3_outlier(side, tp1, tp2, tp3):
+                tp3_candidates = [c for c in tp3_candidates if abs(c - tp3) > _CORRECTION_TOL]
+            tp3 = _choose_price(tp3, tp3_candidates, lambda c: c > tp2, anchor)
+    else:
+        if not (tp1 < low and tp1 > tp2):
+            tp1 = _choose_price(tp1, _candidate_prices(tp1, anchor), lambda c: c < low and c > tp2, anchor)
+        if not (tp2 < tp1 and tp2 > tp3):
+            tp2 = _choose_price(tp2, _candidate_prices(tp2, anchor), lambda c: c < tp1 and c > tp3, anchor)
+        if not (tp3 < tp2) or _tp3_outlier(side, tp1, tp2, tp3):
+            tp3_candidates = _candidate_prices(tp3, anchor)
+            if _tp3_outlier(side, tp1, tp2, tp3):
+                tp3_candidates = [c for c in tp3_candidates if abs(c - tp3) > _CORRECTION_TOL]
+            tp3 = _choose_price(tp3, tp3_candidates, lambda c: c < tp2, anchor)
+
+    return tp1, tp2, tp3
+
+
+def _fix_sl_level(side: str, r1: float, r2: float, sl: float) -> float:
+    """Fix SL only when it is on the wrong side. RR never moves SL."""
+    high, low = _range_bounds(r1, r2)
+    anchor = (r1 + r2) / 2.0
+    candidates = _candidate_prices(sl, anchor)
+
+    if side == "BUY":
+        return _choose_price(sl, candidates, lambda c: c < low, anchor)
+    return _choose_price(sl, candidates, lambda c: c > high, anchor)
+
+
+def _classify_tp1_rr(parsed: ParsedSignal) -> tuple[str, Optional[float]]:
+    side = parsed.side.upper()
+    entry = _best_ladder_entry(side, parsed.r1, parsed.r2)
+
+    if side == "BUY":
+        risk = entry - parsed.sl
+        reward = parsed.tp1 - entry
+    else:
+        risk = parsed.sl - entry
+        reward = entry - parsed.tp1
+
+    if risk <= 0 or reward <= 0:
+        return "INVALID_RR", None
+
+    rr = reward / risk
+    if rr + _CORRECTION_TOL >= _MIN_TP1_RR_BEST_ENTRY:
+        return "GOOD_TP1_RR", rr
+    return "LOW_TP1_RR", rr
+
+
+def _add_change(changes: list[str], field: str, old: float, new: float) -> None:
+    if abs(old - new) > _CORRECTION_TOL:
+        changes.append(f"{field}: {_fmt_price(old)} -> {_fmt_price(new)}")
+
 
 def apply_signal_corrections(parsed: ParsedSignal) -> GeometryFix:
-    """Force the signal onto VICTOR's standard geometry; report each change."""
+    """Apply logic-only correction, then classify RR.
+
+    This intentionally does NOT tighten SL or change TP values just to improve
+    risk:reward. LOW_TP1_RR is only a warning/filter for backtesting.
+    """
     side = parsed.side.upper()
-    r1 = parsed.r1
     changes: list[str] = []
 
-    # Step 1: range. Trust r1; fix r2 if width != 2.
-    if side == "BUY":
-        expected_r2 = r1 - 2.0
-    elif side == "SELL":
-        expected_r2 = r1 + 2.0
-    else:
-        # Unknown side -> can't apply rules; pass through.
-        return GeometryFix(corrected=parsed, changes=[])
+    if side not in ("BUY", "SELL"):
+        return GeometryFix(corrected=parsed, changes=[], rr_bucket="UNKNOWN_RR", tp1_rr_best_entry=None)
 
-    new_r2 = parsed.r2
-    if abs(parsed.r2 - expected_r2) > _GEOMETRY_TOL:
-        changes.append(f"R2: {_fmt_price(parsed.r2)} -> {_fmt_price(expected_r2)}")
-        new_r2 = expected_r2
-
-    # Step 2: reference price from corrected range.
-    if side == "BUY":
-        ref = min(r1, new_r2)
-        exp_sl, exp_tp1, exp_tp2, exp_tp3 = (
-            ref - 5.0, ref + 10.0, ref + 20.0, ref + 40.0,
-        )
-    else:
-        ref = max(r1, new_r2)
-        exp_sl, exp_tp1, exp_tp2, exp_tp3 = (
-            ref + 5.0, ref - 10.0, ref - 20.0, ref - 40.0,
+    new_r1, new_r2 = _choose_range(parsed)
+    if abs(new_r1 - parsed.r1) > _CORRECTION_TOL or abs(new_r2 - parsed.r2) > _CORRECTION_TOL:
+        changes.append(
+            "Range: "
+            f"{_fmt_price(parsed.r1)} - {_fmt_price(parsed.r2)} -> "
+            f"{_fmt_price(new_r1)} - {_fmt_price(new_r2)}"
         )
 
-    new_sl, new_tp1, new_tp2, new_tp3 = parsed.sl, parsed.tp1, parsed.tp2, parsed.tp3
+    new_tp1, new_tp2, new_tp3 = _fix_tp_levels(side, new_r1, new_r2, parsed.sl, parsed.tp1, parsed.tp2, parsed.tp3)
+    _add_change(changes, "TP1", parsed.tp1, new_tp1)
+    _add_change(changes, "TP2", parsed.tp2, new_tp2)
+    _add_change(changes, "TP3", parsed.tp3, new_tp3)
 
-    if abs(parsed.sl - exp_sl) > _GEOMETRY_TOL:
-        changes.append(f"SL: {_fmt_price(parsed.sl)} -> {_fmt_price(exp_sl)}")
-        new_sl = exp_sl
-    if abs(parsed.tp1 - exp_tp1) > _GEOMETRY_TOL:
-        changes.append(f"TP1: {_fmt_price(parsed.tp1)} -> {_fmt_price(exp_tp1)}")
-        new_tp1 = exp_tp1
-    if abs(parsed.tp2 - exp_tp2) > _GEOMETRY_TOL:
-        changes.append(f"TP2: {_fmt_price(parsed.tp2)} -> {_fmt_price(exp_tp2)}")
-        new_tp2 = exp_tp2
-    if abs(parsed.tp3 - exp_tp3) > _GEOMETRY_TOL:
-        changes.append(f"TP3: {_fmt_price(parsed.tp3)} -> {_fmt_price(exp_tp3)}")
-        new_tp3 = exp_tp3
+    new_sl = parsed.sl
+    if not _sl_side_ok(side, new_r1, new_r2, new_sl):
+        new_sl = _fix_sl_level(side, new_r1, new_r2, new_sl)
+    _add_change(changes, "SL", parsed.sl, new_sl)
 
-    corrected = ParsedSignal(
-        side=side, r1=r1, r2=new_r2,
-        sl=new_sl, tp1=new_tp1, tp2=new_tp2, tp3=new_tp3,
+    corrected = ParsedSignal(side=side, r1=new_r1, r2=new_r2, sl=new_sl, tp1=new_tp1, tp2=new_tp2, tp3=new_tp3)
+    rr_bucket, tp1_rr = _classify_tp1_rr(corrected)
+
+    final_errors = _logic_error_count(
+        side,
+        corrected.r1,
+        corrected.r2,
+        corrected.sl,
+        corrected.tp1,
+        corrected.tp2,
+        corrected.tp3,
     )
-    return GeometryFix(corrected=corrected, changes=changes)
+    if final_errors >= 30:
+        changes.append("REVIEW: auto-correction could not fully validate range/SL/TP logic")
+
+    return GeometryFix(corrected=corrected, changes=changes, rr_bucket=rr_bucket, tp1_rr_best_entry=tp1_rr)
 
 
 def _format_time(dt: datetime) -> str:
@@ -322,8 +551,7 @@ def _read_signals_lines() -> list[str]:
 
 
 def _atomic_write_lines(lines: list[str]) -> None:
-    """Atomic via temp file + os.replace. Readers (xauusd auto) never see
-    a half-written file."""
+    """Atomic via temp file + os.replace. Readers never see a half-written file."""
     tmp = SIGNALS_PATH.with_suffix(SIGNALS_PATH.suffix + ".tmp")
     content = "\n".join(lines).rstrip() + "\n"
     tmp.write_text(content, encoding="utf-8")
@@ -351,16 +579,10 @@ def _section_signal_count(lines: list[str], header_idx: int) -> int:
 
 
 class DuplicateSignalError(ValueError):
-    """Raised by append_manual_signal when the content already exists.
-
-    Distinct from a format-validation ValueError so the Saved Messages
-    reply can be a friendlier 'already there' instead of '❌'.
-    """
+    """Raised by append_manual_signal when the content already exists."""
 
     def __init__(self, existing_line: str, existing_index: int):
-        super().__init__(
-            f"Already present as #{existing_index}: {existing_line}"
-        )
+        super().__init__(f"Already present as #{existing_index}: {existing_line}")
         self.existing_line = existing_line
         self.existing_index = existing_index
 
@@ -370,13 +592,7 @@ def _find_matching_signal_in_section(
         side: str, r1: float, r2: float, sl: float,
         tp1: float, tp2: float, tp3: float, time_text: str,
 ) -> Optional[tuple[str, int]]:
-    """Content-based dedup. Walk the section and return (existing_line,
-    existing_index) if a signal with same side, prices, AND time already
-    exists. Defensive backup to state-based dedup — survives a deleted
-    or corrupt telegram_state.json. Time is part of the key, so a
-    legitimate same-price signal posted at a different time of day is
-    NOT a duplicate.
-    """
+    """Return existing signal with same side, prices, and time."""
     norm_time = time_text.upper().replace(" ", "")
     for line in lines[header_idx + 1:]:
         if DATE_HEADER_RE.match(line):
@@ -396,9 +612,7 @@ def _find_matching_signal_in_section(
     return None
 
 
-def _insert_into_section(
-        lines: list[str], header_idx: int, signal_line: str,
-) -> list[str]:
+def _insert_into_section(lines: list[str], header_idx: int, signal_line: str) -> list[str]:
     """Insert `signal_line` at the end of the section, before trailing blanks."""
     end = len(lines)
     for j in range(header_idx + 1, len(lines)):
@@ -411,28 +625,21 @@ def _insert_into_section(
     return lines[:insert_at] + [signal_line] + lines[insert_at:]
 
 
-def _append_new_section(
-        lines: list[str], date_str: str, tz_offset: int, signal_line: str,
-) -> list[str]:
+def _append_new_section(lines: list[str], date_str: str, tz_offset: int, signal_line: str) -> list[str]:
     while lines and lines[-1].strip() == "":
         lines.pop()
     if lines:
-        lines.append("")  # separator between sections
+        lines.append("")
     tz_label = f"GMT+{tz_offset}" if tz_offset >= 0 else f"GMT{tz_offset}"
     lines.append(f"{date_str} {tz_label}")
     lines.append(signal_line)
     return lines
 
 
-def write_signal_to_file(
-        parsed: ParsedSignal, signal_dt_gmt7: datetime,
-) -> tuple[str, int, bool]:
+def write_signal_to_file(parsed: ParsedSignal, signal_dt_gmt7: datetime) -> tuple[str, int, bool]:
     """Append a parsed VICTOR signal to signals.txt.
 
-    Returns (signal_line, day_index, was_duplicate). When was_duplicate,
-    no write happened and (signal_line, day_index) refer to the matched
-    existing entry; caller should still mark the message_id 'written'
-    so future events skip it.
+    Returns (signal_line, day_index, was_duplicate).
     """
     date_str = signal_dt_gmt7.strftime("%Y-%m-%d")
     time_text = _format_time(signal_dt_gmt7)
@@ -440,8 +647,6 @@ def write_signal_to_file(
     lines = _read_signals_lines()
     header_idx = _find_section(lines, date_str)
 
-    # Content-based dedup: catches the case where state was lost/reset
-    # but the signal is already in file.
     if header_idx is not None:
         match = _find_matching_signal_in_section(
             lines, header_idx,
@@ -455,9 +660,7 @@ def write_signal_to_file(
     if header_idx is None:
         day_index = 1
         signal_line = parsed.to_line(day_index, time_text)
-        lines = _append_new_section(
-            lines, date_str, SIGNAL_SOURCE_TZ_OFFSET, signal_line,
-        )
+        lines = _append_new_section(lines, date_str, SIGNAL_SOURCE_TZ_OFFSET, signal_line)
     else:
         day_index = _section_signal_count(lines, header_idx) + 1
         signal_line = parsed.to_line(day_index, time_text)
@@ -467,22 +670,11 @@ def write_signal_to_file(
     return signal_line, day_index, False
 
 
-def append_manual_signal(line: str) -> tuple[str, int, list[str]]:
-    """Append a strict-canonical signal line (from Saved Messages).
+def append_manual_signal(line: str) -> tuple[str, int, list[str], str, Optional[float]]:
+    """Append a strict-canonical signal line from Saved Messages.
 
-    The day-index in `line` is REPLACED with the next free index in
-    today's section, so it's impossible to double-write `5.` when `5.`
-    already exists. Geometry corrections are applied silently so the
-    Saved Messages path produces the same canonical output as VICTOR's
-    direct feed.
-
-    Returns (rendered_line, day_index_used, geometry_changes). The
-    changes list is non-empty when auto-correction shifted any value;
-    the caller can surface those changes in the Saved Messages reply.
-
-    Raises:
-      ValueError           — line doesn't match the canonical format.
-      DuplicateSignalError — identical signal already in today's section.
+    The day-index in `line` is replaced with the next free index in today's
+    section. Logic-only sanity corrections are applied before writing.
     """
     m = STRICT_LINE_RE.match(line.strip())
     if not m:
@@ -516,23 +708,17 @@ def append_manual_signal(line: str) -> tuple[str, int, list[str]]:
         if match is not None:
             raise DuplicateSignalError(match[0], match[1])
 
-    new_index = (
-        1 if header_idx is None
-        else _section_signal_count(lines, header_idx) + 1
-    )
-
+    new_index = 1 if header_idx is None else _section_signal_count(lines, header_idx) + 1
     rendered = parsed.to_line(new_index, time_text)
     if not STRICT_LINE_RE.match(rendered):
         raise ValueError("Line is unparseable after renumbering -- nothing was written.")
 
     if header_idx is None:
-        lines = _append_new_section(
-            lines, date_str, SIGNAL_SOURCE_TZ_OFFSET, rendered,
-        )
+        lines = _append_new_section(lines, date_str, SIGNAL_SOURCE_TZ_OFFSET, rendered)
     else:
         lines = _insert_into_section(lines, header_idx, rendered)
     _atomic_write_lines(lines)
-    return rendered, new_index, fix.changes
+    return rendered, new_index, fix.changes, fix.rr_bucket, fix.tp1_rr_best_entry
 
 
 def next_day_index(date_str: str) -> int:
@@ -579,10 +765,7 @@ def state_set(state: dict, message_id: int, record: dict) -> None:
 
 def quarantine(message_id: int, raw_text: str, reason: str, dt_utc: datetime) -> None:
     """Append a parse-failure entry to telegram_quarantine.txt."""
-    block = (
-        f"=== {dt_utc.isoformat()}  message_id={message_id}  reason={reason} ===\n"
-        f"{raw_text}\n\n"
-    )
+    block = f"=== {dt_utc.isoformat()}  message_id={message_id}  reason={reason} ===\n{raw_text}\n\n"
     with open(QUARANTINE_PATH, "a", encoding="utf-8") as f:
         f.write(block)
 
@@ -598,8 +781,8 @@ class Listener:
         self.client = TelegramClient(SESSION_NAME, cfg.api_id, cfg.api_hash)
         self.state = load_state()
         self.channel_id: Optional[int] = cfg.channel_id
-        self.saved_id: Optional[int] = None  # filled at setup
-        self._lock = asyncio.Lock()  # serialises file I/O between handlers
+        self.saved_id: Optional[int] = None
+        self._lock = asyncio.Lock()
 
     async def _resolve_channel(self) -> int:
         """Find the channel id from config or title-substring match."""
@@ -610,8 +793,10 @@ class Listener:
                 log.info(f"Listening on channel id={self.channel_id} title={title!r}")
                 return self.channel_id
             except Exception as e:
-                log.warning(f"channel_id={self.channel_id} couldn't be resolved ({e}); "
-                            f"falling back to title-substring match.")
+                log.warning(
+                    f"channel_id={self.channel_id} couldn't be resolved ({e}); "
+                    "falling back to title-substring match."
+                )
 
         pattern = self.cfg.channel_title_pattern.upper()
         matches = []
@@ -622,15 +807,15 @@ class Listener:
         if not matches:
             raise RuntimeError(
                 f"No chat title contains {self.cfg.channel_title_pattern!r}. "
-                f"Run `python listener\\telegram_listener.py list-chats` and "
-                f"put the numeric id into listener_config.json (repo root) "
-                f"under `channel_id`."
+                "Run `python listener\\telegram_listener.py list-chats` and "
+                "put the numeric id into listener_config.json (repo root) "
+                "under `channel_id`."
             )
         if len(matches) > 1:
             titles = ", ".join(f"{d.id}={d.title!r}" for d in matches)
             raise RuntimeError(
                 f"Multiple chats match {self.cfg.channel_title_pattern!r}: {titles}. "
-                f"Disambiguate by setting `channel_id` in listener_config.json."
+                "Disambiguate by setting `channel_id` in listener_config.json."
             )
         d = matches[0]
         log.info(f"Matched channel by title: id={d.id} title={d.title!r}")
@@ -643,27 +828,15 @@ class Listener:
         self.saved_id = me.id
         self.channel_id = await self._resolve_channel()
 
-        self.client.add_event_handler(
-            self._on_channel_new,
-            events.NewMessage(chats=self.channel_id),
-        )
-        self.client.add_event_handler(
-            self._on_channel_edit,
-            events.MessageEdited(chats=self.channel_id),
-        )
-        # Saved Messages: chat is yourself, sender is yourself.
-        self.client.add_event_handler(
-            self._on_saved,
-            events.NewMessage(chats=self.saved_id, from_users=self.saved_id),
-        )
+        self.client.add_event_handler(self._on_channel_new, events.NewMessage(chats=self.channel_id))
+        self.client.add_event_handler(self._on_channel_edit, events.MessageEdited(chats=self.channel_id))
+        self.client.add_event_handler(self._on_saved, events.NewMessage(chats=self.saved_id, from_users=self.saved_id))
 
     async def catch_up(self, lookback_hours: int = 24) -> None:
-        """Process channel messages that arrived while the listener was down.
-        Walks back until we hit a seen message_id or lookback_hours."""
+        """Process channel messages that arrived while the listener was down."""
         last_id = self.state.get("last_processed_message_id", 0)
         cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
-        log.info(f"Catch-up: looking for channel messages with id > {last_id} "
-                 f"(or up to {lookback_hours}h ago)")
+        log.info(f"Catch-up: looking for channel messages with id > {last_id} (or up to {lookback_hours}h ago)")
         new_msgs = []
         async for msg in self.client.iter_messages(self.channel_id, limit=500):
             if msg.id <= last_id:
@@ -671,7 +844,6 @@ class Listener:
             if msg.date < cutoff_dt:
                 break
             new_msgs.append(msg)
-        # iter_messages returns newest first; flip to chronological.
         for msg in reversed(new_msgs):
             await self._process_message(msg, is_edit=False)
         log.info(f"Catch-up done ({len(new_msgs)} messages scanned)")
@@ -684,12 +856,7 @@ class Listener:
 
     async def _on_saved(self, event) -> None:
         text = (event.message.message or "").strip()
-        if not text:
-            return
-        # Only react to canonical signal lines. Everything else in Saved
-        # Messages (notes to self, the listener's own warning messages,
-        # suggestion templates) is ignored.
-        if not STRICT_LINE_RE.match(text):
+        if not text or not STRICT_LINE_RE.match(text):
             return
         async with self._lock:
             try:
@@ -697,31 +864,22 @@ class Listener:
                     log.info(f"[dry-run] would inject manual signal: {text}")
                     await self._reply_saved(f"✅ [dry-run] would inject: `{text}`")
                 else:
-                    rendered, idx, changes = append_manual_signal(text)
+                    rendered, idx, changes, rr_bucket, tp1_rr = append_manual_signal(text)
+                    rr_text = f"{rr_bucket}" + (f" TP1_RR={tp1_rr:.2f}" if tp1_rr is not None else "")
                     if changes:
-                        log.info(
-                            f"Manual injection #{idx} (auto-corrected "
-                            f"{', '.join(changes)}): {rendered}"
-                        )
+                        log.info(f"Manual injection #{idx} (auto-corrected {', '.join(changes)}; {rr_text}): {rendered}")
                         await self._reply_saved(
-                            f"✅ Injected as #{idx} "
-                            f"(auto-corrected: {', '.join(changes)}):\n"
-                            f"`{rendered}`"
+                            f"✅ Injected as #{idx} (auto-corrected: {', '.join(changes)}; {rr_text}):\n`{rendered}`"
                         )
+                    elif rr_bucket == "LOW_TP1_RR":
+                        log.info(f"Manual injection #{idx} ({rr_text}): {rendered}")
+                        await self._reply_saved(f"⚠️ Injected as #{idx}, but classified {rr_text}:\n`{rendered}`")
                     else:
-                        log.info(f"Manual injection #{idx}: {rendered}")
-                        await self._reply_saved(
-                            f"✅ Injected as #{idx} in today's section:\n`{rendered}`"
-                        )
+                        log.info(f"Manual injection #{idx} ({rr_text}): {rendered}")
+                        await self._reply_saved(f"✅ Injected as #{idx} in today's section ({rr_text}):\n`{rendered}`")
             except DuplicateSignalError as e:
-                log.info(
-                    f"Manual injection is a duplicate: matches #{e.existing_index} "
-                    f"({e.existing_line})"
-                )
-                await self._reply_saved(
-                    f"ℹ️ Already in signals.txt as #{e.existing_index}:\n"
-                    f"`{e.existing_line}`"
-                )
+                log.info(f"Manual injection is a duplicate: matches #{e.existing_index} ({e.existing_line})")
+                await self._reply_saved(f"ℹ️ Already in signals.txt as #{e.existing_index}:\n`{e.existing_line}`")
             except ValueError as e:
                 log.warning(f"Manual injection rejected: {e}")
                 await self._reply_saved(f"❌ {e}")
@@ -733,7 +891,6 @@ class Listener:
         message_id = msg.id
         raw = msg.message or ""
 
-        # Telethon gives us tz-aware UTC datetimes.
         if msg.date.tzinfo is None:
             msg_dt_utc = msg.date.replace(tzinfo=timezone.utc)
         else:
@@ -743,45 +900,28 @@ class Listener:
         async with self._lock:
             existing = state_get(self.state, message_id)
 
-            # Universal dedup: skip if already handled successfully. Covers
-            # catch_up re-processing after restart, Telegram redelivering
-            # an event after reconnect, accidentally starting two listener
-            # processes, and any other double-fire path.
             if existing and existing.get("status") == "written":
                 log.debug(
-                    f"Message {message_id} already written as "
-                    f"{existing.get('signal_key')}; ignoring "
+                    f"Message {message_id} already written as {existing.get('signal_key')}; ignoring "
                     f"({'edit' if is_edit else 'new'} event)"
                 )
                 return
 
-            # For previously-quarantined messages, re-parse only on EDIT.
-            # New-message events are usually catch_up replays — the user
-            # was already notified once, so skip silently.
-            if (existing
-                    and existing.get("status") in ("quarantined", "write_failed")
-                    and not is_edit):
+            if existing and existing.get("status") in ("quarantined", "write_failed") and not is_edit:
                 log.debug(
-                    f"Catch-up saw previously-{existing.get('status')} "
-                    f"message {message_id}; ignoring (user already notified)"
+                    f"Catch-up saw previously-{existing.get('status')} message {message_id}; "
+                    "ignoring (user already notified)"
                 )
                 return
 
             if is_edit and existing:
-                log.info(
-                    f"Edit on previously-{existing.get('status')} "
-                    f"message {message_id}: re-parsing"
-                )
+                log.info(f"Edit on previously-{existing.get('status')} message {message_id}: re-parsing")
 
             try:
                 parsed_raw = parse_victor_signal(raw)
             except ValueError as e:
                 log.warning(f"Parse failure on message {message_id}: {e}")
-                state_set(self.state, message_id, {
-                    "status": "quarantined",
-                    "reason": str(e),
-                    "raw": raw[:500],
-                })
+                state_set(self.state, message_id, {"status": "quarantined", "reason": str(e), "raw": raw[:500]})
                 save_state(self.state)
                 if not self.dry_run:
                     quarantine(message_id, raw, str(e), msg_dt_utc)
@@ -789,19 +929,15 @@ class Listener:
                 return
 
             if parsed_raw is None:
-                # Not a new signal — update, "Move SL", commentary, etc.
-                # Silent no-op; don't pollute state file.
                 return
 
-            # Apply VICTOR's standard geometry. If any field was off (mistype
-            # in the channel post), correct it before the write so signals.txt
-            # is always canonical.
+            # Correct only impossible SL/TP mistakes. RR is only classified.
             fix = apply_signal_corrections(parsed_raw)
             if fix.changed:
-                log.warning(
-                    f"Auto-corrected message {message_id} to standard "
-                    f"geometry: {', '.join(fix.changes)}"
-                )
+                log.warning(f"Auto-corrected message {message_id}: {', '.join(fix.changes)}")
+            if fix.is_low_tp1_rr:
+                rr_display = f"{fix.tp1_rr_best_entry:.2f}" if fix.tp1_rr_best_entry is not None else "n/a"
+                log.warning(f"Message {message_id} classified LOW_TP1_RR (best-entry TP1 RR={rr_display})")
             parsed = fix.corrected
 
             try:
@@ -810,71 +946,49 @@ class Listener:
                         next_day_index(msg_dt_gmt7.strftime("%Y-%m-%d")),
                         _format_time(msg_dt_gmt7),
                     )
-                    log.info(f"[dry-run] would append: {line_preview}")
-                    state_set(self.state, message_id, {
-                        "status": "dry-run", "line": line_preview,
-                    })
+                    log.info(f"[dry-run] would append: {line_preview} [{fix.rr_bucket}]")
+                    state_set(self.state, message_id, {"status": "dry-run", "line": line_preview, "rr_bucket": fix.rr_bucket})
                 else:
-                    signal_line, day_index, was_duplicate = write_signal_to_file(
-                        parsed, msg_dt_gmt7,
-                    )
+                    signal_line, day_index, was_duplicate = write_signal_to_file(parsed, msg_dt_gmt7)
                     signal_key = f"{msg_dt_gmt7:%Y-%m-%d}#{day_index:02d}"
+                    state_payload = {
+                        "status": "written",
+                        "signal_key": signal_key,
+                        "line": signal_line,
+                        "rr_bucket": fix.rr_bucket,
+                        "tp1_rr_best_entry": fix.tp1_rr_best_entry,
+                        **({"auto_corrected": fix.changes} if fix.changed else {}),
+                    }
                     if was_duplicate:
-                        # Content-based dedup caught it. Record as 'written'
-                        # pointing at the existing entry so we never look at
-                        # this message_id again, and skip the user notification.
-                        log.info(
-                            f"Message {message_id} matches existing "
-                            f"{signal_key}: {signal_line} -- skipping write"
-                        )
-                        state_set(self.state, message_id, {
-                            "status": "written",
-                            "signal_key": signal_key,
-                            "line": signal_line,
-                            "note": "matched existing entry by content",
-                        })
+                        log.info(f"Message {message_id} matches existing {signal_key}: {signal_line} -- skipping write")
+                        state_payload["note"] = "matched existing entry by content"
+                        state_set(self.state, message_id, state_payload)
                     else:
-                        state_set(self.state, message_id, {
-                            "status": "written",
-                            "signal_key": signal_key,
-                            "line": signal_line,
-                            **({"auto_corrected": fix.changes} if fix.changed else {}),
-                        })
-                        log.info(f"Wrote {signal_key}: {signal_line}")
+                        state_set(self.state, message_id, state_payload)
+                        log.info(f"Wrote {signal_key}: {signal_line} [{fix.rr_bucket}]")
                         if fix.changed:
-                            await self._notify_correction(
-                                raw, signal_key, signal_line, fix.changes,
-                            )
+                            await self._notify_correction(raw, signal_key, signal_line, fix.changes)
+                        if fix.is_low_tp1_rr:
+                            await self._notify_low_rr(raw, signal_key, signal_line, fix.tp1_rr_best_entry)
                 save_state(self.state)
             except Exception as e:
                 log.error(f"Write failed on message {message_id}: {e}")
-                state_set(self.state, message_id, {
-                    "status": "write_failed",
-                    "reason": str(e),
-                    "raw": raw[:500],
-                })
+                state_set(self.state, message_id, {"status": "write_failed", "reason": str(e), "raw": raw[:500]})
                 save_state(self.state)
                 if not self.dry_run:
-                    await self._notify_failure(
-                        raw, f"Write failed: {e}", msg_dt_gmt7,
-                    )
+                    await self._notify_failure(raw, f"Write failed: {e}", msg_dt_gmt7)
 
-    async def _notify_failure(
-            self, raw: str, reason: str, msg_dt_gmt7: datetime,
-    ) -> None:
+    async def _notify_failure(self, raw: str, reason: str, msg_dt_gmt7: datetime) -> None:
         """Post a Saved Messages note with a pre-filled correction template."""
         date_str = msg_dt_gmt7.strftime("%Y-%m-%d")
         time_text = _format_time(msg_dt_gmt7)
         idx = next_day_index(date_str)
-        suggestion = (
-            f"{idx}. BUY XAUUSD R1 - R2 SL S TP1 T1 TP2 T2 TP3 T3 {time_text}"
-        )
+        suggestion = f"{idx}. BUY XAUUSD R1 - R2 SL S TP1 T1 TP2 T2 TP3 T3 {time_text}"
         truncated = raw[:800] + ("..." if len(raw) > 800 else "")
         notification = (
             f"⚠️ Couldn't parse a VICTOR message ({reason}).\n"
             f"\nRaw:\n```\n{truncated}\n```\n"
-            f"\nReply with the corrected line in this format "
-            f"(replace `BUY` with `SELL` if needed):\n"
+            f"\nReply with the corrected line in this format (replace `BUY` with `SELL` if needed):\n"
             f"`{suggestion}`"
         )
         try:
@@ -882,10 +996,7 @@ class Listener:
         except Exception as e:
             log.warning(f"Saved Messages notification failed: {e}")
 
-    async def _notify_correction(
-            self, raw: str, signal_key: str, signal_line: str,
-            changes: list[str],
-    ) -> None:
+    async def _notify_correction(self, raw: str, signal_key: str, signal_line: str, changes: list[str]) -> None:
         """Tell the user we auto-corrected a VICTOR mistype.
 
         Best-effort: failures only log, never raise.
@@ -901,6 +1012,25 @@ class Listener:
             await self.client.send_message(self.saved_id, body)
         except Exception as e:
             log.warning(f"Saved Messages correction notice failed: {e}")
+
+    async def _notify_low_rr(self, raw: str, signal_key: str, signal_line: str, tp1_rr: Optional[float]) -> None:
+        """Warn that the signal was saved but has LOW_TP1_RR.
+
+        This is not a correction. It is only a backtest/filter classification.
+        """
+        rr_display = f"{tp1_rr:.2f}" if tp1_rr is not None else "n/a"
+        truncated = raw[:600] + ("..." if len(raw) > 600 else "")
+        body = (
+            f"⚠️ LOW_TP1_RR saved for {signal_key}:\n"
+            f"`{signal_line}`\n"
+            f"Best laddered entry TP1 RR = {rr_display}\n"
+            f"Signal was saved unchanged except any impossible SL/TP typo correction.\n"
+            f"\nOriginal raw:\n```\n{truncated}\n```"
+        )
+        try:
+            await self.client.send_message(self.saved_id, body)
+        except Exception as e:
+            log.warning(f"Saved Messages LOW_TP1_RR notice failed: {e}")
 
     async def _reply_saved(self, text: str) -> None:
         try:
@@ -931,13 +1061,15 @@ async def _cmd_list_chats(cfg: Config) -> int:
             kind = "group"
         else:
             kind = "user"
-        title = (dialog.title or "(no title)")
+        title = dialog.title or "(no title)"
         print(f"{dialog.id:>20}  {kind:<10} {title!r}")
     await client.disconnect()
     print()
-    print("Copy the ID of the VICTOR channel into listener_config.json "
-          "(repo root) under `channel_id`, then run "
-          "`python listener\\telegram_listener.py`.")
+    print(
+        "Copy the ID of the VICTOR channel into listener_config.json "
+        "(repo root) under `channel_id`, then run "
+        "`python listener\\telegram_listener.py`."
+    )
     return 0
 
 

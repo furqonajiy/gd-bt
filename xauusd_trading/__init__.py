@@ -12,9 +12,12 @@ from __future__ import annotations
 
 # 1. core.config
 from .core.config import (
+    BALANCED_LIVE_CONFIG,
     CHART_TIMEZONE_OFFSET,
     CONTRACT_SIZE_OZ,
     DEFAULT_CONFIG,
+    HIGHEST_PROFIT_CONFIG,
+    LOWER_EXPOSURE_CONFIG,
     POINT_VALUE,
     StrategyConfig,
 )
@@ -108,7 +111,7 @@ from .notifications import (
     summarize_closed_position,
 )
 
-# 11. forensic (leaf -- engine -> JSONL post-mortem log)
+# 11. forensic (leaf -> JSONL post-mortem log)
 from .forensic import (
     DEFAULT_FORENSIC_PATH,
     ForensicLog,
@@ -127,9 +130,12 @@ from .execution.mt5_executor import (
 
 __all__ = [
     # core.config
+    "BALANCED_LIVE_CONFIG",
     "CHART_TIMEZONE_OFFSET",
     "CONTRACT_SIZE_OZ",
     "DEFAULT_CONFIG",
+    "HIGHEST_PROFIT_CONFIG",
+    "LOWER_EXPOSURE_CONFIG",
     "POINT_VALUE",
     "StrategyConfig",
     # core.chart

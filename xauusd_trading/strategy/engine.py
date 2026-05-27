@@ -8,9 +8,9 @@ Gate order applied to the new signal:
   1. SKIP_EXPIRED       — pending window already closed.
   2. Replay-based filtering — entries terminal in backtest replay are
      filtered out; remaining placeable entries go to MT5.
-       - all terminal  → SKIP_INVALIDATED
-       - mix           → FOLLOW (partial)
-       - all placeable → FOLLOW (standard)
+       - all terminal  -> SKIP_INVALIDATED
+       - mix           -> FOLLOW (partial)
+       - all placeable -> FOLLOW (standard)
 
 The engine adds no cross-signal overlay logic. The gates above are
 per-signal divergence corrections — they don't change which signals the
@@ -201,8 +201,6 @@ def _build_new_signal_plan(
         )
 
     # Gate 2: per-entry replay filtering.
-    # PENDING / OPEN -> placeable; terminal -> filtered. Skipped when chart
-    # is None (legacy callers) so the old all-or-nothing path is preserved.
     replay_pos: Optional[Position] = None
     if chart is not None and now is not None:
         replay_pos = open_position(signal, equity, config, contract_size)
@@ -251,7 +249,7 @@ def _build_new_signal_plan(
                 replay_position=replay_pos,
             )
 
-    # Gate 3: standard FOLLOW.
+    lock_text = "lock to TP1/TP2" if config.lock_after_tp2 else "lock to TP1"
     return NewSignalPlan(
         signal=signal, action="FOLLOW",
         rationale=(
@@ -259,7 +257,7 @@ def _build_new_signal_plan(
             f"{config.entry_count} limits @ {', '.join(f'{o.entry_price:g}' for o in orders)}, "
             f"effective SL distance ${base_stop_distance:.2f}, "
             f"final target {final_target} = {target_price:g}, "
-            f"lock to TP1 after first TP1 touch, "
+            f"{lock_text} after target touches, "
             f"max hold {config.max_hold_minutes} min from first fill."
         ),
         orders=orders, pending_expires_at=expires,
@@ -270,13 +268,7 @@ def _build_new_signal_plan(
 
 
 def format_replay_outcome(replay: Position, indent: str = "    ") -> list[str]:
-    """Render a per-entry outcome breakdown for a replayed signal.
-
-    Output:
-        #0 (4702.00): filled 11:22, SL at 12:18, pnl -$56.70
-        #1 (4703.50): NO_FILL (pending expired)
-        Backtest realized so far: -$56.70
-    """
+    """Render a per-entry outcome breakdown for a replayed signal."""
     lines: list[str] = []
     for e in replay.entries:
         if e.status == "PENDING":
@@ -312,6 +304,8 @@ def format_replay_outcome(replay: Position, indent: str = "    ") -> list[str]:
 def _stage_label(position: Position, config: StrategyConfig) -> str:
     if not position.filled_entries():
         return "Pending -- no fills yet"
+    if config.lock_after_tp2 and position.stage >= 2:
+        return "Stage 3 (TP2 locked, stops at TP2)"
     if config.lock_after_tp1 and position.stage >= 1:
         return "Stage 2 (TP1 locked, stops at TP1)"
     return "Stage 1 (initial SL active)"
@@ -332,7 +326,8 @@ def _snapshot_entry(
 ) -> EntryStatus:
     side = pos.signal.side
     effective_stop = (
-        pos.effective_stop_for(e, config.lock_after_tp1) if e.status == "OPEN" else None
+        pos.effective_stop_for(e, config.lock_after_tp1, config.lock_after_tp2)
+        if e.status == "OPEN" else None
     )
     floating: Optional[float] = None
     if e.status == "OPEN" and last_bid is not None:
@@ -436,18 +431,18 @@ def render_report(rec: Recommendation) -> str:
             f"  Pending expires:  {_fmt_time(rec.new_signal.pending_expires_at)} GMT+3 "
             f"({rec.config.pending_expiry_minutes} min after activation)"
         )
+        lock_text = "TP1, then TP2" if rec.config.lock_after_tp2 else "TP1"
         lines.append(
             f"  Final target:     {rec.new_signal.final_target_label} "
             f"@ {rec.new_signal.final_target_price:g} "
-            f"(lock to TP1 after TP1 touch)"
+            f"(lock to {lock_text} after touches)"
         )
         lines.append(f"  Max hold:         {rec.config.max_hold_minutes} min from first fill")
         lines.append(
             f"  Total initial risk if all fill: "
             f"{_fmt_money(-rec.new_signal.total_initial_risk_dollars)} "
-            f"({rec.config.risk_per_signal * 100:.1f}% of equity)"
+            f"({rec.config.risk_per_signal * 100:.1f}% of equity equivalent)"
         )
-        # Partial FOLLOW: show the per-entry replay so the user can see what got filtered.
         rp = rec.new_signal.replay_position
         if rp is not None and len(rec.new_signal.orders) < len(rp.entries):
             lines.append("")
