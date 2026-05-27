@@ -1,11 +1,21 @@
 """Strategy configuration.
 
-Default strategy: Balanced Live Candidate.
+Default strategy: latest sweep Best PNL candidate.
 
-The default mirrors the optimized live execution candidate used by this
-project: 3 range entries, 2-minute activation delay, 5-minute pending TIF,
-90-minute max hold, SL x1.5, TP3 runner, TP1 and TP2 stop locks, and fixed
-0.5 lot per entry.
+The default mirrors the current broad-sweep highest-PnL candidate:
+3 signal-range entries, fixed 0.5 lot per entry, 2-minute activation delay,
+5-minute pending TIF, 90-minute max hold, SL x1.5, TP3 final target, and TP1
+then TP2 stop locks.
+
+Latest observed sweep snapshot:
+- net_profit: 59,339.50
+- quality_score: 54,866.06
+- max_drawdown_pct: -76.67
+- win_rate_pct: 66.59
+- profit_factor: 1.24
+
+Note: this is the highest-PnL default, not necessarily the safest drawdown
+profile. Re-run tools/sweep.py after material signal/chart-data changes.
 """
 from __future__ import annotations
 from dataclasses import dataclass, replace
