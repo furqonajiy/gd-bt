@@ -14,31 +14,6 @@ and same-bar worst-case stop priority.
 
 By default, sizing is fixed at 0.5 lot per entry. This keeps the sweep focused
 on execution rules rather than money-management effects.
-
-Examples:
-
-    # Main full-sample sweep
-    python tools/sweep.py \
-      --signals signals.txt \
-      --charts data/DAT_MT_SHIFTED_XAUUSD_M1_*.csv data/XAUUSD_M1_*.csv \
-      --output reports/sweep_results_full.csv
-
-    # Smaller first pass
-    python tools/sweep.py \
-      --signals signals.txt \
-      --charts data/DAT_MT_SHIFTED_XAUUSD_M1_*.csv data/XAUUSD_M1_*.csv \
-      --output reports/sweep_results_small.csv \
-      --entry-counts 2,3 \
-      --activation-delays 0,2 \
-      --pending-expiries 5,20 \
-      --max-holds 30,90 \
-      --sl-multipliers 1.5 \
-      --final-targets TP2,TP3 \
-      --lock-after-tp1 True \
-      --lock-after-tp2 True,False
-
-    # Optional split diagnostic, not the default decision method
-    python tools/sweep.py ... --split-date 2026-01-01
 """
 from __future__ import annotations
 
@@ -111,6 +86,14 @@ _STRATEGY_FIELDS = {
     "entry_count", "entry_ladder", "entry_sl_gap",
     "activation_delay_minutes", "pending_expiry_minutes", "max_hold_minutes",
     "sl_multiplier", "final_target", "lock_after_tp1", "lock_after_tp2",
+}
+
+# Scoring values are set by CLI in main() before multiprocessing starts.
+_SCORING = {
+    "dd_weight": 50.0,
+    "worst_month_weight": 0.25,
+    "losing_month_weight": 50.0,
+    "losing_year_weight": 250.0,
 }
 
 
@@ -439,15 +422,6 @@ def _eval_config(combo: dict) -> dict:
     return out
 
 
-# Scoring values are set by CLI in main() before multiprocessing starts.
-_SCORING = {
-    "dd_weight": 50.0,
-    "worst_month_weight": 0.25,
-    "losing_month_weight": 50.0,
-    "losing_year_weight": 250.0,
-}
-
-
 # ---------------------------------------------------------------------------
 # grid expansion
 # ---------------------------------------------------------------------------
@@ -522,6 +496,37 @@ def _expand_chart_paths(patterns: list[str]) -> list[str]:
                 raise SystemExit(f"Chart file not found: {pat}")
             paths.append(pat)
     return paths
+
+
+def _fmt_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h:d}h {m:02d}m {s:02d}s"
+    if m:
+        return f"{m:d}m {s:02d}s"
+    return f"{s:d}s"
+
+
+def _progress_line(done: int, total: int, start: float, results: list[dict]) -> str:
+    elapsed = time.time() - start
+    rate = done / elapsed if elapsed > 0 and done > 0 else 0.0
+    eta = (total - done) / rate if rate > 0 else None
+    pct = done / total * 100.0 if total else 0.0
+    best_quality = max((r.get("quality_score", float("-inf")) for r in results), default=float("-inf"))
+    best_profit = max((r.get("net_profit", float("-inf")) for r in results), default=float("-inf"))
+    eta_text = _fmt_duration(eta) if eta is not None else "calculating"
+    rate_text = f"{rate:.2f} cfg/s" if rate > 0 else "waiting for first result"
+    if best_quality == float("-inf"):
+        best_text = "best: n/a"
+    else:
+        best_text = f"best quality={best_quality:,.2f}, best pnl={best_profit:,.2f}"
+    return (
+        f"  [{done}/{total}] {pct:5.1f}%  "
+        f"elapsed {_fmt_duration(elapsed)}  ETA {eta_text}  "
+        f"{rate_text}  {best_text}"
+    )
 
 
 def _print_top(df: pd.DataFrame, n: int, title: str, sort_col: str) -> None:
@@ -620,6 +625,8 @@ def main() -> int:
 
     p.add_argument("--workers", type=int,
                    default=max(1, (os.cpu_count() or 4) - 1))
+    p.add_argument("--progress-interval-minutes", type=float, default=5.0,
+                   help="Print a heartbeat at least every N minutes. Use 0 to disable time-based heartbeat.")
     p.add_argument("--top", type=int, default=20,
                    help="How many top configs to print per ranking.")
     p.add_argument("--max-configs", type=int, default=30000,
@@ -677,25 +684,59 @@ def main() -> int:
     chart_paths = _expand_chart_paths(args.charts)
     print(f"Workers: {args.workers}")
     print(f"Chart files: {len(chart_paths)}")
+    if args.progress_interval_minutes > 0:
+        print(f"Progress heartbeat: every {args.progress_interval_minutes:g} minutes")
+    else:
+        print("Progress heartbeat: disabled; completion-step progress only")
 
     start = time.time()
     results: list[dict] = []
+    completed = 0
+    total = len(combos)
+    progress_interval = max(0.0, args.progress_interval_minutes) * 60.0
+    next_heartbeat = start + progress_interval if progress_interval > 0 else float("inf")
+    step = max(1, total // 50)
+    next_step = step
+
     with mp.Pool(
         processes=args.workers,
         initializer=_init_worker,
         initargs=(chart_paths, args.signals, args.split_date),
     ) as pool:
-        step = max(1, len(combos) // 50)
-        for i, r in enumerate(pool.imap_unordered(_eval_config, combos, chunksize=1), start=1):
-            results.append(r)
-            if i % step == 0 or i == len(combos):
-                elapsed = time.time() - start
-                rate = i / elapsed if elapsed else 0.0
-                eta = (len(combos) - i) / rate if rate else 0.0
-                print(f"  [{i}/{len(combos)}]  {elapsed:.0f}s elapsed  ~{eta:.0f}s remaining")
+        iterator = pool.imap_unordered(_eval_config, combos, chunksize=1)
+        while completed < total:
+            got_result = False
+            try:
+                # Timeout keeps the parent process alive and able to print a
+                # heartbeat even while workers are still loading data or running
+                # long configurations.
+                result = iterator.next(timeout=1.0)
+                results.append(result)
+                completed += 1
+                got_result = True
+            except mp.TimeoutError:
+                pass
+
+            now = time.time()
+            due_by_time = now >= next_heartbeat
+            due_by_step = completed >= next_step
+            done = completed >= total
+
+            if due_by_time or due_by_step or done:
+                print(_progress_line(completed, total, start, results), flush=True)
+                while completed >= next_step:
+                    next_step += step
+                if due_by_time:
+                    # Avoid rapid catch-up prints after a long blocking period.
+                    missed = max(1, int((now - next_heartbeat) // progress_interval) + 1) if progress_interval > 0 else 1
+                    next_heartbeat += missed * progress_interval
+
+            # If a result arrived, loop immediately to drain available results.
+            if got_result:
+                continue
 
     elapsed = time.time() - start
-    print(f"\nCompleted {len(results)} configs in {elapsed:.0f}s "
+    print(f"\nCompleted {len(results)} configs in {_fmt_duration(elapsed)} "
           f"({elapsed / max(len(results), 1):.2f}s per config).")
 
     df = pd.DataFrame(results)
