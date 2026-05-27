@@ -120,12 +120,12 @@ from .forensic import (
 # 12. execution.mt5_executor
 from .execution.mt5_executor import (
     ExecutionLog,
-    Mt5Executor,
     SignalRegistry,
     render_execution_log,
     round_lot,
     signal_to_magic,
 )
+from .execution.mt5_executor_tp2 import Mt5Executor
 
 
 __all__ = [
