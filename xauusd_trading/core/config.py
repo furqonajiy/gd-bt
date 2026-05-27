@@ -1,11 +1,32 @@
 """Strategy configuration.
 
-Default strategy: Balanced Live Candidate.
+Default strategy: latest sweep Best PnL candidate.
 
-The default mirrors the optimized live execution candidate used by this
-project: 3 range entries, 2-minute activation delay, 5-minute pending TIF,
-90-minute max hold, SL x1.5, TP3 runner, TP1 and TP2 stop locks, and fixed
-0.5 lot per entry.
+The default mirrors the current broad-sweep highest-PnL candidate supplied from
+`sweep_risk`:
+
+- fixed sizing at 0.5 lot per entry
+- 3 signal-range entries
+- 2-minute activation delay
+- 5-minute pending TIF
+- 90-minute max hold
+- SL x1.5
+- TP3 final target
+- TP1 and TP2 stop locks enabled
+
+Latest observed sweep snapshot:
+
+- net_profit: 59,339.50
+- quality_score: 54,866.06
+- max_drawdown_pct: -76.67
+- win_rate_pct: 66.59
+- profit_factor: 1.24
+- positive_month_rate_pct: 61.54
+- losing_months: 10
+- worst_month: 2025-05 (-4,038.50)
+
+Note: this is the highest-PnL default, not necessarily the safest drawdown
+profile. Re-run tools/sweep.py after material signal/chart-data changes.
 """
 from __future__ import annotations
 from dataclasses import dataclass, replace
@@ -20,9 +41,9 @@ CHART_TIMEZONE_OFFSET = 3      # MT5 CSV is GMT+3
 class StrategyConfig:
     initial_capital: float = 1000.0
 
-    # Sizing. Default is fixed-lot because strategy comparison should not be
-    # distorted by compounding or changing SL distance. Set sizing_mode="risk"
-    # to use risk_per_signal instead.
+    # Sizing. Default is fixed-lot because the selected best-PnL candidate was
+    # evaluated with fixed 0.5 lot per entry. Set sizing_mode="risk" to use
+    # risk_per_signal instead.
     sizing_mode: str = "fixed"             # "fixed" | "risk"
     lot_per_entry: float = 0.5
     risk_per_signal: float = 0.05
@@ -47,6 +68,7 @@ class StrategyConfig:
 
 
 DEFAULT_CONFIG = StrategyConfig()
+BEST_PNL_CONFIG = DEFAULT_CONFIG
 BALANCED_LIVE_CONFIG = DEFAULT_CONFIG
 
 # Reference variants that should always be compared in sweeps.
