@@ -7,12 +7,9 @@
     2. After the pending window closes, mark unfilled entries NO_FILL.
     3. For OPEN entries, evaluate stop and target with same-bar worst-case
        priority (stop wins when both trigger).
-    4. When TP1 is touched while an entry is OPEN, advance to stage 1 and
-       record the touch time. An entry's stop locks to TP1 only if it was
-       already OPEN at that touch; an entry that fills later keeps its own
-       initial SL and is managed normally. A late fill is never handed an
-       instant TP1 exit — that would be lookahead.
-    5. After max_hold_minutes from first fill, time-exit any still-OPEN
+    4. When TP1 is touched, lock remaining open entries to TP1 if configured.
+    5. When TP2 is touched, lock remaining open entries to TP2 if configured.
+    6. After max_hold_minutes from first fill, time-exit any still-OPEN
        entries at bar close.
 
 Both the engine and the backtest runner call into here.
@@ -31,7 +28,7 @@ from .triggers import (
 )
 
 
-TERMINAL = {"NO_FILL", "SL", "LOCK_TP1", "TP1", "TP2", "TP3", "TIME_EXIT"}
+TERMINAL = {"NO_FILL", "SL", "LOCK_TP1", "LOCK_TP2", "TP1", "TP2", "TP3", "TIME_EXIT"}
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +42,7 @@ class Entry:
     entry_price: float
     initial_sl: float            # SL applied while position is in stage 0
     lot: float
-    status: str = "PENDING"      # PENDING | OPEN | NO_FILL | SL | LOCK_TP1 | TP1 | TP2 | TP3 | TIME_EXIT
+    status: str = "PENDING"      # PENDING | OPEN | NO_FILL | SL | LOCK_TP1 | LOCK_TP2 | TP1 | TP2 | TP3 | TIME_EXIT
     fill_time: Optional[datetime] = None
     exit_time: Optional[datetime] = None
     exit_price: Optional[float] = None
@@ -63,8 +60,9 @@ class Position:
     target_level: float                # the configured final target's price
     activation_time: datetime
     expiry_time: datetime              # pending orders die after this
-    stage: int = 0                     # 0 = initial SL; 1 = locked at TP1
-    stage1_time: Optional[datetime] = None  # bar time TP1 was touched (stage 0->1)
+    stage: int = 0                     # 0=initial SL; 1=locked TP1; 2=locked TP2
+    stage1_time: Optional[datetime] = None  # bar time TP1 was touched
+    stage2_time: Optional[datetime] = None  # bar time TP2 was touched
     first_fill_time: Optional[datetime] = None
     time_exit_deadline: Optional[datetime] = None
     last_processed_time: Optional[datetime] = None
@@ -85,25 +83,27 @@ class Position:
     def realized_pnl(self) -> float:
         return sum(e.pnl for e in self.entries if e.pnl is not None)
 
-    def lock_eligible(self, entry: Entry, lock_after_tp1: bool) -> bool:
-        """True iff `entry` was already OPEN when TP1 was touched.
+    def lock_stage_for(self, entry: Entry, lock_after_tp1: bool, lock_after_tp2: bool) -> int:
+        """Highest stop-lock stage that applies to this entry.
 
-        Only such entries lock their stop to TP1 in stage 1. An entry
-        that fills *after* the touch keeps its own initial SL: locking it
-        would let bar replay exit it at TP1 in its own fill bar — a price
-        not guaranteed reachable after the fill (lookahead).
+        Project rule: late fills inherit the current lock stage. If a new
+        entry fills after TP1/TP2 was already touched, its stop is immediately
+        TP1/TP2 rather than the original SL.
         """
-        return (
-                lock_after_tp1
-                and self.stage >= 1
-                and self.stage1_time is not None
-                and entry.fill_time is not None
-                and entry.fill_time <= self.stage1_time
-        )
+        if entry.fill_time is None:
+            return 0
+        if lock_after_tp2 and self.stage >= 2:
+            return 2
+        if lock_after_tp1 and self.stage >= 1:
+            return 1
+        return 0
 
-    def effective_stop_for(self, entry: Entry, lock_after_tp1: bool) -> float:
+    def effective_stop_for(self, entry: Entry, lock_after_tp1: bool, lock_after_tp2: bool = False) -> float:
         """The stop price currently protecting this entry."""
-        if self.lock_eligible(entry, lock_after_tp1):
+        stage = self.lock_stage_for(entry, lock_after_tp1, lock_after_tp2)
+        if stage >= 2:
+            return self.signal.tp2
+        if stage >= 1:
             return self.signal.tp1
         return entry.initial_sl
 
@@ -127,13 +127,7 @@ def compute_lot(
         equity: float, signal: Signal, config: StrategyConfig,
         contract_size: float = CONTRACT_SIZE_OZ,
 ) -> tuple[float, float]:
-    """Return (lot_per_entry, base_stop_distance).
-
-    All entries get the same lot, sized so total initial-SL price-risk
-    equals risk_per_signal x equity, then floored to the broker lot step
-    and clamped to the broker minimum. Lot rounding is unconditional —
-    if config.lot_step is 0, it falls back to 0.01.
-    """
+    """Return (lot_per_entry, base_stop_distance)."""
     entries = compute_entries(signal, config)
     if not entries:
         return 0.0, 0.0
@@ -141,6 +135,14 @@ def compute_lot(
     first = entries[0]
     raw_distance = first - signal.sl if signal.side == "BUY" else signal.sl - first
     base_stop_distance = raw_distance * config.sl_multiplier
+
+    if getattr(config, "sizing_mode", "risk") == "fixed":
+        lot = getattr(config, "lot_per_entry", 0.0)
+        step = config.lot_step if config.lot_step > 0 else 0.01
+        lot = _floor_to_step(lot, step)
+        if lot < config.minimum_lot - 1e-9:
+            lot = 0.0
+        return lot, base_stop_distance
 
     risk_amount = equity * config.risk_per_signal
     total_price_risk = sum(
@@ -206,6 +208,14 @@ def _close_entry(
     entry.pnl = _pnl(side, entry.entry_price, exit_price, entry.lot, contract_size)
 
 
+def _target_levels_hit(position: Position, side: str, h: float, l: float, sp: float) -> tuple[bool, bool, bool, bool]:
+    tp1_hit = target_trigger(side, h, l, position.signal.tp1, sp)
+    tp2_hit = target_trigger(side, h, l, position.signal.tp2, sp)
+    tp3_hit = target_trigger(side, h, l, position.signal.tp3, sp)
+    target_hit = target_trigger(side, h, l, position.target_level, sp)
+    return tp1_hit, tp2_hit, tp3_hit, target_hit
+
+
 def advance_one_bar(
         position: Position, bar: Bar, config: StrategyConfig,
         contract_size: float = CONTRACT_SIZE_OZ,
@@ -249,33 +259,29 @@ def advance_one_bar(
             if e.status == "PENDING":
                 e.status = "NO_FILL"
 
-    # 3. Stop / target. Worst-case: stop wins same bar.
+    # 3. Stop / target. Worst-case: active stop wins same bar.
     open_entries = position.open_entries()
     if open_entries:
-        tp1_hit = target_trigger(side, h, l, position.signal.tp1, sp)
-        target_hit = target_trigger(side, h, l, position.target_level, sp)
+        tp1_hit, tp2_hit, _tp3_hit, target_hit = _target_levels_hit(position, side, h, l, sp)
 
         for e in list(open_entries):
-            # An entry locks to TP1 only if it was OPEN when TP1 was
-            # touched. A later fill keeps its own initial SL — otherwise
-            # the locked stop sits past the entry price and the replay
-            # exits it at TP1 in its fill bar, a price not guaranteed
-            # reachable after the fill (lookahead).
-            locked = position.lock_eligible(e, config.lock_after_tp1)
-            stop_level = position.signal.tp1 if locked else e.initial_sl
+            stop_level = position.effective_stop_for(e, config.lock_after_tp1, config.lock_after_tp2)
+            lock_stage = position.lock_stage_for(e, config.lock_after_tp1, config.lock_after_tp2)
             if stop_trigger(side, h, l, stop_level, sp):
-                status = "LOCK_TP1" if locked else "SL"
+                status = "LOCK_TP2" if lock_stage >= 2 else "LOCK_TP1" if lock_stage >= 1 else "SL"
                 _close_entry(e, status, bar.time, stop_level, side, contract_size, stop_level)
             elif target_hit:
                 _close_entry(e, config.final_target.upper(), bar.time, position.target_level,
                              side, contract_size)
 
-        # 4. Stage advance: TP1 touched while an entry is OPEN -> stage 1.
-        #    stage1_time pins the touch so lock_eligible can tell entries
-        #    open-at-touch from later fills.
-        if config.lock_after_tp1 and position.stage == 0 and tp1_hit:
+        # 4. Stage advances happen after the stop/target check so a same-bar
+        #    target touch cannot create a retroactive stop on the same candle.
+        if config.lock_after_tp1 and position.stage < 1 and tp1_hit and position.open_entries():
             position.stage = 1
             position.stage1_time = bar.time
+        if config.lock_after_tp2 and position.stage < 2 and tp2_hit and position.open_entries():
+            position.stage = 2
+            position.stage2_time = bar.time
 
     # 5. Time exit at first bar at/after the deadline; closes at bar close.
     if position.time_exit_deadline is not None and bar.time >= position.time_exit_deadline:
