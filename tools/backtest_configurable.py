@@ -25,6 +25,8 @@ import argparse
 import glob
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 
 # Allow running as ``python tools/backtest_configurable.py`` from repo root.
@@ -85,6 +87,53 @@ def _summary_without_rows(result: dict) -> dict:
     return {k: v for k, v in result.items() if k not in {"rows", "entry_rows"}}
 
 
+def _fmt_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h:d}h {m:02d}m {s:02d}s"
+    if m:
+        return f"{m:d}m {s:02d}s"
+    return f"{s:d}s"
+
+
+class _Heartbeat:
+    """Periodic stderr progress message while a blocking step is running."""
+
+    def __init__(self, label: str, interval_seconds: float, *, enabled: bool = True):
+        self.label = label
+        self.interval_seconds = max(1.0, float(interval_seconds))
+        self.enabled = enabled
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._start = 0.0
+
+    def __enter__(self):
+        if not self.enabled:
+            return self
+        self._start = time.time()
+        print(f"[{self.label}] started", file=sys.stderr, flush=True)
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if not self.enabled:
+            return False
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        elapsed = time.time() - self._start
+        print(f"[{self.label}] finished after {_fmt_duration(elapsed)}", file=sys.stderr, flush=True)
+        return False
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_seconds):
+            elapsed = time.time() - self._start
+            print(f"[{self.label}] still running... elapsed {_fmt_duration(elapsed)}", file=sys.stderr, flush=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="backtest_configurable",
@@ -130,22 +179,47 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Return exit code 1 when abs(max_drawdown_pct) exceeds the configured limit.",
     )
+    p.add_argument(
+        "--progress-interval-seconds",
+        type=float,
+        default=15.0,
+        help="Print heartbeat progress every N seconds while loading/running. Use 0 to disable.",
+    )
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = _config_from_args(args)
+    progress_enabled = args.progress_interval_seconds > 0
 
+    print(f"Loading signals: {args.signals}", file=sys.stderr, flush=True)
     signals = parse_signals_file(Path(args.signals))
-    chart = CsvChartSource(_expand_chart_paths(args.charts))
+    print(f"Parsed signals: {len(signals):,}", file=sys.stderr, flush=True)
 
-    result = run_backtest(
-        signals,
-        chart,
-        config,
-        exclude_structural_anomalies=args.exclude_structural_anomalies,
+    chart_paths = _expand_chart_paths(args.charts)
+    print(f"Loading chart files: {len(chart_paths):,}", file=sys.stderr, flush=True)
+    with _Heartbeat("chart load", args.progress_interval_seconds, enabled=progress_enabled):
+        chart = CsvChartSource(chart_paths)
+    chart_rows = len(chart.dataframe)
+    print(
+        f"Loaded chart rows: {chart_rows:,} | range: {chart.first_time()} -> {chart.last_time()}",
+        file=sys.stderr,
+        flush=True,
     )
+
+    print(
+        f"Running backtest for {len(signals):,} signals...",
+        file=sys.stderr,
+        flush=True,
+    )
+    with _Heartbeat("backtest", args.progress_interval_seconds, enabled=progress_enabled):
+        result = run_backtest(
+            signals,
+            chart,
+            config,
+            exclude_structural_anomalies=args.exclude_structural_anomalies,
+        )
 
     summary = _summary_without_rows(result)
     max_dd_pct = float(result.get("max_drawdown_pct", 0.0) or 0.0)
@@ -156,7 +230,8 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(summary, indent=2, default=str))
 
     if args.output_dir:
-        path = write_backtest_outputs(result, Path(args.output_dir))
+        with _Heartbeat("Excel write", args.progress_interval_seconds, enabled=progress_enabled):
+            path = write_backtest_outputs(result, Path(args.output_dir))
         print(f"\nWrote Excel output to {path.resolve()}", file=sys.stderr)
 
     if args.fail_on_drawdown_limit and not summary["passes_drawdown_limit"]:
