@@ -2,7 +2,8 @@
 
 Walks signals chronologically. For each signal, opens a Position and
 advances it through bars from activation to expiry+max_hold. Equity
-compounds with realized P&L; the next signal sees the updated equity.
+compounds with realized P&L plus optional broker bonus/rebate; the next signal
+sees the updated equity.
 
 `decide()` is not invoked here — the engine always returns FOLLOW with
 the strategy's plan for backtest-eligible signals, so calling it would
@@ -61,6 +62,19 @@ def position_status(pos: Position) -> tuple[str, float]:
     return "BREAKEVEN", 0.0
 
 
+def _entry_closed_lots(pos: Position) -> float:
+    """Lots that closed during replay and therefore earn the broker bonus."""
+    return sum(
+        float(e.lot or 0.0)
+        for e in pos.entries
+        if e.fill_time is not None and e.exit_time is not None
+    )
+
+
+def _bonus_for_position(pos: Position, config: StrategyConfig) -> float:
+    return _entry_closed_lots(pos) * float(getattr(config, "bonus_per_closed_lot", 0.0) or 0.0)
+
+
 # ---------------------------------------------------------------------------
 # full backtest
 # ---------------------------------------------------------------------------
@@ -72,7 +86,8 @@ _STATUS_TO_KEY = {"WIN": "wins", "LOSS": "losses",
 def _new_bucket(key_name: str, key_value: str, equity_start: float) -> dict:
     return {
         key_name: key_value, "signals": 0, "wins": 0, "losses": 0,
-        "no_fills": 0, "open": 0, "pnl": 0.0,
+        "no_fills": 0, "open": 0,
+        "pnl": 0.0, "trading_pnl": 0.0, "bonus": 0.0, "closed_lots": 0.0,
         "equity_start": equity_start, "equity_end": equity_start,
     }
 
@@ -115,18 +130,29 @@ def run_backtest(
             continue
 
         pos = replay_signal(sig, chart_df, equity, config, contract_size)
-        status, pnl = position_status(pos)
-        equity_after = equity if status == "OPEN" else equity + pnl
+        status, trading_pnl = position_status(pos)
+        closed_lots = 0.0 if status == "OPEN" else _entry_closed_lots(pos)
+        bonus = 0.0 if status == "OPEN" else _bonus_for_position(pos, config)
+        total_pnl = trading_pnl + bonus if status != "OPEN" else None
+        equity_after = equity if status == "OPEN" else equity + float(total_pnl or 0.0)
         rows.append({
             "global_id": sig.global_id, "signal_key": sig.signal_key,
             "signal_time_chart": sig.signal_time_chart, "side": sig.side,
-            "status": status, "pnl": pnl if status != "OPEN" else None,
+            "status": status,
+            "pnl": total_pnl,
+            "trading_pnl": trading_pnl if status != "OPEN" else None,
+            "bonus": bonus if status != "OPEN" else None,
+            "closed_lots": closed_lots,
             "equity_before": equity, "equity_after": equity_after,
         })
 
         tz_label = (f"GMT+{sig.source_tz_offset}" if sig.source_tz_offset >= 0
                     else f"GMT{sig.source_tz_offset}")
         for e in pos.entries:
+            entry_closed_lots = float(e.lot or 0.0) if e.fill_time is not None and e.exit_time is not None and status != "OPEN" else 0.0
+            entry_bonus = entry_closed_lots * float(getattr(config, "bonus_per_closed_lot", 0.0) or 0.0)
+            entry_trading_pnl = e.pnl
+            entry_total_pnl = (entry_trading_pnl + entry_bonus) if entry_trading_pnl is not None and status != "OPEN" else entry_trading_pnl
             entry_rows.append({
                 "global_id": sig.global_id,
                 "signal_key": sig.signal_key,
@@ -153,7 +179,10 @@ def run_backtest(
                 "exit_time": e.exit_time,
                 "exit_price": e.exit_price,
                 "stop_at_exit": e.stop_at_exit,
-                "pnl": e.pnl,
+                "trading_pnl": entry_trading_pnl,
+                "closed_lots": entry_closed_lots,
+                "bonus": entry_bonus,
+                "pnl": entry_total_pnl,
                 "first_fill_time": pos.first_fill_time,
                 "time_exit_deadline": pos.time_exit_deadline,
                 "signal_status": status,
@@ -170,9 +199,12 @@ def run_backtest(
     losses = sum(1 for r in rows if r["status"] == "LOSS")
     no_fills = sum(1 for r in rows if r["status"] == "NO_FILL")
     open_count = sum(1 for r in rows if r["status"] == "OPEN")
-    realized = sum(r["pnl"] for r in rows if r["pnl"] is not None)
+    total_realized = sum(r["pnl"] for r in rows if r["pnl"] is not None)
+    trading_realized = sum((r.get("trading_pnl") or 0.0) for r in rows if r["pnl"] is not None)
+    total_bonus = sum((r.get("bonus") or 0.0) for r in rows if r["pnl"] is not None)
+    total_closed_lots = sum((r.get("closed_lots") or 0.0) for r in rows)
 
-    # Max drawdown across the equity curve.
+    # Max drawdown across the equity curve, including bonus-adjusted equity.
     max_dd_pct = 0.0
     peak = config.initial_capital
     for r in rows:
@@ -195,6 +227,9 @@ def run_backtest(
         bucket[_STATUS_TO_KEY.get(r["status"], "no_fills")] += 1
         if r["pnl"] is not None:
             bucket["pnl"] += r["pnl"]
+            bucket["trading_pnl"] += r.get("trading_pnl") or 0.0
+            bucket["bonus"] += r.get("bonus") or 0.0
+            bucket["closed_lots"] += r.get("closed_lots") or 0.0
         bucket["equity_end"] = r["equity_after"]
     monthly_rows = sorted(monthly.values(), key=lambda b: b["month"])
     for b in monthly_rows:
@@ -212,6 +247,9 @@ def run_backtest(
         bucket[_STATUS_TO_KEY.get(r["status"], "no_fills")] += 1
         if r["pnl"] is not None:
             bucket["pnl"] += r["pnl"]
+            bucket["trading_pnl"] += r.get("trading_pnl") or 0.0
+            bucket["bonus"] += r.get("bonus") or 0.0
+            bucket["closed_lots"] += r.get("closed_lots") or 0.0
         bucket["equity_end"] = r["equity_after"]
 
     daily_rows: list[dict] = []
@@ -243,7 +281,10 @@ def run_backtest(
         "signals_excluded": len(excluded),
         "final_equity": equity,
         "net_profit": equity - config.initial_capital,
-        "realized_pnl": realized,
+        "realized_pnl": total_realized,
+        "trading_pnl": trading_realized,
+        "bonus": total_bonus,
+        "closed_lots": total_closed_lots,
         "wins": wins, "losses": losses, "no_fills": no_fills, "open": open_count,
         "win_rate_pct": wins / (wins + losses) * 100.0 if (wins + losses) else 0.0,
         "max_drawdown_pct": max_dd_pct,
