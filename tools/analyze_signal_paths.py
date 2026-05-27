@@ -11,7 +11,7 @@ Example:
       --max-hold 90 \
       --sl-multiplier 1.5 \
       --final-target TP3 \
-      --entry-ladder range_uniform \
+      --entry-ladder signal_range_3 \
       --near-tp1-dollars 1.0
 """
 from __future__ import annotations
@@ -53,6 +53,8 @@ def _expand_chart_paths(patterns: list[str]) -> list[Path]:
 def _config_from_args(args: argparse.Namespace) -> StrategyConfig:
     return StrategyConfig(
         initial_capital=args.initial_capital,
+        sizing_mode=args.sizing_mode,
+        lot_per_entry=args.lot,
         risk_per_signal=args.risk,
         entry_count=args.entries,
         entry_ladder=args.entry_ladder,
@@ -63,6 +65,7 @@ def _config_from_args(args: argparse.Namespace) -> StrategyConfig:
         sl_multiplier=args.sl_multiplier,
         final_target=args.final_target,
         lock_after_tp1=not args.no_lock_after_tp1,
+        lock_after_tp2=not args.no_lock_after_tp2,
         minimum_lot=args.minimum_lot,
         lot_step=args.lot_step,
     )
@@ -82,13 +85,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Classify a signal as 'almost TP1' if price comes within this many dollars of TP1.",
     )
 
-    # Strategy inputs. Defaults mirror the package config; pass the balanced
-    # candidate values explicitly when using the optimized live setup.
     p.add_argument("--initial-capital", type=float, default=DEFAULT_CONFIG.initial_capital)
+    p.add_argument("--sizing-mode", default=DEFAULT_CONFIG.sizing_mode, choices=["fixed", "risk"])
+    p.add_argument("--lot", type=float, default=DEFAULT_CONFIG.lot_per_entry)
     p.add_argument("--risk", type=float, default=DEFAULT_CONFIG.risk_per_signal)
     p.add_argument("--entries", type=int, default=DEFAULT_CONFIG.entry_count)
     p.add_argument("--entry-ladder", default=DEFAULT_CONFIG.entry_ladder,
-                   choices=["range_uniform", "range_to_sl"])
+                   choices=["signal_range_3", "range_uniform", "range_to_sl"])
     p.add_argument("--entry-sl-gap", type=float, default=DEFAULT_CONFIG.entry_sl_gap)
     p.add_argument("--activation-delay", type=int, default=DEFAULT_CONFIG.activation_delay_minutes)
     p.add_argument("--pending-expiry", type=int, default=DEFAULT_CONFIG.pending_expiry_minutes)
@@ -97,6 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--final-target", default=DEFAULT_CONFIG.final_target,
                    choices=["TP1", "TP2", "TP3"])
     p.add_argument("--no-lock-after-tp1", action="store_true")
+    p.add_argument("--no-lock-after-tp2", action="store_true")
     p.add_argument("--minimum-lot", type=float, default=DEFAULT_CONFIG.minimum_lot)
     p.add_argument("--lot-step", type=float, default=DEFAULT_CONFIG.lot_step)
     return p
