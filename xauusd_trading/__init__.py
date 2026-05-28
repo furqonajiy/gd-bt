@@ -32,7 +32,33 @@ def _install_auto_execution_history_filter() -> None:
         return
 
     original_print = builtins.print
+    original_stdout = sys.stdout
     state = {"dashboard": False, "reconcile": False}
+
+    class _AutoHistoryStdout:
+        """Suppress auto's screen-clear refresh while preserving real output."""
+
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+
+        def write(self, data):
+            # _run_auto_watch clears the terminal every iteration with this
+            # escape sequence. Hide it so Auto behaves like an append-only
+            # activity log instead of a refreshing dashboard.
+            if data == "\x1b[H\x1b[J":
+                return len(data)
+            cleaned = data.replace("\x1b[H\x1b[J", "")
+            if cleaned == "":
+                return len(data)
+            return self._wrapped.write(cleaned)
+
+        def flush(self):
+            return self._wrapped.flush()
+
+        def __getattr__(self, name):
+            return getattr(self._wrapped, name)
+
+    sys.stdout = _AutoHistoryStdout(original_stdout)
 
     def _is_replay_detail_line(line: str) -> bool:
         stripped = line.strip()
