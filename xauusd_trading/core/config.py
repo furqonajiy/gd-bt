@@ -72,6 +72,12 @@ class StrategyConfig:
     lock_after_tp1: bool = True
     lock_after_tp2: bool = True
 
+    # Delayed stop-lock timing. 0 keeps the old behavior: TP1/TP2 lock is
+    # applied right after the target-touch candle is processed. Positive values
+    # wait N full minutes after first touch before raising the stop.
+    tp1_lock_delay_minutes: int = 0
+    tp2_lock_delay_minutes: int = 0
+
     # Profit-lock model:
     # - "tp_levels": old validated rule; after TP1 lock stop at TP1, after TP2
     #   lock stop at TP2, and close at final_target.
