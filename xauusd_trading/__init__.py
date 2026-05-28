@@ -10,6 +10,85 @@ imports.
 """
 from __future__ import annotations
 
+
+def _install_auto_execution_history_filter() -> None:
+    """Keep live auto stdout focused on execution/history only.
+
+    Auto mode used to render a full live dashboard, including the dual replay
+    block that compares "if executed on time" against actual MT5 execution.
+    In unattended auto execution that projection is noisy; operators only need
+    the event/history stream: placements, reconciliation, SL moves, cancels,
+    closes, warnings, and hard errors.
+
+    This is intentionally scoped to the CLI `auto` subcommand so backtest,
+    decide, manage, tests, and library imports keep their normal output.
+    """
+    import builtins
+    import sys
+
+    if "auto" not in sys.argv[1:3]:
+        return
+    if getattr(builtins.print, "_xauusd_auto_history_filter", False):
+        return
+
+    original_print = builtins.print
+    state = {"dashboard": False, "reconcile": False}
+
+    def history_only_print(*args, **kwargs):
+        file = kwargs.get("file", sys.stdout)
+        if file is not sys.stdout:
+            return original_print(*args, **kwargs)
+
+        sep = kwargs.get("sep", " ")
+        text = sep.join(str(arg) for arg in args)
+        stripped = text.strip()
+
+        # Keep execution/history records.
+        if stripped.startswith("EXECUTION:"):
+            state["dashboard"] = False
+            state["reconcile"] = False
+            return original_print(*args, **kwargs)
+        if stripped.startswith("RECONCILIATION:"):
+            state["dashboard"] = False
+            state["reconcile"] = True
+            return original_print(*args, **kwargs)
+        if state["reconcile"]:
+            original_print(*args, **kwargs)
+            if stripped == "":
+                state["reconcile"] = False
+            return None
+
+        # Keep actionable failures/errors, but hide routine archive/loop noise.
+        if stripped.startswith((
+            "SANITY CHECKS FAILED",
+            "[signals]",
+            "[mt5]",
+            "Interrupted;",
+        )):
+            state["dashboard"] = False
+            return original_print(*args, **kwargs)
+        if stripped.startswith("Archive:"):
+            return None
+
+        # Hide auto loop and dashboard/projection output.
+        if text.startswith("[auto iter #"):
+            return None
+        if stripped == "=" * 70:
+            return None
+        if stripped.startswith("XAUUSD AUTO MODE"):
+            state["dashboard"] = True
+            return None
+        if state["dashboard"]:
+            return None
+
+        return original_print(*args, **kwargs)
+
+    history_only_print._xauusd_auto_history_filter = True
+    builtins.print = history_only_print
+
+
+_install_auto_execution_history_filter()
+
 # 1. core.config
 from .core.config import (
     BALANCED_LIVE_CONFIG,
