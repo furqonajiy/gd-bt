@@ -6,7 +6,8 @@ This branch is optimized for provider-style VICTOR XAUUSD signals filtered by
 ``high_growth_hour_side``. The same defaults are used by backtest, ``decide``,
 ``manage``, and ``auto`` unless explicitly overridden.
 
-Current best bonus-aware candidate from the uploaded provider signal sample:
+Current best bonus-aware candidate from the uploaded provider signal sample with
+max drawdown capped at 40%:
 
 - filtered signal file using high_growth_hour_side
 - initial capital: 10,000
@@ -19,14 +20,16 @@ Current best bonus-aware candidate from the uploaded provider signal sample:
 - SL x1.5
 - TP3 final target
 - TP1 and TP2 stop locks enabled
+- TP1 stop-lock delay: 1 minute
+- TP2 stop-lock delay: 0 minutes
 - closed-lot bonus/rebate: $3 per closed lot
 
 Observed snapshot from local validation on the uploaded sample:
 
-- net profit including bonus: about +$1.475M
-- trading P&L: about +$1.457M
-- closed-lot bonus: about +$18.4k
-- max drawdown: about -39.75%
+- net profit including bonus: about +$2.195M
+- trading P&L: about +$2.171M
+- closed-lot bonus: about +$23.2k
+- max drawdown: about -39.74%
 
 This is extremely aggressive and should be paper/forward-tested before live
 size. Use LOWER_RISK_PROVIDER_CONFIG for warm-up.
@@ -75,7 +78,7 @@ class StrategyConfig:
     # Delayed stop-lock timing. 0 keeps the old behavior: TP1/TP2 lock is
     # applied right after the target-touch candle is processed. Positive values
     # wait N full minutes after first touch before raising the stop.
-    tp1_lock_delay_minutes: int = 0
+    tp1_lock_delay_minutes: int = 1
     tp2_lock_delay_minutes: int = 0
 
     # Profit-lock model:
