@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""Run live auto-execution with the current DD30 research contract.
+"""Run live auto-execution with the current DD40 research contract.
 
 The project DEFAULT_CONFIG on feature/improve is set to the current best tested
-candidate with max drawdown <= 30%. This wrapper passes only the strategy flags
+candidate with max drawdown <= 40%. This wrapper passes only the strategy flags
 that ``xauusd_trading.cli auto`` supports directly and relies on DEFAULT_CONFIG
 for the rest of the execution contract.
 
 Current backtest-aligned contract:
 
-- risk: 0.11307
-- entries: 5
+- risk: 0.05575
+- entries: 3
 - entry ladder: range_to_sl
 - entry-to-SL gap: 2.0
-- activation delay: 3 minutes  (from DEFAULT_CONFIG)
-- pending expiry: 5 minutes    (from DEFAULT_CONFIG)
-- max hold: 80 minutes         (from DEFAULT_CONFIG)
-- SL multiplier: 1.61          (from DEFAULT_CONFIG)
-- final target: TP3            (from DEFAULT_CONFIG)
-- lock after TP1: true         (from DEFAULT_CONFIG)
-- lock after TP2: false        (from DEFAULT_CONFIG)
+- activation delay: 3 minutes    (from DEFAULT_CONFIG)
+- pending expiry: 630 minutes    (from DEFAULT_CONFIG)
+- max hold: 90 minutes           (from DEFAULT_CONFIG)
+- SL multiplier: 1.61            (from DEFAULT_CONFIG)
+- final target: TP3              (from DEFAULT_CONFIG)
+- lock after TP1: true           (from DEFAULT_CONFIG)
+- lock after TP2: false          (from DEFAULT_CONFIG)
 
 The auto command should read the FILTERED signal file produced by
 ``tools/live_provider_signal_filter.py``. Do not execute the raw Telegram signal
@@ -32,7 +32,7 @@ import sys
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Run DD30 high-growth live auto execution.")
+    p = argparse.ArgumentParser(description="Run DD40 high-growth live auto execution.")
     p.add_argument("--signals", default="generated/live_provider_high_growth.txt")
     p.add_argument("--positions-json", default="positions_high_growth.json")
     p.add_argument("--watch-interval", type=float, default=5.0)
@@ -43,8 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mt5-login", default=None)
     p.add_argument("--mt5-password", default=None)
     p.add_argument("--mt5-server", default=None)
-    p.add_argument("--risk", type=float, default=0.11307)
-    p.add_argument("--entries", type=int, default=5)
+    p.add_argument("--risk", type=float, default=0.05575)
+    p.add_argument("--entries", type=int, default=3)
     p.add_argument("--entry-ladder", default="range_to_sl", choices=["range_uniform", "range_to_sl"])
     p.add_argument("--entry-sl-gap", type=float, default=2.0)
     p.add_argument("--no-clear", action="store_true")
