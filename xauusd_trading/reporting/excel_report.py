@@ -339,6 +339,8 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
 ENTRY_COLUMNS = [
     ("global_id", "Sig ID", None),
     ("signal_key", "Sig Key", None),
+    ("entry_key", "Entry Key", None),
+    ("entry_number", "Entry #", None),
     ("signal_date", "Date", None),
     ("signal_time_source", "Time (src)", None),
     ("source_tz", "Src TZ", None),
@@ -352,7 +354,6 @@ ENTRY_COLUMNS = [
     ("TP3", "TP3", "price"),
     ("final_target_label", "Tgt Lbl", None),
     ("final_target_price", "Tgt Price", "price"),
-    ("entry_index", "Entry #", None),
     ("entry_price", "Entry Price", "price"),
     ("effective_SL", "Effective SL", "price"),
     ("SL_distance", "SL Dist ($)", "price"),

@@ -52,6 +52,20 @@ def signal_to_magic(signal_key: str) -> int:
     return int.from_bytes(h[:4], "big") & 0x7FFFFFFF
 
 
+def signal_entry_key(signal_key: str, entry_index: int) -> str:
+    """Human-readable one-based key for a generated entry."""
+    return f"{signal_key}.{entry_index + 1}"
+
+
+def mt5_entry_comment(signal_key: str, entry_index: int, max_len: int = 31) -> str:
+    """MT5-safe per-entry comment preserving the one-based entry suffix."""
+    suffix = f".{entry_index + 1}"
+    prefix_len = max_len - len(suffix)
+    if prefix_len <= 0:
+        return suffix[-max_len:]
+    return f"{signal_key[:prefix_len]}{suffix}"
+
+
 def round_lot(lot: float, min_lot: float = 0.01, lot_step: float = 0.01) -> float:
     """Floor `lot` to a multiple of `lot_step` and enforce `min_lot`.
 
@@ -391,7 +405,6 @@ class Mt5Executor:
         """
         log = ExecutionLog()
         magic = signal_to_magic(signal.signal_key)
-        comment = signal.signal_key[:31]
 
         # Re-entry guard: don't place if MT5 already has a footprint for
         # this magic (defends against duplicate placement within a session
@@ -419,6 +432,8 @@ class Mt5Executor:
                 )
                 continue
 
+            comment = mt5_entry_comment(signal.signal_key, o.entry_index)
+            entry_key = signal_entry_key(signal.signal_key, o.entry_index)
             request = {
                 "action":       self.mt5.TRADE_ACTION_PENDING,
                 "symbol":       self.symbol,
@@ -452,7 +467,7 @@ class Mt5Executor:
             else:
                 log.placed += 1
                 log.actions.append(
-                    f"  #{o.entry_index}: placed ticket={res.order} "
+                    f"  {entry_key}: placed ticket={res.order} comment={comment} "
                     f"@ {request['price']:g} lot={lot} "
                     f"SL={request['sl']:g} TP={request['tp']:g}"
                 )
