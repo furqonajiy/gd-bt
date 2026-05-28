@@ -10,22 +10,26 @@ Run from repo root:
 from __future__ import annotations
 from pathlib import Path
 
+import pytest
+
 from xauusd_trading import (
     BALANCED_LIVE_CONFIG, CsvChartSource, parse_signals_file, run_backtest,
 )
 
 REPO = Path(__file__).resolve().parents[1]
-CHART_FILE = REPO / "data" / "XAUUSD_M1_202604.csv"
+DATA_DIR = REPO / "data"
+CHART_FILES = sorted(DATA_DIR.glob("XAUUSD_M1_*.csv"))
 
 
 def test_backtest_runs_balanced_default():
-    assert CHART_FILE.exists(), (
-        f"Missing chart file: {CHART_FILE}. "
-        f"Place your April-2026 MT5 export there before running this test."
-    )
+    if not CHART_FILES:
+        pytest.skip(
+            f"No chart files found under {DATA_DIR}. "
+            "Place at least one XAUUSD_M1_*.csv export before running this smoke test."
+        )
 
     signals = parse_signals_file(REPO / "signals.txt")
-    chart = CsvChartSource([CHART_FILE])
+    chart = CsvChartSource(CHART_FILES)
     result = run_backtest(signals, chart, BALANCED_LIVE_CONFIG)
 
     actuals = {
