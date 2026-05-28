@@ -18,6 +18,11 @@ Example:
       --sl-multiplier 1.5 \
       --final-target TP3 \
       --bonus-per-closed-lot 3 \
+      --profit-lock-mode bep_plus_half_tp1 \
+      --bep-trigger-distance 3 \
+      --tp1-lock-fraction 0.5 \
+      --tp2-lock-target TP1 \
+      --runner-after-tp3 \
       --max-drawdown-limit-pct 40
 """
 from __future__ import annotations
@@ -82,6 +87,12 @@ def _config_from_args(args: argparse.Namespace) -> StrategyConfig:
         final_target=args.final_target,
         lock_after_tp1=not args.no_lock_after_tp1,
         lock_after_tp2=not args.no_lock_after_tp2,
+        profit_lock_mode=args.profit_lock_mode,
+        bep_trigger_distance=args.bep_trigger_distance,
+        tp1_lock_fraction=args.tp1_lock_fraction,
+        tp2_lock_target=args.tp2_lock_target,
+        runner_after_tp3=args.runner_after_tp3,
+        tp3_lock_target=args.tp3_lock_target,
     )
 
 
@@ -175,6 +186,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--final-target", default=DEFAULT_CONFIG.final_target, choices=["TP1", "TP2", "TP3"])
     p.add_argument("--no-lock-after-tp1", action="store_true")
     p.add_argument("--no-lock-after-tp2", action="store_true")
+
+    p.add_argument(
+        "--profit-lock-mode",
+        default=DEFAULT_CONFIG.profit_lock_mode,
+        choices=["tp_levels", "bep_plus_half_tp1"],
+        help="tp_levels = old TP1/TP2 locks. bep_plus_half_tp1 = BEP at +N, half-TP1 lock after TP1, TP1 lock after TP2.",
+    )
+    p.add_argument("--bep-trigger-distance", type=float, default=DEFAULT_CONFIG.bep_trigger_distance)
+    p.add_argument("--tp1-lock-fraction", type=float, default=DEFAULT_CONFIG.tp1_lock_fraction)
+    p.add_argument("--tp2-lock-target", default=DEFAULT_CONFIG.tp2_lock_target, choices=["TP1", "TP2"])
+    p.add_argument("--runner-after-tp3", action="store_true", help="Do not close at TP3; after TP3, lock stop to TP2 and keep running until stop/time exit.")
+    p.add_argument("--tp3-lock-target", default=DEFAULT_CONFIG.tp3_lock_target, choices=["TP2"])
 
     p.add_argument(
         "--max-drawdown-limit-pct",
