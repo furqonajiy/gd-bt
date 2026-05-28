@@ -5,7 +5,7 @@ live price had already moved far above the entry, causing MT5 retcode=10015
 Invalid price every watch interval.
 """
 from __future__ import annotations
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from xauusd_trading import DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, PlannedOrder, parse_one_signal
 
@@ -66,6 +66,7 @@ class _FakeConn:
 
 def _make_plan(signal, *, entry_price: float, initial_sl: float, target: float):
     now = signal.signal_time_chart + timedelta(minutes=DEFAULT_CONFIG.activation_delay_minutes)
+    risk_dollars = 10.0
     return NewSignalPlan(
         signal=signal,
         action="FOLLOW",
@@ -77,12 +78,13 @@ def _make_plan(signal, *, entry_price: float, initial_sl: float, target: float):
                 entry_price=entry_price,
                 initial_sl=initial_sl,
                 lot=0.13,
-                risk_dollars=10.0,
+                risk_dollars=risk_dollars,
             )
         ],
         pending_expires_at=now + timedelta(minutes=DEFAULT_CONFIG.pending_expiry_minutes),
         final_target_label="TP3",
         final_target_price=target,
+        total_initial_risk_dollars=risk_dollars,
     )
 
 
