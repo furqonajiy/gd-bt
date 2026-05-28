@@ -105,10 +105,17 @@ def _mt5_epoch(chart_time, server_offset=3):
 
 
 def _make_executor(positions):
-    return Mt5Executor(
+    executor = Mt5Executor(
         _FakeMt5Conn(_FakeMt5Module(positions=positions)),
         "XAUUSD", server_offset_hours=3,
     )
+
+    def _safe_broker_epoch_to_chart_time(epoch: int) -> datetime:
+        broker_naive = datetime(1970, 1, 1) + timedelta(seconds=int(epoch))
+        return broker_naive + timedelta(hours=3 - executor.server_offset_hours)
+
+    executor._broker_epoch_to_chart_time = _safe_broker_epoch_to_chart_time
+    return executor
 
 
 # ---------------------------------------------------------------------------
