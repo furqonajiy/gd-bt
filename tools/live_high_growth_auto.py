@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Run live auto-execution with the best bonus-aware backtest contract.
+"""Run live auto-execution with the current 50% drawdown research contract.
 
-This wrapper avoids live/backtest config drift. The project DEFAULT_CONFIG on
-feature/improve is already set to the current best candidate, and this wrapper
-also passes the key supported CLI flags explicitly:
+The project DEFAULT_CONFIG on feature/improve is set to the current best tested
+candidate. This wrapper passes the key supported CLI flags explicitly so the
+launcher is clear and repeatable:
 
-- risk: 0.10
-- entries: 4
-- entry ladder: range_uniform
+- risk: 0.14222
+- entries: 3
+- entry ladder: signal_range_3
 
 The auto command should read the FILTERED signal file produced by
 ``tools/live_provider_signal_filter.py``. Do not execute the raw Telegram signal
@@ -32,9 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mt5-login", default=None)
     p.add_argument("--mt5-password", default=None)
     p.add_argument("--mt5-server", default=None)
-    p.add_argument("--risk", type=float, default=0.10)
-    p.add_argument("--entries", type=int, default=4)
-    p.add_argument("--entry-ladder", default="range_uniform", choices=["range_uniform", "range_to_sl"])
+    p.add_argument("--risk", type=float, default=0.14222)
+    p.add_argument("--entries", type=int, default=3)
+    p.add_argument("--entry-ladder", default="signal_range_3", choices=["signal_range_3", "range_uniform", "range_to_sl"])
     p.add_argument("--no-clear", action="store_true")
     p.add_argument("--no-notifications", action="store_true")
     p.add_argument("--no-forensic", action="store_true")
