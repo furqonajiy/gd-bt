@@ -83,4 +83,3 @@ def test_dd40_command_backtest_runs_end_to_end():
     assert result["wins"] + result["losses"] + result["no_fills"] + result["open"] == result["signals_included"]
     assert result["final_equity"] is not None
     assert result["max_drawdown_pct"] <= 0.0
-}
