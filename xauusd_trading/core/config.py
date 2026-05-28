@@ -72,6 +72,17 @@ class StrategyConfig:
     lock_after_tp1: bool = True
     lock_after_tp2: bool = True
 
+    # Profit-lock model:
+    # - "tp_levels": old validated rule; after TP1 lock stop at TP1, after TP2
+    #   lock stop at TP2.
+    # - "bep_plus_half_tp1": research rule; after price moves +N from each
+    #   entry, lock that entry at BEP. After TP1, lock remaining entries at
+    #   entry + fraction*(TP1-entry). After TP2, lock remaining entries at TP1.
+    profit_lock_mode: str = "tp_levels"
+    bep_trigger_distance: float = 3.0
+    tp1_lock_fraction: float = 0.5
+    tp2_lock_target: str = "TP1"            # "TP1" | "TP2"
+
 
 DEFAULT_CONFIG = StrategyConfig()
 BEST_PNL_CONFIG = DEFAULT_CONFIG
