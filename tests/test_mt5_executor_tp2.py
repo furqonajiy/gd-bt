@@ -1,10 +1,11 @@
 """Regression tests for TP2 live-execution parity.
 
-The backtest/replay engine moves the effective stop to TP2 once TP2 has been
-touched.  The public Mt5Executor should therefore move live broker SLs to TP2
-when the replayed Position reaches stage 2.
+DD40 disables TP2 locking by default. This test enables it explicitly to keep
+coverage for the TP2-capable executor wrapper without changing the selected
+DD40 live contract.
 """
 from __future__ import annotations
+from dataclasses import replace
 from datetime import datetime
 
 from xauusd_trading import DEFAULT_CONFIG, Mt5Executor, open_position, parse_one_signal, signal_to_magic
@@ -82,12 +83,13 @@ class _FakeConn:
 
 
 def test_public_mt5_executor_moves_live_sl_to_tp2_when_engine_stage_is_2():
+    config = replace(DEFAULT_CONFIG, lock_after_tp2=True)
     signal = parse_one_signal(
         "1. BUY XAUUSD 4518 - 4516 SL 4511 TP1 4526 TP2 4536 TP3 4551 11:25 AM",
         source_date="2026-05-05",
         source_offset=7,
     )
-    pos = open_position(signal, equity=1000.0, config=DEFAULT_CONFIG)
+    pos = open_position(signal, equity=1000.0, config=config)
     pos.stage = 2
     pos.stage1_time = datetime(2026, 5, 5, 7, 30)
     pos.stage2_time = datetime(2026, 5, 5, 7, 35)
@@ -104,7 +106,7 @@ def test_public_mt5_executor_moves_live_sl_to_tp2_when_engine_stage_is_2():
     mt5 = _FakeMt5([mt5_pos])
     executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
 
-    log = executor.manage_position(pos, DEFAULT_CONFIG, datetime(2026, 5, 5, 7, 36))
+    log = executor.manage_position(pos, config, datetime(2026, 5, 5, 7, 36))
 
     assert mt5_pos.sl == signal.tp2
     assert any(req.get("action") == mt5.TRADE_ACTION_SLTP and req.get("sl") == signal.tp2 for req in mt5.requests)
