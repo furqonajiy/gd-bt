@@ -63,9 +63,10 @@ class Position:
     target_level: float                # the configured final target's price
     activation_time: datetime
     expiry_time: datetime              # pending orders die after this
-    stage: int = 0                     # tp_levels: 0=SL,1=TP1,2=TP2; bep_plus_half_tp1: 0=SL/BEP,1=half TP1,2=TP1/TP2
+    stage: int = 0                     # tp_levels: 0=SL,1=TP1,2=TP2,3=TP3 runner lock
     stage1_time: Optional[datetime] = None  # bar time TP1 was touched
     stage2_time: Optional[datetime] = None  # bar time TP2 was touched
+    stage3_time: Optional[datetime] = None  # bar time TP3 was touched in runner mode
     first_fill_time: Optional[datetime] = None
     time_exit_deadline: Optional[datetime] = None
     last_processed_time: Optional[datetime] = None
@@ -90,11 +91,13 @@ class Position:
         """Highest global stop-lock stage that applies to this entry.
 
         Project rule: late fills inherit the current lock stage. If a new
-        entry fills after TP1/TP2 was already touched, its stop is immediately
+        entry fills after TP1/TP2/TP3 was already touched, its stop is immediately
         adjusted rather than the original SL.
         """
         if entry.fill_time is None:
             return 0
+        if self.stage >= 3:
+            return 3
         if lock_after_tp2 and self.stage >= 2:
             return 2
         if lock_after_tp1 and self.stage >= 1:
@@ -109,6 +112,10 @@ class Position:
 
     def _tp2_lock_stop(self, config: StrategyConfig) -> float:
         return self.signal.tp2 if getattr(config, "tp2_lock_target", "TP1").upper() == "TP2" else self.signal.tp1
+
+    def _tp3_runner_stop(self, config: StrategyConfig) -> float:
+        # User-requested runner rule: after TP3, lock stop profit to TP2.
+        return self.signal.tp2
 
     def effective_stop_for(self, entry: Entry, config_or_lock_after_tp1, lock_after_tp2: bool = False) -> float:
         """The stop price currently protecting this entry.
@@ -129,6 +136,8 @@ class Position:
 
         stage = self.lock_stage_for(entry, lock_after_tp1, lock_after_tp2)
         if mode == "bep_plus_half_tp1" and config is not None:
+            if stage >= 3:
+                return self._tp3_runner_stop(config)
             if stage >= 2:
                 return self._tp2_lock_stop(config)
             if stage >= 1:
@@ -137,6 +146,8 @@ class Position:
                 return entry.entry_price
             return entry.initial_sl
 
+        if stage >= 3:
+            return self.signal.tp2
         if stage >= 2:
             return self.signal.tp2
         if stage >= 1:
@@ -262,6 +273,8 @@ def _bep_triggered(side: str, entry: Entry, h: float, l: float, sp: float, trigg
 def _stop_status(lock_stage: int, stop_level: float, entry: Entry, config: StrategyConfig) -> str:
     mode = getattr(config, "profit_lock_mode", "tp_levels")
     if mode == "bep_plus_half_tp1":
+        if lock_stage >= 3:
+            return "LOCK_TP2"
         if lock_stage >= 2:
             return "LOCK_TP2" if getattr(config, "tp2_lock_target", "TP1").upper() == "TP2" else "LOCK_TP1"
         if lock_stage >= 1:
@@ -318,7 +331,8 @@ def advance_one_bar(
     # 3. Stop / target. Worst-case: active stop wins same bar.
     open_entries = position.open_entries()
     if open_entries:
-        tp1_hit, tp2_hit, _tp3_hit, target_hit = _target_levels_hit(position, side, h, l, sp)
+        tp1_hit, tp2_hit, tp3_hit, target_hit = _target_levels_hit(position, side, h, l, sp)
+        runner_after_tp3 = bool(getattr(config, "runner_after_tp3", False)) and config.final_target.upper() == "TP3"
 
         # Early BEP is applied before stop evaluation. Same-bar worst-case still
         # applies: if +3 and BEP are both possible inside one M1 bar, BEP stop wins.
@@ -333,7 +347,7 @@ def advance_one_bar(
             if stop_trigger(side, h, l, stop_level, sp):
                 status = _stop_status(lock_stage, stop_level, e, config)
                 _close_entry(e, status, bar.time, stop_level, side, contract_size, stop_level)
-            elif target_hit:
+            elif target_hit and not runner_after_tp3:
                 _close_entry(e, config.final_target.upper(), bar.time, position.target_level,
                              side, contract_size)
 
@@ -345,6 +359,9 @@ def advance_one_bar(
         if config.lock_after_tp2 and position.stage < 2 and tp2_hit and position.open_entries():
             position.stage = 2
             position.stage2_time = bar.time
+        if runner_after_tp3 and position.stage < 3 and tp3_hit and position.open_entries():
+            position.stage = 3
+            position.stage3_time = bar.time
 
     # 5. Time exit at first bar at/after the deadline; closes at bar close.
     if position.time_exit_deadline is not None and bar.time >= position.time_exit_deadline:
