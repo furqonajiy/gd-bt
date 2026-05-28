@@ -2,27 +2,39 @@
 
 Default strategy: bonus-aware provider execution contract.
 
-The defaults in this branch are aligned with the current best 50% max-drawdown
-research candidate from the uploaded provider signal sample. Use the filtered
+The defaults in this branch are aligned with the current best 40% max-drawdown
+candidate found from the uploaded provider signal sample. Use the filtered
 ``generated/live_provider_high_growth.txt`` signal file for parity between
 backtest and auto execution.
 
 Current default contract:
 
 - sizing: risk mode
-- risk per signal: 0.14222
+- risk per signal: 0.05575
 - entries: 3
-- entry ladder: signal_range_3
-- activation delay: 0 minutes
-- pending expiry: 45 minutes
-- max hold: 280 minutes
-- SL multiplier: 2.5
+- entry ladder: range_to_sl
+- entry-to-SL gap: 2.0
+- activation delay: 3 minutes
+- pending expiry: 630 minutes
+- max hold: 90 minutes
+- SL multiplier: 1.61
 - final target: TP3
-- TP1 lock delay: 8 minutes
-- TP2 lock delay: 4 minutes
+- lock after TP1: true
+- lock after TP2: false
+- TP1 lock delay: 0 minutes
+- TP2 lock delay: 0 minutes
 - closed-lot bonus/rebate: 3.0 per closed lot
 
-This is a research configuration and should be forward-tested before real size.
+Observed local validation snapshot on uploaded provider signals/charts:
+
+- net profit including bonus: about +$22.609T
+- trading P&L: about +$22.436T
+- closed-lot bonus: about +$174.0B
+- max drawdown: about -39.94%
+
+This is an extremely aggressive research configuration. The very long pending
+expiry is the main reason live/backtest parity requires MT5 to keep orders alive
+for the full 630-minute window.
 """
 from __future__ import annotations
 from dataclasses import dataclass, replace
@@ -39,7 +51,7 @@ class StrategyConfig:
 
     sizing_mode: str = "risk"              # "fixed" | "risk"
     lot_per_entry: float = 0.5
-    risk_per_signal: float = 0.14222
+    risk_per_signal: float = 0.05575
     minimum_lot: float = 0.01
     lot_step: float = 0.01
 
@@ -49,25 +61,24 @@ class StrategyConfig:
 
     # Entry plan.
     entry_count: int = 3
-    entry_ladder: str = "signal_range_3"   # "signal_range_3" | "range_uniform" | "range_to_sl"
+    entry_ladder: str = "range_to_sl"      # "signal_range_3" | "range_uniform" | "range_to_sl"
     entry_sl_gap: float = 2.0               # only used when entry_ladder="range_to_sl"
 
     # Execution timing.
-    activation_delay_minutes: int = 0
-    pending_expiry_minutes: int = 45
-    max_hold_minutes: int = 280
+    activation_delay_minutes: int = 3
+    pending_expiry_minutes: int = 630
+    max_hold_minutes: int = 90
 
     # Stop/target management.
-    sl_multiplier: float = 2.5
+    sl_multiplier: float = 1.61
     final_target: str = "TP3"
     lock_after_tp1: bool = True
-    lock_after_tp2: bool = True
+    lock_after_tp2: bool = False
 
-    # Delayed stop-lock timing. 0 keeps the old behavior: TP1/TP2 lock is
-    # applied right after the target-touch candle is processed. Positive values
-    # wait N full minutes after first touch before raising the stop.
-    tp1_lock_delay_minutes: int = 8
-    tp2_lock_delay_minutes: int = 4
+    # Delayed stop-lock timing. 0 keeps the standard behavior: TP1/TP2 lock is
+    # applied right after the target-touch candle is processed.
+    tp1_lock_delay_minutes: int = 0
+    tp2_lock_delay_minutes: int = 0
 
     # Profit-lock model:
     # - "tp_levels": after TP1/TP2 lock stops to the configured TP levels.
