@@ -18,6 +18,8 @@ Example:
       --sl-multiplier 1.5 \
       --final-target TP3 \
       --bonus-per-closed-lot 3 \
+      --tp1-lock-delay-minutes 2 \
+      --tp2-lock-delay-minutes 2 \
       --profit-lock-mode bep_plus_half_tp1 \
       --bep-trigger-distance 3 \
       --tp1-lock-fraction 0.5 \
@@ -87,6 +89,8 @@ def _config_from_args(args: argparse.Namespace) -> StrategyConfig:
         final_target=args.final_target,
         lock_after_tp1=not args.no_lock_after_tp1,
         lock_after_tp2=not args.no_lock_after_tp2,
+        tp1_lock_delay_minutes=args.tp1_lock_delay_minutes,
+        tp2_lock_delay_minutes=args.tp2_lock_delay_minutes,
         profit_lock_mode=args.profit_lock_mode,
         bep_trigger_distance=args.bep_trigger_distance,
         tp1_lock_fraction=args.tp1_lock_fraction,
@@ -186,6 +190,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--final-target", default=DEFAULT_CONFIG.final_target, choices=["TP1", "TP2", "TP3"])
     p.add_argument("--no-lock-after-tp1", action="store_true")
     p.add_argument("--no-lock-after-tp2", action="store_true")
+    p.add_argument("--tp1-lock-delay-minutes", type=int, default=DEFAULT_CONFIG.tp1_lock_delay_minutes)
+    p.add_argument("--tp2-lock-delay-minutes", type=int, default=DEFAULT_CONFIG.tp2_lock_delay_minutes)
 
     p.add_argument(
         "--profit-lock-mode",
