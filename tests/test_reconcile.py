@@ -108,7 +108,7 @@ def test_reconcile_patches_pending_entry_when_mt5_filled_in_same_minute():
 
     pos = open_position(signal, equity=7083.11, config=DEFAULT_CONFIG)
     assert pos.entries[0].entry_price == 4670
-    assert pos.entries[0].initial_sl == 4663
+    assert pos.entries[0].initial_sl == 4658.73
     assert pos.entries[0].status == "PENDING"
 
     # Engine's bar-replay sees no fill on entry #0 (low never reaches
@@ -134,7 +134,7 @@ def test_reconcile_patches_pending_entry_when_mt5_filled_in_same_minute():
     mt5_pos = _FakeMt5Position(
         ticket=12345,
         magic=signal_to_magic(signal.signal_key),
-        type_=0, price_open=4668.44, sl=4663.0, tp=4688.0,
+        type_=0, price_open=4668.44, sl=4658.73, tp=4688.0,
         volume=0.16, time=_mt5_epoch(fill_time_chart),
     )
     executor = _make_executor([mt5_pos])
@@ -146,7 +146,7 @@ def test_reconcile_patches_pending_entry_when_mt5_filled_in_same_minute():
     assert pos.entries[0].entry_price == 4668.44
     assert pos.entries[0].lot == 0.16
     # initial_sl unchanged — the cheaper fill gives better R:R, not a wider stop.
-    assert pos.entries[0].initial_sl == 4663
+    assert pos.entries[0].initial_sl == 4658.73
 
     # Stage transitioned to 1 because TP1 was touched on the 07:02 bar
     # during the re-advance.
@@ -185,7 +185,7 @@ def test_reconcile_is_noop_when_engine_already_in_sync():
     mt5_pos = _FakeMt5Position(
         ticket=99999,
         magic=signal_to_magic(signal.signal_key),
-        type_=0, price_open=4670.0, sl=4663.0, tp=4688.0,
+        type_=0, price_open=4670.0, sl=pos.entries[0].initial_sl, tp=4688.0,
         volume=pos.entries[0].lot,
         time=_mt5_epoch(pos.entries[0].fill_time),
     )
@@ -216,7 +216,7 @@ def test_reconcile_warns_when_mt5_has_more_positions_than_slots():
     mt5_positions = [
         _FakeMt5Position(
             ticket=10000 + i, magic=magic, type_=0,
-            price_open=4670 - i * 0.5, sl=4663.0, tp=4688.0,
+            price_open=4670 - i * 0.5, sl=pos.entries[0].initial_sl, tp=4688.0,
             volume=0.1,
             time=_mt5_epoch(datetime(2026, 5, 14, 7, 0, i)),
         )
@@ -225,9 +225,8 @@ def test_reconcile_warns_when_mt5_has_more_positions_than_slots():
     executor = _make_executor(mt5_positions)
 
     log = executor.reconcile_with_mt5(
-        pos, DEFAULT_CONFIG, _FakeChart([]),
-        datetime(2026, 5, 14, 7, 10),
+        pos, DEFAULT_CONFIG, _FakeChart([]), datetime(2026, 5, 14, 7, 10),
     )
 
+    assert any("MT5 has" in w and "engine has only" in w for w in log.warnings)
     assert all(e.status == "PENDING" for e in pos.entries)
-    assert any("MT5 has" in w for w in log.warnings)
