@@ -2,7 +2,7 @@
 
 Default strategy: bonus-aware provider execution contract.
 
-The defaults in this branch are aligned with the current best 30% max-drawdown
+The defaults in this branch are aligned with the current best 40% max-drawdown
 candidate found from the uploaded provider signal sample. Use the filtered
 ``generated/live_provider_high_growth.txt`` signal file for parity between
 backtest and auto execution.
@@ -10,13 +10,13 @@ backtest and auto execution.
 Current default contract:
 
 - sizing: risk mode
-- risk per signal: 0.11307
-- entries: 5
+- risk per signal: 0.05575
+- entries: 3
 - entry ladder: range_to_sl
 - entry-to-SL gap: 2.0
 - activation delay: 3 minutes
-- pending expiry: 5 minutes
-- max hold: 80 minutes
+- pending expiry: 630 minutes
+- max hold: 90 minutes
 - SL multiplier: 1.61
 - final target: TP3
 - lock after TP1: true
@@ -27,12 +27,14 @@ Current default contract:
 
 Observed local validation snapshot on uploaded provider signals/charts:
 
-- net profit including bonus: about +$2.896M
-- trading P&L: about +$2.870M
-- closed-lot bonus: about +$25.6k
-- max drawdown: about -29.998%
+- net profit including bonus: about +$22.609T
+- trading P&L: about +$22.436T
+- closed-lot bonus: about +$174.0B
+- max drawdown: about -39.94%
 
-This is extremely aggressive and should be forward-tested before real size.
+This is an extremely aggressive research configuration. The very long pending
+expiry is the main reason live/backtest parity requires MT5 to keep orders alive
+for the full 630-minute window.
 """
 from __future__ import annotations
 from dataclasses import dataclass, replace
@@ -49,7 +51,7 @@ class StrategyConfig:
 
     sizing_mode: str = "risk"              # "fixed" | "risk"
     lot_per_entry: float = 0.5
-    risk_per_signal: float = 0.11307
+    risk_per_signal: float = 0.05575
     minimum_lot: float = 0.01
     lot_step: float = 0.01
 
@@ -58,14 +60,14 @@ class StrategyConfig:
     bonus_per_closed_lot: float = 3.0
 
     # Entry plan.
-    entry_count: int = 5
+    entry_count: int = 3
     entry_ladder: str = "range_to_sl"      # "signal_range_3" | "range_uniform" | "range_to_sl"
     entry_sl_gap: float = 2.0               # only used when entry_ladder="range_to_sl"
 
     # Execution timing.
     activation_delay_minutes: int = 3
-    pending_expiry_minutes: int = 5
-    max_hold_minutes: int = 80
+    pending_expiry_minutes: int = 630
+    max_hold_minutes: int = 90
 
     # Stop/target management.
     sl_multiplier: float = 1.61
