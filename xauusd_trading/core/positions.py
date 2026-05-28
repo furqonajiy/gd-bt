@@ -64,8 +64,8 @@ class Position:
     activation_time: datetime
     expiry_time: datetime              # pending orders die after this
     stage: int = 0                     # tp_levels: 0=SL,1=TP1,2=TP2,3=TP3 runner lock
-    stage1_time: Optional[datetime] = None  # bar time TP1 was touched
-    stage2_time: Optional[datetime] = None  # bar time TP2 was touched
+    stage1_time: Optional[datetime] = None  # bar time TP1 was first touched
+    stage2_time: Optional[datetime] = None  # bar time TP2 was first touched
     stage3_time: Optional[datetime] = None  # bar time TP3 was touched in runner mode
     first_fill_time: Optional[datetime] = None
     time_exit_deadline: Optional[datetime] = None
@@ -90,9 +90,9 @@ class Position:
     def lock_stage_for(self, entry: Entry, lock_after_tp1: bool, lock_after_tp2: bool) -> int:
         """Highest global stop-lock stage that applies to this entry.
 
-        Project rule: late fills inherit the current lock stage. If a new
-        entry fills after TP1/TP2/TP3 was already touched, its stop is immediately
-        adjusted rather than the original SL.
+        Project rule: late fills inherit the current applied lock stage. If a new
+        entry fills after a delayed TP1/TP2/TP3 lock was already activated, its
+        stop is immediately adjusted rather than the original SL.
         """
         if entry.fill_time is None:
             return 0
@@ -285,6 +285,12 @@ def _stop_status(lock_stage: int, stop_level: float, entry: Entry, config: Strat
     return "LOCK_TP2" if lock_stage >= 2 else "LOCK_TP1" if lock_stage >= 1 else "SL"
 
 
+def _delay_elapsed(first_touch: Optional[datetime], current_time: datetime, delay_minutes: int) -> bool:
+    if first_touch is None:
+        return False
+    return current_time >= first_touch + timedelta(minutes=max(0, int(delay_minutes)))
+
+
 def advance_one_bar(
         position: Position, bar: Bar, config: StrategyConfig,
         contract_size: float = CONTRACT_SIZE_OZ,
@@ -351,14 +357,20 @@ def advance_one_bar(
                 _close_entry(e, config.final_target.upper(), bar.time, position.target_level,
                              side, contract_size)
 
-        # 4. Stage advances happen after the stop/target check so a same-bar
-        #    target touch cannot create a retroactive stop on the same candle.
-        if config.lock_after_tp1 and position.stage < 1 and tp1_hit and position.open_entries():
-            position.stage = 1
+        # 4. Stage touch times are remembered immediately, but the actual stop
+        #    lock stage can be delayed by config.tp1_lock_delay_minutes and
+        #    config.tp2_lock_delay_minutes.
+        if config.lock_after_tp1 and position.stage1_time is None and tp1_hit and position.open_entries():
             position.stage1_time = bar.time
-        if config.lock_after_tp2 and position.stage < 2 and tp2_hit and position.open_entries():
-            position.stage = 2
+        if config.lock_after_tp2 and position.stage2_time is None and tp2_hit and position.open_entries():
             position.stage2_time = bar.time
+
+        if config.lock_after_tp1 and position.stage < 1 and position.open_entries():
+            if _delay_elapsed(position.stage1_time, bar.time, config.tp1_lock_delay_minutes):
+                position.stage = 1
+        if config.lock_after_tp2 and position.stage < 2 and position.open_entries():
+            if _delay_elapsed(position.stage2_time, bar.time, config.tp2_lock_delay_minutes):
+                position.stage = 2
         if runner_after_tp3 and position.stage < 3 and tp3_hit and position.open_entries():
             position.stage = 3
             position.stage3_time = bar.time
