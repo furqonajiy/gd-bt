@@ -34,6 +34,36 @@ def _install_auto_execution_history_filter() -> None:
     original_print = builtins.print
     state = {"dashboard": False, "reconcile": False}
 
+    def _is_replay_detail_line(line: str) -> bool:
+        stripped = line.strip()
+        return (
+            (stripped.startswith("#") and "(" in stripped and "):" in stripped)
+            or stripped.startswith("Backtest realized so far:")
+        )
+
+    def _filter_execution_log_text(text: str) -> str | None:
+        """Remove replay-only debug blocks from Auto's EXECUTION output."""
+        filtered: list[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if "every entry has already played out in backtest replay" in line:
+                continue
+            if "partial placement --" in line and "backtest replay" in line:
+                continue
+            if _is_replay_detail_line(line):
+                continue
+            filtered.append(line)
+
+        # If all that remains is a zero-count EXECUTION header, do not print it.
+        meaningful = [line for line in filtered[1:] if line.strip()]
+        if (
+            filtered
+            and filtered[0].startswith("EXECUTION:  placed=0  modified=0  cancelled=0  closed=0")
+            and not meaningful
+        ):
+            return None
+        return "\n".join(filtered) if filtered else None
+
     def history_only_print(*args, **kwargs):
         file = kwargs.get("file", sys.stdout)
         if file is not sys.stdout:
@@ -43,11 +73,14 @@ def _install_auto_execution_history_filter() -> None:
         text = sep.join(str(arg) for arg in args)
         stripped = text.strip()
 
-        # Keep execution/history records.
+        # Keep execution/history records, but strip replay-only debug details.
         if stripped.startswith("EXECUTION:"):
             state["dashboard"] = False
             state["reconcile"] = False
-            return original_print(*args, **kwargs)
+            filtered_text = _filter_execution_log_text(text)
+            if filtered_text is None:
+                return None
+            return original_print(filtered_text, **kwargs)
         if stripped.startswith("RECONCILIATION:"):
             state["dashboard"] = False
             state["reconcile"] = True
