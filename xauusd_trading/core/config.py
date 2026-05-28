@@ -74,14 +74,18 @@ class StrategyConfig:
 
     # Profit-lock model:
     # - "tp_levels": old validated rule; after TP1 lock stop at TP1, after TP2
-    #   lock stop at TP2.
+    #   lock stop at TP2, and close at final_target.
     # - "bep_plus_half_tp1": research rule; after price moves +N from each
     #   entry, lock that entry at BEP. After TP1, lock remaining entries at
     #   entry + fraction*(TP1-entry). After TP2, lock remaining entries at TP1.
+    #   Optionally, after TP3, do not close; lock stop at TP2 and keep running
+    #   until stop or max-hold time exit.
     profit_lock_mode: str = "tp_levels"
     bep_trigger_distance: float = 3.0
     tp1_lock_fraction: float = 0.5
     tp2_lock_target: str = "TP1"            # "TP1" | "TP2"
+    runner_after_tp3: bool = False
+    tp3_lock_target: str = "TP2"            # currently TP2 is the intended runner stop
 
 
 DEFAULT_CONFIG = StrategyConfig()
