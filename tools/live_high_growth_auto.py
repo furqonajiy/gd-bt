@@ -2,12 +2,18 @@
 """Run live auto-execution with the current 50% drawdown research contract.
 
 The project DEFAULT_CONFIG on feature/improve is set to the current best tested
-candidate. This wrapper passes the key supported CLI flags explicitly so the
-launcher is clear and repeatable:
+candidate. The underlying ``xauusd_trading.cli auto`` command currently accepts
+``--entry-ladder`` overrides only for non-default ladders. Therefore this wrapper
+passes risk and entries explicitly, but relies on DEFAULT_CONFIG for the default
+``signal_range_3`` ladder and the rest of the execution contract:
 
-- risk: 0.14222
-- entries: 3
 - entry ladder: signal_range_3
+- activation delay: 0 minutes
+- pending expiry: 45 minutes
+- max hold: 280 minutes
+- SL multiplier: 2.5
+- TP1 lock delay: 8 minutes
+- TP2 lock delay: 4 minutes
 
 The auto command should read the FILTERED signal file produced by
 ``tools/live_provider_signal_filter.py``. Do not execute the raw Telegram signal
@@ -34,7 +40,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mt5-server", default=None)
     p.add_argument("--risk", type=float, default=0.14222)
     p.add_argument("--entries", type=int, default=3)
-    p.add_argument("--entry-ladder", default="signal_range_3", choices=["signal_range_3", "range_uniform", "range_to_sl"])
     p.add_argument("--no-clear", action="store_true")
     p.add_argument("--no-notifications", action="store_true")
     p.add_argument("--no-forensic", action="store_true")
@@ -54,7 +59,6 @@ def main(argv: list[str] | None = None) -> int:
         "--initial-capital", "10000",
         "--risk", str(args.risk),
         "--entries", str(args.entries),
-        "--entry-ladder", args.entry_ladder,
     ]
     for flag, value in [
         ("--mt5-path", args.mt5_path),
