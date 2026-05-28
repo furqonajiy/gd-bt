@@ -266,6 +266,80 @@ from .execution.mt5_executor import (
 from .execution.mt5_executor_tp2 import Mt5Executor
 
 
+def _install_auto_live_limit_guard() -> None:
+    """Skip stale/marketable LIMIT orders before Auto calls MT5 order_send."""
+    import sys
+
+    if "auto" not in sys.argv[1:3]:
+        return
+    if getattr(Mt5Executor.place_signal, "_xauusd_auto_live_limit_guard", False):
+        return
+
+    original_place_signal = Mt5Executor.place_signal
+    skipped_entries: set[str] = set()
+    failed_signals: set[str] = set()
+
+    def _entry_key(signal_key: str, entry_index: int) -> str:
+        return f"{signal_key}.{entry_index + 1}"
+
+    def guarded_place_signal(self, signal, plan):
+        if signal.signal_key in failed_signals:
+            return ExecutionLog()
+
+        log = ExecutionLog()
+        tick = self.mt5.symbol_info_tick(self.symbol)
+        if tick is None or tick.bid <= 0 or tick.ask <= 0:
+            place_log = original_place_signal(self, signal, plan)
+            if place_log.placed == 0 and (place_log.actions or place_log.warnings):
+                failed_signals.add(signal.signal_key)
+            return place_log
+
+        bid = float(tick.bid)
+        ask = float(tick.ask)
+        valid_orders = []
+        for order in plan.orders:
+            key = _entry_key(signal.signal_key, order.entry_index)
+            price = float(order.entry_price)
+            stale_reason = None
+            if signal.side == "BUY" and price >= ask:
+                stale_reason = f"stale BUY LIMIT {price:g} >= live ask {ask:g}"
+            elif signal.side == "SELL" and price <= bid:
+                stale_reason = f"stale SELL LIMIT {price:g} <= live bid {bid:g}"
+
+            if stale_reason is None:
+                valid_orders.append(order)
+                continue
+
+            if key not in skipped_entries:
+                log.actions.append(f"  {key}: skipped {stale_reason}")
+                skipped_entries.add(key)
+
+        if not valid_orders:
+            return log
+
+        original_orders = plan.orders
+        plan.orders = valid_orders
+        try:
+            place_log = original_place_signal(self, signal, plan)
+        finally:
+            plan.orders = original_orders
+
+        log.merge(place_log)
+        if place_log.placed == 0 and (place_log.actions or place_log.warnings):
+            failed_signals.add(signal.signal_key)
+            log.actions.append(
+                f"Signal {signal.signal_key}: placement failed; skipped further "
+                f"retries in this Auto run. Restart Auto to retry manually."
+            )
+        return log
+
+    guarded_place_signal._xauusd_auto_live_limit_guard = True
+    Mt5Executor.place_signal = guarded_place_signal
+
+
+_install_auto_live_limit_guard()
+
+
 __all__ = [
     # core.config
     "BALANCED_LIVE_CONFIG",
