@@ -84,8 +84,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_forensic:
         cmd.append("--no-forensic")
 
-    print("Running:")
-    print(" ".join(cmd))
     return subprocess.call(cmd)
 
 

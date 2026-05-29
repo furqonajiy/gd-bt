@@ -1,9 +1,13 @@
-"""Tests for Mt5Executor.reconcile_with_mt5 — the divergence-correction
-step that patches engine entry state from MT5's actual open positions
-when the bar-by-bar replay missed a fill.
+"""Tests for Mt5Executor.reconcile_with_mt5 under the DD40 command contract.
+
+The DD40 command used for live/backtest parity is:
+risk sizing, $1000 initial capital, 0.05575 risk, 3 range_to_sl entries,
+entry_sl_gap=2, activation delay=3, pending expiry=630, max hold=90,
+SL multiplier=1.61, TP3 final target, no TP2 lock, and $3 closed-lot bonus.
 """
 from __future__ import annotations
 import calendar
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from xauusd_trading import DEFAULT_CONFIG, parse_one_signal
@@ -11,6 +15,24 @@ from xauusd_trading import Bar
 from xauusd_trading import POINT_VALUE
 from xauusd_trading import Mt5Executor, signal_to_magic
 from xauusd_trading import advance_bars, open_position
+
+
+DD40_COMMAND_CONFIG = replace(
+    DEFAULT_CONFIG,
+    initial_capital=1000.0,
+    sizing_mode="risk",
+    risk_per_signal=0.05575,
+    entry_count=3,
+    entry_ladder="range_to_sl",
+    entry_sl_gap=2.0,
+    activation_delay_minutes=3,
+    pending_expiry_minutes=630,
+    max_hold_minutes=90,
+    sl_multiplier=1.61,
+    final_target="TP3",
+    lock_after_tp2=False,
+    bonus_per_closed_lot=3.0,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -83,10 +105,17 @@ def _mt5_epoch(chart_time, server_offset=3):
 
 
 def _make_executor(positions):
-    return Mt5Executor(
+    executor = Mt5Executor(
         _FakeMt5Conn(_FakeMt5Module(positions=positions)),
         "XAUUSD", server_offset_hours=3,
     )
+
+    def _safe_broker_epoch_to_chart_time(epoch: int) -> datetime:
+        broker_naive = datetime(1970, 1, 1) + timedelta(seconds=int(epoch))
+        return broker_naive + timedelta(hours=3 - executor.server_offset_hours)
+
+    executor._broker_epoch_to_chart_time = _safe_broker_epoch_to_chart_time
+    return executor
 
 
 # ---------------------------------------------------------------------------
@@ -106,9 +135,9 @@ def test_reconcile_patches_pending_entry_when_mt5_filled_in_same_minute():
     )
     assert signal.signal_time_chart == datetime(2026, 5, 14, 6, 44)
 
-    pos = open_position(signal, equity=7083.11, config=DEFAULT_CONFIG)
+    pos = open_position(signal, equity=1000.0, config=DD40_COMMAND_CONFIG)
     assert pos.entries[0].entry_price == 4670
-    assert pos.entries[0].initial_sl == 4663
+    assert pos.entries[0].initial_sl == 4658.73
     assert pos.entries[0].status == "PENDING"
 
     # Engine's bar-replay sees no fill on entry #0 (low never reaches
@@ -124,7 +153,7 @@ def test_reconcile_patches_pending_entry_when_mt5_filled_in_same_minute():
 
     # Actual replay (from executed_at) misses the fill.
     executed_at = datetime(2026, 5, 14, 7, 0, 3)
-    advance_bars(pos, chart.bars_between(executed_at, now), DEFAULT_CONFIG)
+    advance_bars(pos, chart.bars_between(executed_at, now), DD40_COMMAND_CONFIG)
     assert pos.entries[0].status == "PENDING"
     assert pos.first_fill_time is None
     assert pos.stage == 0
@@ -134,19 +163,19 @@ def test_reconcile_patches_pending_entry_when_mt5_filled_in_same_minute():
     mt5_pos = _FakeMt5Position(
         ticket=12345,
         magic=signal_to_magic(signal.signal_key),
-        type_=0, price_open=4668.44, sl=4663.0, tp=4688.0,
+        type_=0, price_open=4668.44, sl=4658.73, tp=4708.0,
         volume=0.16, time=_mt5_epoch(fill_time_chart),
     )
     executor = _make_executor([mt5_pos])
 
-    log = executor.reconcile_with_mt5(pos, DEFAULT_CONFIG, chart, now)
+    log = executor.reconcile_with_mt5(pos, DD40_COMMAND_CONFIG, chart, now)
 
     assert pos.entries[0].status == "OPEN"
     assert pos.entries[0].fill_time == fill_time_chart
     assert pos.entries[0].entry_price == 4668.44
     assert pos.entries[0].lot == 0.16
     # initial_sl unchanged — the cheaper fill gives better R:R, not a wider stop.
-    assert pos.entries[0].initial_sl == 4663
+    assert pos.entries[0].initial_sl == 4658.73
 
     # Stage transitioned to 1 because TP1 was touched on the 07:02 bar
     # during the re-advance.
@@ -154,7 +183,7 @@ def test_reconcile_patches_pending_entry_when_mt5_filled_in_same_minute():
 
     assert pos.first_fill_time == fill_time_chart
     assert pos.time_exit_deadline == (
-            fill_time_chart + timedelta(minutes=DEFAULT_CONFIG.max_hold_minutes)
+            fill_time_chart + timedelta(minutes=DD40_COMMAND_CONFIG.max_hold_minutes)
     )
 
     assert any("Reconciled #0" in a for a in log.actions)
@@ -168,7 +197,7 @@ def test_reconcile_is_noop_when_engine_already_in_sync():
         "1. BUY XAUUSD 4670 - 4668 SL 4663 TP1 4678 TP2 4688 TP3 4708 10:44 AM",
         source_date="2026-05-14", source_offset=7,
     )
-    pos = open_position(signal, equity=7083.11, config=DEFAULT_CONFIG)
+    pos = open_position(signal, equity=1000.0, config=DD40_COMMAND_CONFIG)
 
     # Low=4669 reaches 4670 - 0.20 = 4669.80, so entry #0 fills.
     bars = [
@@ -176,7 +205,7 @@ def test_reconcile_is_noop_when_engine_already_in_sync():
         _bar(datetime(2026, 5, 14, 7, 2), 4673, 4676, 4672, 4674),
     ]
     chart = _FakeChart(bars)
-    advance_bars(pos, bars, DEFAULT_CONFIG)
+    advance_bars(pos, bars, DD40_COMMAND_CONFIG)
     assert pos.entries[0].status == "OPEN"
 
     original_fill_time = pos.entries[0].fill_time
@@ -185,14 +214,14 @@ def test_reconcile_is_noop_when_engine_already_in_sync():
     mt5_pos = _FakeMt5Position(
         ticket=99999,
         magic=signal_to_magic(signal.signal_key),
-        type_=0, price_open=4670.0, sl=4663.0, tp=4688.0,
+        type_=0, price_open=4670.0, sl=pos.entries[0].initial_sl, tp=4708.0,
         volume=pos.entries[0].lot,
         time=_mt5_epoch(pos.entries[0].fill_time),
     )
     executor = _make_executor([mt5_pos])
 
     log = executor.reconcile_with_mt5(
-        pos, DEFAULT_CONFIG, chart, datetime(2026, 5, 14, 7, 10),
+        pos, DD40_COMMAND_CONFIG, chart, datetime(2026, 5, 14, 7, 10),
     )
 
     assert log.actions == []
@@ -210,13 +239,13 @@ def test_reconcile_warns_when_mt5_has_more_positions_than_slots():
         "1. BUY XAUUSD 4670 - 4668 SL 4663 TP1 4678 TP2 4688 TP3 4708 10:44 AM",
         source_date="2026-05-14", source_offset=7,
     )
-    pos = open_position(signal, equity=7083.11, config=DEFAULT_CONFIG)
+    pos = open_position(signal, equity=1000.0, config=DD40_COMMAND_CONFIG)
     magic = signal_to_magic(signal.signal_key)
 
     mt5_positions = [
         _FakeMt5Position(
             ticket=10000 + i, magic=magic, type_=0,
-            price_open=4670 - i * 0.5, sl=4663.0, tp=4688.0,
+            price_open=4670 - i * 0.5, sl=pos.entries[0].initial_sl, tp=4708.0,
             volume=0.1,
             time=_mt5_epoch(datetime(2026, 5, 14, 7, 0, i)),
         )
@@ -225,9 +254,8 @@ def test_reconcile_warns_when_mt5_has_more_positions_than_slots():
     executor = _make_executor(mt5_positions)
 
     log = executor.reconcile_with_mt5(
-        pos, DEFAULT_CONFIG, _FakeChart([]),
-        datetime(2026, 5, 14, 7, 10),
+        pos, DD40_COMMAND_CONFIG, _FakeChart([]), datetime(2026, 5, 14, 7, 10),
     )
 
+    assert any("MT5 has" in w and "engine has only" in w for w in log.warnings)
     assert all(e.status == "PENDING" for e in pos.entries)
-    assert any("MT5 has" in w for w in log.warnings)

@@ -10,6 +10,150 @@ imports.
 """
 from __future__ import annotations
 
+
+def _install_auto_execution_history_filter() -> None:
+    """Keep live auto stdout focused on execution/history only.
+
+    Auto mode used to render a full live dashboard, including the dual replay
+    block that compares "if executed on time" against actual MT5 execution.
+    In unattended auto execution that projection is noisy; operators only need
+    the event/history stream: placements, reconciliation, SL moves, cancels,
+    closes, warnings, and hard errors.
+
+    This is intentionally scoped to the CLI `auto` subcommand so backtest,
+    decide, manage, tests, and library imports keep their normal output.
+    """
+    import builtins
+    import sys
+
+    if "auto" not in sys.argv[1:3]:
+        return
+    if getattr(builtins.print, "_xauusd_auto_history_filter", False):
+        return
+
+    original_print = builtins.print
+    original_stdout = sys.stdout
+    state = {"dashboard": False, "reconcile": False, "auto_started": False}
+
+    class _AutoHistoryStdout:
+        """Suppress auto's screen-clear refresh while preserving real output."""
+
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+            self._clear_seq = chr(27) + "[H" + chr(27) + "[J"
+
+        def write(self, data):
+            # _run_auto_watch clears the terminal every iteration. Hide it so
+            # Auto behaves like an append-only activity log instead of a
+            # refreshing dashboard.
+            if data == self._clear_seq:
+                return len(data)
+            cleaned = data.replace(self._clear_seq, "")
+            if cleaned == "":
+                return len(data)
+            return self._wrapped.write(cleaned)
+
+        def flush(self):
+            return self._wrapped.flush()
+
+        def __getattr__(self, name):
+            return getattr(self._wrapped, name)
+
+    sys.stdout = _AutoHistoryStdout(original_stdout)
+
+    def _is_replay_detail_line(line: str) -> bool:
+        stripped = line.strip()
+        return (
+            (stripped.startswith("#") and "(" in stripped and "):" in stripped)
+            or stripped.startswith("Backtest realized so far:")
+        )
+
+    def _filter_execution_log_text(text: str) -> str | None:
+        """Remove replay-only debug blocks from Auto's EXECUTION output."""
+        filtered: list[str] = []
+        for line in text.splitlines():
+            if "every entry has already played out in backtest replay" in line:
+                continue
+            if "partial placement --" in line and "backtest replay" in line:
+                continue
+            if _is_replay_detail_line(line):
+                continue
+            filtered.append(line)
+
+        # If all that remains is a zero-count EXECUTION header, do not print it.
+        meaningful = [line for line in filtered[1:] if line.strip()]
+        if (
+            filtered
+            and filtered[0].startswith("EXECUTION:  placed=0  modified=0  cancelled=0  closed=0")
+            and not meaningful
+        ):
+            return None
+        return "\n".join(filtered) if filtered else None
+
+    def history_only_print(*args, **kwargs):
+        file = kwargs.get("file", sys.stdout)
+        if file is not sys.stdout:
+            return original_print(*args, **kwargs)
+
+        sep = kwargs.get("sep", " ")
+        text = sep.join(str(arg) for arg in args)
+        stripped = text.strip()
+
+        # Keep execution/history records, but strip replay-only debug details.
+        if stripped.startswith("EXECUTION:"):
+            state["dashboard"] = False
+            state["reconcile"] = False
+            filtered_text = _filter_execution_log_text(text)
+            if filtered_text is None:
+                return None
+            return original_print(filtered_text, **kwargs)
+        if stripped.startswith("RECONCILIATION:"):
+            state["dashboard"] = False
+            state["reconcile"] = True
+            return original_print(*args, **kwargs)
+        if state["reconcile"]:
+            original_print(*args, **kwargs)
+            if stripped == "":
+                state["reconcile"] = False
+            return None
+
+        # Keep startup/activity/errors, but hide routine archive/loop noise.
+        if stripped.startswith((
+            "SANITY CHECKS FAILED",
+            "[signals]",
+            "[mt5]",
+            "Interrupted;",
+        )):
+            state["dashboard"] = False
+            return original_print(*args, **kwargs)
+        if stripped.startswith("Archive:"):
+            return None
+
+        # Show the first auto iteration once so the operator knows Auto is live.
+        # Hide later loop heartbeats to avoid terminal spam.
+        if text.startswith("[auto iter #"):
+            if not state["auto_started"]:
+                state["auto_started"] = True
+                return original_print(text, **kwargs)
+            return None
+
+        # Hide dashboard/projection output.
+        if stripped == "=" * 70:
+            return None
+        if stripped.startswith("XAUUSD AUTO MODE"):
+            state["dashboard"] = True
+            return None
+        if state["dashboard"]:
+            return None
+
+        return original_print(*args, **kwargs)
+
+    history_only_print._xauusd_auto_history_filter = True
+    builtins.print = history_only_print
+
+
+_install_auto_execution_history_filter()
+
 # 1. core.config
 from .core.config import (
     BALANCED_LIVE_CONFIG,

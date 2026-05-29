@@ -156,6 +156,8 @@ def run_backtest(
             entry_rows.append({
                 "global_id": sig.global_id,
                 "signal_key": sig.signal_key,
+                "entry_key": f"{sig.signal_key}.{e.entry_index + 1}",
+                "entry_number": e.entry_index + 1,
                 "signal_date": sig.source_date,
                 "signal_time_source": sig.source_time_text,
                 "source_tz": tz_label,

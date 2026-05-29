@@ -52,6 +52,20 @@ def signal_to_magic(signal_key: str) -> int:
     return int.from_bytes(h[:4], "big") & 0x7FFFFFFF
 
 
+def signal_entry_key(signal_key: str, entry_index: int) -> str:
+    """Human-readable one-based key for a generated entry."""
+    return f"{signal_key}.{entry_index + 1}"
+
+
+def mt5_entry_comment(signal_key: str, entry_index: int, max_len: int = 31) -> str:
+    """MT5-safe per-entry comment preserving the one-based entry suffix."""
+    suffix = f".{entry_index + 1}"
+    prefix_len = max_len - len(suffix)
+    if prefix_len <= 0:
+        return suffix[-max_len:]
+    return f"{signal_key[:prefix_len]}{suffix}"
+
+
 def round_lot(lot: float, min_lot: float = 0.01, lot_step: float = 0.01) -> float:
     """Floor `lot` to a multiple of `lot_step` and enforce `min_lot`.
 
@@ -150,6 +164,10 @@ def _reconstruct_signal_text(s: Signal) -> str:
 class Mt5Executor:
     """Place and manage trades for the validated strategy."""
 
+    # Max slippage (in points) tolerated on forced market closes. A forced
+    # exit must succeed; a few points of slippage is preferable to a reject.
+    CLOSE_DEVIATION_POINTS = 50
+
     def __init__(self, conn: Mt5Connection, symbol: str,
                  min_lot: float = DEFAULT_MIN_LOT,
                  lot_step: float = DEFAULT_LOT_STEP,
@@ -177,6 +195,7 @@ class Mt5Executor:
         self.notifier = notifier
         self.forensic = forensic
         self._sym_info = None
+        self._market_fill = None
 
     def _log_order_send(self, signal_key: str, action: str,
                         request: dict, response, *, success: bool) -> None:
@@ -184,6 +203,30 @@ class Mt5Executor:
             self.forensic.order_send(signal_key=signal_key, action=action,
                                      request=request, response=response,
                                      success=success)
+
+    def _market_fill_mode(self):
+        """Broker-supported fill mode for market-close DEALs (cached per cycle).
+
+        ORDER_FILLING_RETURN is valid for pending orders but most
+        Market-execution brokers reject it on TRADE_ACTION_DEAL with retcode
+        10030 (Unsupported filling mode). Read the symbol's advertised
+        filling_mode bitmask and prefer IOC (forgiving on partial fills),
+        then FOK, falling back to RETURN only if neither is advertised.
+        """
+        if self._market_fill is not None:
+            return self._market_fill
+        sym = self._sym_info or self.mt5.symbol_info(self.symbol)
+        mask = getattr(sym, "filling_mode", 0) if sym is not None else 0
+        ioc_bit = getattr(self.mt5, "SYMBOL_FILLING_IOC", 2)
+        fok_bit = getattr(self.mt5, "SYMBOL_FILLING_FOK", 1)
+        if mask & ioc_bit:
+            mode = self.mt5.ORDER_FILLING_IOC
+        elif mask & fok_bit:
+            mode = self.mt5.ORDER_FILLING_FOK
+        else:
+            mode = self.mt5.ORDER_FILLING_RETURN
+        self._market_fill = mode
+        return mode
 
     # ---- pre-flight ----------------------------------------------------
 
@@ -374,7 +417,7 @@ class Mt5Executor:
                 or earliest_patched < engine_pos.first_fill_time):
             engine_pos.first_fill_time = earliest_patched
             engine_pos.time_exit_deadline = (
-                earliest_patched + timedelta(minutes=config.max_hold_minutes)
+                    earliest_patched + timedelta(minutes=config.max_hold_minutes)
             )
 
         # Re-advance from earliest patched fill so stage/exits catch up.
@@ -391,7 +434,6 @@ class Mt5Executor:
         """
         log = ExecutionLog()
         magic = signal_to_magic(signal.signal_key)
-        comment = signal.signal_key[:31]
 
         # Re-entry guard: don't place if MT5 already has a footprint for
         # this magic (defends against duplicate placement within a session
@@ -419,6 +461,8 @@ class Mt5Executor:
                 )
                 continue
 
+            comment = mt5_entry_comment(signal.signal_key, o.entry_index)
+            entry_key = signal_entry_key(signal.signal_key, o.entry_index)
             request = {
                 "action":       self.mt5.TRADE_ACTION_PENDING,
                 "symbol":       self.symbol,
@@ -452,7 +496,7 @@ class Mt5Executor:
             else:
                 log.placed += 1
                 log.actions.append(
-                    f"  #{o.entry_index}: placed ticket={res.order} "
+                    f"  {entry_key}: placed ticket={res.order} comment={comment} "
                     f"@ {request['price']:g} lot={lot} "
                     f"SL={request['sl']:g} TP={request['tp']:g}"
                 )
@@ -544,7 +588,8 @@ class Mt5Executor:
                         "price":        price,
                         "magic":        magic,
                         "comment":      f"{signal_key}/late-tp1"[:31],
-                        "type_filling": self.mt5.ORDER_FILLING_RETURN,
+                        "deviation":    self.CLOSE_DEVIATION_POINTS,
+                        "type_filling": self._market_fill_mode(),
                     }
                     res = self.mt5.order_send(req)
                     success = bool(res is not None
@@ -637,7 +682,8 @@ class Mt5Executor:
                     "price":        price,
                     "magic":        magic,
                     "comment":      f"{signal_key}/timeout"[:31],
-                    "type_filling": self.mt5.ORDER_FILLING_RETURN,
+                    "deviation":    self.CLOSE_DEVIATION_POINTS,
+                    "type_filling": self._market_fill_mode(),
                 }
                 res = self.mt5.order_send(req)
                 success = bool(res is not None
