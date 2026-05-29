@@ -9,6 +9,7 @@ backtest and auto execution.
 
 Current default contract:
 
+- initial capital: 1000
 - sizing: risk mode
 - risk per signal: 0.05575
 - entries: 3
@@ -47,7 +48,7 @@ CHART_TIMEZONE_OFFSET = 3      # MT5 CSV is GMT+3
 
 @dataclass(frozen=True)
 class StrategyConfig:
-    initial_capital: float = 10_000.0
+    initial_capital: float = 1_000.0
 
     sizing_mode: str = "risk"              # "fixed" | "risk"
     lot_per_entry: float = 0.5
