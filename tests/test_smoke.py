@@ -10,7 +10,6 @@ Run from repo root:
     python -m pytest tests/ -s
 """
 from __future__ import annotations
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -24,22 +23,34 @@ DATA_DIR = REPO / "data"
 SIGNALS_FILE = REPO / "generated" / "live_provider_high_growth.txt"
 CHART_FILES = sorted(DATA_DIR.glob("XAUUSD_M1_*.csv"))
 
-DD40_COMMAND_CONFIG = replace(
-    DEFAULT_CONFIG,
-    initial_capital=1000.0,
-    sizing_mode="risk",
-    risk_per_signal=0.05575,
-    entry_count=3,
-    entry_ladder="range_to_sl",
-    entry_sl_gap=2.0,
-    activation_delay_minutes=3,
-    pending_expiry_minutes=630,
-    max_hold_minutes=90,
-    sl_multiplier=1.61,
-    final_target="TP3",
-    lock_after_tp2=False,
-    bonus_per_closed_lot=3.0,
-)
+
+DD40_DEFAULT_EXPECTED = {
+    "initial_capital": 1000.0,
+    "sizing_mode": "risk",
+    "risk_per_signal": 0.05575,
+    "entry_count": 3,
+    "entry_ladder": "range_to_sl",
+    "entry_sl_gap": 2.0,
+    "activation_delay_minutes": 3,
+    "pending_expiry_minutes": 630,
+    "max_hold_minutes": 90,
+    "sl_multiplier": 1.61,
+    "final_target": "TP3",
+    "lock_after_tp1": True,
+    "lock_after_tp2": False,
+    "tp1_lock_delay_minutes": 0,
+    "tp2_lock_delay_minutes": 0,
+    "profit_lock_mode": "tp_levels",
+    "bonus_per_closed_lot": 3.0,
+}
+
+
+def test_default_config_matches_dd40_contract():
+    actuals = {
+        key: getattr(DEFAULT_CONFIG, key)
+        for key in DD40_DEFAULT_EXPECTED
+    }
+    assert actuals == DD40_DEFAULT_EXPECTED
 
 
 def test_dd40_command_backtest_runs_end_to_end():
@@ -53,21 +64,21 @@ def test_dd40_command_backtest_runs_end_to_end():
 
     signals = parse_signals_file(SIGNALS_FILE)
     chart = CsvChartSource(CHART_FILES)
-    result = run_backtest(signals, chart, DD40_COMMAND_CONFIG)
+    result = run_backtest(signals, chart, DEFAULT_CONFIG)
 
     actuals = {
-        "initial_capital": DD40_COMMAND_CONFIG.initial_capital,
-        "risk_per_signal": DD40_COMMAND_CONFIG.risk_per_signal,
-        "entry_count": DD40_COMMAND_CONFIG.entry_count,
-        "entry_ladder": DD40_COMMAND_CONFIG.entry_ladder,
-        "entry_sl_gap": DD40_COMMAND_CONFIG.entry_sl_gap,
-        "activation_delay_minutes": DD40_COMMAND_CONFIG.activation_delay_minutes,
-        "pending_expiry_minutes": DD40_COMMAND_CONFIG.pending_expiry_minutes,
-        "max_hold_minutes": DD40_COMMAND_CONFIG.max_hold_minutes,
-        "sl_multiplier": DD40_COMMAND_CONFIG.sl_multiplier,
-        "final_target": DD40_COMMAND_CONFIG.final_target,
-        "lock_after_tp2": DD40_COMMAND_CONFIG.lock_after_tp2,
-        "bonus_per_closed_lot": DD40_COMMAND_CONFIG.bonus_per_closed_lot,
+        "initial_capital": DEFAULT_CONFIG.initial_capital,
+        "risk_per_signal": DEFAULT_CONFIG.risk_per_signal,
+        "entry_count": DEFAULT_CONFIG.entry_count,
+        "entry_ladder": DEFAULT_CONFIG.entry_ladder,
+        "entry_sl_gap": DEFAULT_CONFIG.entry_sl_gap,
+        "activation_delay_minutes": DEFAULT_CONFIG.activation_delay_minutes,
+        "pending_expiry_minutes": DEFAULT_CONFIG.pending_expiry_minutes,
+        "max_hold_minutes": DEFAULT_CONFIG.max_hold_minutes,
+        "sl_multiplier": DEFAULT_CONFIG.sl_multiplier,
+        "final_target": DEFAULT_CONFIG.final_target,
+        "lock_after_tp2": DEFAULT_CONFIG.lock_after_tp2,
+        "bonus_per_closed_lot": DEFAULT_CONFIG.bonus_per_closed_lot,
         "final_equity": result["final_equity"],
         "wins": result["wins"],
         "losses": result["losses"],
