@@ -8,6 +8,7 @@ for the rest of the execution contract.
 
 Current backtest-aligned contract:
 
+- initial capital: 1000
 - risk: 0.05575
 - entries: 3
 - entry ladder: range_to_sl
@@ -31,6 +32,13 @@ import subprocess
 import sys
 
 
+DD40_INITIAL_CAPITAL = 1000.0
+DD40_RISK_PER_SIGNAL = 0.05575
+DD40_ENTRY_COUNT = 3
+DD40_ENTRY_LADDER = "range_to_sl"
+DD40_ENTRY_SL_GAP = 2.0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Run DD40 high-growth live auto execution.")
     p.add_argument("--signals", default="generated/live_provider_high_growth.txt")
@@ -43,10 +51,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mt5-login", default=None)
     p.add_argument("--mt5-password", default=None)
     p.add_argument("--mt5-server", default=None)
-    p.add_argument("--risk", type=float, default=0.05575)
-    p.add_argument("--entries", type=int, default=3)
-    p.add_argument("--entry-ladder", default="range_to_sl", choices=["range_uniform", "range_to_sl"])
-    p.add_argument("--entry-sl-gap", type=float, default=2.0)
+    p.add_argument("--initial-capital", type=float, default=DD40_INITIAL_CAPITAL)
+    p.add_argument("--risk", type=float, default=DD40_RISK_PER_SIGNAL)
+    p.add_argument("--entries", type=int, default=DD40_ENTRY_COUNT)
+    p.add_argument("--entry-ladder", default=DD40_ENTRY_LADDER, choices=["range_uniform", "range_to_sl"])
+    p.add_argument("--entry-sl-gap", type=float, default=DD40_ENTRY_SL_GAP)
     p.add_argument("--no-clear", action="store_true")
     p.add_argument("--no-notifications", action="store_true")
     p.add_argument("--no-forensic", action="store_true")
@@ -63,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         "--mt5-symbol", args.mt5_symbol,
         "--mt5-server-offset", str(args.mt5_server_offset),
         "--mt5-history-bars", str(args.mt5_history_bars),
-        "--initial-capital", "10000",
+        "--initial-capital", str(args.initial_capital),
         "--risk", str(args.risk),
         "--entries", str(args.entries),
         "--entry-ladder", args.entry_ladder,
