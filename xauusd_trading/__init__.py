@@ -156,12 +156,9 @@ _install_auto_execution_history_filter()
 
 # 1. core.config
 from .core.config import (
-    BALANCED_LIVE_CONFIG,
     CHART_TIMEZONE_OFFSET,
     CONTRACT_SIZE_OZ,
     DEFAULT_CONFIG,
-    HIGHEST_PROFIT_CONFIG,
-    LOWER_EXPOSURE_CONFIG,
     POINT_VALUE,
     StrategyConfig,
 )
@@ -274,12 +271,9 @@ from .execution.mt5_executor_tp2 import Mt5Executor
 
 __all__ = [
     # core.config
-    "BALANCED_LIVE_CONFIG",
     "CHART_TIMEZONE_OFFSET",
     "CONTRACT_SIZE_OZ",
     "DEFAULT_CONFIG",
-    "HIGHEST_PROFIT_CONFIG",
-    "LOWER_EXPOSURE_CONFIG",
     "POINT_VALUE",
     "StrategyConfig",
     # core.chart

@@ -38,7 +38,7 @@ expiry is the main reason live/backtest parity requires MT5 to keep orders alive
 for the full 630-minute window.
 """
 from __future__ import annotations
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 
 CONTRACT_SIZE_OZ = 100.0       # 1.0 lot XAUUSD = 100 oz; 0.5 lot = $50 per $1 move
@@ -93,28 +93,3 @@ class StrategyConfig:
 
 
 DEFAULT_CONFIG = StrategyConfig()
-BEST_PNL_CONFIG = DEFAULT_CONFIG
-BALANCED_LIVE_CONFIG = DEFAULT_CONFIG
-
-LOWER_RISK_PROVIDER_CONFIG = replace(
-    DEFAULT_CONFIG,
-    risk_per_signal=0.02,
-)
-
-HIGHEST_PROFIT_CONFIG = replace(
-    DEFAULT_CONFIG,
-    entry_count=3,
-    entry_ladder="signal_range_3",
-    activation_delay_minutes=0,
-    pending_expiry_minutes=20,
-    max_hold_minutes=30,
-    sl_multiplier=1.5,
-    final_target="TP3",
-    lock_after_tp1=True,
-    lock_after_tp2=True,
-)
-
-LOWER_EXPOSURE_CONFIG = replace(
-    HIGHEST_PROFIT_CONFIG,
-    entry_count=2,
-)
