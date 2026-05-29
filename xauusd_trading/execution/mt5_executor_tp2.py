@@ -143,7 +143,8 @@ class Mt5Executor(_BaseMt5Executor):
                     "price":        price,
                     "magic":        magic,
                     "comment":      f"{signal_key}/late-tp2"[:31],
-                    "type_filling": self.mt5.ORDER_FILLING_RETURN,
+                    "deviation":    self.CLOSE_DEVIATION_POINTS,
+                    "type_filling": self._market_fill_mode(),
                 }
                 res = self.mt5.order_send(req)
                 success = bool(

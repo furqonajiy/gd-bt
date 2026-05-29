@@ -164,6 +164,10 @@ def _reconstruct_signal_text(s: Signal) -> str:
 class Mt5Executor:
     """Place and manage trades for the validated strategy."""
 
+    # Max slippage (in points) tolerated on forced market closes. A forced
+    # exit must succeed; a few points of slippage is preferable to a reject.
+    CLOSE_DEVIATION_POINTS = 50
+
     def __init__(self, conn: Mt5Connection, symbol: str,
                  min_lot: float = DEFAULT_MIN_LOT,
                  lot_step: float = DEFAULT_LOT_STEP,
@@ -191,6 +195,7 @@ class Mt5Executor:
         self.notifier = notifier
         self.forensic = forensic
         self._sym_info = None
+        self._market_fill = None
 
     def _log_order_send(self, signal_key: str, action: str,
                         request: dict, response, *, success: bool) -> None:
@@ -198,6 +203,30 @@ class Mt5Executor:
             self.forensic.order_send(signal_key=signal_key, action=action,
                                      request=request, response=response,
                                      success=success)
+
+    def _market_fill_mode(self):
+        """Broker-supported fill mode for market-close DEALs (cached per cycle).
+
+        ORDER_FILLING_RETURN is valid for pending orders but most
+        Market-execution brokers reject it on TRADE_ACTION_DEAL with retcode
+        10030 (Unsupported filling mode). Read the symbol's advertised
+        filling_mode bitmask and prefer IOC (forgiving on partial fills),
+        then FOK, falling back to RETURN only if neither is advertised.
+        """
+        if self._market_fill is not None:
+            return self._market_fill
+        sym = self._sym_info or self.mt5.symbol_info(self.symbol)
+        mask = getattr(sym, "filling_mode", 0) if sym is not None else 0
+        ioc_bit = getattr(self.mt5, "SYMBOL_FILLING_IOC", 2)
+        fok_bit = getattr(self.mt5, "SYMBOL_FILLING_FOK", 1)
+        if mask & ioc_bit:
+            mode = self.mt5.ORDER_FILLING_IOC
+        elif mask & fok_bit:
+            mode = self.mt5.ORDER_FILLING_FOK
+        else:
+            mode = self.mt5.ORDER_FILLING_RETURN
+        self._market_fill = mode
+        return mode
 
     # ---- pre-flight ----------------------------------------------------
 
@@ -388,7 +417,7 @@ class Mt5Executor:
                 or earliest_patched < engine_pos.first_fill_time):
             engine_pos.first_fill_time = earliest_patched
             engine_pos.time_exit_deadline = (
-                earliest_patched + timedelta(minutes=config.max_hold_minutes)
+                    earliest_patched + timedelta(minutes=config.max_hold_minutes)
             )
 
         # Re-advance from earliest patched fill so stage/exits catch up.
@@ -559,7 +588,8 @@ class Mt5Executor:
                         "price":        price,
                         "magic":        magic,
                         "comment":      f"{signal_key}/late-tp1"[:31],
-                        "type_filling": self.mt5.ORDER_FILLING_RETURN,
+                        "deviation":    self.CLOSE_DEVIATION_POINTS,
+                        "type_filling": self._market_fill_mode(),
                     }
                     res = self.mt5.order_send(req)
                     success = bool(res is not None
@@ -652,7 +682,8 @@ class Mt5Executor:
                     "price":        price,
                     "magic":        magic,
                     "comment":      f"{signal_key}/timeout"[:31],
-                    "type_filling": self.mt5.ORDER_FILLING_RETURN,
+                    "deviation":    self.CLOSE_DEVIATION_POINTS,
+                    "type_filling": self._market_fill_mode(),
                 }
                 res = self.mt5.order_send(req)
                 success = bool(res is not None
