@@ -33,21 +33,22 @@ def _install_auto_execution_history_filter() -> None:
 
     original_print = builtins.print
     original_stdout = sys.stdout
-    state = {"dashboard": False, "reconcile": False}
+    state = {"dashboard": False, "reconcile": False, "auto_started": False}
 
     class _AutoHistoryStdout:
         """Suppress auto's screen-clear refresh while preserving real output."""
 
         def __init__(self, wrapped):
             self._wrapped = wrapped
+            self._clear_seq = chr(27) + "[H" + chr(27) + "[J"
 
         def write(self, data):
-            # _run_auto_watch clears the terminal every iteration with this
-            # escape sequence. Hide it so Auto behaves like an append-only
-            # activity log instead of a refreshing dashboard.
-            if data == "\x1b[H\x1b[J":
+            # _run_auto_watch clears the terminal every iteration. Hide it so
+            # Auto behaves like an append-only activity log instead of a
+            # refreshing dashboard.
+            if data == self._clear_seq:
                 return len(data)
-            cleaned = data.replace("\x1b[H\x1b[J", "")
+            cleaned = data.replace(self._clear_seq, "")
             if cleaned == "":
                 return len(data)
             return self._wrapped.write(cleaned)
@@ -71,7 +72,6 @@ def _install_auto_execution_history_filter() -> None:
         """Remove replay-only debug blocks from Auto's EXECUTION output."""
         filtered: list[str] = []
         for line in text.splitlines():
-            stripped = line.strip()
             if "every entry has already played out in backtest replay" in line:
                 continue
             if "partial placement --" in line and "backtest replay" in line:
@@ -117,7 +117,7 @@ def _install_auto_execution_history_filter() -> None:
                 state["reconcile"] = False
             return None
 
-        # Keep actionable failures/errors, but hide routine archive/loop noise.
+        # Keep startup/activity/errors, but hide routine archive/loop noise.
         if stripped.startswith((
             "SANITY CHECKS FAILED",
             "[signals]",
@@ -129,9 +129,15 @@ def _install_auto_execution_history_filter() -> None:
         if stripped.startswith("Archive:"):
             return None
 
-        # Hide auto loop and dashboard/projection output.
+        # Show the first auto iteration once so the operator knows Auto is live.
+        # Hide later loop heartbeats to avoid terminal spam.
         if text.startswith("[auto iter #"):
+            if not state["auto_started"]:
+                state["auto_started"] = True
+                return original_print(text, **kwargs)
             return None
+
+        # Hide dashboard/projection output.
         if stripped == "=" * 70:
             return None
         if stripped.startswith("XAUUSD AUTO MODE"):
@@ -264,80 +270,6 @@ from .execution.mt5_executor import (
     signal_to_magic,
 )
 from .execution.mt5_executor_tp2 import Mt5Executor
-
-
-def _install_auto_live_limit_guard() -> None:
-    """Skip stale/marketable LIMIT orders before Auto calls MT5 order_send."""
-    import sys
-
-    if "auto" not in sys.argv[1:3]:
-        return
-    if getattr(Mt5Executor.place_signal, "_xauusd_auto_live_limit_guard", False):
-        return
-
-    original_place_signal = Mt5Executor.place_signal
-    skipped_entries: set[str] = set()
-    failed_signals: set[str] = set()
-
-    def _entry_key(signal_key: str, entry_index: int) -> str:
-        return f"{signal_key}.{entry_index + 1}"
-
-    def guarded_place_signal(self, signal, plan):
-        if signal.signal_key in failed_signals:
-            return ExecutionLog()
-
-        log = ExecutionLog()
-        tick = self.mt5.symbol_info_tick(self.symbol)
-        if tick is None or tick.bid <= 0 or tick.ask <= 0:
-            place_log = original_place_signal(self, signal, plan)
-            if place_log.placed == 0 and (place_log.actions or place_log.warnings):
-                failed_signals.add(signal.signal_key)
-            return place_log
-
-        bid = float(tick.bid)
-        ask = float(tick.ask)
-        valid_orders = []
-        for order in plan.orders:
-            key = _entry_key(signal.signal_key, order.entry_index)
-            price = float(order.entry_price)
-            stale_reason = None
-            if signal.side == "BUY" and price >= ask:
-                stale_reason = f"stale BUY LIMIT {price:g} >= live ask {ask:g}"
-            elif signal.side == "SELL" and price <= bid:
-                stale_reason = f"stale SELL LIMIT {price:g} <= live bid {bid:g}"
-
-            if stale_reason is None:
-                valid_orders.append(order)
-                continue
-
-            if key not in skipped_entries:
-                log.actions.append(f"  {key}: skipped {stale_reason}")
-                skipped_entries.add(key)
-
-        if not valid_orders:
-            return log
-
-        original_orders = plan.orders
-        plan.orders = valid_orders
-        try:
-            place_log = original_place_signal(self, signal, plan)
-        finally:
-            plan.orders = original_orders
-
-        log.merge(place_log)
-        if place_log.placed == 0 and (place_log.actions or place_log.warnings):
-            failed_signals.add(signal.signal_key)
-            log.actions.append(
-                f"Signal {signal.signal_key}: placement failed; skipped further "
-                f"retries in this Auto run. Restart Auto to retry manually."
-            )
-        return log
-
-    guarded_place_signal._xauusd_auto_live_limit_guard = True
-    Mt5Executor.place_signal = guarded_place_signal
-
-
-_install_auto_live_limit_guard()
 
 
 __all__ = [
