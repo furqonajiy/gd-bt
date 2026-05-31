@@ -4,6 +4,7 @@ The base MT5 executor places orders, reconciles fills, cancels expired pendings,
 locks to TP1, and handles time exit. This wrapper adds two live-only parity
 safety checks used by the public executor:
 
+* skip expired signals by wall-clock chart time before order_send;
 * skip stale/marketable pending LIMITs before order_send; and
 * optionally apply TP2 stop-lock parity when the strategy enables TP2 locking.
 
@@ -12,7 +13,9 @@ unless a config explicitly enables it.
 """
 from __future__ import annotations
 
-from xauusd_trading import Position, StrategyConfig
+from datetime import datetime, timedelta
+
+from xauusd_trading import CHART_TIMEZONE_OFFSET, Position, StrategyConfig
 
 from .mt5_executor import (
     ExecutionLog,
@@ -22,13 +25,19 @@ from .mt5_executor import (
 )
 
 
+def _wall_clock_chart_now() -> datetime:
+    """Return real wall-clock time in the chart timezone (GMT+3)."""
+    return datetime.utcnow() + timedelta(hours=CHART_TIMEZONE_OFFSET)
+
+
 class Mt5Executor(_BaseMt5Executor):
     """Public MT5 executor with live parity guards."""
 
     # Process-local guards. Auto creates a fresh executor every cycle, so these
-    # class-level sets prevent the same impossible stale order or zero-placement
-    # broker failure from being logged/sent every watch interval.
+    # class-level sets prevent repeated logs for the same stale entry, expired
+    # signal, or zero-placement broker failure every watch interval.
     _session_skipped_stale_entries: set[str] = set()
+    _session_skipped_expired_signal_keys: set[str] = set()
     _session_failed_signal_keys: set[str] = set()
 
     def place_signal(self, signal, plan) -> ExecutionLog:
@@ -40,17 +49,36 @@ class Mt5Executor(_BaseMt5Executor):
         LIMIT orders, for example a SELL LIMIT below current Bid or a BUY LIMIT
         above current Ask. Skip those before order_send so we do not spam MT5
         with repeated retcode=10015 Invalid price requests.
+
+        Placement expiry is checked against wall-clock chart time so stale MT5
+        M1 history cannot keep old provider signals alive past the 630-minute
+        DD40 pending window.
         """
         if signal.signal_key in self._session_failed_signal_keys:
             return ExecutionLog()
 
         log = ExecutionLog()
+        expires_at = getattr(plan, "pending_expires_at", None)
+        now_chart = _wall_clock_chart_now()
+        if expires_at is not None and now_chart >= expires_at:
+            if signal.signal_key not in self._session_skipped_expired_signal_keys:
+                minutes_past = (now_chart - expires_at).total_seconds() / 60.0
+                log.actions.append(
+                    f"Signal {signal.signal_key}: skipped expired by wall-clock "
+                    f"(expired {expires_at:%Y-%m-%d %H:%M} GMT+3, "
+                    f"now {now_chart:%Y-%m-%d %H:%M} GMT+3, "
+                    f"{minutes_past:.0f} min past expiry)."
+                )
+                self._session_skipped_expired_signal_keys.add(signal.signal_key)
+            return log
+
         tick = self.mt5.symbol_info_tick(self.symbol)
         if tick is None or tick.bid <= 0 or tick.ask <= 0:
-            place_log = super().place_signal(signal, plan)
-            if place_log.placed == 0 and (place_log.actions or place_log.warnings):
-                self._session_failed_signal_keys.add(signal.signal_key)
-            return place_log
+            log.actions.append(
+                f"Signal {signal.signal_key}: skipped placement because no live "
+                f"bid/ask tick is available for {self.symbol}."
+            )
+            return log
 
         bid = float(tick.bid)
         ask = float(tick.ask)

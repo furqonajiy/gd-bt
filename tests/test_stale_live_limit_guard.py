@@ -1,8 +1,8 @@
-"""Tests for live stale LIMIT protection in the public MT5 executor.
+"""Tests for live stale LIMIT and wall-clock expiry protection.
 
-These tests cover the bug where Auto repeatedly sent an old SELL LIMIT after
-live price had already moved far above the entry, causing MT5 retcode=10015
-Invalid price every watch interval.
+These tests cover the bug where Auto can evaluate an old signal against stale
+MT5 chart history and repeatedly try to place a LIMIT order after the real
+pending window has already expired.
 """
 from __future__ import annotations
 from datetime import timedelta
@@ -64,8 +64,14 @@ class _FakeConn:
         self.mt5 = mt5
 
 
+def _reset_executor_guards():
+    Mt5Executor._session_skipped_stale_entries.clear()
+    Mt5Executor._session_skipped_expired_signal_keys.clear()
+    Mt5Executor._session_failed_signal_keys.clear()
+
+
 def _make_plan(signal, *, entry_price: float, initial_sl: float, target: float):
-    now = signal.signal_time_chart + timedelta(minutes=DEFAULT_CONFIG.activation_delay_minutes)
+    activation = signal.signal_time_chart + timedelta(minutes=DEFAULT_CONFIG.activation_delay_minutes)
     risk_dollars = 10.0
     return NewSignalPlan(
         signal=signal,
@@ -81,19 +87,36 @@ def _make_plan(signal, *, entry_price: float, initial_sl: float, target: float):
                 risk_dollars=risk_dollars,
             )
         ],
-        pending_expires_at=now + timedelta(minutes=DEFAULT_CONFIG.pending_expiry_minutes),
+        pending_expires_at=activation + timedelta(minutes=DEFAULT_CONFIG.pending_expiry_minutes),
         final_target_label="TP3",
         final_target_price=target,
         total_initial_risk_dollars=risk_dollars,
     )
 
 
+def test_expired_signal_is_skipped_before_order_send_even_if_limit_side_is_valid():
+    _reset_executor_guards()
+    signal = parse_one_signal(
+        "5. SELL XAUUSD 4510 - 4512 SL 4518 TP1 4500 TP2 4490 TP3 4480 03:53 PM",
+        source_date="2026-05-28",
+        source_offset=3,
+    )
+    plan = _make_plan(signal, entry_price=4510.0, initial_sl=4522.08, target=4480.0)
+    mt5 = _FakeMt5(bid=4504.58, ask=4504.85)
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.place_signal(signal, plan)
+
+    assert log.placed == 0
+    assert mt5.requests == []
+    assert any("skipped expired by wall-clock" in action for action in log.actions)
+
+
 def test_stale_sell_limit_below_live_bid_is_skipped_before_order_send():
-    Mt5Executor._session_skipped_stale_entries.clear()
-    Mt5Executor._session_failed_signal_keys.clear()
+    _reset_executor_guards()
     signal = parse_one_signal(
         "5. SELL XAUUSD 4418 - 4420 SL 4425.5 TP1 4410 TP2 4400 TP3 4380 03:53 PM",
-        source_date="2026-05-28",
+        source_date="2099-05-28",
         source_offset=3,
     )
     plan = _make_plan(signal, entry_price=4418.0, initial_sl=4430.08, target=4380.0)
@@ -108,11 +131,10 @@ def test_stale_sell_limit_below_live_bid_is_skipped_before_order_send():
 
 
 def test_valid_sell_limit_above_live_bid_is_sent_to_mt5():
-    Mt5Executor._session_skipped_stale_entries.clear()
-    Mt5Executor._session_failed_signal_keys.clear()
+    _reset_executor_guards()
     signal = parse_one_signal(
         "5. SELL XAUUSD 4510 - 4512 SL 4518 TP1 4500 TP2 4490 TP3 4480 03:53 PM",
-        source_date="2026-05-28",
+        source_date="2099-05-28",
         source_offset=3,
     )
     plan = _make_plan(signal, entry_price=4510.0, initial_sl=4522.08, target=4480.0)
@@ -128,11 +150,10 @@ def test_valid_sell_limit_above_live_bid_is_sent_to_mt5():
 
 
 def test_stale_buy_limit_above_live_ask_is_skipped_before_order_send():
-    Mt5Executor._session_skipped_stale_entries.clear()
-    Mt5Executor._session_failed_signal_keys.clear()
+    _reset_executor_guards()
     signal = parse_one_signal(
         "6. BUY XAUUSD 4510 - 4508 SL 4502 TP1 4520 TP2 4530 TP3 4540 03:53 PM",
-        source_date="2026-05-28",
+        source_date="2099-05-28",
         source_offset=3,
     )
     plan = _make_plan(signal, entry_price=4510.0, initial_sl=4498.0, target=4540.0)
