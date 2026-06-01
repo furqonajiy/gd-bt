@@ -52,6 +52,43 @@ def _round_sell_sl(value: float, digits: int) -> float:
     return round(math.ceil(value * factor - 1e-9) / factor, digits)
 
 
+def clamp_sltp_sl(executor, p, requested_sl: float) -> float | None:
+    """Return the broker-legal SL level that an SLTP modify would request.
+
+    This is the side-effect-free clamp used by warning/diagnostic code.  It
+    mirrors ``prepare_sltp_modify_request`` but does not append logs, emit
+    forensic records, or send anything to MT5.  ``None`` means the stop cannot be
+    evaluated or would be illegal even after clamping.
+    """
+    mt5 = executor.mt5
+    sym = getattr(executor, "_sym_info", None) or mt5.symbol_info(executor.symbol)
+    digits = _digits_for(sym)
+    stops_points = _level_points(sym, "trade_stops_level")
+    freeze_points = _freeze_level_points(sym)
+    min_distance = max(stops_points, freeze_points) * POINT_VALUE
+
+    tick = mt5.symbol_info_tick(executor.symbol)
+    if tick is None or getattr(tick, "bid", 0) <= 0 or getattr(tick, "ask", 0) <= 0:
+        return None
+
+    bid = float(tick.bid)
+    ask = float(tick.ask)
+    requested = float(requested_sl)
+
+    if p.type == mt5.POSITION_TYPE_BUY:
+        legal_max = bid - min_distance
+        clamped = _round_buy_sl(min(requested, legal_max), digits)
+        if clamped >= bid:
+            return None
+        return clamped
+
+    legal_min = ask + min_distance
+    clamped = _round_sell_sl(max(requested, legal_min), digits)
+    if clamped <= ask:
+        return None
+    return clamped
+
+
 def _emit_forensic(executor, *, signal_key: str, action_name: str, ticket: int,
                    requested_sl: float, clamped_sl: float | None,
                    stops_level_points: int, freeze_level_points: int,
