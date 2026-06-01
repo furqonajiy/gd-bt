@@ -22,6 +22,7 @@ from xauusd_trading import CsvChartSource
 from xauusd_trading import Position, advance_bars, open_position
 from xauusd_trading import Signal
 from xauusd_trading import iter_bars, slice_bars
+from xauusd_trading.core.trend_runner import prewarm_indicators_from_dataframe
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +48,7 @@ def replay_signal(
     chart_end = chart_df["time"].iloc[-1].to_pydatetime()
     if end > chart_end:
         end = chart_end
+    prewarm_indicators_from_dataframe(pos, chart_df, config, replay_start=pos.activation_time)
     bars = iter_bars(slice_bars(chart_df, pos.activation_time, end))
     advance_bars(pos, bars, config, contract_size)
     _finalize_expired_pending_entries(pos, end)
