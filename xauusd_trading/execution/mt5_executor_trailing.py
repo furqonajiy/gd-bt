@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from .mt5_executor_tp2 import Mt5Executor as _Tp2Mt5Executor, _wall_clock_chart_now
 from .mt5_executor import ExecutionLog, mt5_entry_comment, round_lot, signal_entry_key, signal_to_magic
-from .sl_safety import prepare_sltp_modify_request
+from .sl_safety import clamp_sltp_sl, prepare_sltp_modify_request
 from xauusd_trading.core.config import DEFAULT_CONFIG
 
 
@@ -330,7 +330,9 @@ class Mt5Executor(_Tp2Mt5Executor):
         for p, entry in self._position_entry_pairs(engine_pos, magic):
             if entry.status != "OPEN":
                 continue
-            expected = round(engine_pos.effective_stop_for(entry, config), digits)
+            raw_expected = round(engine_pos.effective_stop_for(entry, config), digits)
+            clamped_expected = clamp_sltp_sl(self, p, raw_expected)
+            expected = round(clamped_expected if clamped_expected is not None else raw_expected, digits)
             current = round(float(getattr(p, "sl", 0.0) or 0.0), digits)
             executor_owns_stop = (
                 entry.trailing_stop is not None
