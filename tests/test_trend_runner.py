@@ -97,3 +97,53 @@ def test_trend_runner_does_not_override_max_hold_before_tp3():
     ], cfg)
 
     assert pos.entries[0].status == "TIME_EXIT"
+
+
+def test_active_runner_stop_tightened_from_current_bar_only_triggers_next_bar():
+    sig = parse_one_signal(
+        "1. SELL XAUUSD 4500 - 4502 SL 4508 TP1 4490 TP2 4480 TP3 4470 10:00 PM",
+        source_date="2026-05-29",
+        source_offset=0,
+    )
+    cfg = replace(
+        DEFAULT_CONFIG,
+        activation_delay_minutes=0,
+        entry_count=1,
+        trend_runner_enabled=True,
+        trend_runner_atr_period=1,
+        trend_runner_atr_multiplier=1.0,
+        trend_runner_override_max_hold=True,
+        max_hold_minutes=90,
+    )
+    pos = open_position(sig, 1000.0, cfg)
+    t = sig.signal_time_chart
+    entry = pos.entries[0]
+    fill_time = t - timedelta(minutes=5)
+
+    entry.status = "OPEN"
+    entry.fill_time = fill_time
+    entry.trailing_stop = sig.tp2
+    pos.first_fill_time = fill_time
+    pos.time_exit_deadline = fill_time + timedelta(minutes=cfg.max_hold_minutes)
+    pos.stage = 3
+    pos.stage3_time = t - timedelta(minutes=4)
+    pos.trend_runner_active = True
+    pos.trend_prev_close = 4455.0
+
+    # Same-bar look-ahead bug: this bar's low tightens SELL stop from 4480 to
+    # 4470, and its high touches 4470. The prior 4480 stop is not touched, so the
+    # runner must survive and only arm 4470 for the next bar.
+    advance_bars(pos, [
+        _bar(t, 4455, 4470, 4450, 4455),
+    ], cfg)
+
+    assert entry.status == "OPEN"
+    assert entry.exit_time is None
+    assert entry.trailing_stop == 4470.0
+
+    advance_bars(pos, [
+        _bar(t + timedelta(minutes=1), 4455, 4470, 4454, 4460),
+    ], cfg)
+
+    assert entry.status == "TRAILING_STOP"
+    assert entry.exit_price == 4470.0
