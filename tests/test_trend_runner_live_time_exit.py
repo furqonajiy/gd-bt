@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 
-from xauusd_trading import DEFAULT_CONFIG, Mt5Executor, open_position, parse_one_signal, signal_to_magic
+from xauusd_trading import DEFAULT_CONFIG, ExecutionLog, Mt5Executor, open_position, parse_one_signal, signal_to_magic
 
 
 class _Resp:
@@ -17,9 +17,11 @@ class _Resp:
 class _Sym:
     digits = 2
     filling_mode = 0
-    trade_stops_level = 0
-    trade_freeze_level = 0
-    freeze_level = 0
+
+    def __init__(self, *, stops=0, freeze=0):
+        self.trade_stops_level = stops
+        self.trade_freeze_level = freeze
+        self.freeze_level = freeze
 
 
 class _Tick:
@@ -61,11 +63,11 @@ class _FakeMt5:
     POSITION_TYPE_BUY = 0
     POSITION_TYPE_SELL = 1
 
-    def __init__(self, *, positions=None, orders=None, tick=None):
+    def __init__(self, *, positions=None, orders=None, tick=None, stops=0, freeze=0):
         self._positions = list(positions or [])
         self._orders = list(orders or [])
         self._tick = tick or _Tick()
-        self._sym = _Sym()
+        self._sym = _Sym(stops=stops, freeze=freeze)
         self.requests = []
 
     def symbol_info(self, symbol):
@@ -212,3 +214,43 @@ def test_runner_active_pushes_atr_trailing_stop_even_when_fixed_trailing_close_i
     assert sltp_requests[0]["sl"] == expected_sl
     assert mt5_pos.sl == expected_sl
     assert log.modified == 1
+
+
+def test_clamped_stop_does_not_trigger_external_sl_warning_but_unrelated_stop_does():
+    signal, pos = _past_deadline_position(runner_active=True)
+    pos.time_exit_deadline = datetime(2099, 1, 1)
+    pos.stage = 3
+    pos.stage3_time = pos.entries[0].fill_time + timedelta(minutes=5)
+    pos.entries[0].trailing_stop = 4549.0
+
+    raw_expected = round(pos.effective_stop_for(pos.entries[0], RUNNER_CONFIG), 2)
+    assert raw_expected == 4549.0
+
+    magic = signal_to_magic(signal.signal_key)
+    mt5_pos = _FakePosition(
+        ticket=1004,
+        magic=magic,
+        type_=_FakeMt5.POSITION_TYPE_BUY,
+        sl=4540.0,
+        tp=signal.tp3,
+        comment=f"{signal.signal_key}.1",
+    )
+    mt5 = _FakeMt5(
+        positions=[mt5_pos],
+        tick=_Tick(bid=4550.0, ask=4550.2),
+        stops=200,  # $2.00 minimum stop distance, so BUY SL 4549 clamps to 4548.
+    )
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    first = executor.manage_position(pos, RUNNER_CONFIG, datetime(2026, 6, 2, 5, 0))
+    assert first.modified == 1
+    assert mt5_pos.sl == 4548.0
+
+    quiet_log = ExecutionLog()
+    executor._warn_on_external_sl_change(pos, RUNNER_CONFIG, quiet_log)
+    assert not any("external SL change detected" in warning for warning in quiet_log.warnings)
+
+    mt5_pos.sl = 4547.0
+    warning_log = ExecutionLog()
+    executor._warn_on_external_sl_change(pos, RUNNER_CONFIG, warning_log)
+    assert any("external SL change detected" in warning for warning in warning_log.warnings)
