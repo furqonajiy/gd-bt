@@ -17,7 +17,7 @@ unsafe immediate LIMIT fills.
 """
 from __future__ import annotations
 
-from .mt5_executor_tp2 import Mt5Executor as _Tp2Mt5Executor
+from .mt5_executor_tp2 import Mt5Executor as _Tp2Mt5Executor, _wall_clock_chart_now
 from .mt5_executor import ExecutionLog, mt5_entry_comment, round_lot, signal_entry_key, signal_to_magic
 from xauusd_trading.core.config import DEFAULT_CONFIG
 
@@ -25,14 +25,12 @@ from xauusd_trading.core.config import DEFAULT_CONFIG
 class Mt5Executor(_Tp2Mt5Executor):
     """MT5 executor with trailing-open and trailing-close parity helpers."""
 
-    def _trailing_open_distance(self) -> float:
-        return float(getattr(DEFAULT_CONFIG, "trailing_open_distance", 0.0) or 0.0)
+    @staticmethod
+    def _plan_trailing_open_distance(plan) -> float:
+        return float(getattr(plan, "trailing_open_distance", getattr(DEFAULT_CONFIG, "trailing_open_distance", 0.0)) or 0.0)
 
     def _pending_stop_type(self, side: str):
         return self.mt5.ORDER_TYPE_BUY_STOP if side == "BUY" else self.mt5.ORDER_TYPE_SELL_STOP
-
-    def _pending_limit_type(self, side: str):
-        return self.mt5.ORDER_TYPE_BUY_LIMIT if side == "BUY" else self.mt5.ORDER_TYPE_SELL_LIMIT
 
     @staticmethod
     def _planned_stop_distance(side: str, planned_entry: float, planned_sl: float) -> float:
@@ -58,7 +56,7 @@ class Mt5Executor(_Tp2Mt5Executor):
         return bid - distance
 
     def place_signal(self, signal, plan) -> ExecutionLog:
-        trailing_open_distance = self._trailing_open_distance()
+        trailing_open_distance = self._plan_trailing_open_distance(plan)
         if trailing_open_distance <= 0:
             return super().place_signal(signal, plan)
 
@@ -66,7 +64,7 @@ class Mt5Executor(_Tp2Mt5Executor):
         # sends STOP orders at the current trailing trigger instead of LIMITs.
         log = ExecutionLog()
         log.placed_entry_indices = []
-        now_chart = __import__("xauusd_trading.execution.mt5_executor_tp2", fromlist=["_wall_clock_chart_now"])._wall_clock_chart_now()
+        now_chart = _wall_clock_chart_now()
 
         replay_pos = getattr(plan, "replay_position", None)
         if replay_pos is not None and len(plan.orders) < len(replay_pos.entries):
@@ -209,7 +207,7 @@ class Mt5Executor(_Tp2Mt5Executor):
         return log
 
     def _trail_pending_open_orders(self, engine_pos, config) -> ExecutionLog:
-        distance = float(getattr(config, "trailing_open_distance", 0.0) or self._trailing_open_distance())
+        distance = float(getattr(config, "trailing_open_distance", 0.0) or 0.0)
         if distance <= 0:
             return ExecutionLog()
         log = ExecutionLog()
