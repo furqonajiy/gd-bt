@@ -126,6 +126,32 @@ def _effective_stop_with_trailing(position: Position, entry: Entry, config: Stra
     return position.effective_stop_for(entry, config)
 
 
+def _engage_trend_runner(position: Position, bar: Bar) -> None:
+    """Activate TP3 trend-runner state without using this bar's ATR ratchet.
+
+    The bar that first reaches TP3 must mark the runner active before the stop and
+    time-exit checks, but any ATR stop tightened from this same bar's extreme must
+    only protect from the next bar onward.  Seed the runner-owned stop at TP2 so
+    live/backtest state is explicit while avoiding a current-bar ATR look-ahead.
+    """
+    position.stage = max(position.stage, 3)
+    if position.stage3_time is None:
+        position.stage3_time = bar.time
+    position.trend_runner_active = True
+
+    seed = position.signal.tp2
+    for entry in position.open_entries():
+        if not _entry_open_before_bar(entry, bar):
+            continue
+        current = getattr(entry, "trailing_stop", None)
+        if current is None:
+            entry.trailing_stop = seed
+        elif position.signal.side == "BUY":
+            entry.trailing_stop = max(float(current), seed)
+        else:
+            entry.trailing_stop = min(float(current), seed)
+
+
 def _update_trailing_close_stops(position: Position, bar: Bar, config: StrategyConfig) -> None:
     distance = float(getattr(config, "trailing_close_distance", 0.0) or 0.0)
     if distance <= 0:
@@ -170,8 +196,10 @@ def advance_one_bar(
         tp1_hit, tp2_hit, tp3_hit, target_hit = _target_levels_hit(position, side, h, l, sp)
         runner_after_tp3 = bool(getattr(config, "runner_after_tp3", False)) and config.final_target.upper() == "TP3"
         trend_runner_holds = bool(target_hit and runner_can_hold(position, config))
-        if trend_runner_holds or getattr(position, "trend_runner_active", False):
-            update_runner_stop(position, bar, config)
+        runner_was_active = bool(getattr(position, "trend_runner_active", False))
+        runner_should_ratchet_after_stops = bool(trend_runner_holds or runner_was_active)
+        if trend_runner_holds and not runner_was_active:
+            _engage_trend_runner(position, bar)
 
         if getattr(config, "profit_lock_mode", "tp_levels") == "bep_plus_half_tp1":
             for e in open_entries:
@@ -211,6 +239,8 @@ def advance_one_bar(
             position.stage3_time = bar.time
 
         _update_trailing_close_stops(position, bar, config)
+        if runner_should_ratchet_after_stops and position.open_entries():
+            update_runner_stop(position, bar, config)
 
     if (
         position.time_exit_deadline is not None
