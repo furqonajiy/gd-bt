@@ -12,17 +12,7 @@ from __future__ import annotations
 
 
 def _install_auto_execution_history_filter() -> None:
-    """Keep live auto stdout focused on execution/history only.
-
-    Auto mode used to render a full live dashboard, including the dual replay
-    block that compares "if executed on time" against actual MT5 execution.
-    In unattended auto execution that projection is noisy; operators only need
-    the event/history stream: placements, reconciliation, SL moves, cancels,
-    closes, warnings, and hard errors.
-
-    This is intentionally scoped to the CLI `auto` subcommand so backtest,
-    decide, manage, tests, and library imports keep their normal output.
-    """
+    """Keep live auto stdout focused on execution/history only."""
     import builtins
     import sys
 
@@ -66,7 +56,6 @@ def _install_auto_execution_history_filter() -> None:
         )
 
     def _filter_execution_log_text(text: str) -> str | None:
-        """Remove replay-only debug blocks from Auto's EXECUTION output."""
         filtered: list[str] = []
         for line in text.splitlines():
             if "every entry has already played out in backtest replay" in line:
@@ -189,9 +178,8 @@ from .core.positions import (
     open_position,
 )
 
-# 5b. shared lifecycle.  This wrapper preserves the old lifecycle when
-# trailing distances are 0, and adds virtual trailing-open / trailing-close when
-# enabled.  Backtest, decide, manage and Auto all import these names from here.
+# 5b. shared lifecycle. This wrapper preserves the old lifecycle when trailing
+# distances are 0, and adds virtual trailing-open / trailing-close when enabled.
 from .core.trailing_positions import (
     advance_bars,
     advance_one_bar,
@@ -205,17 +193,17 @@ from .io.adapters import (
     PositionSource,
 )
 
-# 7. strategy.engine
+# 7. strategy.engine public data/rendering
 from .strategy.engine import (
     EntryStatus,
     NewSignalPlan,
     PlannedOrder,
     PositionStatus,
     Recommendation,
-    decide,
     format_replay_outcome,
     render_report,
 )
+from .strategy.trailing_engine import decide
 
 # 8. strategy.backtest
 from .strategy.backtest import (
