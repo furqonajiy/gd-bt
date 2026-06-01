@@ -1,4 +1,4 @@
-"""Regression tests for live trend-runner max-hold parity."""
+"""Regression tests for live trend-runner max-hold and stop parity."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -86,6 +86,12 @@ class _FakeMt5:
             self._positions = [p for p in self._positions if p.ticket != request.get("position")]
         elif request.get("action") == self.TRADE_ACTION_REMOVE:
             self._orders = [o for o in self._orders if o.ticket != request.get("order")]
+        elif request.get("action") == self.TRADE_ACTION_SLTP:
+            for p in self._positions:
+                if p.ticket == request.get("position"):
+                    p.sl = request["sl"]
+                    p.tp = request["tp"]
+                    break
         return _Resp()
 
     def last_error(self):
@@ -101,6 +107,7 @@ RUNNER_CONFIG = replace(
     DEFAULT_CONFIG,
     trend_runner_enabled=True,
     trend_runner_override_max_hold=True,
+    trailing_close_distance=0.0,
     lock_after_tp1=False,
     lock_after_tp2=False,
 )
@@ -174,3 +181,34 @@ def test_non_runner_position_past_deadline_is_still_time_closed_and_timeout_canc
     assert any(req.get("action") == mt5.TRADE_ACTION_REMOVE and req.get("order") == 2002 for req in mt5.requests)
     assert mt5.positions_get(symbol="XAUUSD") == []
     assert mt5.orders_get(symbol="XAUUSD") == []
+
+
+def test_runner_active_pushes_atr_trailing_stop_even_when_fixed_trailing_close_is_disabled():
+    signal, pos = _past_deadline_position(runner_active=True)
+    pos.time_exit_deadline = datetime(2099, 1, 1)
+    pos.stage = 3
+    pos.stage3_time = pos.entries[0].fill_time + timedelta(minutes=5)
+    pos.entries[0].trailing_stop = 4542.0
+
+    expected_sl = round(pos.effective_stop_for(pos.entries[0], RUNNER_CONFIG), 2)
+    assert expected_sl == 4542.0
+
+    magic = signal_to_magic(signal.signal_key)
+    mt5_pos = _FakePosition(
+        ticket=1003,
+        magic=magic,
+        type_=_FakeMt5.POSITION_TYPE_BUY,
+        sl=signal.tp1,
+        tp=signal.tp3,
+        comment=f"{signal.signal_key}.1",
+    )
+    mt5 = _FakeMt5(positions=[mt5_pos], tick=_Tick(bid=4550.0, ask=4550.2))
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.manage_position(pos, RUNNER_CONFIG, datetime(2026, 6, 2, 5, 0))
+
+    sltp_requests = [req for req in mt5.requests if req.get("action") == mt5.TRADE_ACTION_SLTP]
+    assert len(sltp_requests) == 1
+    assert sltp_requests[0]["sl"] == expected_sl
+    assert mt5_pos.sl == expected_sl
+    assert log.modified == 1
