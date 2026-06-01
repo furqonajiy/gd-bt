@@ -304,25 +304,29 @@ def run_backtest(
 
 
 def _backtest_output_path(output_dir: Path, filename: str = "backtest_results.xlsx") -> Path:
-    """Resolve backtest output to a single Excel path.
+    """Resolve backtest output to a single Excel file path.
 
-    Backwards compatible:
+    Legacy/default:
       --output-dir reports -> reports/backtest_results.xlsx
 
     Named run:
-      --output-dir reports/trailing_open_2 -> reports/trailing_open_2.xlsx
+      --output-dir reports/trailing_open_2_risk_0034
+          -> reports/trailing_open_2_risk_0034.xlsx
 
-    Explicit file:
-      --output-dir reports/foo.xlsx -> reports/foo.xlsx
+    Scenario for named run:
+      filename=backtest_results_5000_2025-01-06.xlsx
+          -> reports/trailing_open_2_risk_0034_5000_2025-01-06.xlsx
 
-    Scenario files for a named run append the scenario suffix to the same stem,
-    e.g. reports/foo_1500_2026-05-19.xlsx.
+    Important: only the exact reports directory is treated as a directory. Any
+    deeper path is treated as a run-name stem even if an old folder exists there,
+    preventing repeated reports/<run>/backtest_results.xlsx files.
     """
     output_dir = Path(output_dir)
     default_name = "backtest_results.xlsx"
+
     if output_dir.suffix.lower() == ".xlsx":
         base = output_dir
-    elif output_dir.name.lower() == "reports" or filename == default_name and output_dir.exists() and output_dir.is_dir():
+    elif output_dir.name.lower() == "reports" and output_dir.parent in {Path("."), Path("")}:
         base = output_dir / default_name
     else:
         base = output_dir.with_suffix(".xlsx")
