@@ -72,8 +72,6 @@ def _normal_limit_fills(position: Position, bar: Bar, config: StrategyConfig) ->
             if opened_safe:
                 e.armed_for_touch = True
             elif returned_safe:
-                # The bar visited the safe side, but OHLC cannot order the touch
-                # and the fill inside this candle. Require a later candle.
                 e.armed_for_touch = True
                 continue
             else:
@@ -106,7 +104,6 @@ def _trailing_open_fills(position: Position, bar: Bar, config: StrategyConfig) -
     extreme = getattr(position, "trailing_open_extreme", None)
 
     if side == "BUY":
-        # Market-side prices for BUY are Ask = Bid + spread.
         ask_low = bar.low + sp
         ask_high = bar.high + sp
         deepest_entry = min(e.entry_price for e in pending)
@@ -117,17 +114,21 @@ def _trailing_open_fills(position: Position, bar: Bar, config: StrategyConfig) -
             return
 
         prev_extreme = float(extreme if extreme is not None else ask_low)
+        if ask_low < prev_extreme:
+            # A new lower low inside this M1 candle resets the trail. OHLC cannot
+            # prove that any same-candle high happened after this new low, so the
+            # rebound must occur on a later candle.
+            position.trailing_open_extreme = ask_low
+            return
+
         trigger_price = prev_extreme + distance
         if ask_high >= trigger_price:
             for e in pending:
                 _fill_entry_at_market_side(position, e, trigger_price, bar, config)
             position.trailing_open_active = False
             position.trailing_open_extreme = None
-        else:
-            position.trailing_open_extreme = min(prev_extreme, ask_low)
         return
 
-    # SELL uses Bid side.
     bid_high = bar.high
     bid_low = bar.low
     deepest_entry = max(e.entry_price for e in pending)
@@ -138,14 +139,17 @@ def _trailing_open_fills(position: Position, bar: Bar, config: StrategyConfig) -
         return
 
     prev_extreme = float(extreme if extreme is not None else bid_high)
+    if bid_high > prev_extreme:
+        # New higher high resets SELL trail; require later downside reversal.
+        position.trailing_open_extreme = bid_high
+        return
+
     trigger_price = prev_extreme - distance
     if bid_low <= trigger_price:
         for e in pending:
             _fill_entry_at_market_side(position, e, trigger_price, bar, config)
         position.trailing_open_active = False
         position.trailing_open_extreme = None
-    else:
-        position.trailing_open_extreme = max(prev_extreme, bid_high)
 
 
 def _effective_stop_with_trailing(position: Position, entry: Entry, config: StrategyConfig) -> float:
@@ -164,8 +168,6 @@ def _update_trailing_close_stops(position: Position, bar: Bar, config: StrategyC
         return
     side = position.signal.side
     for e in position.open_entries():
-        # Do not allow a position filled in this same M1 candle to receive and
-        # use a trailing stop derived from that candle.
         if not _entry_open_before_bar(e, bar):
             continue
         if side == "BUY":
@@ -191,17 +193,14 @@ def advance_one_bar(
     sp = bar.spread_price
     h, l, c = bar.high, bar.low, bar.close
 
-    # 1. Fills.
     if position.activation_time <= bar.time <= position.expiry_time:
         _trailing_open_fills(position, bar, config)
 
-    # 2. Pending expiry.
     if bar.time > position.expiry_time:
         for e in position.entries:
             if e.status == "PENDING":
                 e.status = "NO_FILL"
 
-    # 3. Stop / target. Worst-case: active stop wins same bar.
     open_entries = position.open_entries()
     if open_entries:
         tp1_hit, tp2_hit, tp3_hit, target_hit = _target_levels_hit(position, side, h, l, sp)
@@ -243,10 +242,8 @@ def advance_one_bar(
             position.stage = 3
             position.stage3_time = bar.time
 
-        # Advance trailing close stops only after stop/target checks for this bar.
         _update_trailing_close_stops(position, bar, config)
 
-    # 5. Time exit at first bar at/after the deadline; closes at market-side close.
     if position.time_exit_deadline is not None and bar.time >= position.time_exit_deadline:
         exit_price = _time_exit_price(side, c, sp)
         for e in position.entries:
