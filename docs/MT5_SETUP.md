@@ -24,6 +24,11 @@ In MT5: **Tools → Options → Expert Advisors**
 
 (These are the typical defaults; double-check.)
 
+Important: leave MT5's per-position right-click **Trailing Stop** feature **OFF**
+for engine-managed XAUUSD positions. The Python executor owns protective trailing
+SL moves via `TRADE_ACTION_SLTP`; native terminal trailing will fight the executor
+and is not modeled by the backtest.
+
 ## 3. Find your symbol name
 
 Symbols vary by broker:
@@ -76,7 +81,49 @@ Open MT5 positions / pending orders for the symbol:
 If the bar time is wrong, adjust `--mt5-server-offset`. If the symbol is not
 found, check the spelling against Market Watch.
 
-## 6. Decide on a new signal using live MT5 data
+## 6. Live order types: LIMIT vs trailing-open STOP
+
+When `trailing_open_distance = 0`, the live executor places normal broker LIMIT
+orders, with guards so stale/marketable LIMITs are skipped instead of converted
+into market orders.
+
+When `trailing_open_distance > 0`, the live executor does **not** place LIMITs.
+It places broker STOP orders to implement the virtual trailing-open rule:
+
+- BUY: after Ask moves at least `distance` below the planned entry, place/trail a
+  `BUY_STOP` at `Ask + distance`.
+- SELL: after Bid moves at least `distance` above the planned entry, place/trail a
+  `SELL_STOP` at `Bid - distance`.
+
+This is intentional. A normal BUY LIMIT at 4750 would fill immediately when Ask
+falls through 4750 on the way to 4740, which is exactly what trailing-open is
+trying to avoid.
+
+## 7. Protective trailing SL ownership
+
+The executor owns protective trailing stops. Each `manage`/`auto` cycle
+recomputes the engine's expected stop level and modifies MT5 SL with
+`TRADE_ACTION_SLTP` when the stop should improve.
+
+Do **not** enable MT5 terminal-native Trailing Stop on these positions. If native
+trailing is enabled, MT5 and the executor can both modify the same SL. That
+creates SL fights and live/backtest divergence because the backtest models only
+the executor trail.
+
+Expected live gap: executor SL can lag the backtest by up to one closed M1 bar +
+the watch interval, plus broker slippage and broker stop/freeze-level clamping.
+
+If a tracked position's SL differs from the executor's expected SL on a cycle
+where the executor did not issue a modify, the engine logs:
+
+```text
+external SL change detected — is MT5 native trailing enabled?
+```
+
+This warning is passive. The executor does not fight the external change in that
+cycle; inspect MT5 native trailing, other EAs, or manual SL edits.
+
+## 8. Decide on a new signal using live MT5 data
 
 ```powershell
 python -m xauusd_trading.cli decide ^
@@ -92,7 +139,7 @@ That command:
 - Reads your account equity from MT5
 - Outputs the same decision report as the CSV path
 
-## 7. M1 archive: build a long history one fetch at a time
+## 9. M1 archive: build a long history one fetch at a time
 
 MT5 only exposes the last ~103 days of M1 history (varies by broker). Every
 `decide --mt5` call automatically fetches the available range and saves it
@@ -135,7 +182,7 @@ python -m xauusd_trading.cli backtest ^
 The CSV format is identical to the original repo files, so they're
 directly interchangeable.
 
-## 8. Including currently-open signals
+## 10. Including currently-open signals
 
 The engine still uses `positions.json` to know which **signals** you are
 currently in. MT5 alone does not preserve enough context (TP1, TP2, TP3,
@@ -169,12 +216,13 @@ The engine replays each prior signal against the live MT5 chart up to "now"
 to reconstruct stage / floating P&L / time-exit countdown, then prints the
 combined report.
 
-## 9. Auto-execution (`--execute`)
+## 11. Auto-execution (`--execute`)
 
 `decide --execute` places the planned orders directly on MT5 and manages
 existing tracked signals (cancels expired pendings, locks SL to TP1 on
-TP1 touch, time-closes on max-hold deadline). Read-only diagnostic output
-without `--execute`; with `--execute`, real orders are sent.
+TP1 touch, applies executor-owned trailing SL moves, and time-closes on
+max-hold deadline). Read-only diagnostic output without `--execute`; with
+`--execute`, real orders are sent.
 
 ```powershell
 python -m xauusd_trading.cli decide ^
