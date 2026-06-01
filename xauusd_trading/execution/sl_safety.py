@@ -1,17 +1,17 @@
 """Broker stop-level safety for SLTP modifications.
 
-Backtest assumes every stop move is accepted.  Live MT5 can reject SLTP
-modifies when the requested SL is too close to current Bid/Ask.  This helper
-clamps every requested SL to the nearest legal broker level before order_send and
-emits both action-log and forensic evidence whenever it changes or skips a stop.
+Backtest assumes every stop move is accepted. Live MT5 can reject SLTP modifies
+when the requested SL is too close to current Bid/Ask. This helper clamps every
+requested SL to the nearest legal broker level before order_send and emits both
+action-log and forensic evidence whenever it changes or skips a stop.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 from xauusd_trading import POINT_VALUE
-from .mt5_executor import ExecutionLog
 
 
 @dataclass(frozen=True)
@@ -79,7 +79,7 @@ def _emit_forensic(executor, *, signal_key: str, action_name: str, ticket: int,
 
 def prepare_sltp_modify_request(executor, p, requested_sl: float, signal_key: str,
                                 action_name: str, label: str,
-                                log: ExecutionLog) -> SafeStopRequest | None:
+                                log: Any) -> SafeStopRequest | None:
     """Return a broker-legal SLTP request, or None when it must be skipped."""
     mt5 = executor.mt5
     sym = getattr(executor, "_sym_info", None) or mt5.symbol_info(executor.symbol)
