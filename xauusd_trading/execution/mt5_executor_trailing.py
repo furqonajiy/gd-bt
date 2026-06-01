@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from .mt5_executor_tp2 import Mt5Executor as _Tp2Mt5Executor, _wall_clock_chart_now
 from .mt5_executor import ExecutionLog, mt5_entry_comment, round_lot, signal_entry_key, signal_to_magic
+from .sl_safety import prepare_sltp_modify_request
 from xauusd_trading.core.config import DEFAULT_CONFIG
 
 
@@ -260,6 +261,29 @@ class Mt5Executor(_Tp2Mt5Executor):
                 reason = str(res.comment if res else self.mt5.last_error())
                 log.actions.append(f"  FAILED trailing-open modify on #{order.ticket}: {reason}")
         return log
+
+    def _modify_stop(self, p, sl: float, signal_key: str, action_name: str,
+                     label: str, log: ExecutionLog,
+                     locked: list[int], failed: list[tuple[int, str]]) -> None:
+        safe = prepare_sltp_modify_request(self, p, sl, signal_key, action_name, label, log)
+        if safe is None:
+            failed.append((p.ticket, "SLTP skipped by broker stop/freeze clamp"))
+            return
+        req = safe.request
+        res = self.mt5.order_send(req)
+        success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+        self._log_order_send(signal_key, action_name, req, res, success=success)
+        if success:
+            log.modified += 1
+            locked.append(p.ticket)
+            suffix = ""
+            if safe.changed:
+                suffix = f" (requested {safe.requested_sl:g}, clamped for broker stops)"
+            log.actions.append(f"  Locked SL on #{p.ticket} to {label} {safe.clamped_sl:g}{suffix} ({signal_key})")
+        else:
+            reason = str(res.comment if res else self.mt5.last_error())
+            failed.append((p.ticket, reason))
+            log.actions.append(f"  FAILED {label} SL-lock on #{p.ticket}: {reason}")
 
     def _apply_trailing_close_stops(self, engine_pos, config) -> ExecutionLog:
         if float(getattr(config, "trailing_close_distance", 0.0) or 0.0) <= 0:
