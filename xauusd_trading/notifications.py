@@ -10,7 +10,7 @@ Disabling: pass path=None (the Notifier becomes a no-op).
 """
 from __future__ import annotations
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -30,6 +30,11 @@ _STATUS_EMOJI = {
 }
 
 
+def _utc_now_naive() -> datetime:
+    """Return UTC wall-clock time as naive datetime for JSONL compatibility."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
 class Notifier:
     """Append-only JSONL event sink. All emit_* methods are best-effort
     and swallow errors -- notifications never break trading logic.
@@ -42,7 +47,7 @@ class Notifier:
         if self.path is None:
             return
         event = {
-            "ts": datetime.utcnow().isoformat(timespec="seconds"),
+            "ts": _utc_now_naive().isoformat(timespec="seconds"),
             "kind": kind,
             "signal_key": signal_key,
             "text": text,
