@@ -37,8 +37,8 @@ from .mt5_executor import (
 )
 
 
-_TERMINAL_STATUSES = {
-    "NO_FILL", "SL", "BEP", "LOCK_HALF_TP1", "LOCK_TP1", "LOCK_TP2",
+_REPLAY_CLOSED_STATUSES = {
+    "SL", "BEP", "LOCK_HALF_TP1", "LOCK_TP1", "LOCK_TP2",
     "TP1", "TP2", "TP3", "TIME_EXIT",
 }
 
@@ -75,6 +75,11 @@ class Mt5Executor(_BaseMt5Executor):
     _session_skipped_stale_entries: set[str] = set()
     _session_skipped_expired_signal_keys: set[str] = set()
     _session_failed_signal_keys: set[str] = set()
+
+    def _broker_epoch_to_chart_time(self, epoch: int) -> datetime:
+        """MT5 broker-time-as-UTC-epoch -> chart-time naive datetime."""
+        broker_naive = datetime.fromtimestamp(int(epoch), UTC).replace(tzinfo=None)
+        return broker_naive + timedelta(hours=3 - self.server_offset_hours)
 
     def _cancel_ticket(self, ticket: int, signal_key: str, action_name: str) -> bool:
         req = {"action": self.mt5.TRADE_ACTION_REMOVE, "order": ticket}
@@ -296,8 +301,8 @@ class Mt5Executor(_BaseMt5Executor):
         The base executor maps positions by chronological order.  This wrapper
         uses the entry suffix embedded in MT5 comments (``.1``, ``.2``, ``.3``)
         so live fills are reconciled to the same ladder slot that was sent to
-        the broker.  It also patches existing OPEN replay entries with MT5's
-        actual fill price/time where possible.
+        the broker.  It also allows MT5 positions to revive a replay NO_FILL,
+        because a live position is the source of truth for actual execution.
         """
         log = ExecutionLog()
         magic = signal_to_magic(engine_pos.signal.signal_key)
@@ -325,7 +330,7 @@ class Mt5Executor(_BaseMt5Executor):
                 continue
             used.add(idx)
             entry = engine_pos.entries[idx]
-            if entry.status in _TERMINAL_STATUSES:
+            if entry.status in _REPLAY_CLOSED_STATUSES:
                 if self.forensic is not None:
                     self.forensic.reconcile_skipped(
                         signal_key=signal_key,
@@ -344,7 +349,7 @@ class Mt5Executor(_BaseMt5Executor):
             before_price = entry.entry_price
 
             needs_patch = (
-                entry.status == "PENDING"
+                entry.status in ("PENDING", "NO_FILL")
                 or entry.fill_time != fill_time_chart
                 or abs(entry.entry_price - actual_price) > 1e-9
                 or abs(entry.lot - actual_lot) > 1e-9
@@ -495,7 +500,8 @@ class Mt5Executor(_BaseMt5Executor):
         The shared replay can now decide that only some entries are protected by
         a TP1/TP2 touch.  Live management must therefore modify/close only the MT5
         positions mapped to those protected entries, not every position sharing
-        the same signal magic.
+        the same signal magic.  If replay says an entry is already terminal while
+        MT5 still shows it open, close it at current market as a catch-up.
         """
         wall_clock_now = _wall_clock_chart_now()
         effective_chart_now = wall_clock_now if wall_clock_now > chart_now else chart_now
@@ -517,20 +523,52 @@ class Mt5Executor(_BaseMt5Executor):
 
         pairs = self._position_entry_pairs(engine_pos, magic)
 
-        # TP1 catch-up/lock only for entries whose replay says TP1 applies.
-        target_sl = round(engine_pos.signal.tp1, digits)
-        catchup_closed: list[tuple[int, float]] = []
-        catchup_failed: list[tuple[int, str]] = []
-        lock_tickets: list[int] = []
-        lock_failures: list[tuple[int, str]] = []
-        backtest_lock_pnl = sum(e.pnl or 0.0 for e in engine_pos.entries if e.status == "LOCK_TP1")
+        terminal_closed: list[tuple[int, float]] = []
+        terminal_failed: list[tuple[int, str]] = []
+        tp1_catchup_closed: list[tuple[int, float]] = []
+        tp1_catchup_failed: list[tuple[int, str]] = []
+        tp2_catchup_closed: list[tuple[int, float]] = []
+        tp2_catchup_failed: list[tuple[int, str]] = []
+        active_pairs = []
         for p, entry in pairs:
-            if entry.status == "LOCK_TP1" and abs(p.sl - target_sl) > tolerance:
+            if entry.status not in _REPLAY_CLOSED_STATUSES:
+                active_pairs.append((p, entry))
+                continue
+            if entry.status == "LOCK_TP1":
                 self._close_position(
                     p, magic, signal_key, "late-tp1", "Late TP1 catch-up",
-                    log, catchup_closed, catchup_failed,
+                    log, tp1_catchup_closed, tp1_catchup_failed,
                 )
-                continue
+            elif entry.status == "LOCK_TP2":
+                self._close_position(
+                    p, magic, signal_key, "late-tp2", "Late TP2 catch-up",
+                    log, tp2_catchup_closed, tp2_catchup_failed,
+                )
+            else:
+                action_name = f"catchup-{entry.status.lower().replace('_', '-')}"
+                self._close_position(
+                    p, magic, signal_key, action_name, f"{entry.status} catch-up",
+                    log, terminal_closed, terminal_failed,
+                )
+        pairs = active_pairs
+        closed_tickets_this_cycle = {
+            ticket for ticket, _price in (terminal_closed + tp1_catchup_closed + tp2_catchup_closed)
+        }
+
+        if self.notifier is not None and (tp1_catchup_closed or tp1_catchup_failed):
+            backtest_lock_pnl = sum(e.pnl or 0.0 for e in engine_pos.entries if e.status == "LOCK_TP1")
+            self.notifier.late_tp1_catchup(
+                signal_key=signal_key, side=side,
+                closed=tp1_catchup_closed, failed=tp1_catchup_failed,
+                backtest_pnl=backtest_lock_pnl,
+            )
+
+        # TP1 SL-lock only for entries whose replay says TP1 applies and that are
+        # still open in both replay and MT5.
+        target_sl = round(engine_pos.signal.tp1, digits)
+        lock_tickets: list[int] = []
+        lock_failures: list[tuple[int, str]] = []
+        for p, entry in pairs:
             if (
                 config.lock_after_tp1
                 and entry.status == "OPEN"
@@ -542,12 +580,6 @@ class Mt5Executor(_BaseMt5Executor):
                     log, lock_tickets, lock_failures,
                 )
 
-        if self.notifier is not None and (catchup_closed or catchup_failed):
-            self.notifier.late_tp1_catchup(
-                signal_key=signal_key, side=side,
-                closed=catchup_closed, failed=catchup_failed,
-                backtest_pnl=backtest_lock_pnl,
-            )
         if self.notifier is not None and (lock_tickets or lock_failures):
             self.notifier.tp1_lock(
                 signal_key=signal_key, side=side,
@@ -558,16 +590,10 @@ class Mt5Executor(_BaseMt5Executor):
         # Optional TP2 parity, only when the strategy enables it.
         if config.lock_after_tp2 and engine_pos.stage >= 2:
             tp2_sl = round(engine_pos.signal.tp2, digits)
-            tp2_closed: list[tuple[int, float]] = []
-            tp2_failed_close: list[tuple[int, str]] = []
             tp2_locked: list[int] = []
             tp2_lock_failed: list[tuple[int, str]] = []
             for p, entry in self._position_entry_pairs(engine_pos, magic):
-                if entry.status == "LOCK_TP2" and abs(p.sl - tp2_sl) > tolerance:
-                    self._close_position(
-                        p, magic, signal_key, "late-tp2", "Late TP2 catch-up",
-                        log, tp2_closed, tp2_failed_close,
-                    )
+                if int(p.ticket) in closed_tickets_this_cycle:
                     continue
                 if (
                     entry.status == "OPEN"
@@ -597,6 +623,8 @@ class Mt5Executor(_BaseMt5Executor):
             timeout_closed: list[tuple[int, float]] = []
             timeout_failed: list[tuple[int, str]] = []
             for p in self.find_positions(magic):
+                if int(p.ticket) in closed_tickets_this_cycle:
+                    continue
                 self._close_position(
                     p, magic, signal_key, "timeout", "Time-exit",
                     log, timeout_closed, timeout_failed,
