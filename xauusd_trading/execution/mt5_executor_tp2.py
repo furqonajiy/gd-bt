@@ -1,10 +1,11 @@
 """TP2-aware MT5 executor wrapper.
 
 The base MT5 executor places orders, reconciles fills, cancels expired pendings,
-locks to TP1, and handles time exit. This wrapper adds two live-only parity
-safety checks used by the public executor:
+locks to TP1, and handles time exit. This wrapper adds live-only parity safety
+checks used by the public executor:
 
 * skip expired signals by wall-clock chart time before order_send;
+* cancel already-placed pending LIMITs by wall-clock chart expiry;
 * skip stale/marketable pending LIMITs before order_send; and
 * optionally apply TP2 stop-lock parity when the strategy enables TP2 locking.
 
@@ -119,15 +120,62 @@ class Mt5Executor(_BaseMt5Executor):
             )
         return log
 
+    def _cancel_pending_expired_by_wall_clock(self, engine_pos: Position) -> ExecutionLog:
+        """Cancel live pending orders once real chart time passes strategy expiry.
+
+        The base executor cancels expired pendings using ``chart_now`` from the
+        latest MT5 M1 bar. If the feed stalls after order placement, that bar
+        time can lag behind the true DD40 pending expiry. This live-only guard
+        keeps MT5 GTC pending orders aligned with the backtest's 630-minute
+        pending window even during broker/session data gaps.
+        """
+        log = ExecutionLog()
+        now_chart = _wall_clock_chart_now()
+        if now_chart <= engine_pos.expiry_time:
+            return log
+
+        magic = signal_to_magic(engine_pos.signal.signal_key)
+        signal_key = engine_pos.signal.signal_key
+        cancel_failures: list[tuple[int, str]] = []
+        for order in self.find_orders(magic):
+            req = {"action": self.mt5.TRADE_ACTION_REMOVE, "order": order.ticket}
+            res = self.mt5.order_send(req)
+            success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+            self._log_order_send(signal_key, "cancel_pending_wall_clock_expired", req, res, success=success)
+            if success:
+                log.cancelled += 1
+                log.actions.append(
+                    f"  Cancelled wall-clock expired pending #{order.ticket} "
+                    f"({signal_key}; expired {engine_pos.expiry_time:%Y-%m-%d %H:%M} "
+                    f"GMT+3, now {now_chart:%Y-%m-%d %H:%M} GMT+3)"
+                )
+            else:
+                reason = str(res.comment if res else self.mt5.last_error())
+                log.actions.append(
+                    f"  FAILED to cancel wall-clock expired pending #{order.ticket}: {reason}"
+                )
+                cancel_failures.append((order.ticket, reason))
+
+        if self.notifier is not None and cancel_failures:
+            self.notifier.cancel_failed(
+                signal_key=signal_key,
+                side=engine_pos.signal.side,
+                failures=cancel_failures,
+            )
+        return log
+
     def manage_position(self, engine_pos: Position, config: StrategyConfig, chart_now):
         """Manage one tracked signal, including optional TP2 SL-lock parity.
 
-        The base executor handles expiry, reconciliation-dependent TP1 lock,
-        late TP1 catch-up, and time exit. After that pass, this method applies
-        the same stage-2 protection the backtest uses only when
+        The base executor handles chart-replay expiry, reconciliation-dependent
+        TP1 lock, late TP1 catch-up, and time exit. This wrapper first applies a
+        wall-clock pending-expiry guard for live GTC orders, then applies the
+        same stage-2 protection the backtest uses only when
         ``config.lock_after_tp2`` is enabled.
         """
-        log = super().manage_position(engine_pos, config, chart_now)
+        log = self._cancel_pending_expired_by_wall_clock(engine_pos)
+        base_log = super().manage_position(engine_pos, config, chart_now)
+        log.merge(base_log)
 
         if not config.lock_after_tp2 or engine_pos.stage < 2:
             return log
