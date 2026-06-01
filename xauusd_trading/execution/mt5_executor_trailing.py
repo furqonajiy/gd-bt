@@ -12,8 +12,10 @@ STOP orders as virtual trailing entries:
   SELL STOP at ``Bid - distance`` and trail that pending stop higher while Bid
   keeps rising.
 
-This keeps live behavior close to the shared backtest lifecycle while avoiding
-unsafe immediate LIMIT fills.
+The protective trailing stop is also owned by this executor: each manage cycle
+recomputes the shared engine stop and sends MT5 SLTP modifications when the stop
+should improve. MT5 terminal-native trailing must be left off for these positions
+or the terminal and executor will fight over the live SL.
 """
 from __future__ import annotations
 
@@ -313,8 +315,51 @@ class Mt5Executor(_Tp2Mt5Executor):
             )
         return log
 
+    def _warn_on_external_sl_change(self, engine_pos, config, log: ExecutionLog) -> None:
+        """Warn when another MT5 feature/operator has moved an executor-owned SL."""
+        if log.modified > 0:
+            return
+        magic = signal_to_magic(engine_pos.signal.signal_key)
+        signal_key = engine_pos.signal.signal_key
+        sym = self.mt5.symbol_info(self.symbol)
+        digits = int(getattr(sym, "digits", 2) if sym is not None else 2)
+        tolerance = 10 ** (-digits)
+        side = engine_pos.signal.side
+        for p, entry in self._position_entry_pairs(engine_pos, magic):
+            if entry.status != "OPEN":
+                continue
+            expected = round(engine_pos.effective_stop_for(entry, config), digits)
+            current = round(float(getattr(p, "sl", 0.0) or 0.0), digits)
+            executor_owns_stop = (
+                entry.trailing_stop is not None
+                or entry.bep_armed
+                or engine_pos.lock_stage_for(entry, config.lock_after_tp1, config.lock_after_tp2) >= 1
+            )
+            if not executor_owns_stop:
+                continue
+            if abs(current - expected) <= tolerance:
+                continue
+            log.warnings.append(
+                f"external SL change detected on #{p.ticket} ({signal_key}.{entry.entry_index + 1}): "
+                f"MT5 SL={current:g}, executor expected {expected:g}; "
+                f"is MT5 native trailing enabled? Executor will not fight this cycle."
+            )
+            if self.forensic is not None:
+                emit = getattr(self.forensic, "_emit", None)
+                if callable(emit):
+                    emit(
+                        "external_sl_change",
+                        signal_key=signal_key,
+                        entry_index=entry.entry_index,
+                        ticket=int(p.ticket),
+                        side=side,
+                        mt5_sl=float(current),
+                        expected_sl=float(expected),
+                    )
+
     def manage_position(self, engine_pos, config, chart_now):
         log = super().manage_position(engine_pos, config, chart_now)
         log.merge(self._trail_pending_open_orders(engine_pos, config))
         log.merge(self._apply_trailing_close_stops(engine_pos, config))
+        self._warn_on_external_sl_change(engine_pos, config, log)
         return log
