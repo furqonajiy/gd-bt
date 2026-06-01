@@ -16,7 +16,7 @@ unless a config explicitly enables it.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from xauusd_trading import CHART_TIMEZONE_OFFSET, DEFAULT_CONFIG, Position, StrategyConfig
 
@@ -30,7 +30,7 @@ from .mt5_executor import (
 
 def _wall_clock_chart_now() -> datetime:
     """Return real wall-clock time in the chart timezone (GMT+3)."""
-    return datetime.utcnow() + timedelta(hours=CHART_TIMEZONE_OFFSET)
+    return datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=CHART_TIMEZONE_OFFSET)
 
 
 class Mt5Executor(_BaseMt5Executor):
