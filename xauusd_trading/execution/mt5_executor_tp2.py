@@ -65,9 +65,14 @@ class Mt5Executor(_BaseMt5Executor):
         log = ExecutionLog()
         now_chart = _wall_clock_chart_now()
 
-        activation_at = signal.signal_time_chart + timedelta(
-            minutes=DEFAULT_CONFIG.activation_delay_minutes
-        )
+        activation_at = getattr(plan, "pending_activates_at", None)
+        if activation_at is None:
+            # Backwards-compatible fallback for old tests/tools that construct
+            # NewSignalPlan directly. Runtime plans from the engine carry the
+            # exact activation time derived from the active StrategyConfig.
+            activation_at = signal.signal_time_chart + timedelta(
+                minutes=DEFAULT_CONFIG.activation_delay_minutes
+            )
         if now_chart < activation_at:
             if signal.signal_key not in self._session_skipped_inactive_signal_keys:
                 wait_min = (activation_at - now_chart).total_seconds() / 60.0
