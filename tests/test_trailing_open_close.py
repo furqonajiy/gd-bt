@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 from xauusd_trading import Bar, DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, PlannedOrder
 from xauusd_trading import advance_bars, open_position, parse_one_signal
-from xauusd_trading.execution import mt5_executor_tp2
+from xauusd_trading.execution import mt5_executor_trailing
 
 
 class _Resp:
@@ -17,6 +17,7 @@ class _Resp:
 
 class _Sym:
     digits = 2
+    filling_mode = 2
 
 
 class _Tick:
@@ -27,15 +28,28 @@ class _Tick:
 
 class _FakeMt5:
     TRADE_ACTION_PENDING = 5
+    TRADE_ACTION_MODIFY = 6
+    TRADE_ACTION_SLTP = 7
     TRADE_RETCODE_DONE = 10009
     ORDER_TYPE_BUY_LIMIT = 2
     ORDER_TYPE_SELL_LIMIT = 3
+    ORDER_TYPE_BUY_STOP = 4
+    ORDER_TYPE_SELL_STOP = 5
+    ORDER_TYPE_BUY = 0
+    ORDER_TYPE_SELL = 1
+    POSITION_TYPE_BUY = 0
+    POSITION_TYPE_SELL = 1
     ORDER_TIME_GTC = 0
     ORDER_FILLING_RETURN = 2
+    ORDER_FILLING_IOC = 1
+    SYMBOL_FILLING_IOC = 2
+    SYMBOL_FILLING_FOK = 1
 
     def __init__(self, *, bid: float, ask: float):
         self._tick = _Tick(bid, ask)
         self.requests = []
+        self._orders = []
+        self._positions = []
 
     def symbol_info(self, symbol):
         return _Sym()
@@ -44,10 +58,10 @@ class _FakeMt5:
         return self._tick
 
     def positions_get(self, symbol=None):
-        return []
+        return list(self._positions)
 
     def orders_get(self, symbol=None):
-        return []
+        return list(self._orders)
 
     def order_send(self, request):
         self.requests.append(dict(request))
@@ -88,6 +102,7 @@ def test_trailing_open_does_not_fill_buy_limit_while_price_keeps_dropping():
 
     assert pos.entries[0].status == "PENDING"
     assert pos.entries[0].fill_time is None
+    assert pos.entries[0].trailing_open_extreme == 4740
 
 
 def test_trailing_open_fills_buy_after_rebound_from_low():
@@ -113,6 +128,7 @@ def test_trailing_open_fills_buy_after_rebound_from_low():
     assert pos.entries[0].status == "OPEN"
     assert pos.entries[0].fill_time == t + timedelta(minutes=1)
     assert pos.entries[0].entry_price == 4742
+    assert pos.entries[0].initial_sl == 4742 - pos.base_stop_distance
 
 
 def test_trailing_close_advances_stop_and_can_close_later():
@@ -136,19 +152,19 @@ def test_trailing_close_advances_stop_and_can_close_later():
         _bar(t + timedelta(minutes=2), 4756, 4756, 4754, 4754),
     ], cfg)
 
-    assert pos.entries[0].status == "SL"
+    assert pos.entries[0].status == "TRAILING_STOP"
     assert pos.entries[0].exit_price == 4754
     assert pos.entries[0].stop_at_exit == 4754
 
 
-def test_live_executor_does_not_place_normal_limit_when_trailing_open_enabled(monkeypatch):
+def test_live_executor_places_buy_stop_not_buy_limit_when_trailing_open_enabled(monkeypatch):
     signal = parse_one_signal(
         "1. BUY XAUUSD 4750 - 4748 SL 4744 TP1 4760 TP2 4770 TP3 4780 10:00 AM",
         source_date="2026-06-01",
         source_offset=3,
     )
     activation = signal.signal_time_chart
-    monkeypatch.setattr(mt5_executor_tp2, "_wall_clock_chart_now", lambda: activation + timedelta(minutes=1))
+    monkeypatch.setattr(mt5_executor_trailing, "_wall_clock_chart_now", lambda: activation + timedelta(minutes=1))
     plan = NewSignalPlan(
         signal=signal,
         action="FOLLOW",
@@ -159,14 +175,50 @@ def test_live_executor_does_not_place_normal_limit_when_trailing_open_enabled(mo
         final_target_price=4780.0,
         total_initial_risk_dollars=96.6,
         pending_activates_at=activation,
+        trailing_open_distance=2.0,
     )
-    plan.trailing_open_distance = 2.0
 
     mt5 = _FakeMt5(bid=4740.0, ask=4740.2)
     executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
 
     log = executor.place_signal(signal, plan)
 
+    assert log.placed == 1
+    assert len(mt5.requests) == 1
+    request = mt5.requests[0]
+    assert request["type"] == mt5.ORDER_TYPE_BUY_STOP
+    assert request["price"] == 4742.2
+    assert request["price"] != 4750.0
+    assert request["sl"] == 4732.54
+    assert any("placed trailing-open STOP" in action for action in log.actions)
+
+
+def test_live_executor_waits_when_price_has_not_moved_far_enough_for_trailing_open(monkeypatch):
+    signal = parse_one_signal(
+        "1. BUY XAUUSD 4750 - 4748 SL 4744 TP1 4760 TP2 4770 TP3 4780 10:00 AM",
+        source_date="2026-06-01",
+        source_offset=3,
+    )
+    activation = signal.signal_time_chart
+    monkeypatch.setattr(mt5_executor_trailing, "_wall_clock_chart_now", lambda: activation + timedelta(minutes=1))
+    plan = NewSignalPlan(
+        signal=signal,
+        action="FOLLOW",
+        rationale="test",
+        orders=[PlannedOrder(0, signal.side, 4750.0, 4740.34, 0.10, 96.6)],
+        pending_expires_at=activation + timedelta(minutes=630),
+        final_target_label="TP3",
+        final_target_price=4780.0,
+        total_initial_risk_dollars=96.6,
+        pending_activates_at=activation,
+        trailing_open_distance=2.0,
+    )
+
+    mt5 = _FakeMt5(bid=4749.5, ask=4749.8)
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.place_signal(signal, plan)
+
     assert log.placed == 0
     assert mt5.requests == []
-    assert any("normal broker LIMIT orders are not placed" in action for action in log.actions)
+    assert any("trailing-open waiting" in action for action in log.actions)
