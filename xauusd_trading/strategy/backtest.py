@@ -27,22 +27,8 @@ from xauusd_trading import iter_bars, slice_bars
 # ---------------------------------------------------------------------------
 # single-signal replay
 # ---------------------------------------------------------------------------
-
 def _finalize_expired_pending_entries(pos: Position, replay_end: datetime) -> None:
-    """Mark unfilled pending entries as NO_FILL once replay reaches expiry.
-
-    ``advance_one_bar`` marks PENDING -> NO_FILL only when it receives a bar
-    whose timestamp is after ``pos.expiry_time``. That is correct for normal M1
-    replay, but it misses expiry that happens inside a market-data gap, for
-    example Friday night -> Monday open. In those cases there may be no candle
-    between expiry and ``expiry + max_hold``, so the historical report used to
-    show entry_status=PENDING while signal_status=NO_FILL.
-
-    Backtest replay has still covered the whole pending window once
-    ``replay_end >= pos.expiry_time``. Any remaining unfilled pending entry is
-    therefore terminal NO_FILL and should not leak into the Excel output as a
-    live-looking pending order.
-    """
+    """Mark unfilled pending entries as NO_FILL once replay reaches expiry."""
     if replay_end < pos.expiry_time:
         return
     for entry in pos.entries:
@@ -103,7 +89,6 @@ def _bonus_for_position(pos: Position, config: StrategyConfig) -> float:
 # ---------------------------------------------------------------------------
 # full backtest
 # ---------------------------------------------------------------------------
-
 _STATUS_TO_KEY = {"WIN": "wins", "LOSS": "losses",
                   "NO_FILL": "no_fills", "OPEN": "open"}
 
@@ -231,7 +216,6 @@ def run_backtest(
     total_bonus = sum((r.get("bonus") or 0.0) for r in rows if r["pnl"] is not None)
     total_closed_lots = sum((r.get("closed_lots") or 0.0) for r in rows)
 
-    # Max drawdown across the equity curve, including bonus-adjusted equity.
     max_dd_pct = 0.0
     peak = config.initial_capital
     for r in rows:
@@ -243,7 +227,6 @@ def run_backtest(
             if dd < max_dd_pct:
                 max_dd_pct = dd
 
-    # Monthly breakdown — bucket by signal_time_chart (GMT+3).
     monthly: dict[str, dict] = {}
     for r in rows:
         mk = r["signal_time_chart"].strftime("%Y-%m")
@@ -262,8 +245,6 @@ def run_backtest(
     for b in monthly_rows:
         _finalize_bucket(b)
 
-    # Daily breakdown — every calendar day in the chart range, carrying
-    # equity forward across no-signal days.
     daily_by_key: dict[str, dict] = {}
     for r in rows:
         dk = r["signal_time_chart"].strftime("%Y-%m-%d")
@@ -322,17 +303,50 @@ def run_backtest(
     }
 
 
+def _backtest_output_path(output_dir: Path, filename: str = "backtest_results.xlsx") -> Path:
+    """Resolve backtest output to a single Excel path.
+
+    Backwards compatible:
+      --output-dir reports -> reports/backtest_results.xlsx
+
+    Named run:
+      --output-dir reports/trailing_open_2 -> reports/trailing_open_2.xlsx
+
+    Explicit file:
+      --output-dir reports/foo.xlsx -> reports/foo.xlsx
+
+    Scenario files for a named run append the scenario suffix to the same stem,
+    e.g. reports/foo_1500_2026-05-19.xlsx.
+    """
+    output_dir = Path(output_dir)
+    default_name = "backtest_results.xlsx"
+    if output_dir.suffix.lower() == ".xlsx":
+        base = output_dir
+    elif output_dir.name.lower() == "reports" or filename == default_name and output_dir.exists() and output_dir.is_dir():
+        base = output_dir / default_name
+    else:
+        base = output_dir.with_suffix(".xlsx")
+
+    if filename == default_name:
+        return base
+
+    suffix = Path(filename).stem
+    if suffix.startswith("backtest_results_"):
+        suffix = suffix[len("backtest_results_"):]
+    return base.with_name(f"{base.stem}_{suffix}.xlsx")
+
+
 def write_backtest_outputs(
         result: dict, output_dir: Path,
         filename: str = "backtest_results.xlsx",
 ) -> Path:
     """Write the backtest result as a styled .xlsx file.
 
-    `filename` defaults to `backtest_results.xlsx`; scenario runs pass
-    a distinguishing name like `backtest_results_1500_2026-05-19.xlsx`.
-    Returns the path written. openpyxl is required.
+    ``output_dir`` accepts either the legacy reports directory or a named output
+    stem/file path. This prevents repeated nested ``backtest_results.xlsx`` files
+    when running many parameter sets.
     """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = _backtest_output_path(Path(output_dir), filename)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     from ..reporting.excel_report import write_excel_report
-    return write_excel_report(result, output_dir / filename)
+    return write_excel_report(result, output_path)
