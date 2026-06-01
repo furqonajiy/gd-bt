@@ -1,9 +1,4 @@
-"""Regression tests for DD40 live-execution stop locking.
-
-The selected DD40 command uses ``--no-lock-after-tp2``. Therefore the public
-Mt5Executor must not move live broker SLs from TP1 to TP2 when the replayed
-Position reaches stage 2 under this contract.
-"""
+"""Regression tests for DD40 live-execution stop locking."""
 from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime
@@ -38,21 +33,32 @@ class _Resp:
 
 class _Sym:
     digits = 2
+    trade_stops_level = 0
+    trade_freeze_level = 0
+    freeze_level = 0
+
+    def __init__(self, *, stops=0, freeze=0):
+        self.trade_stops_level = stops
+        self.trade_freeze_level = freeze
+        self.freeze_level = freeze
 
 
 class _Tick:
-    bid = 4500.0
-    ask = 4500.2
+    def __init__(self, bid=4500.0, ask=4500.2):
+        self.bid = bid
+        self.ask = ask
 
 
 class _FakePosition:
-    def __init__(self, *, ticket, magic, type_, sl, tp, volume=0.5):
+    def __init__(self, *, ticket, magic, type_, sl, tp, volume=0.5, comment="", time=0):
         self.ticket = ticket
         self.magic = magic
         self.type = type_
         self.sl = sl
         self.tp = tp
         self.volume = volume
+        self.comment = comment
+        self.time = time
 
 
 class _FakeMt5:
@@ -65,15 +71,17 @@ class _FakeMt5:
     POSITION_TYPE_BUY = 0
     POSITION_TYPE_SELL = 1
 
-    def __init__(self, positions):
+    def __init__(self, positions, *, tick=None, stops=0, freeze=0):
         self._positions = list(positions)
+        self._tick = tick or _Tick()
+        self._sym = _Sym(stops=stops, freeze=freeze)
         self.requests = []
 
     def symbol_info(self, symbol):
-        return _Sym()
+        return self._sym
 
     def symbol_info_tick(self, symbol):
-        return _Tick()
+        return self._tick
 
     def positions_get(self, symbol=None):
         return list(self._positions)
@@ -128,3 +136,37 @@ def test_dd40_does_not_move_live_sl_to_tp2_when_engine_stage_is_2():
     assert mt5_pos.sl == signal.tp1
     assert not any(req.get("action") == mt5.TRADE_ACTION_SLTP and req.get("sl") == signal.tp2 for req in mt5.requests)
     assert not any("TP2" in action for action in log.actions)
+
+
+def test_tp1_lock_clamps_sl_to_broker_stops_level_before_modify():
+    signal = parse_one_signal(
+        "1. BUY XAUUSD 4518 - 4516 SL 4511 TP1 4526 TP2 4536 TP3 4551 11:25 AM",
+        source_date="2026-05-05",
+        source_offset=7,
+    )
+    cfg = replace(DD40_COMMAND_CONFIG, lock_after_tp1=True)
+    pos = open_position(signal, equity=1000.0, config=cfg)
+    pos.stage = 1
+    pos.stage1_time = datetime(2026, 5, 5, 7, 30)
+    pos.entries[0].status = "OPEN"
+    pos.entries[0].fill_time = datetime(2026, 5, 5, 7, 27)
+
+    mt5_pos = _FakePosition(
+        ticket=888,
+        magic=signal_to_magic(signal.signal_key),
+        type_=_FakeMt5.POSITION_TYPE_BUY,
+        sl=4510.0,
+        tp=signal.tp3,
+        comment=f"{signal.signal_key}.1",
+    )
+    mt5 = _FakeMt5([mt5_pos], tick=_Tick(bid=4526.0, ask=4526.2), stops=50)
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.manage_position(pos, cfg, datetime(2026, 5, 5, 7, 31))
+
+    sltp_requests = [req for req in mt5.requests if req.get("action") == mt5.TRADE_ACTION_SLTP]
+    assert len(sltp_requests) == 1
+    assert sltp_requests[0]["sl"] == 4525.5
+    assert mt5_pos.sl == 4525.5
+    assert any("Clamped TP1 SL" in action and "requested 4526" in action and "4525.5" in action for action in log.actions)
+    assert any("Locked SL on #888 to TP1 4525.5" in action for action in log.actions)
