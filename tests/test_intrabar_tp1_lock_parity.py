@@ -25,8 +25,7 @@ def _bar(t, open_, high, low, close, spread=0.20):
 
 
 def _fixed_config(**overrides):
-    return replace(
-        DEFAULT_CONFIG,
+    params = dict(
         sizing_mode="fixed",
         lot_per_entry=0.10,
         entry_count=3,
@@ -39,8 +38,9 @@ def _fixed_config(**overrides):
         lock_after_tp1=True,
         lock_after_tp2=False,
         tp1_lock_delay_minutes=0,
-        **overrides,
     )
+    params.update(overrides)
+    return replace(DEFAULT_CONFIG, **params)
 
 
 def test_same_bar_fill_and_tp1_touch_does_not_create_retroactive_lock():
