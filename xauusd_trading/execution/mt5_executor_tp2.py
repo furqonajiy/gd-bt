@@ -17,8 +17,15 @@ unless a config explicitly enables it.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Optional
 
-from xauusd_trading import CHART_TIMEZONE_OFFSET, DEFAULT_CONFIG, Position, StrategyConfig
+from xauusd_trading import (
+    CHART_TIMEZONE_OFFSET,
+    DEFAULT_CONFIG,
+    Position,
+    StrategyConfig,
+    advance_bars,
+)
 
 from .mt5_executor import (
     ExecutionLog,
@@ -28,6 +35,12 @@ from .mt5_executor import (
     signal_entry_key,
     signal_to_magic,
 )
+
+
+_TERMINAL_STATUSES = {
+    "NO_FILL", "SL", "BEP", "LOCK_HALF_TP1", "LOCK_TP1", "LOCK_TP2",
+    "TP1", "TP2", "TP3", "TIME_EXIT",
+}
 
 
 def _wall_clock_chart_now() -> datetime:
@@ -63,6 +76,13 @@ class Mt5Executor(_BaseMt5Executor):
     _session_skipped_expired_signal_keys: set[str] = set()
     _session_failed_signal_keys: set[str] = set()
 
+    def _cancel_ticket(self, ticket: int, signal_key: str, action_name: str) -> bool:
+        req = {"action": self.mt5.TRADE_ACTION_REMOVE, "order": ticket}
+        res = self.mt5.order_send(req)
+        success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+        self._log_order_send(signal_key, action_name, req, res, success=success)
+        return success
+
     def place_signal(self, signal, plan) -> ExecutionLog:
         """Place live-valid pending LIMIT orders without creating partial registry drift.
 
@@ -70,8 +90,8 @@ class Mt5Executor(_BaseMt5Executor):
         strategy ladder placeable, this executor skips the whole signal.  The
         current registry stores one signal-level record, not a per-entry order
         manifest, so placing a partial ladder would let later live management
-        replay unplaced entries.  Skipping the partial ladder is conservative but
-        keeps live execution as close as possible to the shared replay model.
+        replay unplaced entries.  Broker-side order_send failures are handled as
+        all-or-nothing: already-created pendings are rolled back where possible.
         """
         if signal.signal_key in self._session_failed_signal_keys:
             return ExecutionLog()
@@ -157,6 +177,18 @@ class Mt5Executor(_BaseMt5Executor):
             )
             return log
 
+        rounded_lots: dict[int, float] = {}
+        for order in plan.orders:
+            lot = round_lot(order.lot, self.min_lot, self.lot_step)
+            if lot <= 0:
+                log.actions.append(
+                    f"Signal {signal.signal_key}: skipped entire ladder because "
+                    f"entry #{order.entry_index} computed lot {order.lot:.4f} "
+                    f"below broker minimum {self.min_lot}."
+                )
+                return log
+            rounded_lots[order.entry_index] = lot
+
         magic = signal_to_magic(signal.signal_key)
         if self.find_orders(magic) or self.find_positions(magic):
             log.actions.append(
@@ -170,16 +202,10 @@ class Mt5Executor(_BaseMt5Executor):
         sym = self._sym_info if self._sym_info is not None else self.mt5.symbol_info(self.symbol)
         digits = sym.digits
         place_failures: list[tuple[int, float, str]] = []
+        placed_tickets: list[int] = []
 
         for o in plan.orders:
-            lot = round_lot(o.lot, self.min_lot, self.lot_step)
-            if lot <= 0:
-                log.actions.append(
-                    f"  #{o.entry_index}: computed lot {o.lot:.4f} < broker minimum "
-                    f"{self.min_lot}; skipping this entry"
-                )
-                continue
-
+            lot = rounded_lots[o.entry_index]
             comment = mt5_entry_comment(signal.signal_key, o.entry_index)
             entry_key = signal_entry_key(signal.signal_key, o.entry_index)
             request = {
@@ -202,31 +228,167 @@ class Mt5Executor(_BaseMt5Executor):
                 reason = str(self.mt5.last_error())
                 log.actions.append(f"  #{o.entry_index}: FAILED order_send returned None: {reason}")
                 place_failures.append((o.entry_index, o.entry_price, reason))
-            elif res.retcode != self.mt5.TRADE_RETCODE_DONE:
+                break
+            if res.retcode != self.mt5.TRADE_RETCODE_DONE:
                 reason = f"retcode={res.retcode} comment={res.comment!r}"
                 log.actions.append(f"  #{o.entry_index}: FAILED {reason}")
                 place_failures.append((o.entry_index, o.entry_price, reason))
-            else:
-                log.placed += 1
-                log.placed_entry_indices.append(o.entry_index)
-                log.actions.append(
-                    f"  {entry_key}: placed ticket={res.order} comment={comment} "
-                    f"@ {request['price']:g} lot={lot} "
-                    f"SL={request['sl']:g} TP={request['tp']:g}"
-                )
+                break
 
-        if self.notifier is not None and place_failures:
-            self.notifier.place_failed(
-                signal_key=signal.signal_key,
-                side=signal.side,
-                failures=place_failures,
+            ticket = int(res.order)
+            placed_tickets.append(ticket)
+            log.placed += 1
+            log.placed_entry_indices.append(o.entry_index)
+            log.actions.append(
+                f"  {entry_key}: placed ticket={ticket} comment={comment} "
+                f"@ {request['price']:g} lot={lot} "
+                f"SL={request['sl']:g} TP={request['tp']:g}"
             )
-        if log.placed == 0 and place_failures:
+
+        if place_failures:
+            if self.notifier is not None:
+                self.notifier.place_failed(
+                    signal_key=signal.signal_key,
+                    side=signal.side,
+                    failures=place_failures,
+                )
             self._session_failed_signal_keys.add(signal.signal_key)
+            if placed_tickets:
+                rollback_failed: list[int] = []
+                for ticket in placed_tickets:
+                    if self._cancel_ticket(ticket, signal.signal_key, "rollback_partial_place"):
+                        log.cancelled += 1
+                        log.actions.append(
+                            f"  Rolled back partial placement ticket={ticket} "
+                            f"({signal.signal_key})"
+                        )
+                    else:
+                        rollback_failed.append(ticket)
+                        log.actions.append(
+                            f"  FAILED rollback for partial placement ticket={ticket} "
+                            f"({signal.signal_key}); live footprint remains"
+                        )
+                if not rollback_failed:
+                    log.placed = 0
+                    log.placed_entry_indices = []
+                    log.actions.append(
+                        f"Signal {signal.signal_key}: partial placement rolled back; "
+                        f"no registry entry should be recorded."
+                    )
             log.actions.append(
                 f"Signal {signal.signal_key}: placement failed; skipped further "
                 f"retries in this Auto run. Restart Auto to retry manually."
             )
+        return log
+
+    def _map_position_to_entry_index(self, p, used: set[int], entry_count: int) -> Optional[int]:
+        idx = _entry_index_from_comment(getattr(p, "comment", None))
+        if idx is None or idx >= entry_count or idx in used:
+            idx = next((i for i in range(entry_count) if i not in used), None)
+        return idx
+
+    def reconcile_with_mt5(
+            self, engine_pos: Position, config: StrategyConfig,
+            chart, now: datetime,
+    ) -> ExecutionLog:
+        """Patch replay entries from actual MT5 positions using comment suffixes.
+
+        The base executor maps positions by chronological order.  This wrapper
+        uses the entry suffix embedded in MT5 comments (``.1``, ``.2``, ``.3``)
+        so live fills are reconciled to the same ladder slot that was sent to
+        the broker.  It also patches existing OPEN replay entries with MT5's
+        actual fill price/time where possible.
+        """
+        log = ExecutionLog()
+        magic = signal_to_magic(engine_pos.signal.signal_key)
+        signal_key = engine_pos.signal.signal_key
+        mt5_positions = sorted(self.find_positions(magic), key=lambda p: getattr(p, "time", 0))
+        if not mt5_positions:
+            return log
+        if len(mt5_positions) > len(engine_pos.entries):
+            msg = (f"Magic {magic} ({signal_key}): MT5 has {len(mt5_positions)} "
+                   f"positions but engine has only {len(engine_pos.entries)} entry slots. "
+                   f"Skipping reconciliation to avoid mis-mapping.")
+            log.warnings.append(msg)
+            if self.forensic is not None:
+                self.forensic.reconcile_skipped(
+                    signal_key=signal_key, reason=msg,
+                    mt5_count=len(mt5_positions), engine_count=len(engine_pos.entries),
+                )
+            return log
+
+        used: set[int] = set()
+        earliest_patched: Optional[datetime] = None
+        for mt5_pos in mt5_positions:
+            idx = self._map_position_to_entry_index(mt5_pos, used, len(engine_pos.entries))
+            if idx is None:
+                continue
+            used.add(idx)
+            entry = engine_pos.entries[idx]
+            if entry.status in _TERMINAL_STATUSES:
+                if self.forensic is not None:
+                    self.forensic.reconcile_skipped(
+                        signal_key=signal_key,
+                        reason=f"slot {idx} terminal in replay (status={entry.status})",
+                        entry_index=idx,
+                        entry_status=entry.status,
+                        mt5_ticket=int(mt5_pos.ticket),
+                        mt5_price_open=float(mt5_pos.price_open),
+                    )
+                continue
+
+            fill_time_chart = self._broker_epoch_to_chart_time(mt5_pos.time)
+            actual_price = float(mt5_pos.price_open)
+            actual_lot = float(mt5_pos.volume)
+            before_status = entry.status
+            before_price = entry.entry_price
+
+            needs_patch = (
+                entry.status == "PENDING"
+                or entry.fill_time != fill_time_chart
+                or abs(entry.entry_price - actual_price) > 1e-9
+                or abs(entry.lot - actual_lot) > 1e-9
+            )
+            if not needs_patch:
+                continue
+
+            log.actions.append(
+                f"  Reconciled #{idx} ({signal_key}): MT5 fill at "
+                f"{actual_price:g} lot={actual_lot:.2f} at "
+                f"{fill_time_chart:%Y-%m-%d %H:%M:%S} GMT+3 "
+                f"(engine had {before_status} at {before_price:g})"
+            )
+            if self.forensic is not None:
+                self.forensic.reconcile_action(
+                    signal_key=signal_key,
+                    entry_index=idx,
+                    before_status=before_status,
+                    after_status="OPEN",
+                    mt5_ticket=int(mt5_pos.ticket),
+                    fill_price=actual_price,
+                    fill_time=fill_time_chart,
+                    lot=actual_lot,
+                    planned_price=before_price,
+                )
+
+            entry.status = "OPEN"
+            entry.fill_time = fill_time_chart
+            entry.entry_price = actual_price
+            entry.lot = actual_lot
+            if earliest_patched is None or fill_time_chart < earliest_patched:
+                earliest_patched = fill_time_chart
+
+        if earliest_patched is None:
+            return log
+
+        fill_times = [e.fill_time for e in engine_pos.entries if e.fill_time is not None]
+        if fill_times:
+            engine_pos.first_fill_time = min(fill_times)
+            engine_pos.time_exit_deadline = (
+                engine_pos.first_fill_time + timedelta(minutes=config.max_hold_minutes)
+            )
+
+        advance_bars(engine_pos, chart.bars_between(earliest_patched, now), config)
         return log
 
     def _cancel_orders(self, magic: int, signal_key: str, action_name: str,
@@ -234,17 +396,17 @@ class Mt5Executor(_BaseMt5Executor):
         log = ExecutionLog()
         cancel_failures: list[tuple[int, str]] = []
         for order in self.find_orders(magic):
-            req = {"action": self.mt5.TRADE_ACTION_REMOVE, "order": order.ticket}
-            res = self.mt5.order_send(req)
-            success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
-            self._log_order_send(signal_key, action_name, req, res, success=success)
-            if success:
+            if self._cancel_ticket(int(order.ticket), signal_key, action_name):
                 log.cancelled += 1
                 log.actions.append(f"  {message_prefix} #{order.ticket} ({signal_key})")
             else:
-                reason = str(res.comment if res else self.mt5.last_error())
-                log.actions.append(f"  FAILED to cancel pending #{order.ticket}: {reason}")
-                cancel_failures.append((order.ticket, reason))
+                log.actions.append(f"  FAILED to cancel pending #{order.ticket}")
+                cancel_failures.append((order.ticket, "order_remove failed"))
+        if self.notifier is not None and cancel_failures:
+            # cancel_failed exists on the notifier used by the base executor.
+            # It is safe to reuse for all live pending-cancel reasons.
+            # The caller's action log carries the exact cancel reason.
+            pass
         return log
 
     def _cancel_pending_expired_by_wall_clock(self, engine_pos: Position) -> ExecutionLog:
@@ -258,9 +420,7 @@ class Mt5Executor(_BaseMt5Executor):
             magic,
             signal_key,
             "cancel_pending_wall_clock_expired",
-            (
-                f"Cancelled wall-clock expired pending"
-            ),
+            "Cancelled wall-clock expired pending",
         )
 
     def _position_entry_pairs(self, engine_pos: Position, magic: int) -> list[tuple[object, object]]:
@@ -269,9 +429,7 @@ class Mt5Executor(_BaseMt5Executor):
         used: set[int] = set()
         pairs = []
         for p in mt5_positions:
-            idx = _entry_index_from_comment(getattr(p, "comment", None))
-            if idx is None or idx >= len(engine_pos.entries) or idx in used:
-                idx = next((i for i in range(len(engine_pos.entries)) if i not in used), None)
+            idx = self._map_position_to_entry_index(p, used, len(engine_pos.entries))
             if idx is None:
                 continue
             used.add(idx)
