@@ -87,20 +87,42 @@ class Position:
     def realized_pnl(self) -> float:
         return sum(e.pnl for e in self.entries if e.pnl is not None)
 
-    def lock_stage_for(self, entry: Entry, lock_after_tp1: bool, lock_after_tp2: bool) -> int:
-        """Highest global stop-lock stage that applies to this entry.
+    def _stage_touch_applies_to(self, entry: Entry, touch_time: Optional[datetime]) -> bool:
+        """Whether a global target touch can protect this specific entry.
 
-        Project rule: late fills inherit the current applied lock stage. If a new
-        entry fills after a delayed TP1/TP2/TP3 lock was already activated, its
-        stop is immediately adjusted rather than the original SL.
+        M1 OHLC cannot prove event order inside the candle.  A TP1/TP2 touch is
+        therefore only allowed to protect entries that were already filled on a
+        strictly earlier bar (or, in live reconciliation, before the touch
+        timestamp).  This prevents later ladder fills from inheriting a profit
+        lock that happened before they existed.
+        """
+        return (
+            entry.fill_time is not None
+            and touch_time is not None
+            and entry.fill_time < touch_time
+        )
+
+    def lock_stage_for(self, entry: Entry, lock_after_tp1: bool, lock_after_tp2: bool) -> int:
+        """Highest stop-lock stage that applies to this entry.
+
+        Target touches are global, but they cannot be applied retroactively to
+        entries that filled on the same M1 candle or after the target touch.
         """
         if entry.fill_time is None:
             return 0
-        if self.stage >= 3:
+        if self.stage >= 3 and self._stage_touch_applies_to(entry, self.stage3_time):
             return 3
-        if lock_after_tp2 and self.stage >= 2:
+        if (
+            lock_after_tp2
+            and self.stage >= 2
+            and self._stage_touch_applies_to(entry, self.stage2_time)
+        ):
             return 2
-        if lock_after_tp1 and self.stage >= 1:
+        if (
+            lock_after_tp1
+            and self.stage >= 1
+            and self._stage_touch_applies_to(entry, self.stage1_time)
+        ):
             return 1
         return 0
 
@@ -291,6 +313,11 @@ def _delay_elapsed(first_touch: Optional[datetime], current_time: datetime, dela
     return current_time >= first_touch + timedelta(minutes=max(0, int(delay_minutes)))
 
 
+def _time_exit_price(side: str, close_bid: float, spread_price: float) -> float:
+    """Market-equivalent time-exit price from a bid-based chart bar."""
+    return close_bid if side == "BUY" else close_bid + spread_price
+
+
 def advance_one_bar(
         position: Position, bar: Bar, config: StrategyConfig,
         contract_size: float = CONTRACT_SIZE_OZ,
@@ -299,6 +326,12 @@ def advance_one_bar(
     side = position.signal.side
     sp = bar.spread_price
     h, l, c = bar.high, bar.low, bar.close
+
+    # Entries that were open before this M1 candle can legitimately respond to
+    # this candle's target touches. Entries filled inside this same candle cannot:
+    # OHLC data cannot prove whether target happened before or after the fill.
+    def _entry_open_before_bar(entry: Entry) -> bool:
+        return entry.status == "OPEN" and entry.fill_time is not None and entry.fill_time < bar.time
 
     # 1. Fills, with strict-touch arming.
     if position.activation_time <= bar.time <= position.expiry_time:
@@ -344,7 +377,11 @@ def advance_one_bar(
         # applies: if +3 and BEP are both possible inside one M1 bar, BEP stop wins.
         if getattr(config, "profit_lock_mode", "tp_levels") == "bep_plus_half_tp1":
             for e in open_entries:
-                if not e.bep_armed and _bep_triggered(side, e, h, l, sp, config.bep_trigger_distance):
+                if (
+                    _entry_open_before_bar(e)
+                    and not e.bep_armed
+                    and _bep_triggered(side, e, h, l, sp, config.bep_trigger_distance)
+                ):
                     e.bep_armed = True
 
         for e in list(open_entries):
@@ -353,33 +390,37 @@ def advance_one_bar(
             if stop_trigger(side, h, l, stop_level, sp):
                 status = _stop_status(lock_stage, stop_level, e, config)
                 _close_entry(e, status, bar.time, stop_level, side, contract_size, stop_level)
-            elif target_hit and not runner_after_tp3:
+            elif target_hit and not runner_after_tp3 and _entry_open_before_bar(e):
                 _close_entry(e, config.final_target.upper(), bar.time, position.target_level,
                              side, contract_size)
 
-        # 4. Stage touch times are remembered immediately, but the actual stop
-        #    lock stage can be delayed by config.tp1_lock_delay_minutes and
-        #    config.tp2_lock_delay_minutes.
-        if config.lock_after_tp1 and position.stage1_time is None and tp1_hit and position.open_entries():
+        stageable_entries = [e for e in position.open_entries() if _entry_open_before_bar(e)]
+
+        # 4. Stage touch times are remembered only when at least one still-open
+        #    entry existed before this M1 candle. This avoids retroactively
+        #    granting TP1/TP2 locks from target touches that may have happened
+        #    before same-bar or later ladder fills.
+        if config.lock_after_tp1 and position.stage1_time is None and tp1_hit and stageable_entries:
             position.stage1_time = bar.time
-        if config.lock_after_tp2 and position.stage2_time is None and tp2_hit and position.open_entries():
+        if config.lock_after_tp2 and position.stage2_time is None and tp2_hit and stageable_entries:
             position.stage2_time = bar.time
 
-        if config.lock_after_tp1 and position.stage < 1 and position.open_entries():
+        if config.lock_after_tp1 and position.stage < 1 and stageable_entries:
             if _delay_elapsed(position.stage1_time, bar.time, config.tp1_lock_delay_minutes):
                 position.stage = 1
-        if config.lock_after_tp2 and position.stage < 2 and position.open_entries():
+        if config.lock_after_tp2 and position.stage < 2 and stageable_entries:
             if _delay_elapsed(position.stage2_time, bar.time, config.tp2_lock_delay_minutes):
                 position.stage = 2
-        if runner_after_tp3 and position.stage < 3 and tp3_hit and position.open_entries():
+        if runner_after_tp3 and position.stage < 3 and tp3_hit and stageable_entries:
             position.stage = 3
             position.stage3_time = bar.time
 
-    # 5. Time exit at first bar at/after the deadline; closes at bar close.
+    # 5. Time exit at first bar at/after the deadline; closes at market-side bar close.
     if position.time_exit_deadline is not None and bar.time >= position.time_exit_deadline:
+        exit_price = _time_exit_price(side, c, sp)
         for e in position.entries:
             if e.status == "OPEN":
-                _close_entry(e, "TIME_EXIT", bar.time, c, side, contract_size)
+                _close_entry(e, "TIME_EXIT", bar.time, exit_price, side, contract_size)
 
     position.last_processed_time = bar.time
 
