@@ -50,9 +50,11 @@ class NewSignalPlan:
 
     action: FOLLOW | SKIP_EXPIRED | SKIP_INVALIDATED
     orders: the placeable entries (may be a strict subset on partial FOLLOW)
-    replay_position: backtest replay from activation_time to now; set
-        whenever the chart was provided. render_report uses it for the
-        per-entry breakdown on partial FOLLOW and SKIP_INVALIDATED.
+    pending_activates_at: wall-clock/chart-time activation gate for live placement
+    pending_expires_at: pending-order expiry gate for backtest/live parity
+    replay_position: backtest replay from activation_time to now; set whenever
+        the chart was provided. render_report uses it for the per-entry
+        breakdown on partial FOLLOW and SKIP_INVALIDATED.
     """
     signal: Signal
     action: str
@@ -63,6 +65,7 @@ class NewSignalPlan:
     final_target_price: float
     total_initial_risk_dollars: float
     replay_position: Optional[Position] = None
+    pending_activates_at: Optional[datetime] = None
 
 
 @dataclass
@@ -198,6 +201,7 @@ def _build_new_signal_plan(
             final_target_label=final_target, final_target_price=target_price,
             total_initial_risk_dollars=total_risk,
             replay_position=None,
+            pending_activates_at=activation,
         )
 
     # Gate 2: per-entry replay filtering.
@@ -226,6 +230,7 @@ def _build_new_signal_plan(
                 final_target_label=final_target, final_target_price=target_price,
                 total_initial_risk_dollars=total_risk,
                 replay_position=replay_pos,
+                pending_activates_at=activation,
             )
         if len(placeable_indices) < len(orders):
             filtered = [o for o in orders if o.entry_index in placeable_indices]
@@ -247,6 +252,7 @@ def _build_new_signal_plan(
                 final_target_label=final_target, final_target_price=target_price,
                 total_initial_risk_dollars=filtered_risk,
                 replay_position=replay_pos,
+                pending_activates_at=activation,
             )
 
     lock_text = "lock to TP1/TP2" if config.lock_after_tp2 else "lock to TP1"
@@ -264,6 +270,7 @@ def _build_new_signal_plan(
         final_target_label=final_target, final_target_price=target_price,
         total_initial_risk_dollars=total_risk,
         replay_position=replay_pos,
+        pending_activates_at=activation,
     )
 
 
@@ -393,144 +400,76 @@ def _fmt_lateness(executed_at: datetime, signal_time: datetime) -> str:
 
 
 def render_report(rec: Recommendation) -> str:
-    sig = rec.new_signal.signal
-    lines: list[str] = []
-    lines.append("=" * 70)
-    lines.append("XAUUSD TRADING DECISION")
-    lines.append(
-        f"Generated:  {_fmt_time(rec.generated_at)} GMT+3 (chart time)   "
-        f"Equity: ${rec.equity:,.2f}"
-    )
-    lines.append("=" * 70)
+    lines = []
+    cfg = rec.config
+    ns = rec.new_signal
+    s = ns.signal
 
+    lines.append("=" * 72)
+    lines.append("XAUUSD SIGNAL DECISION")
+    lines.append("=" * 72)
+    lines.append(f"Generated at: {rec.generated_at:%Y-%m-%d %H:%M}  GMT+3")
+    lines.append(f"Equity used:  ${rec.equity:,.2f}")
     lines.append("")
-    lines.append("NEW SIGNAL")
-    lines.append("-" * 70)
-    lines.append(
-        f"  {sig.side} XAUUSD {sig.r1:g} - {sig.r2:g}   "
-        f"SL {sig.sl:g}   TP1 {sig.tp1:g}  TP2 {sig.tp2:g}  TP3 {sig.tp3:g}"
-    )
-    lines.append(
-        f"  Issued {sig.source_time_text} GMT{sig.source_tz_offset:+d} "
-        f"= {_fmt_time(sig.signal_time_chart)} GMT+3"
-    )
-    lines.append("")
-    lines.append(f"  Action: {rec.new_signal.action}")
-    lines.append(f"  Reason: {rec.new_signal.rationale}")
 
-    if rec.new_signal.action == "FOLLOW":
-        lines.append("")
-        lines.append("  Orders to place:")
-        for o in rec.new_signal.orders:
+    lines.append(f"Signal {s.signal_key}: {s.side} XAUUSD {s.r1:g}-{s.r2:g}  "
+                 f"SL={s.sl:g} TP1={s.tp1:g} TP2={s.tp2:g} TP3={s.tp3:g}")
+    lines.append(f"Source time: {s.source_date} {s.source_time_text} GMT{s.source_tz_offset:+d}  "
+                 f"=> chart {s.signal_time_chart:%Y-%m-%d %H:%M} GMT+3")
+    if s.anomalies:
+        lines.append("Signal warnings: " + "; ".join(s.anomalies))
+    lines.append("")
+
+    lines.append("Recommendation: " + ns.action)
+    lines.append("Reason: " + ns.rationale)
+    lines.append(f"Pending expires: {ns.pending_expires_at:%Y-%m-%d %H:%M} GMT+3")
+    lines.append(f"Final target: {ns.final_target_label} @ {ns.final_target_price:g}")
+    lines.append(f"Total initial risk: ${ns.total_initial_risk_dollars:,.2f}")
+    lines.append("")
+
+    if ns.orders:
+        lines.append("Orders to place:")
+        for o in ns.orders:
             lines.append(
-                f"    #{o.entry_index} {o.side} LIMIT {o.entry_price:g}   "
-                f"SL {o.initial_sl:.2f}   lot {o.lot:.2f}   "
-                f"risk {_fmt_money(-o.risk_dollars)}"
+                f"  #{o.entry_index} {o.side} LIMIT {o.entry_price:g}  "
+                f"SL={o.initial_sl:g}  TP={ns.final_target_price:g}  "
+                f"lot={o.lot:.2f}  risk=${o.risk_dollars:,.2f}"
             )
-        lines.append(
-            f"  Pending expires:  {_fmt_time(rec.new_signal.pending_expires_at)} GMT+3 "
-            f"({rec.config.pending_expiry_minutes} min after activation)"
-        )
-        lock_text = "TP1, then TP2" if rec.config.lock_after_tp2 else "TP1"
-        lines.append(
-            f"  Final target:     {rec.new_signal.final_target_label} "
-            f"@ {rec.new_signal.final_target_price:g} "
-            f"(lock to {lock_text} after touches)"
-        )
-        lines.append(f"  Max hold:         {rec.config.max_hold_minutes} min from first fill")
-        lines.append(
-            f"  Total initial risk if all fill: "
-            f"{_fmt_money(-rec.new_signal.total_initial_risk_dollars)} "
-            f"({rec.config.risk_per_signal * 100:.1f}% of equity equivalent)"
-        )
-        rp = rec.new_signal.replay_position
-        if rp is not None and len(rec.new_signal.orders) < len(rp.entries):
-            lines.append("")
-            lines.append("  Backtest replay outcome (full signal):")
-            lines.extend(format_replay_outcome(rp, indent="    "))
-    elif rec.new_signal.action == "SKIP_EXPIRED":
-        lines.append(
-            f"  Pending window closed at: "
-            f"{_fmt_time(rec.new_signal.pending_expires_at)} GMT+3"
-        )
-    elif rec.new_signal.action == "SKIP_INVALIDATED":
-        rp = rec.new_signal.replay_position
-        if rp is not None:
-            lines.append("")
-            lines.append("  Backtest replay outcome:")
-            lines.extend(format_replay_outcome(rp, indent="    "))
-
-    lines.append("")
-    lines.append(f"OPEN POSITIONS  ({len(rec.open_positions)})")
-    lines.append("-" * 70)
-    if not rec.open_positions:
-        lines.append("  None.")
-    for p in rec.open_positions:
-        s = p.signal
-        lines.append(
-            f"  Signal {s.signal_key}  {s.side} {s.r1:g}-{s.r2:g}  "
-            f"issued {_fmt_time(s.signal_time_chart)}"
-        )
-        if p.executed_at is not None:
-            lines.append(
-                f"    Executed: {_fmt_time(p.executed_at)} GMT+3 "
-                f"{_fmt_lateness(p.executed_at, s.signal_time_chart)}"
-            )
-        lines.append(
-            f"    Stage:  {p.stage_label}    "
-            f"First fill: {_fmt_time(p.first_fill_time)}    "
-            f"Time exit: {_fmt_time(p.time_exit_at)}"
-            + (f"  ({p.minutes_to_time_exit:.0f} min left)"
-               if p.minutes_to_time_exit is not None else "")
-        )
-        for es in p.entries:
-            stop_str = (
-                f"stop @ {es.effective_stop:g}" if es.effective_stop is not None else "--"
-            )
-            if es.status == "OPEN":
-                lines.append(
-                    f"      #{es.entry_index} ({es.entry_price:g})  OPEN   {stop_str}   "
-                    f"floating { _fmt_money(es.floating_pnl) }"
-                )
-            elif es.status == "PENDING":
-                lines.append(f"      #{es.entry_index} ({es.entry_price:g})  PENDING")
-            elif es.status == "NO_FILL":
-                lines.append(f"      #{es.entry_index} ({es.entry_price:g})  NoFill")
-            else:
-                lines.append(
-                    f"      #{es.entry_index} ({es.entry_price:g})  "
-                    f"{es.status}@{es.exit_price:g}  realized {_fmt_money(es.realized_pnl)}"
-                )
-        lines.append(
-            f"    Realized: {_fmt_money(p.realized_pnl)}   "
-            f"Floating: {_fmt_money(p.floating_pnl)}   "
-            f"Action: {p.action}"
-        )
-        for n in p.notes:
-            lines.append(f"      - {n}")
-
-    lines.append("")
-    lines.append("SUMMARY")
-    lines.append("-" * 70)
-    total_realized = sum(p.realized_pnl for p in rec.open_positions)
-    total_floating = sum(p.floating_pnl for p in rec.open_positions)
-    if rec.new_signal.action == "FOLLOW":
-        new_signal_line = (
-            f"  New signal:             {rec.new_signal.action}  "
-            f"({len(rec.new_signal.orders)} orders, "
-            f"max risk {_fmt_money(-rec.new_signal.total_initial_risk_dollars)})"
-        )
     else:
-        new_signal_line = (
-            f"  New signal:             {rec.new_signal.action}  "
-            f"(no orders placed)"
-        )
-    lines.append(new_signal_line)
-    lines.append(
-        f"  Existing positions:     {len(rec.open_positions)}  "
-        f"realized {_fmt_money(total_realized)}  "
-        f"floating {_fmt_money(total_floating)}"
-    )
-    lines.append(f"  Equity:                 ${rec.equity:,.2f}")
-    lines.append("=" * 70)
+        lines.append("Orders to place: none")
+
+    if ns.replay_position is not None and ns.action in {"SKIP_INVALIDATED", "FOLLOW"}:
+        if ns.action == "SKIP_INVALIDATED" or len(ns.orders) < len(ns.replay_position.entries):
+            lines.append("")
+            lines.append("Replay outcome up to now:")
+            lines.extend(format_replay_outcome(ns.replay_position, indent="  "))
+
+    lines.append("")
+    lines.append("Open-position status:")
+    if not rec.open_positions:
+        lines.append("  (none)")
+    else:
+        for p in rec.open_positions:
+            lines.append(f"  {p.signal.signal_key} {p.signal.side}  stage={p.stage_label}  action={p.action}")
+            if p.executed_at is not None:
+                lines.append(
+                    f"    Executed: {p.executed_at:%Y-%m-%d %H:%M:%S} GMT+3 "
+                    f"{_fmt_lateness(p.executed_at, p.signal.signal_time_chart)}"
+                )
+            if p.time_exit_at:
+                lines.append(f"    Time exit: {_fmt_time(p.time_exit_at)}  ({p.minutes_to_time_exit:.0f} min)")
+            for e in p.entries:
+                fs = _fmt_time(e.fill_time)
+                xs = _fmt_time(e.exit_time)
+                eff = "-" if e.effective_stop is None else f"{e.effective_stop:g}"
+                lines.append(
+                    f"    #{e.entry_index} {e.status:10s} entry={e.entry_price:g} "
+                    f"stop={eff} fill={fs} exit={xs} "
+                    f"realized={_fmt_money(e.realized_pnl)} "
+                    f"floating={_fmt_money(e.floating_pnl)}"
+                )
+            if p.notes:
+                for n in p.notes:
+                    lines.append(f"    NOTE: {n}")
+
     return "\n".join(lines)

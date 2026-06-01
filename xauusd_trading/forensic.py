@@ -19,13 +19,18 @@ logging must never break trading.
 """
 from __future__ import annotations
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
 
 DEFAULT_FORENSIC_PATH = "forensic.jsonl"
+
+
+def _utc_now_naive() -> datetime:
+    """Return UTC wall-clock time as naive datetime for JSONL compatibility."""
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _serializable_request(req: dict) -> dict:
@@ -68,7 +73,7 @@ class ForensicLog:
         if self.path is None:
             return
         event = {
-            "ts": datetime.utcnow().isoformat(timespec="microseconds"),
+            "ts": _utc_now_naive().isoformat(timespec="microseconds"),
             "kind": kind,
         }
         if self._cycle_id is not None:
@@ -238,5 +243,6 @@ class ForensicLog:
     def error(self, where: str, message: str,
               traceback_str: Optional[str] = None) -> None:
         self._emit("error",
-                   where=where, message=message,
+                   where=where,
+                   message=message,
                    traceback=traceback_str)

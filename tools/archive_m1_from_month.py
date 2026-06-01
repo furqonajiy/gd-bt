@@ -22,7 +22,7 @@ backtester:
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import sys
 
@@ -42,6 +42,11 @@ def _parse_month(raw: str) -> tuple[int, int]:
             f"month must be YYYY-MM, got {raw!r}"
         ) from exc
     return dt.year, dt.month
+
+
+def _utc_epoch_to_naive(epoch: int) -> datetime:
+    """Decode MT5 epoch as a naive UTC datetime without utcfromtimestamp()."""
+    return datetime.fromtimestamp(int(epoch), UTC).replace(tzinfo=None)
 
 
 def _first_of_next_month(year: int, month: int) -> datetime:
@@ -92,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
             rates = mt5.copy_rates_from_pos(args.symbol, mt5.TIMEFRAME_M1, 0, 1)
             if rates is None or len(rates) == 0:
                 raise SystemExit(f"No latest M1 bar returned for {args.symbol!r}; check symbol and MT5 connection.")
-            broker_time = datetime.utcfromtimestamp(int(rates[0]["time"]))
+            broker_time = _utc_epoch_to_naive(int(rates[0]["time"]))
             end_chart_time = broker_time + timedelta(hours=3 - args.server_offset)
             end_month = (end_chart_time.year, end_chart_time.month)
         else:

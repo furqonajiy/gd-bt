@@ -12,7 +12,7 @@ be redundant. Both code paths share the same `core` modules.
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -28,6 +28,28 @@ from xauusd_trading import iter_bars, slice_bars
 # single-signal replay
 # ---------------------------------------------------------------------------
 
+def _finalize_expired_pending_entries(pos: Position, replay_end: datetime) -> None:
+    """Mark unfilled pending entries as NO_FILL once replay reaches expiry.
+
+    ``advance_one_bar`` marks PENDING -> NO_FILL only when it receives a bar
+    whose timestamp is after ``pos.expiry_time``. That is correct for normal M1
+    replay, but it misses expiry that happens inside a market-data gap, for
+    example Friday night -> Monday open. In those cases there may be no candle
+    between expiry and ``expiry + max_hold``, so the historical report used to
+    show entry_status=PENDING while signal_status=NO_FILL.
+
+    Backtest replay has still covered the whole pending window once
+    ``replay_end >= pos.expiry_time``. Any remaining unfilled pending entry is
+    therefore terminal NO_FILL and should not leak into the Excel output as a
+    live-looking pending order.
+    """
+    if replay_end < pos.expiry_time:
+        return
+    for entry in pos.entries:
+        if entry.status == "PENDING":
+            entry.status = "NO_FILL"
+
+
 def replay_signal(
         signal: Signal, chart_df: pd.DataFrame, equity: float,
         config: StrategyConfig = DEFAULT_CONFIG,
@@ -41,6 +63,7 @@ def replay_signal(
         end = chart_end
     bars = iter_bars(slice_bars(chart_df, pos.activation_time, end))
     advance_bars(pos, bars, config, contract_size)
+    _finalize_expired_pending_entries(pos, end)
     return pos
 
 
@@ -51,6 +74,8 @@ def position_status(pos: Position) -> tuple[str, float]:
     """
     open_entries = pos.open_entries()
     if open_entries:
+        return "OPEN", 0.0
+    if any(e.status == "PENDING" for e in pos.entries):
         return "OPEN", 0.0
     if not pos.filled_entries():
         return "NO_FILL", 0.0
