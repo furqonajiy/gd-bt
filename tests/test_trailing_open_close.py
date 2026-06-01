@@ -197,6 +197,42 @@ def test_trailing_open_two_buy_entries_can_fill_at_different_prices_and_times():
     assert second.initial_sl == 4746 - pos.base_stop_distance
 
 
+def test_trailing_open_ladder_keeps_deeper_entry_no_fill_on_shallow_bounce():
+    sig = parse_one_signal(
+        "1. BUY XAUUSD 4750 - 4748 SL 4744 TP1 4760 TP2 4770 TP3 4780 10:00 AM",
+        source_date="2026-06-01",
+        source_offset=3,
+    )
+    cfg = replace(
+        DEFAULT_CONFIG,
+        entry_count=2,
+        entry_ladder="range_to_sl",
+        entry_sl_gap=2.0,
+        trailing_open_distance=2.0,
+        activation_delay_minutes=0,
+    )
+    pos = open_position(sig, 1000.0, cfg)
+    t = sig.signal_time_chart
+
+    advance_bars(pos, [
+        _bar(t, 4755, 4755, 4748, 4750),
+        _bar(t + timedelta(minutes=1), 4750, 4750, 4748, 4750),
+        _bar(t + timedelta(minutes=2), 4750, 4750, 4744, 4745),
+        _bar(t + timedelta(minutes=3), 4745, 4745, 4744, 4745),
+        _bar(t + timedelta(minutes=91), 4745, 4745, 4745, 4745),
+        _bar(t + timedelta(minutes=631), 4745, 4745, 4745, 4745),
+    ], cfg)
+
+    first, second = pos.entries
+    assert first.status == "TIME_EXIT"
+    assert first.fill_time == t + timedelta(minutes=1)
+    assert first.entry_price == 4750
+    assert second.status == "NO_FILL"
+    assert second.fill_time is None
+    assert second.trailing_open_touched_at == t + timedelta(minutes=2)
+    assert second.trailing_open_extreme == 4744
+
+
 def test_trailing_open_two_buy_entries_do_not_fill_on_arming_bar():
     sig = parse_one_signal(
         "1. BUY XAUUSD 4750 - 4748 SL 4744 TP1 4760 TP2 4770 TP3 4780 10:00 AM",
