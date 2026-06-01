@@ -3,16 +3,16 @@
 Default strategy: bonus-aware provider execution contract.
 
 The defaults in this branch remain the validated DD40-compatible provider
-contract. Optional trailing-open / trailing-close distances are available for
-research and live execution, but default to 0.0 so existing backtests and Auto
-runs keep their current behaviour unless explicitly enabled.
+contract. Optional trailing-open, trailing-close, and trend-runner settings are
+available for research/live parity, but default to disabled so existing backtests
+and Auto runs keep their current behaviour unless explicitly enabled.
 
-Trailing distances can be enabled from live CLI without changing the large CLI
-surface by setting environment variables before running ``python -m
-xauusd_trading.cli auto``:
+Environment variables supported by ``python -m xauusd_trading.cli auto``:
 
 - ``XAUUSD_TRAILING_OPEN_DISTANCE``: virtual entry trail distance.
 - ``XAUUSD_TRAILING_CLOSE_DISTANCE``: protective trailing-stop distance.
+- ``XAUUSD_TREND_RUNNER_ENABLED``: hold TP3 winners while EMA trend agrees.
+- ``XAUUSD_TREND_RUNNER_ATR_MULTIPLIER``: ATR trailing stop distance multiplier.
 """
 from __future__ import annotations
 
@@ -33,6 +33,23 @@ def _env_float(name: str, default: float) -> float:
         return float(raw)
     except ValueError:
         return float(default)
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return int(default)
+    try:
+        return int(raw)
+    except ValueError:
+        return int(default)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 @dataclass(frozen=True)
@@ -66,19 +83,33 @@ class StrategyConfig:
     lock_after_tp2: bool = False
 
     # Optional trailing behaviour. 0.0 disables each feature.
-    # trailing_open_distance:
-    #   Use virtual entries until the whole ladder is passed and price rebounds
-    #   by this distance. Example BUY LIMIT 4750 with distance=2.0 will not open
-    #   while Ask is dumping to 4740; it opens only after the observed low Ask
-    #   rebounds by 2.0. Live execution uses broker STOP orders and trails the
-    #   pending stop price while the signal is tracked.
-    # trailing_close_distance:
-    #   Trail the protective stop by this distance after an entry is open.
     trailing_open_distance: float = field(
         default_factory=lambda: _env_float("XAUUSD_TRAILING_OPEN_DISTANCE", 0.0)
     )
     trailing_close_distance: float = field(
         default_factory=lambda: _env_float("XAUUSD_TRAILING_CLOSE_DISTANCE", 0.0)
+    )
+
+    # Optional trend-following runner. When enabled and a TP3 trade is already
+    # profitable, the strategy can keep it open while EMA trend agrees and protect
+    # it with an ATR trailing stop. Disabled by default until accepted by tests.
+    trend_runner_enabled: bool = field(
+        default_factory=lambda: _env_bool("XAUUSD_TREND_RUNNER_ENABLED", False)
+    )
+    trend_runner_ema_fast: int = field(
+        default_factory=lambda: _env_int("XAUUSD_TREND_RUNNER_EMA_FAST", 21)
+    )
+    trend_runner_ema_slow: int = field(
+        default_factory=lambda: _env_int("XAUUSD_TREND_RUNNER_EMA_SLOW", 55)
+    )
+    trend_runner_atr_period: int = field(
+        default_factory=lambda: _env_int("XAUUSD_TREND_RUNNER_ATR_PERIOD", 14)
+    )
+    trend_runner_atr_multiplier: float = field(
+        default_factory=lambda: _env_float("XAUUSD_TREND_RUNNER_ATR_MULTIPLIER", 3.0)
+    )
+    trend_runner_override_max_hold: bool = field(
+        default_factory=lambda: _env_bool("XAUUSD_TREND_RUNNER_OVERRIDE_MAX_HOLD", True)
     )
 
     # Delayed stop-lock timing. 0 keeps the standard behavior: TP1/TP2 lock is
