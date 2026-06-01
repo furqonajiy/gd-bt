@@ -288,7 +288,9 @@ class Mt5Executor(_Tp2Mt5Executor):
             log.actions.append(f"  FAILED {label} SL-lock on #{p.ticket}: {reason}")
 
     def _apply_trailing_close_stops(self, engine_pos, config) -> ExecutionLog:
-        if float(getattr(config, "trailing_close_distance", 0.0) or 0.0) <= 0:
+        has_fixed_trailing_close = float(getattr(config, "trailing_close_distance", 0.0) or 0.0) > 0
+        has_active_runner = bool(getattr(engine_pos, "trend_runner_active", False) or getattr(engine_pos, "stage", 0) >= 3)
+        if not has_fixed_trailing_close and not has_active_runner:
             return ExecutionLog()
         log = ExecutionLog()
         magic = signal_to_magic(engine_pos.signal.signal_key)
