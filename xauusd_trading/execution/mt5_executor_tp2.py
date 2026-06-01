@@ -23,6 +23,8 @@ from xauusd_trading import CHART_TIMEZONE_OFFSET, DEFAULT_CONFIG, Position, Stra
 from .mt5_executor import (
     ExecutionLog,
     Mt5Executor as _BaseMt5Executor,
+    mt5_entry_comment,
+    round_lot,
     signal_entry_key,
     signal_to_magic,
 )
@@ -31,6 +33,23 @@ from .mt5_executor import (
 def _wall_clock_chart_now() -> datetime:
     """Return real wall-clock time in the chart timezone (GMT+3)."""
     return datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=CHART_TIMEZONE_OFFSET)
+
+
+def _entry_index_from_comment(comment: str | None) -> int | None:
+    """Extract the zero-based entry index from an MT5 order/position comment.
+
+    ``mt5_entry_comment`` always preserves the one-based ``.N`` suffix even when
+    the signal key is truncated to fit MT5's comment length.  Prefer this suffix
+    over chronological position order so partial fills and broker fill-order
+    quirks are mapped back to the correct engine entry.
+    """
+    if not comment:
+        return None
+    suffix = str(comment).rsplit(".", 1)[-1]
+    if not suffix.isdigit():
+        return None
+    idx = int(suffix) - 1
+    return idx if idx >= 0 else None
 
 
 class Mt5Executor(_BaseMt5Executor):
@@ -45,25 +64,31 @@ class Mt5Executor(_BaseMt5Executor):
     _session_failed_signal_keys: set[str] = set()
 
     def place_signal(self, signal, plan) -> ExecutionLog:
-        """Place only live-valid pending LIMIT orders.
+        """Place live-valid pending LIMIT orders without creating partial registry drift.
 
-        Backtest replay can leave an entry as PENDING because it was never
-        touch-filled historically. In live Auto, that does not always mean the
-        broker can still accept the pending order now. MT5 rejects marketable
-        LIMIT orders, for example a SELL LIMIT below current Bid or a BUY LIMIT
-        above current Ask. Skip those before order_send so we do not spam MT5
-        with repeated retcode=10015 Invalid price requests.
-
-        Live placement also honors the strategy activation delay and pending
-        expiry against wall-clock chart time so stale MT5 M1 history cannot
-        place orders before activation or keep old provider signals alive past
-        the 630-minute DD40 pending window.
+        If decide() or live bid/ask validation leaves only a subset of the
+        strategy ladder placeable, this executor skips the whole signal.  The
+        current registry stores one signal-level record, not a per-entry order
+        manifest, so placing a partial ladder would let later live management
+        replay unplaced entries.  Skipping the partial ladder is conservative but
+        keeps live execution as close as possible to the shared replay model.
         """
         if signal.signal_key in self._session_failed_signal_keys:
             return ExecutionLog()
 
         log = ExecutionLog()
+        log.placed_entry_indices = []
         now_chart = _wall_clock_chart_now()
+
+        replay_pos = getattr(plan, "replay_position", None)
+        if replay_pos is not None and len(plan.orders) < len(replay_pos.entries):
+            log.actions.append(
+                f"Signal {signal.signal_key}: skipped partial placement "
+                f"({len(plan.orders)} of {len(replay_pos.entries)} entries). "
+                f"Live registry is signal-level, so partial ladders are skipped "
+                f"to avoid managing unplaced entries."
+            )
+            return log
 
         activation_at = getattr(plan, "pending_activates_at", None)
         if activation_at is None:
@@ -108,7 +133,7 @@ class Mt5Executor(_BaseMt5Executor):
 
         bid = float(tick.bid)
         ask = float(tick.ask)
-        valid_orders = []
+        stale_entries = []
         for order in plan.orders:
             key = signal_entry_key(signal.signal_key, order.entry_index)
             price = float(order.entry_price)
@@ -118,26 +143,85 @@ class Mt5Executor(_BaseMt5Executor):
             elif signal.side == "SELL" and price <= bid:
                 stale_reason = f"stale SELL LIMIT {price:g} <= live bid {bid:g}"
 
-            if stale_reason is None:
-                valid_orders.append(order)
-                continue
+            if stale_reason is not None:
+                stale_entries.append(key)
+                if key not in self._session_skipped_stale_entries:
+                    log.actions.append(f"  {key}: skipped {stale_reason}")
+                    self._session_skipped_stale_entries.add(key)
 
-            if key not in self._session_skipped_stale_entries:
-                log.actions.append(f"  {key}: skipped {stale_reason}")
-                self._session_skipped_stale_entries.add(key)
-
-        if not valid_orders:
+        if stale_entries:
+            log.actions.append(
+                f"Signal {signal.signal_key}: skipped entire ladder because "
+                f"{len(stale_entries)} entr{'y was' if len(stale_entries) == 1 else 'ies were'} "
+                f"not broker-placeable at the live bid/ask."
+            )
             return log
 
-        original_orders = plan.orders
-        plan.orders = valid_orders
-        try:
-            place_log = super().place_signal(signal, plan)
-        finally:
-            plan.orders = original_orders
+        magic = signal_to_magic(signal.signal_key)
+        if self.find_orders(magic) or self.find_positions(magic):
+            log.actions.append(
+                f"Signal {signal.signal_key} already has MT5 orders/positions; "
+                f"skipping placement (will manage instead)."
+            )
+            return log
 
-        log.merge(place_log)
-        if place_log.placed == 0 and (place_log.actions or place_log.warnings):
+        order_type = (self.mt5.ORDER_TYPE_BUY_LIMIT if signal.side == "BUY"
+                      else self.mt5.ORDER_TYPE_SELL_LIMIT)
+        sym = self._sym_info if self._sym_info is not None else self.mt5.symbol_info(self.symbol)
+        digits = sym.digits
+        place_failures: list[tuple[int, float, str]] = []
+
+        for o in plan.orders:
+            lot = round_lot(o.lot, self.min_lot, self.lot_step)
+            if lot <= 0:
+                log.actions.append(
+                    f"  #{o.entry_index}: computed lot {o.lot:.4f} < broker minimum "
+                    f"{self.min_lot}; skipping this entry"
+                )
+                continue
+
+            comment = mt5_entry_comment(signal.signal_key, o.entry_index)
+            entry_key = signal_entry_key(signal.signal_key, o.entry_index)
+            request = {
+                "action":       self.mt5.TRADE_ACTION_PENDING,
+                "symbol":       self.symbol,
+                "volume":       lot,
+                "type":         order_type,
+                "price":        round(o.entry_price, digits),
+                "sl":           round(o.initial_sl, digits),
+                "tp":           round(plan.final_target_price, digits),
+                "magic":        magic,
+                "comment":      comment,
+                "type_time":    self.mt5.ORDER_TIME_GTC,
+                "type_filling": self.mt5.ORDER_FILLING_RETURN,
+            }
+            res = self.mt5.order_send(request)
+            success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+            self._log_order_send(signal.signal_key, "place_pending", request, res, success=success)
+            if res is None:
+                reason = str(self.mt5.last_error())
+                log.actions.append(f"  #{o.entry_index}: FAILED order_send returned None: {reason}")
+                place_failures.append((o.entry_index, o.entry_price, reason))
+            elif res.retcode != self.mt5.TRADE_RETCODE_DONE:
+                reason = f"retcode={res.retcode} comment={res.comment!r}"
+                log.actions.append(f"  #{o.entry_index}: FAILED {reason}")
+                place_failures.append((o.entry_index, o.entry_price, reason))
+            else:
+                log.placed += 1
+                log.placed_entry_indices.append(o.entry_index)
+                log.actions.append(
+                    f"  {entry_key}: placed ticket={res.order} comment={comment} "
+                    f"@ {request['price']:g} lot={lot} "
+                    f"SL={request['sl']:g} TP={request['tp']:g}"
+                )
+
+        if self.notifier is not None and place_failures:
+            self.notifier.place_failed(
+                signal_key=signal.signal_key,
+                side=signal.side,
+                failures=place_failures,
+            )
+        if log.placed == 0 and place_failures:
             self._session_failed_signal_keys.add(signal.signal_key)
             log.actions.append(
                 f"Signal {signal.signal_key}: placement failed; skipped further "
@@ -145,171 +229,230 @@ class Mt5Executor(_BaseMt5Executor):
             )
         return log
 
-    def _cancel_pending_expired_by_wall_clock(self, engine_pos: Position) -> ExecutionLog:
-        """Cancel live pending orders once real chart time passes strategy expiry.
-
-        The base executor cancels expired pendings using ``chart_now`` from the
-        latest MT5 M1 bar. If the feed stalls after order placement, that bar
-        time can lag behind the true DD40 pending expiry. This live-only guard
-        keeps MT5 GTC pending orders aligned with the backtest's 630-minute
-        pending window even during broker/session data gaps.
-        """
+    def _cancel_orders(self, magic: int, signal_key: str, action_name: str,
+                       message_prefix: str) -> ExecutionLog:
         log = ExecutionLog()
-        now_chart = _wall_clock_chart_now()
-        if now_chart <= engine_pos.expiry_time:
-            return log
-
-        magic = signal_to_magic(engine_pos.signal.signal_key)
-        signal_key = engine_pos.signal.signal_key
         cancel_failures: list[tuple[int, str]] = []
         for order in self.find_orders(magic):
             req = {"action": self.mt5.TRADE_ACTION_REMOVE, "order": order.ticket}
             res = self.mt5.order_send(req)
             success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
-            self._log_order_send(signal_key, "cancel_pending_wall_clock_expired", req, res, success=success)
+            self._log_order_send(signal_key, action_name, req, res, success=success)
             if success:
                 log.cancelled += 1
-                log.actions.append(
-                    f"  Cancelled wall-clock expired pending #{order.ticket} "
-                    f"({signal_key}; expired {engine_pos.expiry_time:%Y-%m-%d %H:%M} "
-                    f"GMT+3, now {now_chart:%Y-%m-%d %H:%M} GMT+3)"
-                )
+                log.actions.append(f"  {message_prefix} #{order.ticket} ({signal_key})")
             else:
                 reason = str(res.comment if res else self.mt5.last_error())
-                log.actions.append(
-                    f"  FAILED to cancel wall-clock expired pending #{order.ticket}: {reason}"
-                )
+                log.actions.append(f"  FAILED to cancel pending #{order.ticket}: {reason}")
                 cancel_failures.append((order.ticket, reason))
-
-        if self.notifier is not None and cancel_failures:
-            self.notifier.cancel_failed(
-                signal_key=signal_key,
-                side=engine_pos.signal.side,
-                failures=cancel_failures,
-            )
         return log
 
-    def manage_position(self, engine_pos: Position, config: StrategyConfig, chart_now):
-        """Manage one tracked signal, including optional TP2 SL-lock parity.
+    def _cancel_pending_expired_by_wall_clock(self, engine_pos: Position) -> ExecutionLog:
+        """Cancel live pending orders once real chart time passes strategy expiry."""
+        now_chart = _wall_clock_chart_now()
+        if now_chart <= engine_pos.expiry_time:
+            return ExecutionLog()
+        magic = signal_to_magic(engine_pos.signal.signal_key)
+        signal_key = engine_pos.signal.signal_key
+        return self._cancel_orders(
+            magic,
+            signal_key,
+            "cancel_pending_wall_clock_expired",
+            (
+                f"Cancelled wall-clock expired pending"
+            ),
+        )
 
-        The base executor handles chart-replay expiry, reconciliation-dependent
-        TP1 lock, late TP1 catch-up, and time exit. This wrapper first applies a
-        wall-clock pending-expiry guard for live GTC orders, then passes the
-        later of chart time and wall-clock chart time into base management so
-        live expiry/time-exit deadlines are not delayed by a stale M1 feed.
-        TP2 protection is applied only when ``config.lock_after_tp2`` is enabled.
+    def _position_entry_pairs(self, engine_pos: Position, magic: int) -> list[tuple[object, object]]:
+        """Map MT5 positions to engine entries, preferring the comment suffix."""
+        mt5_positions = sorted(self.find_positions(magic), key=lambda p: getattr(p, "time", 0))
+        used: set[int] = set()
+        pairs = []
+        for p in mt5_positions:
+            idx = _entry_index_from_comment(getattr(p, "comment", None))
+            if idx is None or idx >= len(engine_pos.entries) or idx in used:
+                idx = next((i for i in range(len(engine_pos.entries)) if i not in used), None)
+            if idx is None:
+                continue
+            used.add(idx)
+            pairs.append((p, engine_pos.entries[idx]))
+        return pairs
+
+    def _close_position(self, p, magic: int, signal_key: str, action_name: str,
+                        reason_label: str, log: ExecutionLog,
+                        closed: list[tuple[int, float]],
+                        failed: list[tuple[int, str]]) -> None:
+        tick = self.mt5.symbol_info_tick(self.symbol)
+        if tick is None:
+            log.actions.append(f"  {reason_label} on #{p.ticket}: no tick available, skipping")
+            failed.append((p.ticket, "no tick available"))
+            return
+        if p.type == self.mt5.POSITION_TYPE_BUY:
+            close_type, price = self.mt5.ORDER_TYPE_SELL, tick.bid
+        else:
+            close_type, price = self.mt5.ORDER_TYPE_BUY, tick.ask
+        req = {
+            "action":       self.mt5.TRADE_ACTION_DEAL,
+            "position":     p.ticket,
+            "symbol":       self.symbol,
+            "volume":       p.volume,
+            "type":         close_type,
+            "price":        price,
+            "magic":        magic,
+            "comment":      f"{signal_key}/{action_name}"[:31],
+            "deviation":    self.CLOSE_DEVIATION_POINTS,
+            "type_filling": self._market_fill_mode(),
+        }
+        res = self.mt5.order_send(req)
+        success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+        self._log_order_send(signal_key, action_name, req, res, success=success)
+        if success:
+            log.closed += 1
+            log.actions.append(f"  {reason_label} closed #{p.ticket} @ {price:g} ({signal_key})")
+            closed.append((p.ticket, price))
+        else:
+            reason = str(res.comment if res else self.mt5.last_error())
+            log.actions.append(f"  FAILED {reason_label} close on #{p.ticket}: {reason}")
+            failed.append((p.ticket, reason))
+
+    def _modify_stop(self, p, sl: float, signal_key: str, action_name: str,
+                     label: str, log: ExecutionLog,
+                     locked: list[int], failed: list[tuple[int, str]]) -> None:
+        req = {"action": self.mt5.TRADE_ACTION_SLTP, "position": p.ticket, "sl": sl, "tp": p.tp}
+        res = self.mt5.order_send(req)
+        success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+        self._log_order_send(signal_key, action_name, req, res, success=success)
+        if success:
+            log.modified += 1
+            locked.append(p.ticket)
+            log.actions.append(f"  Locked SL on #{p.ticket} to {label} {sl:g} ({signal_key})")
+        else:
+            reason = str(res.comment if res else self.mt5.last_error())
+            failed.append((p.ticket, reason))
+            log.actions.append(f"  FAILED {label} SL-lock on #{p.ticket}: {reason}")
+
+    def manage_position(self, engine_pos: Position, config: StrategyConfig, chart_now):
+        """Manage one tracked signal with per-entry stop-lock parity.
+
+        The shared replay can now decide that only some entries are protected by
+        a TP1/TP2 touch.  Live management must therefore modify/close only the MT5
+        positions mapped to those protected entries, not every position sharing
+        the same signal magic.
         """
         wall_clock_now = _wall_clock_chart_now()
         effective_chart_now = wall_clock_now if wall_clock_now > chart_now else chart_now
 
         log = self._cancel_pending_expired_by_wall_clock(engine_pos)
-        base_log = super().manage_position(engine_pos, config, effective_chart_now)
-        log.merge(base_log)
-
-        if not config.lock_after_tp2 or engine_pos.stage < 2:
-            return log
-
         magic = signal_to_magic(engine_pos.signal.signal_key)
         signal_key = engine_pos.signal.signal_key
+        side = engine_pos.signal.side
         digits = self.mt5.symbol_info(self.symbol).digits
-        tp2_sl = round(engine_pos.signal.tp2, digits)
         tolerance = 10 ** (-digits)
 
-        # If the backtest/replay says an entry already exited at LOCK_TP2 but
-        # MT5 still shows an open position, close it at market as a catch-up.
-        # This mirrors the existing late TP1 catch-up safety behavior.
-        if any(e.status == "LOCK_TP2" for e in engine_pos.entries):
-            unlocked = [
-                p for p in self.find_positions(magic)
-                if abs(p.sl - tp2_sl) > tolerance
-            ]
-            backtest_lock_pnl = sum(
-                e.pnl or 0.0
-                for e in engine_pos.entries
-                if e.status == "LOCK_TP2"
+        if effective_chart_now > engine_pos.expiry_time:
+            log.merge(self._cancel_orders(
+                magic,
+                signal_key,
+                "cancel_pending_expired",
+                "Cancelled expired pending",
+            ))
+
+        pairs = self._position_entry_pairs(engine_pos, magic)
+
+        # TP1 catch-up/lock only for entries whose replay says TP1 applies.
+        target_sl = round(engine_pos.signal.tp1, digits)
+        catchup_closed: list[tuple[int, float]] = []
+        catchup_failed: list[tuple[int, str]] = []
+        lock_tickets: list[int] = []
+        lock_failures: list[tuple[int, str]] = []
+        backtest_lock_pnl = sum(e.pnl or 0.0 for e in engine_pos.entries if e.status == "LOCK_TP1")
+        for p, entry in pairs:
+            if entry.status == "LOCK_TP1" and abs(p.sl - target_sl) > tolerance:
+                self._close_position(
+                    p, magic, signal_key, "late-tp1", "Late TP1 catch-up",
+                    log, catchup_closed, catchup_failed,
+                )
+                continue
+            if (
+                config.lock_after_tp1
+                and entry.status == "OPEN"
+                and engine_pos.lock_stage_for(entry, config.lock_after_tp1, config.lock_after_tp2) >= 1
+                and abs(p.sl - target_sl) > tolerance
+            ):
+                self._modify_stop(
+                    p, target_sl, signal_key, "modify_sl_to_tp1", "TP1",
+                    log, lock_tickets, lock_failures,
+                )
+
+        if self.notifier is not None and (catchup_closed or catchup_failed):
+            self.notifier.late_tp1_catchup(
+                signal_key=signal_key, side=side,
+                closed=catchup_closed, failed=catchup_failed,
+                backtest_pnl=backtest_lock_pnl,
             )
-            for p in unlocked:
-                tick = self.mt5.symbol_info_tick(self.symbol)
-                if tick is None:
-                    log.actions.append(
-                        f"  Late TP2 catch-up on #{p.ticket}: no tick available, skipping"
+        if self.notifier is not None and (lock_tickets or lock_failures):
+            self.notifier.tp1_lock(
+                signal_key=signal_key, side=side,
+                locked=lock_tickets, failed=lock_failures,
+                sl=target_sl,
+            )
+
+        # Optional TP2 parity, only when the strategy enables it.
+        if config.lock_after_tp2 and engine_pos.stage >= 2:
+            tp2_sl = round(engine_pos.signal.tp2, digits)
+            tp2_closed: list[tuple[int, float]] = []
+            tp2_failed_close: list[tuple[int, str]] = []
+            tp2_locked: list[int] = []
+            tp2_lock_failed: list[tuple[int, str]] = []
+            for p, entry in self._position_entry_pairs(engine_pos, magic):
+                if entry.status == "LOCK_TP2" and abs(p.sl - tp2_sl) > tolerance:
+                    self._close_position(
+                        p, magic, signal_key, "late-tp2", "Late TP2 catch-up",
+                        log, tp2_closed, tp2_failed_close,
                     )
                     continue
-                if p.type == self.mt5.POSITION_TYPE_BUY:
-                    close_type, price = self.mt5.ORDER_TYPE_SELL, tick.bid
-                else:
-                    close_type, price = self.mt5.ORDER_TYPE_BUY, tick.ask
-                req = {
-                    "action":       self.mt5.TRADE_ACTION_DEAL,
-                    "position":     p.ticket,
-                    "symbol":       self.symbol,
-                    "volume":       p.volume,
-                    "type":         close_type,
-                    "price":        price,
-                    "magic":        magic,
-                    "comment":      f"{signal_key}/late-tp2"[:31],
-                    "deviation":    self.CLOSE_DEVIATION_POINTS,
-                    "type_filling": self._market_fill_mode(),
-                }
-                res = self.mt5.order_send(req)
-                success = bool(
-                    res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE
-                )
-                self._log_order_send(signal_key, "close_catchup_tp2", req, res, success=success)
-                if success:
-                    log.closed += 1
-                    log.actions.append(
-                        f"  Late TP2 catch-up closed #{p.ticket} @ {price:g} "
-                        f"({signal_key}; backtest LOCK_TP2 would have realized "
-                        f"${backtest_lock_pnl:+.2f} -- actual close at current market)"
+                if (
+                    entry.status == "OPEN"
+                    and engine_pos.lock_stage_for(entry, config.lock_after_tp1, config.lock_after_tp2) >= 2
+                    and abs(p.sl - tp2_sl) > tolerance
+                ):
+                    self._modify_stop(
+                        p, tp2_sl, signal_key, "modify_sl_to_tp2", "TP2",
+                        log, tp2_locked, tp2_lock_failed,
                     )
-                else:
-                    reason = str(res.comment if res else self.mt5.last_error())
-                    log.actions.append(
-                        f"  FAILED late TP2 catch-up close on #{p.ticket}: {reason}"
+            if self.notifier is not None and (tp2_locked or tp2_lock_failed):
+                notify = getattr(self.notifier, "tp2_lock", None)
+                if callable(notify):
+                    notify(
+                        signal_key=signal_key,
+                        side=engine_pos.signal.side,
+                        locked=tp2_locked,
+                        failed=tp2_lock_failed,
+                        sl=tp2_sl,
                     )
 
-        # For remaining open positions, move broker SL to TP2. This is the
-        # direct live equivalent of Position.effective_stop_for(... stage >= 2).
-        locked_tickets: list[int] = []
-        lock_failures: list[tuple[int, str]] = []
-        for p in self.find_positions(magic):
-            if abs(p.sl - tp2_sl) <= tolerance:
-                continue
-            req = {
-                "action":   self.mt5.TRADE_ACTION_SLTP,
-                "position": p.ticket,
-                "sl":       tp2_sl,
-                "tp":       p.tp,
-            }
-            res = self.mt5.order_send(req)
-            success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
-            self._log_order_send(signal_key, "modify_sl_to_tp2", req, res, success=success)
-            if success:
-                log.modified += 1
-                locked_tickets.append(p.ticket)
-                log.actions.append(
-                    f"  Locked SL on #{p.ticket} to TP2 {tp2_sl:g} ({signal_key})"
+        # Time-exit closes all still-open live positions for the signal.
+        if (
+            engine_pos.time_exit_deadline is not None
+            and effective_chart_now >= engine_pos.time_exit_deadline
+        ):
+            timeout_closed: list[tuple[int, float]] = []
+            timeout_failed: list[tuple[int, str]] = []
+            for p in self.find_positions(magic):
+                self._close_position(
+                    p, magic, signal_key, "timeout", "Time-exit",
+                    log, timeout_closed, timeout_failed,
                 )
-            else:
-                reason = str(res.comment if res else self.mt5.last_error())
-                lock_failures.append((p.ticket, reason))
-                log.actions.append(
-                    f"  FAILED TP2 SL-lock on #{p.ticket}: {reason}"
+            if self.notifier is not None:
+                self.notifier.time_exit(
+                    signal_key=signal_key, side=side,
+                    closed=timeout_closed, failed=timeout_failed,
                 )
-
-        if self.notifier is not None and (locked_tickets or lock_failures):
-            # Reuse the generic tp1_lock notification shape if the notifier has
-            # not grown a dedicated TP2 method yet; the action text above keeps
-            # the execution log explicit.
-            notify = getattr(self.notifier, "tp2_lock", None)
-            if callable(notify):
-                notify(
-                    signal_key=signal_key,
-                    side=engine_pos.signal.side,
-                    locked=locked_tickets,
-                    failed=lock_failures,
-                    sl=tp2_sl,
-                )
+            log.merge(self._cancel_orders(
+                magic,
+                signal_key,
+                "cancel_after_timeout",
+                "Cancelled pending after timeout",
+            ))
 
         return log
