@@ -40,11 +40,10 @@ def _set_first_fill(position: Position, entry: Entry, bar: Bar, config: Strategy
 
 def _fill_entry_at_market_side(position: Position, entry: Entry, fill_price: float, bar: Bar,
                                config: StrategyConfig) -> None:
-    planned_risk_distance = abs(entry.entry_price - entry.initial_sl)
     entry.status = "OPEN"
     entry.fill_time = bar.time
     entry.entry_price = fill_price
-    entry.initial_sl = initial_stop_for_entry(position.signal.side, fill_price, planned_risk_distance)
+    entry.initial_sl = initial_stop_for_entry(position.signal.side, fill_price, position.base_stop_distance)
     _set_first_fill(position, entry, bar, config)
 
 
@@ -81,58 +80,46 @@ def _trailing_open_fills(position: Position, bar: Bar, config: StrategyConfig) -
         _normal_limit_fills(position, bar, config)
         return
 
-    pending = [e for e in position.entries if e.status == "PENDING"]
-    if not pending:
-        return
-
     side = position.signal.side
     sp = bar.spread_price
-    active = bool(getattr(position, "trailing_open_active", False))
-    extreme = getattr(position, "trailing_open_extreme", None)
 
     if side == "BUY":
         ask_low = bar.low + sp
         ask_high = bar.high + sp
-        deepest_entry = min(e.entry_price for e in pending)
-        if not active:
-            if ask_low <= deepest_entry:
-                position.trailing_open_active = True
-                position.trailing_open_extreme = ask_low
-            return
+        for entry in position.entries:
+            if entry.status != "PENDING":
+                continue
+            armed_at = entry.trailing_open_touched_at
+            if armed_at is None:
+                if ask_low <= entry.entry_price - distance:
+                    entry.trailing_open_touched_at = bar.time
+                    entry.trailing_open_extreme = ask_low
+                continue
 
-        prev_extreme = float(extreme if extreme is not None else ask_low)
-        if ask_low < prev_extreme:
-            position.trailing_open_extreme = ask_low
-            return
-
-        trigger_price = prev_extreme + distance
-        if ask_high >= trigger_price:
-            for e in pending:
-                _fill_entry_at_market_side(position, e, trigger_price, bar, config)
-            position.trailing_open_active = False
-            position.trailing_open_extreme = None
+            if entry.trailing_open_extreme is None or ask_low < entry.trailing_open_extreme:
+                entry.trailing_open_extreme = ask_low
+            trigger_price = float(entry.trailing_open_extreme) + distance
+            if bar.time > armed_at and ask_high >= trigger_price:
+                _fill_entry_at_market_side(position, entry, trigger_price, bar, config)
         return
 
     bid_high = bar.high
     bid_low = bar.low
-    deepest_entry = max(e.entry_price for e in pending)
-    if not active:
-        if bid_high >= deepest_entry:
-            position.trailing_open_active = True
-            position.trailing_open_extreme = bid_high
-        return
+    for entry in position.entries:
+        if entry.status != "PENDING":
+            continue
+        armed_at = entry.trailing_open_touched_at
+        if armed_at is None:
+            if bid_high >= entry.entry_price + distance:
+                entry.trailing_open_touched_at = bar.time
+                entry.trailing_open_extreme = bid_high
+            continue
 
-    prev_extreme = float(extreme if extreme is not None else bid_high)
-    if bid_high > prev_extreme:
-        position.trailing_open_extreme = bid_high
-        return
-
-    trigger_price = prev_extreme - distance
-    if bid_low <= trigger_price:
-        for e in pending:
-            _fill_entry_at_market_side(position, e, trigger_price, bar, config)
-        position.trailing_open_active = False
-        position.trailing_open_extreme = None
+        if entry.trailing_open_extreme is None or bid_high > entry.trailing_open_extreme:
+            entry.trailing_open_extreme = bid_high
+        trigger_price = float(entry.trailing_open_extreme) - distance
+        if bar.time > armed_at and bid_low <= trigger_price:
+            _fill_entry_at_market_side(position, entry, trigger_price, bar, config)
 
 
 def _effective_stop_with_trailing(position: Position, entry: Entry, config: StrategyConfig) -> float:

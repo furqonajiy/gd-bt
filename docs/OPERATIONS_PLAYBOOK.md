@@ -40,6 +40,39 @@ What to check in the output:
 - **Open positions/orders** match what's in `positions.json`. If MT5
   shows orders not in JSON, you have orphans — investigate before trading.
 
+## Live trailing behavior — important
+
+When `trailing_open_distance = 0`, live placement uses normal broker LIMIT
+orders, subject to the stale/marketable-entry guards.
+
+When `trailing_open_distance > 0`, live placement does **not** use LIMIT orders.
+The executor uses broker STOP orders to model the virtual trailing entry:
+
+- BUY trailing-open: after Ask moves at least the distance below the planned
+  entry, the executor places/trails a `BUY_STOP` at `Ask + distance`.
+- SELL trailing-open: after Bid moves at least the distance above the planned
+  entry, the executor places/trails a `SELL_STOP` at `Bid - distance`.
+
+Protective trailing stop is also owned by the executor, not MT5's terminal
+native trailing feature. Each manage/Auto cycle recomputes the engine stop and
+moves MT5 SL with `TRADE_ACTION_SLTP` when needed. Leave MT5's right-click
+**Trailing Stop** option **OFF** for these positions. If native trailing is on,
+the terminal and executor can fight over the SL, and the backtest models only the
+executor trail.
+
+Expected live gap: executor SL can lag the backtest by up to one closed M1 bar +
+the watch interval, plus broker slippage/stop-level clamping.
+
+If the engine sees an executor-owned SL changed externally on a cycle where it
+did not issue a modify, it logs a warning:
+
+```text
+external SL change detected — is MT5 native trailing enabled?
+```
+
+The warning is passive. The executor does not fight the external change in that
+cycle.
+
 ## Mode A — manual `decide` flow
 
 ### Step 1 — preview the order plan (no orders placed)
@@ -62,9 +95,10 @@ uses GMT+7). The engine converts to GMT+3 internally.
 What you'll see in the report:
 
 - **NEW SIGNAL** section with `Action:` — `FOLLOW`, `FOLLOW (partial)`,
-  `SKIP_EXPIRED`, or `SKIP_INVALIDATED`. For `FOLLOW`, the LIMIT orders
-  with computed entry prices, SL, lot, dollar risk per entry. Total risk =
-  5% of current equity.
+  `SKIP_EXPIRED`, or `SKIP_INVALIDATED`. For `FOLLOW`, the planned entries
+  show computed entry prices, SL, lot, dollar risk per entry. With
+  `trailing_open_distance=0`, live sends LIMITs; with `trailing_open_distance>0`,
+  live sends trailing STOP orders after the required beyond-entry move.
 - **OPEN POSITIONS** section: status of each tracked signal — pending
   with deadline, filled with floating P&L, locked at TP1, etc. If any
   signal has a recorded `executed_at` and was placed meaningfully late,
@@ -97,9 +131,10 @@ This:
    bar-replay missed)
 3. Manages every existing tracked signal: cancels expired pendings, runs
    Late TP1 catch-up where needed, locks SL to TP1 on stage-1 positions,
-   time-closes positions past the 90-min deadline
-4. Places LIMIT orders for the new signal — only entries whose backtest-
-   replay status is PENDING or OPEN (terminal entries are filtered out)
+   time-closes positions past the 90-min deadline, and applies executor-owned
+   trailing-close/trend-runner SL moves when enabled
+4. Places orders for the new signal — LIMITs only when trailing-open is off;
+   STOP orders when trailing-open is enabled
 5. Stamps `executed_at` on the registry entry and prunes any signals
    whose MT5 footprint is gone
 
@@ -109,7 +144,7 @@ the command and orders being placed.
 ### Step 3 — keep the SL-lock fresh
 
 After placing a signal, the 90-min hold and the SL-to-TP1 lock are the
-two time-critical pieces. Either run `manage --watch` in another window,
+time-critical pieces. Either run `manage --watch` in another window,
 or schedule `manage --execute` via Task Scheduler every minute:
 
 ```powershell
@@ -184,8 +219,15 @@ order/position. It still proceeds. To fix:
 - If MT5 orders are real and you want to track them, add the original
   signal text to `positions.json` manually.
 - If MT5 orders are stale and should be cancelled, do it manually in MT5
-  or wait for the engine's expiry handling (4-hour pending limit) to
-  catch them on the next `--execute` / `auto` cycle.
+  or wait for the engine's expiry handling to catch them on the next
+  `--execute` / `auto` cycle.
+
+### External SL change warning
+
+If you see `external SL change detected`, MT5's SL differs from the executor's
+expected SL and the executor did not issue a modify in that cycle. Check whether
+MT5 native trailing stop is enabled, another EA is managing the same symbol, or a
+manual SL edit happened.
 
 ### A signal closed but `positions.json` still has it
 
@@ -217,37 +259,30 @@ next free index in today's section. Engine never sees malformed lines.
 2. **One mode at a time.** Don't run `auto` and manual `decide --execute`
    against the same `positions.json` in parallel. Don't run two `auto`
    loops at the same time.
-3. **Don't edit `core/config.py` to chase a bigger number.** If you want
+3. **Do not enable MT5 native Trailing Stop** on engine-managed positions.
+   The executor owns SL moves; native trailing creates SL fights and the
+   backtest does not model it.
+4. **Don't edit `core/config.py` to chase a bigger number.** If you want
    to change strategy parameters, run `tools/sweep.py` first, lock the
    new `tests/test_smoke.py`, then deploy. Otherwise the engine drifts.
-4. **Don't delete entries from `positions.json` while orders are still
+5. **Don't delete entries from `positions.json` while orders are still
    live on MT5.** That orphans the orders — they'll execute without engine
    management (no SL→TP1 lock, no time-exit). If you want out, close on
    MT5 first, then the next `--execute` / `auto` cycle auto-prunes.
-5. **Drawdown tolerance is 50%.** If realized DD goes deeper than that,
-   stop trading and re-evaluate. The v2 backtest peaked at -42.8% — going
-   notably past that in live is a regime-change signal, not a "wait it
-   out" signal.
-6. **Don't delete `telegram_state.json` while the listener is running.**
+6. **Drawdown tolerance is 50%.** If realized DD goes deeper than that,
+   stop trading and re-evaluate.
+7. **Don't delete `telegram_state.json` while the listener is running.**
    It works, but you'll get a flurry of "matched by content" lines as
    `catch_up` rebuilds state.
 
 ## Known limits
 
-- **Forward expectation: 2–10× per month**, not the headline backtest
-  numbers. April–May 2026 backtest was an unusually favorable regime;
-  Jan–March was much closer to 2× monthly.
 - **Backtest equity ≠ live equity.** Different broker tick data produces
-  different fills. Treat the headline figures as upper bounds, not
-  predictions.
-- **Win rate ~56%, not ~70%.** v2 has lower win rate than v1 because
-  the tighter SL multiplier triggers more SLs. The math works because
-  each SL is also smaller dollar-wise. Don't panic at consecutive losses.
+  different fills. Treat the headline figures as upper bounds, not predictions.
 - **MT5 only retains ~103 days of M1 history.** Run `fetch` daily (or
-  let `decide --mt5` / `manage` / `auto` do it) to accumulate the
-  archive. Without it, re-running historical backtests on broker data
-  gets harder over time.
+  let `decide --mt5` / `manage` / `auto` do it) to accumulate the archive.
 - **Late TP1 catch-up exits at current market, not at TP1.** Backtest
   models the lock SL triggering exactly at TP1; the catch-up closes at
-  whatever the bid/ask is right now. Acceptable trade-off — better than
-  leaving the position exposed to the original SL when the lock was missed.
+  whatever the bid/ask is right now.
+- **Executor trailing stop is interval-based.** SL can lag the backtest by up
+  to one closed M1 bar plus the Auto/manage watch interval, plus slippage.
