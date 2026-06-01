@@ -43,9 +43,6 @@ def _install_auto_execution_history_filter() -> None:
             self._clear_seq = chr(27) + "[H" + chr(27) + "[J"
 
         def write(self, data):
-            # _run_auto_watch clears the terminal every iteration. Hide it so
-            # Auto behaves like an append-only activity log instead of a
-            # refreshing dashboard.
             if data == self._clear_seq:
                 return len(data)
             cleaned = data.replace(self._clear_seq, "")
@@ -80,7 +77,6 @@ def _install_auto_execution_history_filter() -> None:
                 continue
             filtered.append(line)
 
-        # If all that remains is a zero-count EXECUTION header, do not print it.
         meaningful = [line for line in filtered[1:] if line.strip()]
         if (
             filtered
@@ -99,7 +95,6 @@ def _install_auto_execution_history_filter() -> None:
         text = sep.join(str(arg) for arg in args)
         stripped = text.strip()
 
-        # Keep execution/history records, but strip replay-only debug details.
         if stripped.startswith("EXECUTION:"):
             state["dashboard"] = False
             state["reconcile"] = False
@@ -117,7 +112,6 @@ def _install_auto_execution_history_filter() -> None:
                 state["reconcile"] = False
             return None
 
-        # Keep startup/activity/errors, but hide routine archive/loop noise.
         if stripped.startswith((
             "SANITY CHECKS FAILED",
             "[signals]",
@@ -129,15 +123,12 @@ def _install_auto_execution_history_filter() -> None:
         if stripped.startswith("Archive:"):
             return None
 
-        # Show the first auto iteration once so the operator knows Auto is live.
-        # Hide later loop heartbeats to avoid terminal spam.
         if text.startswith("[auto iter #"):
             if not state["auto_started"]:
                 state["auto_started"] = True
                 return original_print(text, **kwargs)
             return None
 
-        # Hide dashboard/projection output.
         if stripped == "=" * 70:
             return None
         if stripped.startswith("XAUUSD AUTO MODE"):
@@ -189,15 +180,21 @@ from .core.triggers import (
     target_trigger,
 )
 
-# 5. core.positions
+# 5. core.positions data classes / sizing / construction
 from .core.positions import (
     TERMINAL,
     Entry,
     Position,
-    advance_bars,
-    advance_one_bar,
     compute_lot,
     open_position,
+)
+
+# 5b. shared lifecycle.  This wrapper preserves the old lifecycle when
+# trailing distances are 0, and adds virtual trailing-open / trailing-close when
+# enabled.  Backtest, decide, manage and Auto all import these names from here.
+from .core.trailing_positions import (
+    advance_bars,
+    advance_one_bar,
 )
 
 # 6. io.adapters
@@ -229,11 +226,6 @@ from .strategy.backtest import (
 )
 
 # 9. io.mt5_adapter
-# Module imports cleanly on any OS; MetaTrader5 is lazy-imported inside
-# Mt5Connection.__init__, not at module load.
-# _MT5_EXPORT_COLUMNS and _merge_with_existing are private archive helpers
-# re-exported here so tests/test_archive.py can import them from the
-# package root; they are not part of the public surface (not in __all__).
 from .io.mt5_adapter import (
     Mt5ChartSource,
     Mt5Connection,
@@ -270,75 +262,18 @@ from .execution.mt5_executor_tp2 import Mt5Executor
 
 
 __all__ = [
-    # core.config
-    "CHART_TIMEZONE_OFFSET",
-    "CONTRACT_SIZE_OZ",
-    "DEFAULT_CONFIG",
-    "POINT_VALUE",
-    "StrategyConfig",
-    # core.chart
-    "Bar",
-    "iter_bars",
-    "latest_bar",
-    "load_chart",
-    "slice_bars",
-    # core.signal
-    "Signal",
-    "compute_entries",
-    "parse_one_signal",
-    "parse_signal_line",
-    "parse_signals_file",
-    # core.triggers
-    "fill_trigger",
-    "initial_stop_for_entry",
-    "stop_trigger",
-    "target_trigger",
-    # core.positions
-    "TERMINAL",
-    "Entry",
-    "Position",
-    "advance_bars",
-    "advance_one_bar",
-    "compute_lot",
-    "open_position",
-    # io.adapters
-    "ChartSource",
-    "CsvChartSource",
-    "ManualPositionSource",
-    "PositionSource",
-    # strategy.engine
-    "EntryStatus",
-    "NewSignalPlan",
-    "PlannedOrder",
-    "PositionStatus",
-    "Recommendation",
-    "decide",
-    "format_replay_outcome",
-    "render_report",
-    # strategy.backtest
-    "position_status",
-    "replay_signal",
-    "run_backtest",
-    "write_backtest_outputs",
-    # io.mt5_adapter
-    "Mt5ChartSource",
-    "Mt5Connection",
-    "archive_m1_by_month",
-    "mt5_equity",
-    "mt5_open_positions_summary",
-    "render_archive_summary",
-    # notifications
-    "DEFAULT_NOTIFICATIONS_PATH",
-    "Notifier",
-    "summarize_closed_position",
-    # forensic
-    "DEFAULT_FORENSIC_PATH",
-    "ForensicLog",
-    # execution.mt5_executor
-    "ExecutionLog",
-    "Mt5Executor",
-    "SignalRegistry",
-    "render_execution_log",
-    "round_lot",
-    "signal_to_magic",
+    "CHART_TIMEZONE_OFFSET", "CONTRACT_SIZE_OZ", "DEFAULT_CONFIG", "POINT_VALUE", "StrategyConfig",
+    "Bar", "iter_bars", "latest_bar", "load_chart", "slice_bars",
+    "Signal", "compute_entries", "parse_one_signal", "parse_signal_line", "parse_signals_file",
+    "fill_trigger", "initial_stop_for_entry", "stop_trigger", "target_trigger",
+    "TERMINAL", "Entry", "Position", "advance_bars", "advance_one_bar", "compute_lot", "open_position",
+    "ChartSource", "CsvChartSource", "ManualPositionSource", "PositionSource",
+    "EntryStatus", "NewSignalPlan", "PlannedOrder", "PositionStatus", "Recommendation",
+    "decide", "format_replay_outcome", "render_report",
+    "position_status", "replay_signal", "run_backtest", "write_backtest_outputs",
+    "Mt5ChartSource", "Mt5Connection", "archive_m1_by_month", "mt5_equity",
+    "mt5_open_positions_summary", "render_archive_summary",
+    "DEFAULT_NOTIFICATIONS_PATH", "Notifier", "summarize_closed_position",
+    "DEFAULT_FORENSIC_PATH", "ForensicLog",
+    "ExecutionLog", "Mt5Executor", "SignalRegistry", "render_execution_log", "round_lot", "signal_to_magic",
 ]
