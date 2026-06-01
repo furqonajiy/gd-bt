@@ -4,6 +4,7 @@ The base MT5 executor places orders, reconciles fills, cancels expired pendings,
 locks to TP1, and handles time exit. This wrapper adds live-only parity safety
 checks used by the public executor:
 
+* wait for wall-clock chart activation time before order_send;
 * skip expired signals by wall-clock chart time before order_send;
 * cancel already-placed pending LIMITs by wall-clock chart expiry;
 * use wall-clock chart time for live manage deadlines when MT5 bars lag;
@@ -17,7 +18,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from xauusd_trading import CHART_TIMEZONE_OFFSET, Position, StrategyConfig
+from xauusd_trading import CHART_TIMEZONE_OFFSET, DEFAULT_CONFIG, Position, StrategyConfig
 
 from .mt5_executor import (
     ExecutionLog,
@@ -36,8 +37,9 @@ class Mt5Executor(_BaseMt5Executor):
     """Public MT5 executor with live parity guards."""
 
     # Process-local guards. Auto creates a fresh executor every cycle, so these
-    # class-level sets prevent repeated logs for the same stale entry, expired
-    # signal, or zero-placement broker failure every watch interval.
+    # class-level sets prevent repeated logs for the same inactive/stale entry,
+    # expired signal, or zero-placement broker failure every watch interval.
+    _session_skipped_inactive_signal_keys: set[str] = set()
     _session_skipped_stale_entries: set[str] = set()
     _session_skipped_expired_signal_keys: set[str] = set()
     _session_failed_signal_keys: set[str] = set()
@@ -52,16 +54,33 @@ class Mt5Executor(_BaseMt5Executor):
         above current Ask. Skip those before order_send so we do not spam MT5
         with repeated retcode=10015 Invalid price requests.
 
-        Placement expiry is checked against wall-clock chart time so stale MT5
-        M1 history cannot keep old provider signals alive past the 630-minute
-        DD40 pending window.
+        Live placement also honors the strategy activation delay and pending
+        expiry against wall-clock chart time so stale MT5 M1 history cannot
+        place orders before activation or keep old provider signals alive past
+        the 630-minute DD40 pending window.
         """
         if signal.signal_key in self._session_failed_signal_keys:
             return ExecutionLog()
 
         log = ExecutionLog()
-        expires_at = getattr(plan, "pending_expires_at", None)
         now_chart = _wall_clock_chart_now()
+
+        activation_at = signal.signal_time_chart + timedelta(
+            minutes=DEFAULT_CONFIG.activation_delay_minutes
+        )
+        if now_chart < activation_at:
+            if signal.signal_key not in self._session_skipped_inactive_signal_keys:
+                wait_min = (activation_at - now_chart).total_seconds() / 60.0
+                log.actions.append(
+                    f"Signal {signal.signal_key}: waiting for activation "
+                    f"(activates {activation_at:%Y-%m-%d %H:%M} GMT+3, "
+                    f"now {now_chart:%Y-%m-%d %H:%M} GMT+3, "
+                    f"{wait_min:.0f} min remaining)."
+                )
+                self._session_skipped_inactive_signal_keys.add(signal.signal_key)
+            return log
+
+        expires_at = getattr(plan, "pending_expires_at", None)
         if expires_at is not None and now_chart >= expires_at:
             if signal.signal_key not in self._session_skipped_expired_signal_keys:
                 minutes_past = (now_chart - expires_at).total_seconds() / 60.0
