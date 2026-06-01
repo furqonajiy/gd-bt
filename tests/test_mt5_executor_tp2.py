@@ -170,3 +170,37 @@ def test_tp1_lock_clamps_sl_to_broker_stops_level_before_modify():
     assert mt5_pos.sl == 4525.5
     assert any("Clamped TP1 SL" in action and "requested 4526" in action and "4525.5" in action for action in log.actions)
     assert any("Locked SL on #888 to TP1 4525.5" in action for action in log.actions)
+
+
+def test_external_sl_change_warns_without_modify_when_executor_issued_no_modify():
+    signal = parse_one_signal(
+        "1. BUY XAUUSD 4518 - 4516 SL 4511 TP1 4526 TP2 4536 TP3 4551 11:25 AM",
+        source_date="2026-05-05",
+        source_offset=7,
+    )
+    cfg = replace(DD40_COMMAND_CONFIG, lock_after_tp1=True)
+    pos = open_position(signal, equity=1000.0, config=cfg)
+    pos.stage = 1
+    pos.stage1_time = datetime(2026, 5, 5, 7, 30)
+    pos.entries[0].status = "OPEN"
+    pos.entries[0].fill_time = datetime(2026, 5, 5, 7, 27)
+
+    # This SL is higher than TP1 for a BUY, so the normal TP1 lock path does not
+    # improve it and sends no SLTP modify. The warning path should still detect
+    # that the executor-owned stop differs from the engine's expected TP1.
+    mt5_pos = _FakePosition(
+        ticket=999,
+        magic=signal_to_magic(signal.signal_key),
+        type_=_FakeMt5.POSITION_TYPE_BUY,
+        sl=4527.0,
+        tp=signal.tp3,
+        comment=f"{signal.signal_key}.1",
+    )
+    mt5 = _FakeMt5([mt5_pos], tick=_Tick(bid=4528.0, ask=4528.2))
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.manage_position(pos, cfg, datetime(2026, 5, 5, 7, 31))
+
+    assert not any(req.get("action") == mt5.TRADE_ACTION_SLTP for req in mt5.requests)
+    assert any("external SL change detected" in warning for warning in log.warnings)
+    assert any("MT5 native trailing enabled" in warning for warning in log.warnings)
