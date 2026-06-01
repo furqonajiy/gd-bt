@@ -6,6 +6,7 @@ checks used by the public executor:
 
 * skip expired signals by wall-clock chart time before order_send;
 * cancel already-placed pending LIMITs by wall-clock chart expiry;
+* use wall-clock chart time for live manage deadlines when MT5 bars lag;
 * skip stale/marketable pending LIMITs before order_send; and
 * optionally apply TP2 stop-lock parity when the strategy enables TP2 locking.
 
@@ -169,12 +170,16 @@ class Mt5Executor(_BaseMt5Executor):
 
         The base executor handles chart-replay expiry, reconciliation-dependent
         TP1 lock, late TP1 catch-up, and time exit. This wrapper first applies a
-        wall-clock pending-expiry guard for live GTC orders, then applies the
-        same stage-2 protection the backtest uses only when
-        ``config.lock_after_tp2`` is enabled.
+        wall-clock pending-expiry guard for live GTC orders, then passes the
+        later of chart time and wall-clock chart time into base management so
+        live expiry/time-exit deadlines are not delayed by a stale M1 feed.
+        TP2 protection is applied only when ``config.lock_after_tp2`` is enabled.
         """
+        wall_clock_now = _wall_clock_chart_now()
+        effective_chart_now = wall_clock_now if wall_clock_now > chart_now else chart_now
+
         log = self._cancel_pending_expired_by_wall_clock(engine_pos)
-        base_log = super().manage_position(engine_pos, config, chart_now)
+        base_log = super().manage_position(engine_pos, config, effective_chart_now)
         log.merge(base_log)
 
         if not config.lock_after_tp2 or engine_pos.stage < 2:
