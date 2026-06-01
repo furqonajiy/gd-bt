@@ -26,6 +26,7 @@ from xauusd_trading import (
     StrategyConfig,
     advance_bars,
 )
+from xauusd_trading.core.trend_runner import should_skip_time_exit
 
 from .mt5_executor import (
     ExecutionLog,
@@ -615,10 +616,14 @@ class Mt5Executor(_BaseMt5Executor):
                         sl=tp2_sl,
                     )
 
-        # Time-exit closes all still-open live positions for the signal.
+        # Time-exit closes all still-open live positions for the signal, except
+        # active trend-runners that the shared engine explicitly allows to hold
+        # past max-hold.  The paired timeout pending-cancel must be skipped too
+        # so live and backtest keep the same signal lifecycle for this cycle.
         if (
             engine_pos.time_exit_deadline is not None
             and effective_chart_now >= engine_pos.time_exit_deadline
+            and not should_skip_time_exit(engine_pos, config)
         ):
             timeout_closed: list[tuple[int, float]] = []
             timeout_failed: list[tuple[int, str]] = []
