@@ -6,14 +6,33 @@ The defaults in this branch remain the validated DD40-compatible provider
 contract. Optional trailing-open / trailing-close distances are available for
 research and live execution, but default to 0.0 so existing backtests and Auto
 runs keep their current behaviour unless explicitly enabled.
+
+Trailing distances can be enabled from live CLI without changing the large CLI
+surface by setting environment variables before running ``python -m
+xauusd_trading.cli auto``:
+
+- ``XAUUSD_TRAILING_OPEN_DISTANCE``: virtual entry trail distance.
+- ``XAUUSD_TRAILING_CLOSE_DISTANCE``: protective trailing-stop distance.
 """
 from __future__ import annotations
-from dataclasses import dataclass
+
+import os
+from dataclasses import dataclass, field
 
 
 CONTRACT_SIZE_OZ = 100.0       # 1.0 lot XAUUSD = 100 oz; 0.5 lot = $50 per $1 move
 POINT_VALUE = 0.01             # 1 spread point = $0.01
 CHART_TIMEZONE_OFFSET = 3      # MT5 CSV is GMT+3
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return float(default)
+    try:
+        return float(raw)
+    except ValueError:
+        return float(default)
 
 
 @dataclass(frozen=True)
@@ -51,11 +70,16 @@ class StrategyConfig:
     #   Use virtual entries until the whole ladder is passed and price rebounds
     #   by this distance. Example BUY LIMIT 4750 with distance=2.0 will not open
     #   while Ask is dumping to 4740; it opens only after the observed low Ask
-    #   rebounds by 2.0.
+    #   rebounds by 2.0. Live execution uses broker STOP orders and trails the
+    #   pending stop price while the signal is tracked.
     # trailing_close_distance:
     #   Trail the protective stop by this distance after an entry is open.
-    trailing_open_distance: float = 0.0
-    trailing_close_distance: float = 0.0
+    trailing_open_distance: float = field(
+        default_factory=lambda: _env_float("XAUUSD_TRAILING_OPEN_DISTANCE", 0.0)
+    )
+    trailing_close_distance: float = field(
+        default_factory=lambda: _env_float("XAUUSD_TRAILING_CLOSE_DISTANCE", 0.0)
+    )
 
     # Delayed stop-lock timing. 0 keeps the standard behavior: TP1/TP2 lock is
     # applied right after the target-touch candle is processed.
