@@ -1,19 +1,7 @@
 """Trailing-open / trailing-close position advancement.
 
-This module wraps the validated core position lifecycle with two optional
-mechanics that are safe to keep disabled by default:
-
-* trailing_open_distance > 0: entries are virtual until price has moved through
-  the whole ladder and then rebounded by the configured distance.  This prevents
-  a BUY LIMIT at 4750 from being filled immediately while price is still dumping
-  to 4740.
-* trailing_close_distance > 0: once an entry is open, a protective stop trails
-  favourable price action by the configured distance.  The stop is advanced only
-  after a completed bar, so the replay does not assume impossible intrabar
-  ordering.
-
-The default StrategyConfig keeps both distances at 0.0, which preserves the
-current DD40 lifecycle exactly.
+This module wraps the validated core position lifecycle with optional mechanics
+that are disabled by default so DD40 behaviour is preserved.
 """
 from __future__ import annotations
 
@@ -31,6 +19,13 @@ from .positions import (
 )
 from .triggers import fill_trigger, initial_stop_for_entry, stop_trigger, target_trigger
 from .config import CONTRACT_SIZE_OZ, StrategyConfig
+from .trend_runner import (
+    runner_can_hold,
+    should_skip_time_exit,
+    stop_status_for,
+    update_indicators,
+    update_runner_stop,
+)
 
 
 def _entry_open_before_bar(entry: Entry, bar: Bar) -> bool:
@@ -45,7 +40,6 @@ def _set_first_fill(position: Position, entry: Entry, bar: Bar, config: Strategy
 
 def _fill_entry_at_market_side(position: Position, entry: Entry, fill_price: float, bar: Bar,
                                config: StrategyConfig) -> None:
-    """Fill a virtual trailing entry and preserve its planned risk distance."""
     planned_risk_distance = abs(entry.entry_price - entry.initial_sl)
     entry.status = "OPEN"
     entry.fill_time = bar.time
@@ -55,7 +49,6 @@ def _fill_entry_at_market_side(position: Position, entry: Entry, fill_price: flo
 
 
 def _normal_limit_fills(position: Position, bar: Bar, config: StrategyConfig) -> None:
-    """Original strict-touch LIMIT fill behaviour."""
     side = position.signal.side
     sp = bar.spread_price
     h, l = bar.high, bar.low
@@ -83,12 +76,6 @@ def _normal_limit_fills(position: Position, bar: Bar, config: StrategyConfig) ->
 
 
 def _trailing_open_fills(position: Position, bar: Bar, config: StrategyConfig) -> None:
-    """Virtual all-ladder trailing entry.
-
-    For BUY, the whole ladder is armed only after Ask reaches the deepest entry.
-    The entries then fill together after Ask rebounds from the lowest observed
-    Ask by trailing_open_distance.  SELL is symmetric on Bid.
-    """
     distance = float(getattr(config, "trailing_open_distance", 0.0) or 0.0)
     if distance <= 0:
         _normal_limit_fills(position, bar, config)
@@ -115,9 +102,6 @@ def _trailing_open_fills(position: Position, bar: Bar, config: StrategyConfig) -
 
         prev_extreme = float(extreme if extreme is not None else ask_low)
         if ask_low < prev_extreme:
-            # A new lower low inside this M1 candle resets the trail. OHLC cannot
-            # prove that any same-candle high happened after this new low, so the
-            # rebound must occur on a later candle.
             position.trailing_open_extreme = ask_low
             return
 
@@ -140,7 +124,6 @@ def _trailing_open_fills(position: Position, bar: Bar, config: StrategyConfig) -
 
     prev_extreme = float(extreme if extreme is not None else bid_high)
     if bid_high > prev_extreme:
-        # New higher high resets SELL trail; require later downside reversal.
         position.trailing_open_extreme = bid_high
         return
 
@@ -153,13 +136,7 @@ def _trailing_open_fills(position: Position, bar: Bar, config: StrategyConfig) -
 
 
 def _effective_stop_with_trailing(position: Position, entry: Entry, config: StrategyConfig) -> float:
-    base_stop = position.effective_stop_for(entry, config)
-    trail_stop = getattr(entry, "trailing_close_stop", None)
-    if trail_stop is None:
-        return base_stop
-    if position.signal.side == "BUY":
-        return max(base_stop, float(trail_stop))
-    return min(base_stop, float(trail_stop))
+    return position.effective_stop_for(entry, config)
 
 
 def _update_trailing_close_stops(position: Position, bar: Bar, config: StrategyConfig) -> None:
@@ -174,24 +151,24 @@ def _update_trailing_close_stops(position: Position, bar: Bar, config: StrategyC
             candidate = bar.high - distance
             if candidate <= e.entry_price:
                 continue
-            current = getattr(e, "trailing_close_stop", None)
-            e.trailing_close_stop = candidate if current is None else max(float(current), candidate)
+            current = getattr(e, "trailing_stop", None)
+            e.trailing_stop = candidate if current is None else max(float(current), candidate)
         else:
             candidate = bar.low + distance
             if candidate >= e.entry_price:
                 continue
-            current = getattr(e, "trailing_close_stop", None)
-            e.trailing_close_stop = candidate if current is None else min(float(current), candidate)
+            current = getattr(e, "trailing_stop", None)
+            e.trailing_stop = candidate if current is None else min(float(current), candidate)
 
 
 def advance_one_bar(
         position: Position, bar: Bar, config: StrategyConfig,
         contract_size: float = CONTRACT_SIZE_OZ,
 ) -> None:
-    """Mutate `position` state to reflect one minute of price action."""
     side = position.signal.side
     sp = bar.spread_price
     h, l, c = bar.high, bar.low, bar.close
+    update_indicators(position, bar, config)
 
     if position.activation_time <= bar.time <= position.expiry_time:
         _trailing_open_fills(position, bar, config)
@@ -205,6 +182,9 @@ def advance_one_bar(
     if open_entries:
         tp1_hit, tp2_hit, tp3_hit, target_hit = _target_levels_hit(position, side, h, l, sp)
         runner_after_tp3 = bool(getattr(config, "runner_after_tp3", False)) and config.final_target.upper() == "TP3"
+        trend_runner_holds = bool(target_hit and runner_can_hold(position, config))
+        if trend_runner_holds or getattr(position, "trend_runner_active", False):
+            update_runner_stop(position, bar, config)
 
         if getattr(config, "profit_lock_mode", "tp_levels") == "bep_plus_half_tp1":
             for e in open_entries:
@@ -219,9 +199,10 @@ def advance_one_bar(
             stop_level = _effective_stop_with_trailing(position, e, config)
             lock_stage = position.lock_stage_for(e, config.lock_after_tp1, config.lock_after_tp2)
             if stop_trigger(side, h, l, stop_level, sp):
-                status = _stop_status(lock_stage, stop_level, e, config)
+                fallback_status = _stop_status(lock_stage, stop_level, e, config)
+                status = stop_status_for(e, stop_level, fallback_status)
                 _close_entry(e, status, bar.time, stop_level, side, contract_size, stop_level)
-            elif target_hit and not runner_after_tp3 and _entry_open_before_bar(e, bar):
+            elif target_hit and not runner_after_tp3 and not trend_runner_holds and _entry_open_before_bar(e, bar):
                 _close_entry(e, config.final_target.upper(), bar.time, position.target_level,
                              side, contract_size)
 
@@ -244,7 +225,11 @@ def advance_one_bar(
 
         _update_trailing_close_stops(position, bar, config)
 
-    if position.time_exit_deadline is not None and bar.time >= position.time_exit_deadline:
+    if (
+        position.time_exit_deadline is not None
+        and bar.time >= position.time_exit_deadline
+        and not should_skip_time_exit(position, config)
+    ):
         exit_price = _time_exit_price(side, c, sp)
         for e in position.entries:
             if e.status == "OPEN":
@@ -257,7 +242,6 @@ def advance_bars(
         position: Position, bars, config: StrategyConfig,
         contract_size: float = CONTRACT_SIZE_OZ,
 ) -> None:
-    """Advance through an iterable of Bar objects, stopping early if terminal."""
     for bar in bars:
         advance_one_bar(position, bar, config, contract_size)
         if position.is_terminal():
