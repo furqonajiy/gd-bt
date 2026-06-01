@@ -246,7 +246,7 @@ from .execution.mt5_executor import (
     round_lot,
     signal_to_magic,
 )
-from .execution.mt5_executor_tp2 import Mt5Executor
+from .execution.mt5_executor_trailing import Mt5Executor
 
 
 __all__ = [
