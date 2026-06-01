@@ -35,7 +35,7 @@ from xauusd_trading import Signal, compute_entries
 
 @dataclass
 class PlannedOrder:
-    """One limit order to place when following a new signal."""
+    """One limit/order slot to place when following a new signal."""
     entry_index: int
     side: str
     entry_price: float
@@ -55,6 +55,9 @@ class NewSignalPlan:
     replay_position: backtest replay from activation_time to now; set whenever
         the chart was provided. render_report uses it for the per-entry
         breakdown on partial FOLLOW and SKIP_INVALIDATED.
+    trailing_open_distance/trailing_close_distance: copied from StrategyConfig so
+        the live executor can reproduce the same virtual trailing behavior as
+        shared replay.
     """
     signal: Signal
     action: str
@@ -66,6 +69,8 @@ class NewSignalPlan:
     total_initial_risk_dollars: float
     replay_position: Optional[Position] = None
     pending_activates_at: Optional[datetime] = None
+    trailing_open_distance: float = 0.0
+    trailing_close_distance: float = 0.0
 
 
 @dataclass
@@ -106,6 +111,36 @@ class Recommendation:
     new_signal: NewSignalPlan
     open_positions: list[PositionStatus]
     config: StrategyConfig
+
+
+def _plan(
+        signal: Signal,
+        action: str,
+        rationale: str,
+        orders: list[PlannedOrder],
+        expires: datetime,
+        final_target: str,
+        target_price: float,
+        total_risk: float,
+        config: StrategyConfig,
+        *,
+        replay_position: Optional[Position] = None,
+        activation: Optional[datetime] = None,
+) -> NewSignalPlan:
+    return NewSignalPlan(
+        signal=signal,
+        action=action,
+        rationale=rationale,
+        orders=orders,
+        pending_expires_at=expires,
+        final_target_label=final_target,
+        final_target_price=target_price,
+        total_initial_risk_dollars=total_risk,
+        replay_position=replay_position,
+        pending_activates_at=activation,
+        trailing_open_distance=float(getattr(config, "trailing_open_distance", 0.0) or 0.0),
+        trailing_close_distance=float(getattr(config, "trailing_close_distance", 0.0) or 0.0),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -188,20 +223,24 @@ def _build_new_signal_plan(
     # Gate 1: SKIP_EXPIRED
     if now is not None and now >= expires:
         minutes_past = (now - expires).total_seconds() / 60.0
-        return NewSignalPlan(
-            signal=signal, action="SKIP_EXPIRED",
-            rationale=(
+        return _plan(
+            signal,
+            "SKIP_EXPIRED",
+            (
                 f"Pending window already closed {minutes_past:.0f} min ago "
                 f"(expired {expires:%Y-%m-%d %H:%M} GMT+3, "
                 f"now {now:%Y-%m-%d %H:%M} GMT+3). "
                 f"No orders will be placed -- they would only be cancelled "
                 f"immediately on the next manage cycle."
             ),
-            orders=orders, pending_expires_at=expires,
-            final_target_label=final_target, final_target_price=target_price,
-            total_initial_risk_dollars=total_risk,
+            orders,
+            expires,
+            final_target,
+            target_price,
+            total_risk,
+            config,
             replay_position=None,
-            pending_activates_at=activation,
+            activation=activation,
         )
 
     # Gate 2: per-entry replay filtering.
@@ -219,27 +258,32 @@ def _build_new_signal_plan(
             if e.status in ("PENDING", "OPEN")
         }
         if not placeable_indices:
-            return NewSignalPlan(
-                signal=signal, action="SKIP_INVALIDATED",
-                rationale=(
+            return _plan(
+                signal,
+                "SKIP_INVALIDATED",
+                (
                     "Backtest replay from signal time to now shows every "
                     "entry has already played out -- nothing to place. "
                     "See per-entry breakdown below."
                 ),
-                orders=orders, pending_expires_at=expires,
-                final_target_label=final_target, final_target_price=target_price,
-                total_initial_risk_dollars=total_risk,
+                orders,
+                expires,
+                final_target,
+                target_price,
+                total_risk,
+                config,
                 replay_position=replay_pos,
-                pending_activates_at=activation,
+                activation=activation,
             )
         if len(placeable_indices) < len(orders):
             filtered = [o for o in orders if o.entry_index in placeable_indices]
             filtered_risk = sum(o.risk_dollars for o in filtered)
             skipped_count = len(orders) - len(filtered)
             placed_ids = ", ".join(f"#{o.entry_index}" for o in filtered)
-            return NewSignalPlan(
-                signal=signal, action="FOLLOW",
-                rationale=(
+            return _plan(
+                signal,
+                "FOLLOW",
+                (
                     f"Partial placement: {len(filtered)} of {len(orders)} "
                     f"entries placeable ({placed_ids}). The other "
                     f"{skipped_count} entr"
@@ -248,29 +292,42 @@ def _build_new_signal_plan(
                     f"only entries whose replay status is still PENDING "
                     f"or OPEN are sent to MT5. See per-entry breakdown below."
                 ),
-                orders=filtered, pending_expires_at=expires,
-                final_target_label=final_target, final_target_price=target_price,
-                total_initial_risk_dollars=filtered_risk,
+                filtered,
+                expires,
+                final_target,
+                target_price,
+                filtered_risk,
+                config,
                 replay_position=replay_pos,
-                pending_activates_at=activation,
+                activation=activation,
             )
 
     lock_text = "lock to TP1/TP2" if config.lock_after_tp2 else "lock to TP1"
-    return NewSignalPlan(
-        signal=signal, action="FOLLOW",
-        rationale=(
+    trail_bits = []
+    if getattr(config, "trailing_open_distance", 0.0) > 0:
+        trail_bits.append(f"trailing-open ${config.trailing_open_distance:g}")
+    if getattr(config, "trailing_close_distance", 0.0) > 0:
+        trail_bits.append(f"trailing-close ${config.trailing_close_distance:g}")
+    trail_text = (", " + ", ".join(trail_bits)) if trail_bits else ""
+    return _plan(
+        signal,
+        "FOLLOW",
+        (
             f"Strategy follows every signal. "
             f"{config.entry_count} limits @ {', '.join(f'{o.entry_price:g}' for o in orders)}, "
             f"effective SL distance ${base_stop_distance:.2f}, "
             f"final target {final_target} = {target_price:g}, "
             f"{lock_text} after target touches, "
-            f"max hold {config.max_hold_minutes} min from first fill."
+            f"max hold {config.max_hold_minutes} min from first fill{trail_text}."
         ),
-        orders=orders, pending_expires_at=expires,
-        final_target_label=final_target, final_target_price=target_price,
-        total_initial_risk_dollars=total_risk,
+        orders,
+        expires,
+        final_target,
+        target_price,
+        total_risk,
+        config,
         replay_position=replay_pos,
-        pending_activates_at=activation,
+        activation=activation,
     )
 
 
@@ -279,7 +336,10 @@ def format_replay_outcome(replay: Position, indent: str = "    ") -> list[str]:
     lines: list[str] = []
     for e in replay.entries:
         if e.status == "PENDING":
-            lines.append(f"{indent}#{e.entry_index} ({e.entry_price:g}): still PENDING")
+            suffix = ""
+            if e.trailing_open_extreme is not None:
+                suffix = f", trailing extreme {e.trailing_open_extreme:g}"
+            lines.append(f"{indent}#{e.entry_index} ({e.entry_price:g}): still PENDING{suffix}")
         elif e.status == "OPEN":
             fill_str = f"{e.fill_time:%H:%M}" if e.fill_time is not None else "?"
             lines.append(
@@ -333,7 +393,7 @@ def _snapshot_entry(
 ) -> EntryStatus:
     side = pos.signal.side
     effective_stop = (
-        pos.effective_stop_for(e, config.lock_after_tp1, config.lock_after_tp2)
+        pos.effective_stop_for(e, config)
         if e.status == "OPEN" else None
     )
     floating: Optional[float] = None
@@ -425,13 +485,19 @@ def render_report(rec: Recommendation) -> str:
     lines.append(f"Pending expires: {ns.pending_expires_at:%Y-%m-%d %H:%M} GMT+3")
     lines.append(f"Final target: {ns.final_target_label} @ {ns.final_target_price:g}")
     lines.append(f"Total initial risk: ${ns.total_initial_risk_dollars:,.2f}")
+    if ns.trailing_open_distance > 0 or ns.trailing_close_distance > 0:
+        lines.append(
+            f"Trailing: open={ns.trailing_open_distance:g}, "
+            f"close={ns.trailing_close_distance:g}"
+        )
     lines.append("")
 
     if ns.orders:
         lines.append("Orders to place:")
         for o in ns.orders:
+            order_word = "TRAILING STOP" if ns.trailing_open_distance > 0 else "LIMIT"
             lines.append(
-                f"  #{o.entry_index} {o.side} LIMIT {o.entry_price:g}  "
+                f"  #{o.entry_index} {o.side} {order_word} seed {o.entry_price:g}  "
                 f"SL={o.initial_sl:g}  TP={ns.final_target_price:g}  "
                 f"lot={o.lot:.2f}  risk=${o.risk_dollars:,.2f}"
             )
