@@ -1,4 +1,9 @@
-"""Shared position lifecycle used by backtest and live replay."""
+"""Position primitives shared by the single wired lifecycle engine.
+
+`core.trailing_positions` is the only bar-advance engine.  This module keeps the
+state containers, sizing, construction, P&L, stop/target helper primitives, and
+status helpers that the wired engine imports.
+"""
 from __future__ import annotations
 
 import math
@@ -6,8 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
-from .chart import Bar
-from .triggers import fill_trigger, initial_stop_for_entry, stop_trigger, target_trigger
+from .triggers import initial_stop_for_entry, target_trigger
 from xauusd_trading import CONTRACT_SIZE_OZ, Signal, StrategyConfig, compute_entries
 
 
@@ -221,149 +225,3 @@ def _delay_elapsed(first_touch: Optional[datetime], current_time: datetime, dela
 
 def _time_exit_price(side: str, close_bid: float, spread_price: float) -> float:
     return close_bid if side == "BUY" else close_bid + spread_price
-
-
-def _open_entry(entry: Entry, position: Position, fill_price: float, fill_time: datetime, config: StrategyConfig) -> None:
-    entry.status = "OPEN"
-    entry.fill_time = fill_time
-    if getattr(config, "trailing_open_distance", 0.0) > 0:
-        entry.entry_price = fill_price
-        entry.initial_sl = initial_stop_for_entry(position.signal.side, fill_price, position.base_stop_distance)
-    if getattr(config, "trailing_close_distance", 0.0) > 0:
-        d = float(config.trailing_close_distance)
-        entry.trailing_stop = fill_price - d if position.signal.side == "BUY" else fill_price + d
-    if position.first_fill_time is None:
-        position.first_fill_time = fill_time
-        position.time_exit_deadline = fill_time + timedelta(minutes=config.max_hold_minutes)
-
-
-def _try_standard_fill(position: Position, e: Entry, bar: Bar, config: StrategyConfig) -> None:
-    side = position.signal.side
-    sp = bar.spread_price
-    h, l = bar.high, bar.low
-    if side == "BUY":
-        opened_safe = (bar.open + sp) > e.entry_price
-        returned_safe = (h + sp) > e.entry_price
-    else:
-        opened_safe = bar.open < e.entry_price
-        returned_safe = l < e.entry_price
-    if not e.armed_for_touch:
-        if opened_safe:
-            e.armed_for_touch = True
-        elif returned_safe:
-            e.armed_for_touch = True
-            return
-        else:
-            return
-    if fill_trigger(side, h, l, e.entry_price, sp):
-        _open_entry(e, position, e.entry_price, bar.time, config)
-
-
-def _try_trailing_open_fill(position: Position, e: Entry, bar: Bar, config: StrategyConfig) -> None:
-    d = float(getattr(config, "trailing_open_distance", 0.0) or 0.0)
-    if d <= 0:
-        _try_standard_fill(position, e, bar, config)
-        return
-    side = position.signal.side
-    sp = bar.spread_price
-    ask_low, ask_high = bar.low + sp, bar.high + sp
-    bid_low, bid_high = bar.low, bar.high
-    if side == "BUY":
-        if ask_low <= e.entry_price:
-            if e.trailing_open_extreme is None or ask_low < e.trailing_open_extreme:
-                e.trailing_open_extreme = ask_low
-                e.trailing_open_touched_at = bar.time
-        if e.trailing_open_extreme is None:
-            return
-        trigger = e.trailing_open_extreme + d
-        if e.trailing_open_touched_at is not None and bar.time <= e.trailing_open_touched_at:
-            return
-        if ask_high >= trigger:
-            _open_entry(e, position, trigger, bar.time, config)
-    else:
-        if bid_high >= e.entry_price:
-            if e.trailing_open_extreme is None or bid_high > e.trailing_open_extreme:
-                e.trailing_open_extreme = bid_high
-                e.trailing_open_touched_at = bar.time
-        if e.trailing_open_extreme is None:
-            return
-        trigger = e.trailing_open_extreme - d
-        if e.trailing_open_touched_at is not None and bar.time <= e.trailing_open_touched_at:
-            return
-        if bid_low <= trigger:
-            _open_entry(e, position, trigger, bar.time, config)
-
-
-def _update_trailing_close(position: Position, entry: Entry, bar: Bar, config: StrategyConfig) -> None:
-    d = float(getattr(config, "trailing_close_distance", 0.0) or 0.0)
-    if d <= 0 or entry.status != "OPEN" or entry.fill_time is None or entry.fill_time >= bar.time:
-        return
-    if position.signal.side == "BUY":
-        candidate = bar.high - d
-        entry.trailing_stop = candidate if entry.trailing_stop is None else max(entry.trailing_stop, candidate)
-    else:
-        candidate = bar.low + d
-        entry.trailing_stop = candidate if entry.trailing_stop is None else min(entry.trailing_stop, candidate)
-
-
-def advance_one_bar(position: Position, bar: Bar, config: StrategyConfig, contract_size: float = CONTRACT_SIZE_OZ) -> None:
-    side = position.signal.side
-    sp = bar.spread_price
-    h, l, c = bar.high, bar.low, bar.close
-
-    def _entry_open_before_bar(entry: Entry) -> bool:
-        return entry.status == "OPEN" and entry.fill_time is not None and entry.fill_time < bar.time
-
-    if position.activation_time <= bar.time <= position.expiry_time:
-        for e in position.entries:
-            if e.status == "PENDING":
-                _try_trailing_open_fill(position, e, bar, config)
-
-    if bar.time > position.expiry_time:
-        for e in position.entries:
-            if e.status == "PENDING":
-                e.status = "NO_FILL"
-
-    open_entries = position.open_entries()
-    if open_entries:
-        tp1_hit, tp2_hit, tp3_hit, target_hit = _target_levels_hit(position, side, h, l, sp)
-        runner_after_tp3 = bool(getattr(config, "runner_after_tp3", False)) and config.final_target.upper() == "TP3"
-        if getattr(config, "profit_lock_mode", "tp_levels") == "bep_plus_half_tp1":
-            for e in open_entries:
-                if _entry_open_before_bar(e) and not e.bep_armed and _bep_triggered(side, e, h, l, sp, config.bep_trigger_distance):
-                    e.bep_armed = True
-        for e in list(open_entries):
-            stop_level = position.effective_stop_for(e, config)
-            lock_stage = position.lock_stage_for(e, config.lock_after_tp1, config.lock_after_tp2)
-            if stop_trigger(side, h, l, stop_level, sp):
-                _close_entry(e, _stop_status(lock_stage, stop_level, e, config), bar.time, stop_level, side, contract_size, stop_level)
-            elif target_hit and not runner_after_tp3 and _entry_open_before_bar(e):
-                _close_entry(e, config.final_target.upper(), bar.time, position.target_level, side, contract_size)
-        for e in position.open_entries():
-            _update_trailing_close(position, e, bar, config)
-        stageable_entries = [e for e in position.open_entries() if _entry_open_before_bar(e)]
-        if config.lock_after_tp1 and position.stage1_time is None and tp1_hit and stageable_entries:
-            position.stage1_time = bar.time
-        if config.lock_after_tp2 and position.stage2_time is None and tp2_hit and stageable_entries:
-            position.stage2_time = bar.time
-        if config.lock_after_tp1 and position.stage < 1 and stageable_entries and _delay_elapsed(position.stage1_time, bar.time, config.tp1_lock_delay_minutes):
-            position.stage = 1
-        if config.lock_after_tp2 and position.stage < 2 and stageable_entries and _delay_elapsed(position.stage2_time, bar.time, config.tp2_lock_delay_minutes):
-            position.stage = 2
-        if runner_after_tp3 and position.stage < 3 and tp3_hit and stageable_entries:
-            position.stage = 3
-            position.stage3_time = bar.time
-
-    if position.time_exit_deadline is not None and bar.time >= position.time_exit_deadline:
-        exit_price = _time_exit_price(side, c, sp)
-        for e in position.entries:
-            if e.status == "OPEN":
-                _close_entry(e, "TIME_EXIT", bar.time, exit_price, side, contract_size)
-    position.last_processed_time = bar.time
-
-
-def advance_bars(position: Position, bars, config: StrategyConfig, contract_size: float = CONTRACT_SIZE_OZ) -> None:
-    for bar in bars:
-        advance_one_bar(position, bar, config, contract_size)
-        if position.is_terminal():
-            break
