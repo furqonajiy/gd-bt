@@ -96,7 +96,7 @@ class Position:
         return self.signal.tp2
 
     def _combine_with_trailing_stop(self, entry: Entry, stop_level: float, config: StrategyConfig) -> float:
-        if getattr(config, "trailing_close_distance", 0.0) <= 0 or entry.trailing_stop is None:
+        if entry.trailing_stop is None:
             return stop_level
         return max(stop_level, entry.trailing_stop) if self.signal.side == "BUY" else min(stop_level, entry.trailing_stop)
 
