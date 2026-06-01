@@ -2,40 +2,10 @@
 
 Default strategy: bonus-aware provider execution contract.
 
-The defaults in this branch are aligned with the current best 40% max-drawdown
-candidate found from the uploaded provider signal sample. Use the filtered
-``generated/live_provider_high_growth.txt`` signal file for parity between
-backtest and auto execution.
-
-Current default contract:
-
-- initial capital: 1000
-- sizing: risk mode
-- risk per signal: 0.05575
-- entries: 3
-- entry ladder: range_to_sl
-- entry-to-SL gap: 2.0
-- activation delay: 3 minutes
-- pending expiry: 630 minutes
-- max hold: 90 minutes
-- SL multiplier: 1.61
-- final target: TP3
-- lock after TP1: true
-- lock after TP2: false
-- TP1 lock delay: 0 minutes
-- TP2 lock delay: 0 minutes
-- closed-lot bonus/rebate: 3.0 per closed lot
-
-Observed local validation snapshot on uploaded provider signals/charts:
-
-- net profit including bonus: about +$22.609T
-- trading P&L: about +$22.436T
-- closed-lot bonus: about +$174.0B
-- max drawdown: about -39.94%
-
-This is an extremely aggressive research configuration. The very long pending
-expiry is the main reason live/backtest parity requires MT5 to keep orders alive
-for the full 630-minute window.
+The defaults in this branch remain the validated DD40-compatible provider
+contract. Optional trailing-open / trailing-close distances are available for
+research and live execution, but default to 0.0 so existing backtests and Auto
+runs keep their current behaviour unless explicitly enabled.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -75,6 +45,17 @@ class StrategyConfig:
     final_target: str = "TP3"
     lock_after_tp1: bool = True
     lock_after_tp2: bool = False
+
+    # Optional trailing behaviour. 0.0 disables each feature.
+    # trailing_open_distance:
+    #   Use virtual entries until the whole ladder is passed and price rebounds
+    #   by this distance. Example BUY LIMIT 4750 with distance=2.0 will not open
+    #   while Ask is dumping to 4740; it opens only after the observed low Ask
+    #   rebounds by 2.0.
+    # trailing_close_distance:
+    #   Trail the protective stop by this distance after an entry is open.
+    trailing_open_distance: float = 0.0
+    trailing_close_distance: float = 0.0
 
     # Delayed stop-lock timing. 0 keeps the standard behavior: TP1/TP2 lock is
     # applied right after the target-touch candle is processed.
