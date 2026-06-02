@@ -10,7 +10,7 @@ Disabling: pass path=None (the Notifier becomes a no-op).
 """
 from __future__ import annotations
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -33,6 +33,12 @@ _STATUS_EMOJI = {
 def _utc_now_naive() -> datetime:
     """Return UTC wall-clock time as naive datetime for JSONL compatibility."""
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _fmt_time_gmt7(dt: datetime | None) -> str:
+    if dt is None:
+        return "n/a"
+    return f"{dt + timedelta(hours=4):%Y-%m-%d %H:%M} GMT+7"
 
 
 class Notifier:
@@ -60,6 +66,109 @@ class Notifier:
         except Exception:
             # Never let a notification failure break trading.
             pass
+
+    # ---- Signal lifecycle actions -------------------------------------
+
+    def signal_detected(self, *, signal_key: str, side: str,
+                        entries: list[dict[str, Any]], activation_at: datetime | None,
+                        expiry_at: datetime | None, trailing: dict[str, Any] | None = None) -> None:
+        parts = [f"🟢 Signal accepted {signal_key} ({side})"]
+        parts.append(f"  Active: {_fmt_time_gmt7(activation_at)} | Expiry: {_fmt_time_gmt7(expiry_at)}")
+        for e in entries:
+            parts.append(
+                f"  #{e.get('entry_index')} {e.get('entry_type', 'LIMIT')} "
+                f"entry={float(e.get('entry_price')):g} lot={float(e.get('lot')):g} "
+                f"SL={float(e.get('sl')):g} TP1={float(e.get('tp1')):g} "
+                f"TP2={float(e.get('tp2')):g} TP3={float(e.get('tp3')):g}"
+            )
+        if trailing:
+            enabled = {k: v for k, v in trailing.items() if v not in (None, False, 0, 0.0, "")}
+            if enabled:
+                parts.append("  Trailing: " + ", ".join(f"{k}={v}" for k, v in enabled.items()))
+        self._emit(
+            "signal_detected", signal_key, text="\n".join(parts),
+            side=side, entries=entries, activation_at=activation_at,
+            expiry_at=expiry_at, trailing=trailing or {},
+        )
+
+    def order_placed(self, *, signal_key: str, side: str, order_kind: str,
+                     placed: list[dict[str, Any]]) -> None:
+        if not placed:
+            return
+        parts = [f"✅ {order_kind} orders placed {signal_key} ({side})"]
+        for p in placed:
+            parts.append(
+                f"  #{p.get('entry_index')} ticket={p.get('ticket')} "
+                f"@ {float(p.get('price')):g} lot={float(p.get('lot')):g} "
+                f"SL={float(p.get('sl')):g} TP={float(p.get('tp')):g}"
+            )
+        self._emit("order_placed", signal_key, text="\n".join(parts),
+                   side=side, order_kind=order_kind, placed=placed)
+
+    def trailing_open_armed(self, *, signal_key: str, side: str, entry_index: int,
+                            ticket: int, stop_price: float, sl: float, tp: float) -> None:
+        text = (
+            f"🟡 Trailing-open STOP armed {signal_key} ({side})\n"
+            f"  #{entry_index} ticket={ticket} STOP={stop_price:g} SL={sl:g} TP={tp:g}"
+        )
+        self._emit("trailing_open_armed", signal_key, text=text, side=side,
+                   entry_index=entry_index, ticket=ticket, stop_price=stop_price, sl=sl, tp=tp)
+
+    def trailing_open_trailed(self, *, signal_key: str, side: str, entry_index: int,
+                              ticket: int, old_price: float, new_price: float) -> None:
+        text = (
+            f"↕️ Trailing-open STOP moved {signal_key} ({side})\n"
+            f"  #{entry_index} ticket={ticket} {old_price:g} → {new_price:g}"
+        )
+        self._emit("trailing_open_trailed", signal_key, text=text, side=side,
+                   entry_index=entry_index, ticket=ticket, old_price=old_price, new_price=new_price)
+
+    def trailing_open_filled(self, *, signal_key: str, side: str, entry_index: int,
+                             ticket: int, fill_price: float) -> None:
+        text = (
+            f"✅ Trailing-open STOP filled {signal_key} ({side})\n"
+            f"  #{entry_index} ticket={ticket} fill={fill_price:g}"
+        )
+        self._emit("trailing_open_filled", signal_key, text=text, side=side,
+                   entry_index=entry_index, ticket=ticket, fill_price=fill_price)
+
+    def sl_moved(self, *, signal_key: str, side: str, entry_index: int,
+                 old_sl: float, new_sl: float, reason: str) -> None:
+        text = (
+            f"🔧 SL moved {signal_key} ({side})\n"
+            f"  #{entry_index} {old_sl:g} → {new_sl:g} ({reason})"
+        )
+        self._emit("sl_moved", signal_key, text=text, side=side, entry_index=entry_index,
+                   old_sl=old_sl, new_sl=new_sl, reason=reason)
+
+    def tp_moved(self, *, signal_key: str, side: str, entry_index: int,
+                 old_tp: float, new_tp: float, reason: str) -> None:
+        text = (
+            f"🔧 TP moved {signal_key} ({side})\n"
+            f"  #{entry_index} {old_tp:g} → {new_tp:g} ({reason})"
+        )
+        self._emit("tp_moved", signal_key, text=text, side=side, entry_index=entry_index,
+                   old_tp=old_tp, new_tp=new_tp, reason=reason)
+
+    def pending_cancelled(self, *, signal_key: str, side: str,
+                          cancelled: list[dict[str, Any]]) -> None:
+        if not cancelled:
+            return
+        parts = [f"🧹 Pending cancelled {signal_key} ({side})"]
+        for c in cancelled:
+            parts.append(f"  ticket={c.get('ticket')} ({c.get('reason')})")
+        self._emit("pending_cancelled", signal_key, text="\n".join(parts),
+                   side=side, cancelled=cancelled)
+
+    def entry_filled(self, *, signal_key: str, side: str, entry_index: int,
+                     fill_price: float, source: str, ticket: int | None = None) -> None:
+        ticket_text = f" ticket={ticket}" if ticket is not None else ""
+        text = (
+            f"✅ Entry filled {signal_key} ({side})\n"
+            f"  #{entry_index}{ticket_text} fill={fill_price:g} ({source})"
+        )
+        self._emit("entry_filled", signal_key, text=text, side=side,
+                   entry_index=entry_index, fill_price=fill_price, source=source, ticket=ticket)
 
     # ---- TP1 SL-lock -------------------------------------------------
 
