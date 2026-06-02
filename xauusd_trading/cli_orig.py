@@ -27,7 +27,7 @@ import sys
 import time
 import traceback
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from xauusd_trading import CsvChartSource, ManualPositionSource
@@ -165,7 +165,7 @@ def _handle_closures(notifier: Notifier, forensic: ForensicLog,
 
 def _chart_now() -> datetime:
     """Wall-clock current time in chart timezone (GMT+3), naive."""
-    return datetime.utcnow() + timedelta(hours=CHART_TIMEZONE_OFFSET)
+    return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=CHART_TIMEZONE_OFFSET)
 
 
 def _parse_executed_at(raw) -> datetime | None:
