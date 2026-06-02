@@ -91,14 +91,14 @@ def _bonus_for_position(pos: Position, config: StrategyConfig) -> float:
 # ---------------------------------------------------------------------------
 # full backtest
 # ---------------------------------------------------------------------------
-_STATUS_TO_KEY = {"WIN": "wins", "LOSS": "losses",
+_STATUS_TO_KEY = {"WIN": "wins", "LOSS": "losses", "BREAKEVEN": "breakevens",
                   "NO_FILL": "no_fills", "OPEN": "open"}
 
 
 def _new_bucket(key_name: str, key_value: str, equity_start: float) -> dict:
     return {
         key_name: key_value, "signals": 0, "wins": 0, "losses": 0,
-        "no_fills": 0, "open": 0,
+        "breakevens": 0, "no_fills": 0, "open": 0,
         "pnl": 0.0, "trading_pnl": 0.0, "bonus": 0.0, "closed_lots": 0.0,
         "equity_start": equity_start, "equity_end": equity_start,
     }
@@ -211,6 +211,7 @@ def run_backtest(
 
     wins = sum(1 for r in rows if r["status"] == "WIN")
     losses = sum(1 for r in rows if r["status"] == "LOSS")
+    breakevens = sum(1 for r in rows if r["status"] == "BREAKEVEN")
     no_fills = sum(1 for r in rows if r["status"] == "NO_FILL")
     open_count = sum(1 for r in rows if r["status"] == "OPEN")
     total_realized = sum(r["pnl"] for r in rows if r["pnl"] is not None)
@@ -295,7 +296,8 @@ def run_backtest(
         "trading_pnl": trading_realized,
         "bonus": total_bonus,
         "closed_lots": total_closed_lots,
-        "wins": wins, "losses": losses, "no_fills": no_fills, "open": open_count,
+        "wins": wins, "losses": losses, "breakevens": breakevens,
+        "no_fills": no_fills, "open": open_count,
         "win_rate_pct": wins / (wins + losses) * 100.0 if (wins + losses) else 0.0,
         "max_drawdown_pct": max_dd_pct,
         "rows": rows,

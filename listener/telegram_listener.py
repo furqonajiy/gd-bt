@@ -112,7 +112,7 @@ class Config:
 NEW_SIGNAL_MARKER = re.compile(
     r"\U0001F947\s*(?P<side>BUY|SELL)\s+XAUUSD",
     re.IGNORECASE | re.UNICODE,
-)
+    )
 
 # Lenient field extractors. Run after _normalize_text(), so commas are
 # still in place — handled by the num() converter.
@@ -706,7 +706,7 @@ def append_manual_signal(line: str) -> tuple[str, int, list[str], str, Optional[
     parsed = fix.corrected
     time_text = m.group("time")
 
-    now_gmt7 = datetime.utcnow() + timedelta(hours=SIGNAL_SOURCE_TZ_OFFSET)
+    now_gmt7 = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=SIGNAL_SOURCE_TZ_OFFSET)
     date_str = now_gmt7.strftime("%Y-%m-%d")
 
     lines = _read_signals_lines()

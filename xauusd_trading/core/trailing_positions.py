@@ -127,29 +127,15 @@ def _effective_stop_with_trailing(position: Position, entry: Entry, config: Stra
 
 
 def _engage_trend_runner(position: Position, bar: Bar) -> None:
-    """Activate TP3 trend-runner state without using this bar's ATR ratchet.
+    """Flag the TP3 runner active before the stop/time-exit checks only.
 
-    The bar that first reaches TP3 must mark the runner active before the stop and
-    time-exit checks, but any ATR stop tightened from this same bar's extreme must
-    only protect from the next bar onward.  Seed the runner-owned stop at TP2 so
-    live/backtest state is explicit while avoiding a current-bar ATR look-ahead.
+    Stage promotion, stage3_time, and the protective runner stop are deferred to
+    update_runner_stop (which runs after the per-entry stop loop) so the
+    runner-owned stop can only trigger from the next bar onward, never against the
+    same engage bar's pre-TP3 extreme.  Setting just the flag here still suppresses
+    the final-target close and the time-exit on the bar that first reaches TP3.
     """
-    position.stage = max(position.stage, 3)
-    if position.stage3_time is None:
-        position.stage3_time = bar.time
     position.trend_runner_active = True
-
-    seed = position.signal.tp2
-    for entry in position.open_entries():
-        if not _entry_open_before_bar(entry, bar):
-            continue
-        current = getattr(entry, "trailing_stop", None)
-        if current is None:
-            entry.trailing_stop = seed
-        elif position.signal.side == "BUY":
-            entry.trailing_stop = max(float(current), seed)
-        else:
-            entry.trailing_stop = min(float(current), seed)
 
 
 def _update_trailing_close_stops(position: Position, bar: Bar, config: StrategyConfig) -> None:
@@ -204,9 +190,9 @@ def advance_one_bar(
         if getattr(config, "profit_lock_mode", "tp_levels") == "bep_plus_half_tp1":
             for e in open_entries:
                 if (
-                    _entry_open_before_bar(e, bar)
-                    and not e.bep_armed
-                    and _bep_triggered(side, e, h, l, sp, config.bep_trigger_distance)
+                        _entry_open_before_bar(e, bar)
+                        and not e.bep_armed
+                        and _bep_triggered(side, e, h, l, sp, config.bep_trigger_distance)
                 ):
                     e.bep_armed = True
 
@@ -217,7 +203,8 @@ def advance_one_bar(
                 fallback_status = _stop_status(lock_stage, stop_level, e, config)
                 status = stop_status_for(e, stop_level, fallback_status)
                 _close_entry(e, status, bar.time, stop_level, side, contract_size, stop_level)
-            elif target_hit and not runner_after_tp3 and not trend_runner_holds and _entry_open_before_bar(e, bar):
+            elif (target_hit and not runner_after_tp3 and not trend_runner_holds
+                  and not runner_was_active and _entry_open_before_bar(e, bar)):
                 _close_entry(e, config.final_target.upper(), bar.time, position.target_level,
                              side, contract_size)
 
@@ -243,9 +230,9 @@ def advance_one_bar(
             update_runner_stop(position, bar, config)
 
     if (
-        position.time_exit_deadline is not None
-        and bar.time >= position.time_exit_deadline
-        and not should_skip_time_exit(position, config)
+            position.time_exit_deadline is not None
+            and bar.time >= position.time_exit_deadline
+            and not should_skip_time_exit(position, config)
     ):
         exit_price = _time_exit_price(side, c, sp)
         for e in position.entries:

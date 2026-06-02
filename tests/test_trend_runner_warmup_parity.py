@@ -34,7 +34,7 @@ def _advance_from(signal, chart_df, cfg, replay_start: datetime):
     prewarm_indicators_from_dataframe(pos, chart_df, cfg, replay_start=replay_start)
     advance_bars(
         pos,
-        iter_bars(slice_bars(chart_df, replay_start, replay_start + timedelta(minutes=5))),
+        iter_bars(slice_bars(chart_df, replay_start, chart_df["time"].iloc[-1])),
         cfg,
     )
     return pos
@@ -79,7 +79,7 @@ def test_trend_runner_warmup_same_result_from_activation_or_later_start():
         _bar(delayed, 4499.0, 4500.0, 4498.0, 4498.0),
         _bar(delayed + timedelta(minutes=1), 4498.0, 4498.0, 4470.0, 4470.0),
         _bar(delayed + timedelta(minutes=2), 4470.0, 4470.0, 4450.0, 4452.0),
-        _bar(delayed + timedelta(minutes=3), 4452.0, 4465.0, 4451.0, 4464.0),
+        _bar(delayed + timedelta(minutes=3), 4452.0, 4470.0, 4451.0, 4464.0),
     ])
     chart_df = _df(bars)
 

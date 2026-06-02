@@ -48,7 +48,7 @@ def test_sell_trend_runner_holds_after_tp3_and_closes_on_atr_trailing_stop():
 
     # Reversal into the runner stop closes later with more profit than TP3.
     advance_bars(pos, [
-        _bar(t + timedelta(minutes=4), 4452, 4465, 4451, 4464),
+        _bar(t + timedelta(minutes=4), 4452, 4470, 4451, 4464),
     ], cfg)
 
     assert entry.status == "TRAILING_STOP"
@@ -67,7 +67,7 @@ def test_trend_runner_disabled_keeps_normal_tp3_close():
     t = sig.signal_time_chart
 
     advance_bars(pos, [
-        _bar(t, 4501, 4501, 4499, 4500),
+        _bar(t, 4499, 4501, 4498, 4500),
         _bar(t + timedelta(minutes=1), 4500, 4500, 4470, 4470),
     ], cfg)
 

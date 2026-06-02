@@ -42,6 +42,12 @@ DD40_DEFAULT_EXPECTED = {
     "tp2_lock_delay_minutes": 0,
     "profit_lock_mode": "tp_levels",
     "bonus_per_closed_lot": 3.0,
+    # Research toggles must default OFF for DD40. Pinning them here makes the
+    # contract test fail fast on XAUUSD_* env-var drift instead of letting it
+    # cascade into unrelated executor/fill test failures.
+    "trailing_open_distance": 0.0,
+    "trailing_close_distance": 0.0,
+    "trend_runner_enabled": False,
 }
 
 
@@ -82,6 +88,7 @@ def test_dd40_command_backtest_runs_end_to_end():
         "final_equity": result["final_equity"],
         "wins": result["wins"],
         "losses": result["losses"],
+        "breakevens": result["breakevens"],
         "no_fills": result["no_fills"],
         "open": result["open"],
         "signals_included": result["signals_included"],
@@ -91,6 +98,26 @@ def test_dd40_command_backtest_runs_end_to_end():
     print("\nDD40 command smoke actuals:", actuals)
 
     assert result["signals_included"] > 0
-    assert result["wins"] + result["losses"] + result["no_fills"] + result["open"] == result["signals_included"]
+    # Every replayed signal lands in exactly one terminal bucket. position_status
+    # returns WIN | LOSS | BREAKEVEN | NO_FILL | OPEN, so all five must be summed.
+    assert (
+                   result["wins"] + result["losses"] + result["breakevens"]
+                   + result["no_fills"] + result["open"]
+           ) == result["signals_included"]
     assert result["final_equity"] is not None
     assert result["max_drawdown_pct"] <= 0.0
+
+
+def test_every_terminal_status_has_a_bucket():
+    """Guard against the BREAKEVEN-style orphan: every status position_status can
+    return must map to a counted bucket present in the bucket template. Runs
+    without market data, so it always executes (the end-to-end test skips when the
+    provider feed or charts are absent)."""
+    from xauusd_trading.strategy.backtest import _STATUS_TO_KEY, _new_bucket
+
+    terminal_statuses = {"WIN", "LOSS", "BREAKEVEN", "NO_FILL", "OPEN"}
+    assert set(_STATUS_TO_KEY) == terminal_statuses
+
+    bucket = _new_bucket("month", "1970-01", 0.0)
+    for key in _STATUS_TO_KEY.values():
+        assert key in bucket

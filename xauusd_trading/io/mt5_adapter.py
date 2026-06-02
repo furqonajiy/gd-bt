@@ -140,7 +140,7 @@ class Mt5ChartSource(ChartSource):
 
     def _to_chart_time(self, mt5_epoch: int) -> datetime:
         # MT5 returns server-local-time-as-if-it-were-UTC.
-        broker_naive = datetime.utcfromtimestamp(int(mt5_epoch))
+        broker_naive = datetime.fromtimestamp(int(mt5_epoch), timezone.utc).replace(tzinfo=None)
         return broker_naive + self._shift
 
     def _to_server_time(self, chart_time: datetime) -> datetime:
@@ -230,7 +230,7 @@ def mt5_open_positions_summary(connection: Mt5Connection, symbol: str = "XAUUSD"
             "volume": p.volume, "price_open": p.price_open,
             "sl": p.sl, "tp": p.tp, "profit": p.profit,
             "comment": p.comment, "magic": p.magic,
-            "time": datetime.utcfromtimestamp(p.time),
+            "time": datetime.fromtimestamp(p.time, timezone.utc).replace(tzinfo=None),
         })
     for o in mt5.orders_get(symbol=symbol) or []:
         out.append({
@@ -238,7 +238,7 @@ def mt5_open_positions_summary(connection: Mt5Connection, symbol: str = "XAUUSD"
             "type": _order_type_name(mt5, o.type),
             "volume": o.volume_initial, "price_open": o.price_open,
             "sl": o.sl, "tp": o.tp, "comment": o.comment, "magic": o.magic,
-            "time_setup": datetime.utcfromtimestamp(o.time_setup),
+            "time_setup": datetime.fromtimestamp(o.time_setup, timezone.utc).replace(tzinfo=None),
         })
     return out
 
@@ -363,10 +363,10 @@ def archive_m1_by_month(
     if until_chart_time is None:
         rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 1)
         if rates is None or len(rates) == 0:
-            now_utc = datetime.utcnow()
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
             until_chart_time = now_utc + timedelta(hours=3)
         else:
-            broker_naive = datetime.utcfromtimestamp(int(rates[0]["time"]))
+            broker_naive = datetime.fromtimestamp(int(rates[0]["time"]), timezone.utc).replace(tzinfo=None)
             until_chart_time = broker_naive + timedelta(hours=3 - server_offset_hours)
 
     summary: list[dict] = []

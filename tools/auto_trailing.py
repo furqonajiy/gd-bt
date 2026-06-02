@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Run live Auto with optional trailing-open / trailing-close distances.
 
-This is a thin wrapper around ``python -m xauusd_trading.cli auto``.  The main
-CLI intentionally stays stable; this wrapper sets the trailing environment
-variables before importing the package, so ``DEFAULT_CONFIG`` picks them up.
+Thin wrapper around ``python -m xauusd_trading.cli auto``. The main CLI now
+accepts ``--trailing-open-distance`` / ``--trailing-close-distance`` (and
+``--trend-runner``) directly, so this wrapper simply forwards those flags; it no
+longer sets XAUUSD_* environment variables. You can also just call ``cli auto``
+with the flags yourself.
 
 Example PowerShell:
 
@@ -25,7 +27,6 @@ python tools/auto_trailing.py `
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -54,12 +55,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     known, rest = parser.parse_known_args(argv)
 
-    os.environ["XAUUSD_TRAILING_OPEN_DISTANCE"] = str(float(known.trailing_open_distance))
-    os.environ["XAUUSD_TRAILING_CLOSE_DISTANCE"] = str(float(known.trailing_close_distance))
-
     from xauusd_trading.cli import main as cli_main
 
-    return cli_main(["auto", *rest])
+    return cli_main([
+        "auto",
+        "--trailing-open-distance", str(float(known.trailing_open_distance)),
+        "--trailing-close-distance", str(float(known.trailing_close_distance)),
+        *rest,
+    ])
 
 
 if __name__ == "__main__":
