@@ -91,6 +91,10 @@ class Notifier:
             expiry_at=expiry_at, trailing=trailing or {},
         )
 
+    def signal_skipped(self, *, signal_key: str, side: str, reason: str) -> None:
+        text = f"⚪ Signal skipped {signal_key} ({side})\n  {reason}"
+        self._emit("signal_skipped", signal_key, text=text, side=side, reason=reason)
+
     def order_placed(self, *, signal_key: str, side: str, order_kind: str,
                      placed: list[dict[str, Any]]) -> None:
         if not placed:
