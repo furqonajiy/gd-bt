@@ -52,6 +52,17 @@ QUARANTINE_PATH = REPO_ROOT / "telegram_quarantine.txt"
 CONFIG_PATH = REPO_ROOT / "listener_config.json"
 SESSION_NAME = str(REPO_ROOT / "telegram")
 
+# Engine -> listener event bridge. `xauusd_trading.cli auto` appends one JSON
+# object per line to this file (see xauusd_trading/notifications.py); the
+# listener tails it and forwards each event's pre-rendered `text` to Saved
+# Messages. The offset sidecar lets a restart resume mid-file without
+# replaying the backlog or skipping events.
+NOTIFICATIONS_PATH = REPO_ROOT / "notifications.jsonl"
+NOTIFICATIONS_POLL_SECONDS = 2.0
+# Space out a burst of events so a flurry of closures can't trip Telegram's
+# per-chat flood limit.
+NOTIFICATIONS_SEND_GAP_SECONDS = 0.5
+
 # VICTOR posts in GMT+7. Must match the existing section headers in
 # signals.txt; if the channel ever changes timezone, change both together.
 SIGNAL_SOURCE_TZ_OFFSET = 7
@@ -70,6 +81,7 @@ class Config:
     api_hash: str
     channel_id: Optional[int] = None
     channel_title_pattern: str = "VICTOR"
+    notifications_path: Optional[str] = None
 
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -87,6 +99,7 @@ class Config:
             api_hash=str(data["api_hash"]),
             channel_id=channel_id,
             channel_title_pattern=str(data.get("channel_title_pattern") or "VICTOR"),
+            notifications_path=(str(data["notifications"]) if data.get("notifications") else None),
         )
 
 
@@ -760,6 +773,67 @@ def state_set(state: dict, message_id: int, record: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# engine notifications bridge (tail notifications.jsonl -> Saved Messages)
+# ---------------------------------------------------------------------------
+
+def read_notification_offset(offset_path: Path) -> int:
+    """Return the persisted byte offset, or -1 when no offset file exists yet
+    (the caller then starts at end-of-file so it doesn't replay the backlog).
+    """
+    try:
+        return int((offset_path.read_text(encoding="utf-8").strip() or "0"))
+    except FileNotFoundError:
+        return -1
+    except Exception:
+        log.warning("Notifications offset file unreadable; resuming from end of file.")
+        return -1
+
+
+def write_notification_offset(offset_path: Path, offset: int) -> None:
+    tmp = offset_path.with_suffix(offset_path.suffix + ".tmp")
+    tmp.write_text(str(int(offset)), encoding="utf-8")
+    os.replace(tmp, offset_path)
+
+
+def read_new_notification_events(path: Path, offset: int) -> tuple[list[dict], int]:
+    """Return (events, new_offset) for complete JSONL lines after `offset`.
+
+    Offsets are BYTE positions (the file holds multi-byte emoji), so reads use
+    binary mode to stay consistent with ``st_size``. Only data up to the last
+    newline is consumed, so a half-written final line is re-read next poll. A
+    file that shrank below `offset` (rotated/truncated) resets to 0. A malformed
+    line is skipped but still advances the offset, so one bad line can't wedge
+    the stream.
+    """
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return [], offset
+    if offset < 0 or offset > size:
+        offset = 0
+    if offset == size:
+        return [], offset
+    with path.open("rb") as f:
+        f.seek(offset)
+        raw = f.read()
+    nl = raw.rfind(b"\n")
+    if nl == -1:
+        return [], offset
+    complete = raw[: nl + 1]
+    new_offset = offset + len(complete)
+    events: list[dict] = []
+    for bline in complete.split(b"\n"):
+        line = bline.decode("utf-8", "replace").strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except Exception:
+            log.warning("Skipping malformed notifications line.")
+    return events, new_offset
+
+
+# ---------------------------------------------------------------------------
 # quarantine
 # ---------------------------------------------------------------------------
 
@@ -783,6 +857,13 @@ class Listener:
         self.channel_id: Optional[int] = cfg.channel_id
         self.saved_id: Optional[int] = None
         self._lock = asyncio.Lock()
+        self._notifications_path = (
+            Path(cfg.notifications_path) if cfg.notifications_path else NOTIFICATIONS_PATH
+        )
+        self._notifications_offset_path = self._notifications_path.with_suffix(
+            self._notifications_path.suffix + ".offset"
+        )
+        self._last_forwarded_text: Optional[str] = None
 
     async def _resolve_channel(self) -> int:
         """Find the channel id from config or title-substring match."""
@@ -1038,11 +1119,65 @@ class Listener:
         except Exception as e:
             log.warning(f"Saved Messages reply failed: {e}")
 
+    async def _forward_notifications(self) -> None:
+        """Tail the engine notifications JSONL and forward each event's `text`
+        to Saved Messages. Best-effort: any failure here is logged and retried,
+        never propagated -- a notification problem must not take down the
+        channel listener.
+        """
+        path = self._notifications_path
+        offset_path = self._notifications_offset_path
+        offset = read_notification_offset(offset_path)
+        if offset < 0:
+            # First run against this file: start at the end so the listener
+            # doesn't replay events that predate it coming up.
+            try:
+                offset = path.stat().st_size
+            except FileNotFoundError:
+                offset = 0
+            write_notification_offset(offset_path, offset)
+        log.info(f"Forwarding engine notifications from {path} (offset={offset}).")
+        while True:
+            try:
+                events, new_offset = read_new_notification_events(path, offset)
+                for event in events:
+                    text = event.get("text")
+                    if not text:
+                        continue
+                    # Collapse a machine retry loop emitting the identical line
+                    # every cycle (e.g. a TP1 lock the broker keeps rejecting).
+                    if text == self._last_forwarded_text:
+                        continue
+                    if self.dry_run:
+                        log.info(f"[dry-run] would forward to Saved Messages:\n{text}")
+                    else:
+                        await self._reply_saved(text)
+                    self._last_forwarded_text = text
+                    await asyncio.sleep(NOTIFICATIONS_SEND_GAP_SECONDS)
+                # Persist only after a batch is sent: at-least-once delivery is
+                # the right bias for monitoring (a crash re-sends, never drops).
+                if new_offset != offset:
+                    offset = new_offset
+                    write_notification_offset(offset_path, offset)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.warning(f"Notification forwarder error (continuing): {e}")
+            await asyncio.sleep(NOTIFICATIONS_POLL_SECONDS)
+
     async def run(self) -> None:
         await self.setup()
         await self.catch_up()
         log.info("Listening. Press Ctrl+C to stop.")
-        await self.client.run_until_disconnected()
+        forwarder = asyncio.create_task(self._forward_notifications())
+        try:
+            await self.client.run_until_disconnected()
+        finally:
+            forwarder.cancel()
+            try:
+                await forwarder
+            except asyncio.CancelledError:
+                pass
 
 
 # ---------------------------------------------------------------------------
