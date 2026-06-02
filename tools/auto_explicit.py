@@ -82,6 +82,10 @@ def build_parser() -> argparse.ArgumentParser:
     strategy.add_argument("--tp2-lock-target", choices=["TP1", "TP2"], required=True)
     strategy.add_argument("--runner-after-tp3", choices=["true", "false"], required=True)
     strategy.add_argument("--tp3-lock-target", choices=["TP2"], required=True)
+    strategy.add_argument("--trailing-open-distance", type=_positive_float, required=True,
+                          help="Virtual trailing-open entry distance in price units; 0 disables.")
+    strategy.add_argument("--trailing-close-distance", type=_positive_float, required=True,
+                          help="Trailing-close (ratcheting) stop distance in price units; 0 disables.")
 
     obs = p.add_argument_group("observability")
     obs.add_argument("--notifications", default=None)
@@ -131,6 +135,8 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         tp2_lock_target=args.tp2_lock_target,
         runner_after_tp3=_bool_text(args.runner_after_tp3),
         tp3_lock_target=args.tp3_lock_target,
+        trailing_open_distance=args.trailing_open_distance,
+        trailing_close_distance=args.trailing_close_distance,
     )
 
 
