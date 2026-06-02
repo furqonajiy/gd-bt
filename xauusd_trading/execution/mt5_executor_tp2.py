@@ -362,10 +362,10 @@ class Mt5Executor(_BaseMt5Executor):
             before_price = entry.entry_price
 
             needs_patch = (
-                entry.status in ("PENDING", "NO_FILL")
-                or entry.fill_time != fill_time_chart
-                or abs(entry.entry_price - actual_price) > 1e-9
-                or abs(entry.lot - actual_lot) > 1e-9
+                    entry.status in ("PENDING", "NO_FILL")
+                    or entry.fill_time != fill_time_chart
+                    or abs(entry.entry_price - actual_price) > 1e-9
+                    or abs(entry.lot - actual_lot) > 1e-9
             )
             if not needs_patch:
                 continue
@@ -416,7 +416,7 @@ class Mt5Executor(_BaseMt5Executor):
         if fill_times:
             engine_pos.first_fill_time = min(fill_times)
             engine_pos.time_exit_deadline = (
-                engine_pos.first_fill_time + timedelta(minutes=config.max_hold_minutes)
+                    engine_pos.first_fill_time + timedelta(minutes=config.max_hold_minutes)
             )
 
         advance_bars(engine_pos, chart.bars_between(earliest_patched, now), config)
@@ -505,6 +505,19 @@ class Mt5Executor(_BaseMt5Executor):
             reason = str(res.comment if res else self.mt5.last_error())
             log.actions.append(f"  FAILED {reason_label} close on #{p.ticket}: {reason}")
             failed.append((p.ticket, reason))
+
+    @staticmethod
+    def _lock_improves(side: str, current_sl: float, target_sl: float, tolerance: float) -> bool:
+        """True only when moving the protective stop to target_sl tightens it.
+
+        A lock must never push a stop backwards: for BUY the stop may only rise
+        toward TP, for SELL only fall.  If the live SL is already at or past the
+        lock target (a prior trailing move or a manual edit), no modify is sent so
+        the executor never loosens broker-side protection.
+        """
+        if side == "BUY":
+            return target_sl > current_sl + tolerance
+        return target_sl < current_sl - tolerance
 
     def _modify_stop(self, p, sl: float, signal_key: str, action_name: str,
                      label: str, log: ExecutionLog,
@@ -598,10 +611,10 @@ class Mt5Executor(_BaseMt5Executor):
         lock_failures: list[tuple[int, str]] = []
         for p, entry in pairs:
             if (
-                config.lock_after_tp1
-                and entry.status == "OPEN"
-                and engine_pos.lock_stage_for(entry, config.lock_after_tp1, config.lock_after_tp2) >= 1
-                and abs(p.sl - target_sl) > tolerance
+                    config.lock_after_tp1
+                    and entry.status == "OPEN"
+                    and engine_pos.lock_stage_for(entry, config.lock_after_tp1, config.lock_after_tp2) >= 1
+                    and self._lock_improves(side, float(p.sl), target_sl, tolerance)
             ):
                 self._modify_stop(
                     p, target_sl, signal_key, "modify_sl_to_tp1", "TP1",
@@ -624,9 +637,9 @@ class Mt5Executor(_BaseMt5Executor):
                 if int(p.ticket) in closed_tickets_this_cycle:
                     continue
                 if (
-                    entry.status == "OPEN"
-                    and engine_pos.lock_stage_for(entry, config.lock_after_tp1, config.lock_after_tp2) >= 2
-                    and abs(p.sl - tp2_sl) > tolerance
+                        entry.status == "OPEN"
+                        and engine_pos.lock_stage_for(entry, config.lock_after_tp1, config.lock_after_tp2) >= 2
+                        and self._lock_improves(side, float(p.sl), tp2_sl, tolerance)
                 ):
                     self._modify_stop(
                         p, tp2_sl, signal_key, "modify_sl_to_tp2", "TP2",
@@ -648,9 +661,9 @@ class Mt5Executor(_BaseMt5Executor):
         # past max-hold.  The paired timeout pending-cancel must be skipped too
         # so live and backtest keep the same signal lifecycle for this cycle.
         if (
-            engine_pos.time_exit_deadline is not None
-            and effective_chart_now >= engine_pos.time_exit_deadline
-            and not should_skip_time_exit(engine_pos, config)
+                engine_pos.time_exit_deadline is not None
+                and effective_chart_now >= engine_pos.time_exit_deadline
+                and not should_skip_time_exit(engine_pos, config)
         ):
             timeout_closed: list[tuple[int, float]] = []
             timeout_failed: list[tuple[int, str]] = []

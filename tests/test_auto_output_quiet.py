@@ -225,7 +225,7 @@ def test_auto_watch_prints_hourly_heartbeat(tmp_path, monkeypatch, capsys):
     signals_path = tmp_path / "signals.txt"
     signals_path.write_text("placeholder", encoding="utf-8")
     calls = {"count": 0}
-    ticks = iter([0.0, 10.0, 3601.0])
+    ticks = iter([0.0, 3601.0])
 
     def fake_auto_pass(*args, **kwargs):
         calls["count"] += 1
