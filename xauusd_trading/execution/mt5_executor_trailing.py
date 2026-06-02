@@ -156,6 +156,7 @@ class Mt5Executor(_Tp2Mt5Executor):
 
         place_failures: list[tuple[int, float, str]] = []
         placed_tickets: list[int] = []
+        armed_details: list[dict] = []
         for order in plan.orders:
             entry_key = signal_entry_key(signal.signal_key, order.entry_index)
             trigger = trigger_prices[order.entry_index]
@@ -190,6 +191,11 @@ class Mt5Executor(_Tp2Mt5Executor):
                 break
             ticket = int(res.order)
             placed_tickets.append(ticket)
+            armed_details.append({
+                "entry_index": order.entry_index, "ticket": ticket,
+                "stop_price": float(request["price"]),
+                "sl": float(request["sl"]), "tp": float(request["tp"]),
+            })
             log.placed += 1
             log.placed_entry_indices.append(order.entry_index)
             log.actions.append(
@@ -197,6 +203,14 @@ class Mt5Executor(_Tp2Mt5Executor):
                 f"@ {request['price']:g} lot={request['volume']} "
                 f"SL={request['sl']:g} TP={request['tp']:g}"
             )
+
+        if self.notifier is not None and not place_failures:
+            for a in armed_details:
+                self.notifier.trailing_open_armed(
+                    signal_key=signal.signal_key, side=signal.side,
+                    entry_index=a["entry_index"], ticket=a["ticket"],
+                    stop_price=a["stop_price"], sl=a["sl"], tp=a["tp"],
+                )
 
         if place_failures:
             if placed_tickets:
@@ -259,6 +273,12 @@ class Mt5Executor(_Tp2Mt5Executor):
                     f"  Trailed pending open STOP #{order.ticket} to {req['price']:g} "
                     f"SL={req['sl']:g} ({signal_key})"
                 )
+                if self.notifier is not None:
+                    self.notifier.trailing_open_trailed(
+                        signal_key=signal_key, side=engine_pos.signal.side,
+                        entry_index=idx, ticket=int(order.ticket),
+                        old_price=current_price, new_price=float(req["price"]),
+                    )
             else:
                 reason = str(res.comment if res else self.mt5.last_error())
                 log.actions.append(f"  FAILED trailing-open modify on #{order.ticket}: {reason}")
@@ -315,6 +335,12 @@ class Mt5Executor(_Tp2Mt5Executor):
                 p, target_sl, signal_key, "modify_trailing_close_sl", "trailing-stop",
                 log, locked, failed,
             )
+            if self.notifier is not None and int(p.ticket) in locked:
+                self.notifier.sl_moved(
+                    signal_key=signal_key, side=engine_pos.signal.side,
+                    entry_index=entry.entry_index, old_sl=current_sl,
+                    new_sl=target_sl, reason="trailing-stop",
+                )
         return log
 
     def _warn_on_external_sl_change(self, engine_pos, config, log: ExecutionLog) -> None:
