@@ -197,6 +197,7 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
     interval = float(args.watch_interval)
     iteration = 0
     candidate_console_state: dict[str, str] = {}
+    notified_keys: dict[str, set] = {"detected": set(), "skipped": set()}
     last_heartbeat = time.monotonic()
     try:
         while True:
@@ -205,6 +206,7 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
                 args, config, conn, chart, signals_path,
                 iteration=iteration,
                 candidate_console_state=candidate_console_state,
+                notified_keys=notified_keys,
             )
             if exit_code != 0:
                 return exit_code
@@ -221,7 +223,8 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
 
 def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                conn, chart, signals_path: Path, iteration: int = 1,
-               candidate_console_state: dict[str, str] | None = None) -> int:
+               candidate_console_state: dict[str, str] | None = None,
+               notified_keys: dict[str, set] | None = None) -> int:
     from xauusd_trading import mt5_equity
     from xauusd_trading import (
         Mt5Executor, SignalRegistry, signal_to_magic,
@@ -230,6 +233,8 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
 
     if candidate_console_state is None:
         candidate_console_state = {}
+    if notified_keys is None:
+        notified_keys = {"detected": set(), "skipped": set()}
 
     notifier = _make_notifier(args)
     forensic = _make_forensic(args)
@@ -341,16 +346,41 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                 f"(now {replay_end:%H:%M}). Skipped."
             )
             _auto_record_candidate_action(log, candidate_console_state, signal.signal_key, status)
+            if signal.signal_key not in notified_keys["skipped"]:
+                notifier.signal_skipped(signal_key=signal.signal_key, side=signal.side, reason=status)
+                notified_keys["skipped"].add(signal.signal_key)
             continue
 
         if rec.new_signal.action == "SKIP_INVALIDATED":
             status = _auto_skip_invalidated_status_line(signal.signal_key, rec)
             _auto_record_candidate_action(log, candidate_console_state, signal.signal_key, status)
+            if signal.signal_key not in notified_keys["skipped"]:
+                notifier.signal_skipped(signal_key=signal.signal_key, side=signal.side, reason=status)
+                notified_keys["skipped"].add(signal.signal_key)
             continue
 
         if _is_partial_placement(rec):
             status = _auto_partial_placement_status_line(signal.signal_key, rec)
             _auto_record_candidate_action(log, candidate_console_state, signal.signal_key, status)
+
+        if signal.signal_key not in notified_keys["detected"]:
+            entry_type = "STOP" if float(getattr(config, "trailing_open_distance", 0.0) or 0.0) > 0 else "LIMIT"
+            entries = [{
+                "entry_index": o.entry_index, "entry_type": entry_type,
+                "entry_price": o.entry_price, "lot": o.lot, "sl": o.initial_sl,
+                "tp1": signal.tp1, "tp2": signal.tp2, "tp3": signal.tp3,
+            } for o in rec.new_signal.orders]
+            notifier.signal_detected(
+                signal_key=signal.signal_key, side=signal.side, entries=entries,
+                activation_at=getattr(rec.new_signal, "pending_activates_at", None),
+                expiry_at=getattr(rec.new_signal, "pending_expires_at", None),
+                trailing={
+                    "trailing_open_distance": getattr(config, "trailing_open_distance", 0.0),
+                    "trailing_close_distance": getattr(config, "trailing_close_distance", 0.0),
+                    "trend_runner_enabled": getattr(config, "trend_runner_enabled", False),
+                },
+            )
+            notified_keys["detected"].add(signal.signal_key)
 
         plog = executor.place_signal(signal, rec.new_signal)
         if (
