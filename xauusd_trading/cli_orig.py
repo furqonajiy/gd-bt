@@ -1379,6 +1379,29 @@ def _add_strategy_overrides(p: argparse.ArgumentParser) -> None:
     p.add_argument("--entry-sl-gap", type=float, default=DEFAULT_CONFIG.entry_sl_gap,
                    help="Dollars between deepest entry and signal SL (range_to_sl only).")
 
+    # Research toggles. Omitted flags keep the DD40 defaults (all disabled), so
+    # these are set explicitly per run instead of via XAUUSD_* environment vars.
+    g = p.add_argument_group("Research toggles (default OFF; explicit per run)")
+    g.add_argument("--trailing-open-distance", type=float,
+                   default=DEFAULT_CONFIG.trailing_open_distance,
+                   help="Virtual trailing-open entry distance. 0 disables (default).")
+    g.add_argument("--trailing-close-distance", type=float,
+                   default=DEFAULT_CONFIG.trailing_close_distance,
+                   help="Protective trailing-stop distance. 0 disables (default).")
+    g.add_argument("--trend-runner", action="store_true",
+                   help="Hold TP3 winners while EMA trend agrees, with an ATR trailing stop.")
+    g.add_argument("--trend-runner-ema-fast", type=int,
+                   default=DEFAULT_CONFIG.trend_runner_ema_fast)
+    g.add_argument("--trend-runner-ema-slow", type=int,
+                   default=DEFAULT_CONFIG.trend_runner_ema_slow)
+    g.add_argument("--trend-runner-atr-period", type=int,
+                   default=DEFAULT_CONFIG.trend_runner_atr_period)
+    g.add_argument("--trend-runner-atr-multiplier", type=float,
+                   default=DEFAULT_CONFIG.trend_runner_atr_multiplier)
+    g.add_argument("--trend-runner-no-override-max-hold", action="store_true",
+                   help="Keep max-hold time-exit even for an active runner "
+                        "(default: an active runner overrides max-hold).")
+
 
 def _config_from_args(args: argparse.Namespace) -> StrategyConfig:
     return StrategyConfig(
@@ -1387,6 +1410,22 @@ def _config_from_args(args: argparse.Namespace) -> StrategyConfig:
         entry_count=getattr(args, "entries", DEFAULT_CONFIG.entry_count),
         entry_ladder=getattr(args, "entry_ladder", DEFAULT_CONFIG.entry_ladder),
         entry_sl_gap=getattr(args, "entry_sl_gap", DEFAULT_CONFIG.entry_sl_gap),
+        trailing_open_distance=getattr(args, "trailing_open_distance",
+                                       DEFAULT_CONFIG.trailing_open_distance),
+        trailing_close_distance=getattr(args, "trailing_close_distance",
+                                        DEFAULT_CONFIG.trailing_close_distance),
+        trend_runner_enabled=getattr(args, "trend_runner",
+                                     DEFAULT_CONFIG.trend_runner_enabled),
+        trend_runner_ema_fast=getattr(args, "trend_runner_ema_fast",
+                                      DEFAULT_CONFIG.trend_runner_ema_fast),
+        trend_runner_ema_slow=getattr(args, "trend_runner_ema_slow",
+                                      DEFAULT_CONFIG.trend_runner_ema_slow),
+        trend_runner_atr_period=getattr(args, "trend_runner_atr_period",
+                                        DEFAULT_CONFIG.trend_runner_atr_period),
+        trend_runner_atr_multiplier=getattr(args, "trend_runner_atr_multiplier",
+                                            DEFAULT_CONFIG.trend_runner_atr_multiplier),
+        trend_runner_override_max_hold=not getattr(
+            args, "trend_runner_no_override_max_hold", False),
     )
 
 
