@@ -103,11 +103,22 @@ class _FakeForensic:
         pass
 
 
+class _NoopNotifier:
+    """Tolerates any emit_* call; these tests assert console output, not
+    notifier payloads (those are covered in test_notification_emits)."""
+    path = None
+
+    def __getattr__(self, name):
+        def _noop(*args, **kwargs):
+            return None
+        return _noop
+
+
 @pytest.fixture(autouse=True)
 def patch_auto_dependencies(monkeypatch):
     _FakeRegistry.entries = []
     _FakeExecutor.place_log = None
-    monkeypatch.setattr(cli, "_make_notifier", lambda args: SimpleNamespace(path=None))
+    monkeypatch.setattr(cli, "_make_notifier", lambda args: _NoopNotifier())
     monkeypatch.setattr(cli, "_make_forensic", lambda args: _FakeForensic())
     monkeypatch.setattr(cli, "_handle_closures", lambda *args, **kwargs: None)
     monkeypatch.setattr("xauusd_trading.mt5_equity", lambda conn: 1000.0)

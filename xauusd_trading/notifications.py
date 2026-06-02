@@ -91,6 +91,10 @@ class Notifier:
             expiry_at=expiry_at, trailing=trailing or {},
         )
 
+    def signal_skipped(self, *, signal_key: str, side: str, reason: str) -> None:
+        text = f"⚪ Signal skipped {signal_key} ({side})\n  {reason}"
+        self._emit("signal_skipped", signal_key, text=text, side=side, reason=reason)
+
     def order_placed(self, *, signal_key: str, side: str, order_kind: str,
                      placed: list[dict[str, Any]]) -> None:
         if not placed:
@@ -169,6 +173,25 @@ class Notifier:
         )
         self._emit("entry_filled", signal_key, text=text, side=side,
                    entry_index=entry_index, fill_price=fill_price, source=source, ticket=ticket)
+
+    def position_closed(self, *, signal_key: str, side: str, entry_index: Any,
+                        ticket: int, close_price: float, profit: float,
+                        reason: str, close_time: datetime | None = None) -> None:
+        """One per entry leg as its MT5 position actually closes at the broker
+        (TP/SL/manual), with the broker's real close price and realized P&L.
+        Distinct from `signal_closed`, which summarizes the whole signal once
+        its entire footprint is gone.
+        """
+        emoji = "🎯" if reason == "TP" else ("🛑" if reason in ("SL", "SO") else "✅")
+        when = f" at {_fmt_time_gmt7(close_time)}" if close_time is not None else ""
+        text = (
+            f"{emoji} Position closed {signal_key} ({side})\n"
+            f"  #{entry_index} ticket={ticket} {reason} @ {close_price:g} "
+            f"P&L ${profit:+.2f}{when}"
+        )
+        self._emit("position_closed", signal_key, text=text, side=side,
+                   entry_index=entry_index, ticket=ticket,
+                   close_price=close_price, profit=profit, reason=reason)
 
     # ---- TP1 SL-lock -------------------------------------------------
 
