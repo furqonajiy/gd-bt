@@ -209,6 +209,7 @@ class Mt5Executor(_BaseMt5Executor):
         digits = sym.digits
         place_failures: list[tuple[int, float, str]] = []
         placed_tickets: list[int] = []
+        placed_details: list[dict] = []
 
         for o in plan.orders:
             lot = rounded_lots[o.entry_index]
@@ -243,12 +244,23 @@ class Mt5Executor(_BaseMt5Executor):
 
             ticket = int(res.order)
             placed_tickets.append(ticket)
+            placed_details.append({
+                "entry_index": o.entry_index, "ticket": ticket,
+                "price": request["price"], "lot": lot,
+                "sl": request["sl"], "tp": request["tp"],
+            })
             log.placed += 1
             log.placed_entry_indices.append(o.entry_index)
             log.actions.append(
                 f"  {entry_key}: placed ticket={ticket} comment={comment} "
                 f"@ {request['price']:g} lot={lot} "
                 f"SL={request['sl']:g} TP={request['tp']:g}"
+            )
+
+        if self.notifier is not None and not place_failures and placed_details:
+            self.notifier.order_placed(
+                signal_key=signal.signal_key, side=signal.side,
+                order_kind=f"{signal.side} LIMIT", placed=placed_details,
             )
 
         if place_failures:
@@ -381,6 +393,19 @@ class Mt5Executor(_BaseMt5Executor):
             entry.fill_time = fill_time_chart
             entry.entry_price = actual_price
             entry.lot = actual_lot
+            if before_status in ("PENDING", "NO_FILL") and self.notifier is not None:
+                if float(getattr(config, "trailing_open_distance", 0.0) or 0.0) > 0:
+                    self.notifier.trailing_open_filled(
+                        signal_key=signal_key, side=engine_pos.signal.side,
+                        entry_index=idx, ticket=int(mt5_pos.ticket),
+                        fill_price=actual_price,
+                    )
+                else:
+                    self.notifier.entry_filled(
+                        signal_key=signal_key, side=engine_pos.signal.side,
+                        entry_index=idx, fill_price=actual_price,
+                        source="MT5 reconcile", ticket=int(mt5_pos.ticket),
+                    )
             if earliest_patched is None or fill_time_chart < earliest_patched:
                 earliest_patched = fill_time_chart
 
@@ -401,18 +426,20 @@ class Mt5Executor(_BaseMt5Executor):
                        message_prefix: str) -> ExecutionLog:
         log = ExecutionLog()
         cancel_failures: list[tuple[int, str]] = []
+        cancelled: list[dict] = []
         for order in self.find_orders(magic):
             if self._cancel_ticket(int(order.ticket), signal_key, action_name):
                 log.cancelled += 1
                 log.actions.append(f"  {message_prefix} #{order.ticket} ({signal_key})")
+                cancelled.append({"ticket": int(order.ticket), "reason": message_prefix})
             else:
                 log.actions.append(f"  FAILED to cancel pending #{order.ticket}")
-                cancel_failures.append((order.ticket, "order_remove failed"))
+                cancel_failures.append((int(order.ticket), "order_remove failed"))
+        side = ""  # cancels are signal-level; side is informational only here
+        if self.notifier is not None and cancelled:
+            self.notifier.pending_cancelled(signal_key=signal_key, side=side, cancelled=cancelled)
         if self.notifier is not None and cancel_failures:
-            # cancel_failed exists on the notifier used by the base executor.
-            # It is safe to reuse for all live pending-cancel reasons.
-            # The caller's action log carries the exact cancel reason.
-            pass
+            self.notifier.cancel_failed(signal_key=signal_key, side=side, failures=cancel_failures)
         return log
 
     def _cancel_pending_expired_by_wall_clock(self, engine_pos: Position) -> ExecutionLog:
