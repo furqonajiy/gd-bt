@@ -187,6 +187,39 @@ def test_entry_filled_fires_once_on_pending_to_open(monkeypatch):
     assert len(spy.of("entry_filled")) == 1
 
 
+def test_signal_detected_writes_compact_telegram_text(tmp_path):
+    path = tmp_path / "n.jsonl"
+    Notifier(path).signal_detected(
+        signal_key="2026-06-02#06",
+        side="SELL",
+        activation_at=datetime(2026, 6, 2, 17, 35),
+        expiry_at=datetime(2026, 6, 3, 4, 5),
+        entries=[
+            {"entry_index": 0, "entry_type": "STOP", "entry_price": 4511.0,
+             "lot": 0.03, "sl": 4523.07, "tp1": 4503, "tp2": 4493, "tp3": 4473},
+            {"entry_index": 1, "entry_type": "STOP", "entry_price": 4514.25,
+             "lot": 0.03, "sl": 4526.32, "tp1": 4503, "tp2": 4493, "tp3": 4473},
+            {"entry_index": 2, "entry_type": "STOP", "entry_price": 4517.5,
+             "lot": 0.03, "sl": 4529.57, "tp1": 4503, "tp2": 4493, "tp3": 4473},
+        ],
+        trailing={"trailing_open_distance": 2.0, "trailing_close_distance": 2.0},
+    )
+    event = json.loads(path.read_text(encoding="utf-8").strip())
+
+    assert event["kind"] == "signal_detected"
+    assert event["text"] == (
+        "🟢 Accepted 2026-06-02#06 SELL\n"
+        "⏱ Active 2026-06-02 21:35 → 2026-06-03 08:05 GMT+7\n"
+        "🎯 TP 4503 / 4493 / 4473\n"
+        "📍 Entries\n"
+        "#0 STOP 4511 · 0.03 lot · SL 4523.07\n"
+        "#1 STOP 4514.25 · 0.03 lot · SL 4526.32\n"
+        "#2 STOP 4517.5 · 0.03 lot · SL 4529.57\n"
+        "↕ Trail open 2 / close 2"
+    )
+    assert event["details"]["entries"][0]["entry_price"] == 4511.0
+
+
 def test_signal_skipped_writes_expected_event(tmp_path):
     path = tmp_path / "n.jsonl"
     Notifier(path).signal_skipped(signal_key="2026-05-05#01", side="SELL",
@@ -195,5 +228,28 @@ def test_signal_skipped_writes_expected_event(tmp_path):
     event = json.loads(line)
     assert event["kind"] == "signal_skipped"
     assert event["signal_key"] == "2026-05-05#01"
-    assert "skipped" in event["text"].lower()
-    assert "pending window already closed" in event["text"]
+    assert event["text"] == (
+        "⚪ Skipped 2026-05-05#01 SELL\n"
+        "Reason: pending window already closed"
+    )
+
+
+def test_signal_skipped_simplifies_backtest_replay_reason(tmp_path):
+    path = tmp_path / "n.jsonl"
+    Notifier(path).signal_skipped(
+        signal_key="2026-06-02#07",
+        side="BUY",
+        reason=(
+            "Signal 2026-06-02#07: every entry has already played out in backtest replay "
+            "-- no orders placed (3 entries resolved). Backtest realized so far: $-30.15."
+        ),
+    )
+    event = json.loads(path.read_text(encoding="utf-8").strip())
+
+    assert event["kind"] == "signal_skipped"
+    assert event["text"] == (
+        "⚪ Skipped 2026-06-02#07 BUY\n"
+        "Replay already resolved all 3 entries; no live orders.\n"
+        "Realized so far: $-30.15"
+    )
+    assert "backtest replay -- no orders placed" in event["details"]["reason"]
