@@ -10,6 +10,7 @@ Disabling: pass path=None (the Notifier becomes a no-op).
 """
 from __future__ import annotations
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -29,6 +30,17 @@ _STATUS_EMOJI = {
     "MIXED":     "📊",
 }
 
+_REPLAY_RESOLVED_RE = re.compile(
+    r"^Signal (?P<signal_key>\S+): every entry has already played out in backtest replay "
+    r"-- no orders placed \((?P<count>\d+) entr(?:y|ies) resolved\)\. "
+    r"Backtest realized so far: \$(?P<pnl>[+-]?\d+(?:\.\d+)?)\.$"
+)
+
+_TRAILING_LABELS = {
+    "trailing_open_distance": "open",
+    "trailing_close_distance": "close",
+}
+
 
 def _utc_now_naive() -> datetime:
     """Return UTC wall-clock time as naive datetime for JSONL compatibility."""
@@ -39,6 +51,80 @@ def _fmt_time_gmt7(dt: datetime | None) -> str:
     if dt is None:
         return "n/a"
     return f"{dt + timedelta(hours=4):%Y-%m-%d %H:%M} GMT+7"
+
+
+def _fmt_time_gmt7_compact(dt: datetime | None) -> str:
+    if dt is None:
+        return "n/a"
+    return f"{dt + timedelta(hours=4):%Y-%m-%d %H:%M}"
+
+
+def _fmt_active_window_gmt7(activation_at: datetime | None, expiry_at: datetime | None) -> str:
+    if activation_at is None and expiry_at is None:
+        return "n/a"
+    return f"{_fmt_time_gmt7_compact(activation_at)} → {_fmt_time_gmt7_compact(expiry_at)} GMT+7"
+
+
+def _fmt_number(value: Any) -> str:
+    return f"{float(value):g}"
+
+
+def _shared_tp_line(entries: list[dict[str, Any]]) -> str | None:
+    if not entries:
+        return None
+    first = tuple(_fmt_number(entries[0].get(k)) for k in ("tp1", "tp2", "tp3"))
+    for entry in entries[1:]:
+        current = tuple(_fmt_number(entry.get(k)) for k in ("tp1", "tp2", "tp3"))
+        if current != first:
+            return None
+    return "🎯 TP " + " / ".join(first)
+
+
+def _fmt_entry_line(entry: dict[str, Any], *, include_tp: bool) -> str:
+    parts = [
+        f"#{entry.get('entry_index')}",
+        str(entry.get("entry_type", "LIMIT")),
+        _fmt_number(entry.get("entry_price")),
+        "·",
+        f"{_fmt_number(entry.get('lot'))} lot",
+        "·",
+        f"SL {_fmt_number(entry.get('sl'))}",
+    ]
+    if include_tp:
+        parts.extend([
+            "·",
+            "TP " + "/".join(_fmt_number(entry.get(k)) for k in ("tp1", "tp2", "tp3")),
+        ])
+    return " ".join(parts)
+
+
+def _fmt_trailing_line(trailing: dict[str, Any] | None) -> str | None:
+    if not trailing:
+        return None
+    enabled = [(k, v) for k, v in trailing.items() if v not in (None, False, 0, 0.0, "")]
+    if not enabled:
+        return None
+    ordered: list[tuple[str, Any]] = []
+    for key in _TRAILING_LABELS:
+        for candidate_key, value in enabled:
+            if candidate_key == key:
+                ordered.append((candidate_key, value))
+    ordered.extend((k, v) for k, v in enabled if k not in _TRAILING_LABELS)
+    chunks = [f"{_TRAILING_LABELS.get(k, k)} {_fmt_number(v)}" for k, v in ordered]
+    return "↕ Trail " + " / ".join(chunks)
+
+
+def _fmt_replay_resolved_reason(reason: str) -> str | None:
+    match = _REPLAY_RESOLVED_RE.match(reason.strip())
+    if not match:
+        return None
+    count = int(match.group("count"))
+    pnl = float(match.group("pnl"))
+    if count == 1:
+        replay_line = "Replay already resolved 1 entry; no live orders."
+    else:
+        replay_line = f"Replay already resolved all {count} entries; no live orders."
+    return f"{replay_line}\nRealized so far: ${pnl:+.2f}"
 
 
 class Notifier:
@@ -72,19 +158,19 @@ class Notifier:
     def signal_detected(self, *, signal_key: str, side: str,
                         entries: list[dict[str, Any]], activation_at: datetime | None,
                         expiry_at: datetime | None, trailing: dict[str, Any] | None = None) -> None:
-        parts = [f"🟢 Signal accepted {signal_key} ({side})"]
-        parts.append(f"  Active: {_fmt_time_gmt7(activation_at)} | Expiry: {_fmt_time_gmt7(expiry_at)}")
-        for e in entries:
-            parts.append(
-                f"  #{e.get('entry_index')} {e.get('entry_type', 'LIMIT')} "
-                f"entry={float(e.get('entry_price')):g} lot={float(e.get('lot')):g} "
-                f"SL={float(e.get('sl')):g} TP1={float(e.get('tp1')):g} "
-                f"TP2={float(e.get('tp2')):g} TP3={float(e.get('tp3')):g}"
-            )
-        if trailing:
-            enabled = {k: v for k, v in trailing.items() if v not in (None, False, 0, 0.0, "")}
-            if enabled:
-                parts.append("  Trailing: " + ", ".join(f"{k}={v}" for k, v in enabled.items()))
+        shared_tp = _shared_tp_line(entries)
+        parts = [
+            f"🟢 Accepted {signal_key} {side}",
+            f"⏱ Active {_fmt_active_window_gmt7(activation_at, expiry_at)}",
+        ]
+        if shared_tp:
+            parts.append(shared_tp)
+        if entries:
+            parts.append("📍 Entries")
+            parts.extend(_fmt_entry_line(e, include_tp=shared_tp is None) for e in entries)
+        trailing_line = _fmt_trailing_line(trailing)
+        if trailing_line:
+            parts.append(trailing_line)
         self._emit(
             "signal_detected", signal_key, text="\n".join(parts),
             side=side, entries=entries, activation_at=activation_at,
@@ -92,7 +178,8 @@ class Notifier:
         )
 
     def signal_skipped(self, *, signal_key: str, side: str, reason: str) -> None:
-        text = f"⚪ Signal skipped {signal_key} ({side})\n  {reason}"
+        readable_reason = _fmt_replay_resolved_reason(reason) or f"Reason: {reason}"
+        text = f"⚪ Skipped {signal_key} {side}\n{readable_reason}"
         self._emit("signal_skipped", signal_key, text=text, side=side, reason=reason)
 
     def order_placed(self, *, signal_key: str, side: str, order_kind: str,
