@@ -21,8 +21,6 @@ from xauusd_trading import parse_signals_file as _default_parse_signals_file
 from xauusd_trading import decide as _default_decide
 
 
-AUTO_HEARTBEAT_SECONDS = 300.0
-
 # Module-level aliases make pytest monkeypatching straightforward while defaulting
 # to the exact objects used by the original CLI.
 parse_signals_file = _default_parse_signals_file
@@ -122,6 +120,16 @@ def _print_auto_startup_banner(args: argparse.Namespace,
     print()
 
 
+def _print_auto_idle_heartbeat(iteration: int, replay_end: datetime,
+                               tracked_count: int, candidate_count: int) -> None:
+    print(
+        f"[auto ok #{iteration} -- "
+        f"{datetime.now():%Y-%m-%d %H:%M:%S} local -- "
+        f"chart {replay_end:%Y-%m-%d %H:%M} GMT+3 -- "
+        f"tracked={tracked_count} candidates={candidate_count}]"
+    )
+
+
 def cmd_auto(args: argparse.Namespace) -> int:
     """Continuous live trading with quiet, event-only console output."""
     config = _config_from_args(args)
@@ -193,7 +201,6 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
     interval = float(args.watch_interval)
     iteration = 0
     candidate_console_state: dict[str, str] = {}
-    last_heartbeat = time.monotonic()
     try:
         while True:
             iteration += 1
@@ -204,10 +211,6 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
             )
             if exit_code != 0:
                 return exit_code
-            now_monotonic = time.monotonic()
-            if now_monotonic - last_heartbeat >= AUTO_HEARTBEAT_SECONDS:
-                print(f"[auto heartbeat -- {datetime.now():%Y-%m-%d %H:%M:%S} local]")
-                last_heartbeat = now_monotonic
             time.sleep(interval)
     except KeyboardInterrupt:
         print()
@@ -382,6 +385,8 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
 
     if _execution_log_has_output(log):
         print(render_execution_log(log))
+    else:
+        _print_auto_idle_heartbeat(iteration, replay_end, len(tracked), len(candidates))
 
     forensic.end_cycle(placed=log.placed, modified=log.modified,
                        cancelled=log.cancelled, closed=log.closed)
