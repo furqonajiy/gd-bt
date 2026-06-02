@@ -28,7 +28,7 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -312,7 +312,7 @@ class Mt5Executor:
         epoch ints but interprets them as broker-local-time-treated-as-UTC,
         so getting chart-tz back requires shifting by (3 - server_offset).
         """
-        broker_naive = datetime.utcfromtimestamp(int(epoch))
+        broker_naive = datetime.fromtimestamp(int(epoch), timezone.utc).replace(tzinfo=None)
         return broker_naive + timedelta(hours=3 - self.server_offset_hours)
 
     def reconcile_with_mt5(
