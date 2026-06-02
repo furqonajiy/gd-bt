@@ -164,14 +164,12 @@ def _run_auto_once(tmp_path: Path, monkeypatch, *, signals, place_log=None, conf
     )
 
 
-def test_auto_idle_cycle_prints_compact_ok_heartbeat(tmp_path, monkeypatch, capsys):
+def test_auto_idle_cycle_is_quiet(tmp_path, monkeypatch, capsys):
     exit_code = _run_auto_once(tmp_path, monkeypatch, signals=[])
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert captured.out.count("[auto ok #1") == 1
-    assert "chart 2026-06-02 06:00 GMT+3" in captured.out
-    assert "tracked=0 candidates=0" in captured.out
+    assert captured.out == ""
     assert "XAUUSD AUTO MODE" not in captured.out
     assert "Tracked signals" not in captured.out
     assert "TOTAL FLOATING" not in captured.out
@@ -187,7 +185,7 @@ def test_auto_placement_prints_single_event_line(tmp_path, monkeypatch, capsys):
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.out.count("BUY LIMIT placed for test") == 1
-    assert "[auto ok" not in captured.out
+    assert "[auto heartbeat" not in captured.out
     assert "recorded executed_at" not in captured.out
     assert "XAUUSD AUTO MODE" not in captured.out
     assert "TOTAL FLOATING" not in captured.out
@@ -207,6 +205,35 @@ def test_auto_waiting_candidate_status_is_deduped_across_cycles(tmp_path, monkey
     assert first == 0
     assert second == 0
     assert captured.out.count(waiting) == 1
-    assert captured.out.count("[auto ok") == 1
+    assert "[auto heartbeat" not in captured.out
     assert "XAUUSD AUTO MODE" not in captured.out
     assert "TOTAL FLOATING" not in captured.out
+
+
+def test_auto_watch_prints_hourly_heartbeat(tmp_path, monkeypatch, capsys):
+    signals_path = tmp_path / "signals.txt"
+    signals_path.write_text("placeholder", encoding="utf-8")
+    calls = {"count": 0}
+    ticks = iter([0.0, 10.0, 3601.0])
+
+    def fake_auto_pass(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise KeyboardInterrupt
+        return 0
+
+    monkeypatch.setattr(cli, "_auto_pass", fake_auto_pass)
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(cli.time, "sleep", lambda interval: None)
+
+    exit_code = cli._run_auto_watch(
+        SimpleNamespace(watch_interval=5.0),
+        DEFAULT_CONFIG,
+        _FakeConn(),
+        _FakeChart(datetime(2026, 6, 2, 6, 0)),
+        signals_path,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out.count("[auto heartbeat #1") == 1
