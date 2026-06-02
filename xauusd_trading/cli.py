@@ -39,6 +39,8 @@ _replay_tracked_signal = _orig._replay_tracked_signal
 _is_partial_placement = _orig._is_partial_placement
 _chart_now = _orig._chart_now
 
+from .closure_report import report_entry_closures
+
 
 def _execution_log_has_output(log: Any) -> bool:
     return bool(
@@ -407,6 +409,11 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     log.warnings.extend(executor.warn_on_unknown(known_magics))
 
     alive = executor.all_alive_magics()
+    report_entry_closures(
+        executor, notifier, tracked,
+        ledger_path=registry_path.with_name("closed_deals.json"),
+        server_offset_hours=args.mt5_server_offset,
+    )
     _handle_closures(notifier, forensic, tracked, alive)
     removed = registry.prune(alive)
     if removed:
