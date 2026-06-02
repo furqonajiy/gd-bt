@@ -1,0 +1,69 @@
+$env:XAUUSD_TRAILING_OPEN_DISTANCE="2"
+$env:XAUUSD_TRAILING_CLOSE_DISTANCE="2"
+$env:XAUUSD_TREND_RUNNER_ENABLED="false"
+
+python tools/backtest_explicit.py `
+  --signals generated/live_provider_high_growth.txt `
+  --charts data/XAUUSD_M1_*.csv `
+  --output-dir reports/sweep_restart_best_5000_risk_002607 `
+  --max-drawdown-limit-pct 40 `
+  --progress-interval-seconds 30 `
+  --initial-capital 5000 `
+  --sizing-mode risk `
+  --lot 0.5 `
+  --risk 0.02607 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3 `
+  --entries 3 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 1 `
+  --activation-delay 3 `
+  --pending-expiry 630 `
+  --max-hold 90 `
+  --sl-multiplier 1.61 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 false `
+  --tp1-lock-delay-minutes 0 `
+  --tp2-lock-delay-minutes 0 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2
+
+python tools/auto_explicit.py `
+  --signals generated/live_provider_high_growth.txt `
+  --positions-json positions.json `
+  --watch-interval 5 `
+  --no-clear `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --initial-capital 5000 `
+  --sizing-mode risk `
+  --lot 0.5 `
+  --risk 0.02607 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3 `
+  --entries 3 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 1 `
+  --activation-delay 3 `
+  --pending-expiry 630 `
+  --max-hold 90 `
+  --sl-multiplier 1.61 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 false `
+  --tp1-lock-delay-minutes 0 `
+  --tp2-lock-delay-minutes 0 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2
