@@ -31,12 +31,12 @@ In MT5: **Tools → Options → Expert Advisors**
 
 Symbols vary by broker:
 
-| Broker style                 | Likely symbol                |
-|------------------------------|------------------------------|
-| Standard                     | `XAUUSD`                     |
-| Pepperstone / cTrader-style  | `XAUUSD.r`                   |
-| FXCM / IC Markets            | `GOLD` or `XAUUSD`           |
-| ECN suffix                   | `XAUUSDm`, `XAUUSD-ECN`, etc.|
+| Broker style                | Likely symbol                 |
+|-----------------------------|-------------------------------|
+| Standard                    | `XAUUSD`                      |
+| Pepperstone / cTrader-style | `XAUUSD.r`                    |
+| FXCM / IC Markets           | `GOLD` or `XAUUSD`            |
+| ECN suffix                  | `XAUUSDm`, `XAUUSD-ECN`, etc. |
 
 Check **Market Watch** in MT5 — right-click → Show All — and use the
 exact string you see there.

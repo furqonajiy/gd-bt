@@ -182,12 +182,12 @@ def prepare_filtered_signals(raw_signals_path: Path, output_dir: Path, preset: s
 # Corrected concurrent backtest orchestration
 # ---------------------------------------------------------------------------
 def run_concurrent_backtest(
-    signals: list,
-    chart: CsvChartSource,
-    config: StrategyConfig,
-    *,
-    exclude_structural_anomalies: bool = False,
-    label: str = "full",
+        signals: list,
+        chart: CsvChartSource,
+        config: StrategyConfig,
+        *,
+        exclude_structural_anomalies: bool = False,
+        label: str = "full",
 ) -> dict[str, Any]:
     chart_df = chart.dataframe
     chart_start = chart.first_time()
@@ -532,14 +532,14 @@ def parity_classification(config: dict[str, Any], filter_preset: str) -> str:
 
 
 def evaluate_candidate(
-    candidate: dict[str, Any],
-    *,
-    filter_preset: str,
-    signals: list,
-    chart: CsvChartSource,
-    train_signals: list,
-    validate_signals: list,
-    args: argparse.Namespace,
+        candidate: dict[str, Any],
+        *,
+        filter_preset: str,
+        signals: list,
+        chart: CsvChartSource,
+        train_signals: list,
+        validate_signals: list,
+        args: argparse.Namespace,
 ) -> dict[str, Any]:
     cfg = config_from_dict(candidate)
     cfg_no_bonus = config_from_dict(candidate, bonus=0.0)
@@ -563,11 +563,11 @@ def evaluate_candidate(
     passes = bool(passes_dd and passes_no_bonus and passes_oos)
 
     score = (
-        float(full_no_bonus.get("net_profit") or 0.0) * 0.55
-        + float(full.get("net_profit") or 0.0) * 0.25
-        + validate_no_bonus_profit * 0.20
-        - max(0.0, dd_abs - 30.0) * 50.0
-        - max(0.0, concurrent_dd_abs - 45.0) * 25.0
+            float(full_no_bonus.get("net_profit") or 0.0) * 0.55
+            + float(full.get("net_profit") or 0.0) * 0.25
+            + validate_no_bonus_profit * 0.20
+            - max(0.0, dd_abs - 30.0) * 50.0
+            - max(0.0, concurrent_dd_abs - 45.0) * 25.0
     )
 
     result = {
@@ -686,25 +686,24 @@ def live_command(row: dict[str, Any]) -> str:
     cfg = row.get("config") or json.loads(row.get("config_json", "{}"))
     preset = row.get("filter_preset", "high_growth_hour_side")
     signals = f"generated/live_provider_{preset}.txt"
-    env_parts = []
-    if float(cfg.get("trailing_open_distance", 0.0) or 0.0) > 0:
-        env_parts.append(f"XAUUSD_TRAILING_OPEN_DISTANCE={cfg['trailing_open_distance']}")
-    if float(cfg.get("trailing_close_distance", 0.0) or 0.0) > 0:
-        env_parts.append(f"XAUUSD_TRAILING_CLOSE_DISTANCE={cfg['trailing_close_distance']}")
+    # auto_explicit.py reads no environment variables and requires the trailing
+    # distances as explicit flags (0.0 disables). The old XAUUSD_* env prefix is
+    # dead: config.py ignores it, so emitting it produced a command that either
+    # fails argparse (flags now required) or silently runs trailing-OFF live.
+    trailing_open = float(cfg.get("trailing_open_distance", 0.0) or 0.0)
+    trailing_close = float(cfg.get("trailing_close_distance", 0.0) or 0.0)
+    warning = ""
     if bool(cfg.get("trend_runner_enabled", False)):
-        env_parts.extend([
-            "XAUUSD_TREND_RUNNER_ENABLED=true",
-            f"XAUUSD_TREND_RUNNER_EMA_FAST={cfg.get('trend_runner_ema_fast', 21)}",
-            f"XAUUSD_TREND_RUNNER_EMA_SLOW={cfg.get('trend_runner_ema_slow', 55)}",
-            f"XAUUSD_TREND_RUNNER_ATR_PERIOD={cfg.get('trend_runner_atr_period', 14)}",
-            f"XAUUSD_TREND_RUNNER_ATR_MULTIPLIER={cfg.get('trend_runner_atr_multiplier', 3.0)}",
-            f"XAUUSD_TREND_RUNNER_OVERRIDE_MAX_HOLD={str(cfg.get('trend_runner_override_max_hold', True)).lower()}",
-        ])
-    env_prefix = " ".join(env_parts)
-    if env_prefix:
-        env_prefix += " \\\n"
+        # auto_explicit.py exposes no trend-runner flags; the command below runs
+        # WITHOUT the runner. Deploy trend-runner configs through `cli auto`.
+        warning = (
+            "# WARNING: trend-runner is enabled in this config, but tools/auto_explicit.py\n"
+            "# has no trend-runner flags. The command below runs WITHOUT the runner.\n"
+            "# Deploy via `python -m xauusd_trading.cli auto ... --trend-runner` instead\n"
+            "# (with --trend-runner-ema-fast/-ema-slow/-atr-period/-atr-multiplier).\n"
+        )
     return (
-        f"{env_prefix}python tools/auto_explicit.py \\\n"
+        f"{warning}python tools/auto_explicit.py \\\n"
         f"  --signals {signals} \\\n"
         f"  --positions-json positions.json \\\n"
         f"  --watch-interval 5 \\\n"
@@ -735,7 +734,9 @@ def live_command(row: dict[str, Any]) -> str:
         f"  --tp1-lock-fraction {cfg['tp1_lock_fraction']} \\\n"
         f"  --tp2-lock-target {cfg['tp2_lock_target']} \\\n"
         f"  --runner-after-tp3 {_bool_text(cfg.get('runner_after_tp3', False))} \\\n"
-        f"  --tp3-lock-target {cfg.get('tp3_lock_target', 'TP2')}"
+        f"  --tp3-lock-target {cfg.get('tp3_lock_target', 'TP2')} \\\n"
+        f"  --trailing-open-distance {trailing_open} \\\n"
+        f"  --trailing-close-distance {trailing_close}"
     )
 
 
