@@ -213,6 +213,14 @@ from .strategy.backtest import (
     write_backtest_outputs,
 )
 
+# 8b. strategy.self_signals
+from .strategy.self_signals import (
+    GeneratedSignal,
+    RejectionSignalConfig,
+    format_generated_signals,
+    generate_rejection_signals,
+)
+
 # 9. io.mt5_adapter
 from .io.mt5_adapter import (
     Mt5ChartSource,
@@ -259,6 +267,7 @@ __all__ = [
     "EntryStatus", "NewSignalPlan", "PlannedOrder", "PositionStatus", "Recommendation",
     "decide", "format_replay_outcome", "render_report",
     "position_status", "replay_signal", "run_backtest", "write_backtest_outputs",
+    "GeneratedSignal", "RejectionSignalConfig", "format_generated_signals", "generate_rejection_signals",
     "Mt5ChartSource", "Mt5Connection", "archive_m1_by_month", "mt5_equity",
     "mt5_open_positions_summary", "render_archive_summary",
     "DEFAULT_NOTIFICATIONS_PATH", "Notifier", "summarize_closed_position",
