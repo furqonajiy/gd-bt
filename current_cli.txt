@@ -1,30 +1,26 @@
-$env:XAUUSD_TRAILING_OPEN_DISTANCE="2"
-$env:XAUUSD_TRAILING_CLOSE_DISTANCE="2"
-$env:XAUUSD_TREND_RUNNER_ENABLED="false"
-
 python tools/backtest_explicit.py `
   --signals generated/live_provider_high_growth.txt `
   --charts data/XAUUSD_M1_*.csv `
-  --output-dir reports/sweep_restart_best_5000_risk_002607 `
+  --output-dir reports/risk_scale_known_good_1000_risk_0022 `
   --max-drawdown-limit-pct 40 `
   --progress-interval-seconds 30 `
-  --initial-capital 5000 `
+  --initial-capital 1000 `
   --sizing-mode risk `
-  --lot 0.5 `
-  --risk 0.02607 `
+  --lot 0.01 `
+  --risk 0.022 `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
-  --entries 3 `
-  --entry-ladder range_to_sl `
-  --entry-sl-gap 1 `
-  --activation-delay 3 `
+  --entries 1 `
+  --entry-ladder range_uniform `
+  --entry-sl-gap 2 `
+  --activation-delay 0 `
   --pending-expiry 630 `
-  --max-hold 90 `
-  --sl-multiplier 1.61 `
-  --final-target TP3 `
+  --max-hold 15 `
+  --sl-multiplier 0.85 `
+  --final-target TP1 `
   --lock-after-tp1 true `
-  --lock-after-tp2 false `
+  --lock-after-tp2 true `
   --tp1-lock-delay-minutes 0 `
   --tp2-lock-delay-minutes 0 `
   --profit-lock-mode tp_levels `
@@ -32,33 +28,34 @@ python tools/backtest_explicit.py `
   --tp1-lock-fraction 0.5 `
   --tp2-lock-target TP1 `
   --runner-after-tp3 false `
-  --tp3-lock-target TP2
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.25 `
+  --trailing-close-distance 0.25
 
 python tools/auto_explicit.py `
   --signals generated/live_provider_high_growth.txt `
-  --positions-json positions.json `
-  --watch-interval 5 `
-  --no-clear `
+  --positions-json positions_risk0022.json `
+  --watch-interval 15 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
   --mt5-history-bars 5000 `
-  --initial-capital 5000 `
+  --initial-capital 1000 `
   --sizing-mode risk `
-  --lot 0.5 `
-  --risk 0.02607 `
+  --lot 0.01 `
+  --risk 0.022 `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
-  --entries 3 `
-  --entry-ladder range_to_sl `
-  --entry-sl-gap 1 `
-  --activation-delay 3 `
+  --entries 1 `
+  --entry-ladder range_uniform `
+  --entry-sl-gap 2 `
+  --activation-delay 0 `
   --pending-expiry 630 `
-  --max-hold 90 `
-  --sl-multiplier 1.61 `
-  --final-target TP3 `
+  --max-hold 15 `
+  --sl-multiplier 0.85 `
+  --final-target TP1 `
   --lock-after-tp1 true `
-  --lock-after-tp2 false `
+  --lock-after-tp2 true `
   --tp1-lock-delay-minutes 0 `
   --tp2-lock-delay-minutes 0 `
   --profit-lock-mode tp_levels `
@@ -66,4 +63,6 @@ python tools/auto_explicit.py `
   --tp1-lock-fraction 0.5 `
   --tp2-lock-target TP1 `
   --runner-after-tp3 false `
-  --tp3-lock-target TP2
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.25 `
+  --trailing-close-distance 0.25

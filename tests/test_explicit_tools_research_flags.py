@@ -7,7 +7,9 @@ separate field from runner_after_tp3 and stays at its default here.
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 from pathlib import Path
 
 import pytest
@@ -81,10 +83,12 @@ def test_auto_explicit_trailing_flows_into_config():
 
 
 def test_backtest_explicit_trailing_is_required():
-    with pytest.raises(SystemExit):
+    # argparse prints its usage block to stderr before exiting; redirect it so a
+    # passing required-flag assertion does not look like a failure under `-s`.
+    with contextlib.redirect_stderr(io.StringIO()), pytest.raises(SystemExit):
         backtest_explicit.build_parser().parse_args(_backtest_argv())
 
 
 def test_auto_explicit_trailing_is_required():
-    with pytest.raises(SystemExit):
+    with contextlib.redirect_stderr(io.StringIO()), pytest.raises(SystemExit):
         auto_explicit.build_parser().parse_args(_auto_argv())
