@@ -92,3 +92,42 @@ python tools/auto_explicit.py `
   --tp3-lock-target TP2 `
   --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5
+
+=====
+
+conda activate trading
+python -m xauusd_trading.cli fetch --mt5-symbol XAUUSD --mt5-server-offset 3 --mt5-history-bars 5000
+
+# 1) build the full 2024 -> now archive (this is also what you backtest)
+python tools\generate_self_signals.py `
+  --charts data\XAUUSD_M1_*.csv --output generated\self_rejection_archive.txt --start-date 2024-01-01 `
+  --lookback-bars 20 --min-wick 1.0 --min-bar-range 1.5 --wick-body-ratio 1.2 `
+  --zone-buffer 0.25 --zone-size 1.0 --cooldown-minutes 20 --same-zone-cooldown-minutes 120 `
+  --max-spread-points 35 --session-start-hour 7 --session-end-hour 22
+
+# 2) backtest the ARCHIVE (fixed-lot = the edge; rerun with --sizing-mode risk for the DD<=40% line only)
+python tools\backtest_explicit.py `
+  --signals generated\self_rejection_archive.txt --charts data\XAUUSD_M1_*.csv `
+  --output-dir reports\self_rejection_fixed --progress-interval-seconds 30 `
+  --initial-capital 5000 --sizing-mode risk --lot 0.01 --risk 0.022 --minimum-lot 0.01 --lot-step 0.01 `
+  --bonus-per-closed-lot 3 --entries 1 --entry-ladder range_uniform --entry-sl-gap 2 `
+  --activation-delay 0 --pending-expiry 630 --max-hold 15 --sl-multiplier 0.85 --final-target TP1 `
+  --lock-after-tp1 true --lock-after-tp2 true --tp1-lock-delay-minutes 0 --tp2-lock-delay-minutes 0 `
+  --profit-lock-mode tp_levels --bep-trigger-distance 3 --tp1-lock-fraction 0.5 --tp2-lock-target TP1 `
+  --runner-after-tp3 false --tp3-lock-target TP2 --trailing-open-distance 0.5 --trailing-close-distance 0.5 `
+  --max-drawdown-limit-pct 40
+
+# 3) go live — auto extends the SAME archive as it runs (omit --seed-archive-* since step 1 seeded it)
+python tools\auto_self.py `
+  --signals generated\self_rejection_live.txt `
+  --backtest-archive generated\self_rejection_archive.txt `
+  --positions-json positions_self.json --watch-interval 15 `
+  --mt5-symbol XAUUSD --mt5-server-offset 3 --mt5-history-bars 5000 `
+  --initial-capital 5000 --sizing-mode risk --lot 0.01 --risk 0.022 --minimum-lot 0.01 --lot-step 0.01 `
+  --bonus-per-closed-lot 3 --entries 1 --entry-ladder range_uniform --entry-sl-gap 2 `
+  --activation-delay 0 --pending-expiry 630 --max-hold 15 --sl-multiplier 0.85 --final-target TP1 `
+  --lock-after-tp1 true --lock-after-tp2 true --tp1-lock-delay-minutes 0 --tp2-lock-delay-minutes 0 `
+  --profit-lock-mode tp_levels --bep-trigger-distance 3 --tp1-lock-fraction 0.5 --tp2-lock-target TP1 `
+  --runner-after-tp3 false --tp3-lock-target TP2 --trailing-open-distance 0.5 --trailing-close-distance 0.5 `
+  --account live --max-concurrent-positions 2 --max-daily-loss-pct 10 --place-max-spread-points 40 `
+  --notifications notifications.jsonl --forensic-log forensic.jsonl

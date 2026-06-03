@@ -186,3 +186,88 @@ def test_recent_closed_bars_drops_forming_bar():
     assert bars[-1].open == 2008.0        # index 8 (index 9 is forming, dropped)
     assert bars[0].open == 2004.0         # index 4
     assert all(bars[i].time < bars[i + 1].time for i in range(len(bars) - 1))
+
+# --- cumulative backtest archive -------------------------------------------
+
+def test_append_archive_adds_only_new_keys(tmp_path):
+    sigs = [
+        _mk("BUY", datetime(2026, 6, 4, 8, 5), 2010.0),
+        _mk("SELL", datetime(2026, 6, 4, 9, 0), 2005.0),
+    ]
+    keyed = A._keyed_signals(sigs)
+    arch = tmp_path / "archive.txt"
+    arch.write_text(
+        A._render_feed(keyed, {"2026-06-04#01"}, source_tz_offset=3, price_digits=2),
+        encoding="utf-8",
+    )
+    A._append_to_archive(arch, keyed, 2)
+    assert sorted(s.signal_key for s in parse_signals_file(arch)) == [
+        "2026-06-04#01", "2026-06-04#02"
+    ]
+    # idempotent: re-appending the same keyed set adds nothing
+    A._append_to_archive(arch, keyed, 2)
+    assert sorted(s.signal_key for s in parse_signals_file(arch)) == [
+        "2026-06-04#01", "2026-06-04#02"
+    ]
+
+
+def test_append_archive_new_day_writes_header(tmp_path):
+    yday = [
+        _mk("BUY", datetime(2026, 6, 3, 8, 5), 2010.0),
+        _mk("SELL", datetime(2026, 6, 3, 9, 0), 2005.0),
+    ]
+    arch = tmp_path / "archive.txt"
+    kyd = A._keyed_signals(yday)
+    arch.write_text(
+        A._render_feed(kyd, {k for _, k in kyd}, source_tz_offset=3, price_digits=2),
+        encoding="utf-8",
+    )
+    both = yday + [_mk("BUY", datetime(2026, 6, 4, 8, 5), 2020.0)]
+    A._append_to_archive(arch, A._keyed_signals(both), 2)
+    parsed = parse_signals_file(arch)
+    assert sorted(s.signal_key for s in parsed) == [
+        "2026-06-03#01", "2026-06-03#02", "2026-06-04#01"
+    ]
+    newsig = next(s for s in parsed if s.signal_key == "2026-06-04#01")
+    assert newsig.signal_time_chart == datetime(2026, 6, 4, 8, 5)
+
+
+def test_append_archive_creates_fresh_file(tmp_path):
+    arch = tmp_path / "sub" / "archive.txt"  # parent missing
+    A._append_to_archive(arch, A._keyed_signals([_mk("BUY", datetime(2026, 6, 4, 8, 5), 2010.0)]), 2)
+    assert [s.signal_key for s in parse_signals_file(arch)] == ["2026-06-04#01"]
+
+
+def _write_export_csv(path, rows):
+    header = "<DATE>\t<TIME>\t<OPEN>\t<HIGH>\t<LOW>\t<CLOSE>\t<TICKVOL>\t<VOL>\t<SPREAD>"
+    lines = [header]
+    for (d, t, o, h, l, c, sp) in rows:
+        lines.append(f"{d}\t{t}\t{o:.2f}\t{h:.2f}\t{l:.2f}\t{c:.2f}\t1\t0\t{sp}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_seed_archive_generates_full_history(tmp_path):
+    import types
+    csv = tmp_path / "XAUUSD_M1_202401_ELEV8.csv"
+    rows = [("2024.01.01", f"07:{i:02d}:00", 2000.0, 2000.0, 2000.0, 2000.0, 20) for i in range(20)]
+    rows.append(("2024.01.01", "07:20:00", 2000.5, 2001.2, 1999.0, 2001.0, 20))  # bullish rejection
+    _write_export_csv(csv, rows)
+
+    rcfg = A.RejectionSignalConfig()
+    archive = tmp_path / "gen" / "archive.txt"
+    args = types.SimpleNamespace(
+        backtest_archive=str(archive),
+        seed_archive_charts=[str(csv)],
+        seed_archive_start_date="2024-01-01",
+    )
+    A._seed_archive_if_missing(args, rcfg)
+    parsed = parse_signals_file(archive)
+    assert len(parsed) == 1
+    assert parsed[0].side == "BUY"
+    assert parsed[0].signal_key == "2024-01-01#01"
+    assert parsed[0].signal_time_chart == datetime(2024, 1, 1, 7, 21)  # rejected_bar + 1min
+
+    # skipped when the archive already exists (idempotent startup)
+    before = archive.read_text()
+    A._seed_archive_if_missing(args, rcfg)
+    assert archive.read_text() == before
