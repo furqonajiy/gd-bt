@@ -196,6 +196,23 @@ class Mt5ChartSource(ChartSource):
             return iter([])
         return (self._rate_to_bar(r) for r in rates)
 
+    def recent_closed_bars(self, count: int) -> list[Bar]:
+        """The last `count` CLOSED M1 bars, oldest first.
+
+        copy_rates_from_pos(...,0,N) returns the still-forming current bar at
+        the newest index; it is dropped here so the rejection detector only
+        ever sees completed candles. This is what keeps live generation in
+        parity with the M1 backtest (signal_time = rejected_bar + 1 min, and
+        the rejected bar must be closed before it can produce a signal).
+        """
+        n = max(1, int(count))
+        rates = self._mt5.copy_rates_from_pos(
+            self._symbol, self._mt5.TIMEFRAME_M1, 0, n + 1,
+                                                     )
+        if rates is None or len(rates) <= 1:
+            return []
+        return [self._rate_to_bar(r) for r in rates[:-1]]
+
 
 # ---------------------------------------------------------------------------
 # account equity
