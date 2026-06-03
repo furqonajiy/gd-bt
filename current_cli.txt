@@ -1,7 +1,32 @@
-python tools/backtest_explicit.py `
-  --signals generated/live_provider_high_growth.txt `
+python listener\telegram_listener.py
+
+python tools/live_provider_signal_filter.py `
+  --input signals.txt `
+  --output generated/live_provider_high_growth.txt `
+  --preset high_growth_hour_side `
+  --watch `
+  --interval 2
+
+python tools/generate_self_signals.py `
   --charts data/XAUUSD_M1_*.csv `
-  --output-dir reports/trailing05_risk_baseline `
+  --output generated/self_rejection_v1_2024_today.txt `
+  --start-date 2024-01-01 `
+  --lookback-bars 20 `
+  --min-wick 1.0 `
+  --min-bar-range 1.5 `
+  --wick-body-ratio 1.2 `
+  --zone-buffer 0.25 `
+  --zone-size 1.0 `
+  --cooldown-minutes 20 `
+  --same-zone-cooldown-minutes 120 `
+  --max-spread-points 35 `
+  --session-start-hour 7 `
+  --session-end-hour 22
+
+python tools/backtest_explicit.py `
+  --signals generated/self_rejection_v1_2024_today.txt `
+  --charts data/XAUUSD_M1_*.csv `
+  --output-dir reports/self_rejection_v1_2024_today `
   --max-drawdown-limit-pct 40 `
   --progress-interval-seconds 30 `
   --initial-capital 5000 `
@@ -30,7 +55,8 @@ python tools/backtest_explicit.py `
   --runner-after-tp3 false `
   --tp3-lock-target TP2 `
   --trailing-open-distance 0.5 `
-  --trailing-close-distance 0.5
+  --trailing-close-distance 0.5 `
+  --start-date=2026-06-01
 
 python tools/auto_explicit.py `
   --signals generated/live_provider_high_growth.txt `
