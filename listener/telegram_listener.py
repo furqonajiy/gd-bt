@@ -31,12 +31,25 @@ from typing import Callable, Optional
 
 try:
     from telethon import TelegramClient, events
-except ImportError:
-    sys.stderr.write(
-        "telethon not installed. In your xauusd env, run:\n"
-        "    pip install telethon\n"
-    )
-    sys.exit(1)
+    _TELETHON_IMPORT_ERROR: Optional[ImportError] = None
+except ImportError as e:
+    # Defer the telethon dependency to runtime. Importing this module for its pure
+    # parse/correction/notification-forward helpers -- including under pytest
+    # collection -- must not kill the process; only the live client needs telethon.
+    # Re-raise when some OTHER import is missing (inspect e.name) so real errors surface.
+    if e.name != "telethon":
+        raise
+    TelegramClient = None  # type: ignore[assignment,misc]
+    events = None  # type: ignore[assignment,misc]
+    _TELETHON_IMPORT_ERROR = e
+
+
+def _require_telethon() -> None:
+    if TelegramClient is None:
+        raise RuntimeError(
+            "telethon is required to run the live listener. In your xauusd env, run:\n"
+            "    pip install telethon"
+        ) from _TELETHON_IMPORT_ERROR
 
 # ---------------------------------------------------------------------------
 # paths and constants
@@ -850,6 +863,7 @@ def quarantine(message_id: int, raw_text: str, reason: str, dt_utc: datetime) ->
 
 class Listener:
     def __init__(self, cfg: Config, *, dry_run: bool = False):
+        _require_telethon()
         self.cfg = cfg
         self.dry_run = dry_run
         self.client = TelegramClient(SESSION_NAME, cfg.api_id, cfg.api_hash)
@@ -1185,6 +1199,7 @@ class Listener:
 # ---------------------------------------------------------------------------
 
 async def _cmd_list_chats(cfg: Config) -> int:
+    _require_telethon()
     client = TelegramClient(SESSION_NAME, cfg.api_id, cfg.api_hash)
     await client.start()
     print(f"{'ID':>20}  {'TYPE':<10} TITLE")

@@ -71,7 +71,9 @@ class _Resp:
 
 class _Sym:
     digits = 2
-    filling_mode = 2
+    # FOK-only market-execution broker (matches the live account), so the pending
+    # placement resolves to ORDER_FILLING_FOK via _market_fill_mode().
+    filling_mode = 1
 
 
 class _Tick:
@@ -86,6 +88,8 @@ class _FakeMt5:
     ORDER_TYPE_BUY_LIMIT = 2
     ORDER_TYPE_SELL_LIMIT = 3
     ORDER_TIME_GTC = 0
+    ORDER_FILLING_FOK = 0
+    ORDER_FILLING_IOC = 1
     ORDER_FILLING_RETURN = 2
     SYMBOL_FILLING_IOC = 2
     SYMBOL_FILLING_FOK = 1

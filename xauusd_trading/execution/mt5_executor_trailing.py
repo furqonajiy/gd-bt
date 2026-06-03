@@ -174,7 +174,11 @@ class Mt5Executor(_Tp2Mt5Executor):
                 "magic":        magic,
                 "comment":      comment,
                 "type_time":    self.mt5.ORDER_TIME_GTC,
-                "type_filling": self.mt5.ORDER_FILLING_RETURN,
+                # Pending STOP fills as a market DEAL when triggered, so it is bound
+                # by the symbol's market filling rule. Market-execution, FOK/IOC-only
+                # brokers reject ORDER_FILLING_RETURN at the trigger (retcode 10030,
+                # stranded position). Derive the supported mode from filling_mode.
+                "type_filling": self._market_fill_mode(),
             }
             res = self.mt5.order_send(request)
             success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
@@ -325,9 +329,9 @@ class Mt5Executor(_Tp2Mt5Executor):
             target_sl = round(engine_pos.effective_stop_for(entry, config), digits)
             current_sl = float(getattr(p, "sl", 0.0) or 0.0)
             improves = (
-                current_sl <= 0
-                or (engine_pos.signal.side == "BUY" and target_sl > current_sl + tolerance)
-                or (engine_pos.signal.side == "SELL" and target_sl < current_sl - tolerance)
+                    current_sl <= 0
+                    or (engine_pos.signal.side == "BUY" and target_sl > current_sl + tolerance)
+                    or (engine_pos.signal.side == "SELL" and target_sl < current_sl - tolerance)
             )
             if not improves:
                 continue
@@ -361,9 +365,9 @@ class Mt5Executor(_Tp2Mt5Executor):
             expected = round(clamped_expected if clamped_expected is not None else raw_expected, digits)
             current = round(float(getattr(p, "sl", 0.0) or 0.0), digits)
             executor_owns_stop = (
-                entry.trailing_stop is not None
-                or entry.bep_armed
-                or engine_pos.lock_stage_for(entry, config.lock_after_tp1, config.lock_after_tp2) >= 1
+                    entry.trailing_stop is not None
+                    or entry.bep_armed
+                    or engine_pos.lock_stage_for(entry, config.lock_after_tp1, config.lock_after_tp2) >= 1
             )
             if not executor_owns_stop:
                 continue
