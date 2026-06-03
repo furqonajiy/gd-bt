@@ -474,7 +474,9 @@ class Mt5Executor:
                 "magic":        magic,
                 "comment":      comment,
                 "type_time":    self.mt5.ORDER_TIME_GTC,
-                "type_filling": self.mt5.ORDER_FILLING_RETURN,
+                # RETURN strands the triggered fill on FOK-only market-execution
+                # brokers (retcode 10030); use the broker-supported mode instead.
+                "type_filling": self._market_fill_mode(),
             }
             res = self.mt5.order_send(request)
             success = bool(res is not None
