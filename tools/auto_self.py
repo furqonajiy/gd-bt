@@ -111,24 +111,29 @@ def _select_allowed_keys(keyed, placed_keys, *, cap, placed_count,
     """Decide which keys appear in the executable feed this pass.
 
     Already-placed keys are always kept (so numbering/keys stay matched to the
-    registry). New keys are admitted earliest-first up to the remaining slot
-    count, unless a guard blocks all new entries, and never if older than the
-    executor's acceptance window.
+    registry). New keys are admitted NEWEST-first up to the remaining slot
+    count: the freshest signal is the one most likely still PENDING/OPEN and
+    actually placeable, so admitting oldest-first lets already-played-out
+    signals consume the cap and starve fresh signals. A guard blocks all new
+    entries, and signals older than the executor's acceptance window are never
+    admitted.
     """
-    allowed = set()
+    allowed = {key for _s, key in keyed if key in placed_keys}
+    if block_new:
+        return allowed
     remaining = max(0, int(cap) - int(placed_count))
+    if remaining <= 0:
+        return allowed
     used = 0
-    for s, key in keyed:  # ascending time
+    for s, key in sorted(keyed, key=lambda sk: sk[0].signal_time_chart, reverse=True):
         if key in placed_keys:
-            allowed.add(key)
-            continue
-        if block_new:
             continue
         if min_new_time is not None and s.signal_time_chart <= min_new_time:
             continue
-        if used < remaining:
-            allowed.add(key)
-            used += 1
+        allowed.add(key)
+        used += 1
+        if used >= remaining:
+            break
     return allowed
 
 

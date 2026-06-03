@@ -92,39 +92,41 @@ def test_keys_stable_when_new_signal_appended():
     assert m2[(datetime(2026, 6, 4, 11, 30), "BUY")] == "2026-06-04#03"
 
 
-def test_cap_withholds_latest_new_and_preserves_numbers(tmp_path):
+def test_cap_admits_newest_new_first(tmp_path):
     sigs = [
-        _mk("BUY", datetime(2026, 6, 4, 8, 5), 2010.0),
-        _mk("SELL", datetime(2026, 6, 4, 9, 0), 2005.0),
-        _mk("BUY", datetime(2026, 6, 4, 11, 30), 2020.0),
+        _mk("BUY", datetime(2026, 6, 4, 8, 5), 2010.0),    # #01 oldest
+        _mk("SELL", datetime(2026, 6, 4, 9, 0), 2005.0),   # #02
+        _mk("BUY", datetime(2026, 6, 4, 11, 30), 2020.0),  # #03 newest
     ]
     keyed = A._keyed_signals(sigs)
 
-    # nothing placed yet, cap 2 -> earliest two new admitted, #03 withheld
+    # nothing placed, cap 2 -> the two NEWEST new signals win the slots (#02,#03);
+    # the oldest (#01) is withheld so a stale/played-out signal can't starve fresh ones.
     allowed = A._select_allowed_keys(
         keyed, placed_keys=set(), cap=2, placed_count=0, block_new=False
     )
-    assert allowed == {"2026-06-04#01", "2026-06-04#02"}
+    assert allowed == {"2026-06-04#02", "2026-06-04#03"}
 
     text = A._render_feed(keyed, allowed, source_tz_offset=3, price_digits=2)
     p = tmp_path / "f.txt"
     p.write_text(text, encoding="utf-8")
+    # withheld #01 absent; admitted keep their per-day numbers (gaps are fine)
     assert sorted(s.signal_key for s in parse_signals_file(p)) == [
-        "2026-06-04#01", "2026-06-04#02"
+        "2026-06-04#02", "2026-06-04#03"
     ]
 
-    # #01,#02 now placed and one slot freed -> #03 admitted, placed kept
+    # one slot already in use -> one free, the newest unplaced is admitted
     allowed2 = A._select_allowed_keys(
-        keyed,
-        placed_keys={"2026-06-04#01", "2026-06-04#02"},
-        cap=2, placed_count=1, block_new=False,
+        keyed, placed_keys={"2026-06-04#03"}, cap=2, placed_count=1, block_new=False
     )
-    assert allowed2 == {"2026-06-04#01", "2026-06-04#02", "2026-06-04#03"}
+    assert allowed2 == {"2026-06-04#02", "2026-06-04#03"}
 
-    text2 = A._render_feed(keyed, allowed2, source_tz_offset=3, price_digits=2)
-    p2 = tmp_path / "f2.txt"
-    p2.write_text(text2, encoding="utf-8")
-    assert "2026-06-04#03" in {s.signal_key for s in parse_signals_file(p2)}
+    # at the cap -> nothing new admitted, placed kept
+    allowed3 = A._select_allowed_keys(
+        keyed, placed_keys={"2026-06-04#02", "2026-06-04#03"},
+        cap=2, placed_count=2, block_new=False,
+    )
+    assert allowed3 == {"2026-06-04#02", "2026-06-04#03"}
 
 
 def test_block_new_keeps_only_placed():
