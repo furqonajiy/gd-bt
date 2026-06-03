@@ -1,10 +1,9 @@
 python tools/backtest_explicit.py `
   --signals generated/live_provider_high_growth.txt `
   --charts data/XAUUSD_M1_*.csv `
-  --output-dir reports/risk_scale_known_good_1000_risk_0022 `
+  --output-dir reports/backtest_1000_20260601_0022 `
   --max-drawdown-limit-pct 40 `
   --progress-interval-seconds 30 `
-  --initial-capital 1000 `
   --sizing-mode risk `
   --lot 0.01 `
   --risk 0.022 `
@@ -30,7 +29,9 @@ python tools/backtest_explicit.py `
   --runner-after-tp3 false `
   --tp3-lock-target TP2 `
   --trailing-open-distance 0.25 `
-  --trailing-close-distance 0.25
+  --trailing-close-distance 0.25 `
+  --initial-capital 5000 `
+  --start-date 2026-06-01
 
 python tools/auto_explicit.py `
   --signals generated/live_provider_high_growth.txt `

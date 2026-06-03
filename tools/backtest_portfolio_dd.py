@@ -24,7 +24,7 @@ for _p in (str(ROOT), str(ROOT / "tools")):
         sys.path.insert(0, _p)
 
 from xauusd_trading import CsvChartSource, parse_signals_file, run_backtest  # noqa: E402
-from backtest_explicit import build_parser, config_from_args, _expand_chart_paths  # noqa: E402
+from backtest_explicit import build_parser, config_from_args, _expand_chart_paths, filter_signals_by_date  # noqa: E402
 
 CONTRACT = 100.0
 _DONE_STATUSES = {"OPEN", "NO_FILL"}
@@ -106,8 +106,11 @@ def main(argv: list[str] | None = None) -> int:
     spreads = df["spread_price"].to_numpy()
     tindex = {t: i for i, t in enumerate(times)}
 
+    signals = filter_signals_by_date(
+        parse_signals_file(Path(args.signals)), args.start_date, args.end_date
+    )
     result = run_backtest(
-        parse_signals_file(Path(args.signals)), chart, config,
+        signals, chart, config,
         exclude_structural_anomalies=args.exclude_structural_anomalies,
     )
 

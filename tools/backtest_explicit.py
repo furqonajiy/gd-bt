@@ -19,6 +19,7 @@ import json
 import sys
 import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -303,6 +304,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all-signals", default=None, help="Optional raw provider signals.txt for All Signals Audit sheet.")
     p.add_argument("--filter-preset", default="high_growth_hour_side", choices=["all", "no_bad_hours", "best_hours", "high_growth_hour_side", "research_month_hour_side"])
     p.add_argument("--charts", required=True, nargs="+")
+    p.add_argument("--start-date", default=None, metavar="YYYY-MM-DD",
+                   help="Only backtest signals on/after this date (chart time GMT+3). "
+                        "Equity starts at --initial-capital on the first surviving signal.")
+    p.add_argument("--end-date", default=None, metavar="YYYY-MM-DD",
+                   help="Only backtest signals on/before this date (chart time GMT+3, "
+                        "inclusive of the whole day).")
     p.add_argument("--output-dir", required=True)
     p.add_argument("--exclude-structural-anomalies", action="store_true")
     p.add_argument("--max-drawdown-limit-pct", type=float, required=True)
@@ -353,12 +360,40 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
     )
 
 
+def _parse_date(value: str | None) -> datetime | None:
+    return datetime.strptime(value, "%Y-%m-%d") if value else None
+
+
+def filter_signals_by_date(signals, start_date: str | None, end_date: str | None):
+    """Keep signals whose chart-time falls within [start_date 00:00, end_date 24:00).
+
+    Dates are 'YYYY-MM-DD' (chart time GMT+3) or None; end_date includes the whole
+    day. run_backtest then starts equity at --initial-capital on the first
+    surviving signal, so this is how a run begins from a specific date.
+    """
+    start = _parse_date(start_date)
+    end = _parse_date(end_date)
+    if end is not None:
+        end = end + timedelta(days=1)
+    kept = []
+    for s in signals:
+        t = s.signal_time_chart
+        if start is not None and t < start:
+            continue
+        if end is not None and t >= end:
+            continue
+        kept.append(s)
+    return kept
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = config_from_args(args)
     progress_enabled = args.progress_interval_seconds > 0
 
-    signals = parse_signals_file(Path(args.signals))
+    signals = filter_signals_by_date(
+        parse_signals_file(Path(args.signals)), args.start_date, args.end_date
+    )
     with Heartbeat("chart load", args.progress_interval_seconds, enabled=progress_enabled):
         chart = CsvChartSource(_expand_chart_paths(args.charts))
     with Heartbeat("backtest", args.progress_interval_seconds, enabled=progress_enabled):
