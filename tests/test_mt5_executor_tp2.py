@@ -372,3 +372,83 @@ def test_reconcile_reannounces_when_actual_fill_changes():
     pos.entries[0].fill_time = None
     log2 = executor.reconcile_with_mt5(pos, DD40_COMMAND_CONFIG, chart, now)
     assert len([a for a in log2.actions if "Reconciled #0" in a]) == 1
+
+
+def test_reconcile_trailing_open_trigger_announced_once():
+    """A trailing-open STOP fill emits an explicit TRIGGERED line once, even if
+    the replay flaps the slot back to PENDING on a later cycle."""
+    Mt5Executor._session_announced_triggers.clear()
+    Mt5Executor._session_announced_reconciles.clear()
+
+    signal = parse_one_signal(
+        "1. BUY XAUUSD 4518 - 4516 SL 4511 TP1 4526 TP2 4536 TP3 4551 11:25 AM",
+        source_date="2026-06-04",
+        source_offset=7,
+    )
+    cfg = replace(DD40_COMMAND_CONFIG, trailing_open_distance=0.5)
+    pos = open_position(signal, equity=1000.0, config=cfg)
+
+    mt5_pos = _FakePosition(
+        ticket=5151,
+        magic=signal_to_magic(signal.signal_key),
+        type_=_FakeMt5.POSITION_TYPE_BUY,
+        sl=4457.06,
+        tp=signal.tp3,
+        volume=0.20,
+        comment=f"{signal.signal_key}.1",
+        time=1_780_000_000,
+        price_open=4469.06,
+    )
+    mt5 = _FakeMt5([mt5_pos])
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+    chart = _reconcile_chart_stub()
+    now = datetime(2026, 6, 4, 14, 0)
+
+    pos.entries[0].status = "PENDING"
+    pos.entries[0].entry_price = 4470.0
+    pos.entries[0].fill_time = None
+    log1 = executor.reconcile_with_mt5(pos, cfg, chart, now)
+    triggers1 = [a for a in log1.actions if "TRAILING-OPEN TRIGGERED #0" in a]
+    assert len(triggers1) == 1
+    assert "filled at 4469.06" in triggers1[0]
+    assert "SL 4457.06" in triggers1[0]
+
+    # Replay flaps back to PENDING; the trigger must not re-announce.
+    pos.entries[0].status = "PENDING"
+    pos.entries[0].entry_price = 4470.0
+    pos.entries[0].fill_time = None
+    log2 = executor.reconcile_with_mt5(pos, cfg, chart, now)
+    assert [a for a in log2.actions if "TRAILING-OPEN TRIGGERED #0" in a] == []
+
+
+def test_reconcile_plain_limit_fill_has_no_trailing_trigger_line():
+    """With trailing-open disabled, the explicit TRIGGERED line must not appear."""
+    Mt5Executor._session_announced_triggers.clear()
+    Mt5Executor._session_announced_reconciles.clear()
+
+    signal = parse_one_signal(
+        "1. BUY XAUUSD 4518 - 4516 SL 4511 TP1 4526 TP2 4536 TP3 4551 11:25 AM",
+        source_date="2026-06-04",
+        source_offset=7,
+    )
+    pos = open_position(signal, equity=1000.0, config=DD40_COMMAND_CONFIG)
+    mt5_pos = _FakePosition(
+        ticket=5252,
+        magic=signal_to_magic(signal.signal_key),
+        type_=_FakeMt5.POSITION_TYPE_BUY,
+        sl=signal.sl,
+        tp=signal.tp3,
+        volume=0.20,
+        comment=f"{signal.signal_key}.1",
+        time=1_780_000_000,
+        price_open=4516.0,
+    )
+    mt5 = _FakeMt5([mt5_pos])
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+    chart = _reconcile_chart_stub()
+
+    pos.entries[0].status = "NO_FILL"
+    pos.entries[0].entry_price = 4516.0
+    pos.entries[0].fill_time = None
+    log = executor.reconcile_with_mt5(pos, DD40_COMMAND_CONFIG, chart, datetime(2026, 6, 4, 14, 0))
+    assert not any("TRAILING-OPEN TRIGGERED" in a for a in log.actions)

@@ -82,6 +82,10 @@ class Mt5Executor(_BaseMt5Executor):
     # same fill every interval. Key by the actual MT5 fill so each reconcile is
     # announced once, not by the flapping engine-side status.
     _session_announced_reconciles: set[str] = set()
+    # Trailing-open STOP fills are announced once per (signal, entry); the fill
+    # is observed when reconcile flips a PENDING/NO_FILL slot to OPEN, and a
+    # flapping replay could revisit PENDING, so the set guards against re-firing.
+    _session_announced_triggers: set[str] = set()
 
     def _broker_epoch_to_chart_time(self, epoch: int) -> datetime:
         """MT5 broker-time-as-UTC-epoch -> chart-time naive datetime."""
@@ -407,8 +411,22 @@ class Mt5Executor(_BaseMt5Executor):
             entry.fill_time = fill_time_chart
             entry.entry_price = actual_price
             entry.lot = actual_lot
+
+            trailing_open = float(getattr(config, "trailing_open_distance", 0.0) or 0.0)
+            if before_status in ("PENDING", "NO_FILL") and trailing_open > 0:
+                # A trailing-open STOP fill is the trigger event the operator is
+                # watching for; surface it explicitly (deduped), not just as the
+                # generic reconcile line.
+                trigger_sig = f"{signal_key}|{idx}"
+                if trigger_sig not in self._session_announced_triggers:
+                    self._session_announced_triggers.add(trigger_sig)
+                    log.actions.append(
+                        f"  TRAILING-OPEN TRIGGERED #{idx} ({signal_key}): "
+                        f"{engine_pos.signal.side} filled at {actual_price:g}, "
+                        f"SL {float(mt5_pos.sl):g}"
+                    )
             if before_status in ("PENDING", "NO_FILL") and self.notifier is not None:
-                if float(getattr(config, "trailing_open_distance", 0.0) or 0.0) > 0:
+                if trailing_open > 0:
                     self.notifier.trailing_open_filled(
                         signal_key=signal_key, side=engine_pos.signal.side,
                         entry_index=idx, ticket=int(mt5_pos.ticket),

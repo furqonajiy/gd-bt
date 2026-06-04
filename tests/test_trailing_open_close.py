@@ -357,4 +357,47 @@ def test_live_executor_waits_when_price_has_not_moved_far_enough_for_trailing_op
 
     assert log.placed == 0
     assert mt5.requests == []
-    assert any("trailing-open waiting" in action for action in log.actions)
+    waiting_line = next(a for a in log.actions if "trailing-open waiting" in a)
+    # Names the arm threshold and STOP direction; the old wording said "LIMIT".
+    assert "arms when Ask<=4748" in waiting_line
+    assert "planned 4750-2" in waiting_line
+    assert "BUY STOP" in waiting_line
+    assert "rebound" in waiting_line
+    assert "#1" in waiting_line
+    assert "LIMIT" not in waiting_line
+
+
+def test_live_executor_waiting_line_names_sell_stop_and_pullback(monkeypatch):
+    signal = parse_one_signal(
+        "1. SELL XAUUSD 4750 - 4752 SL 4756 TP1 4742 TP2 4732 TP3 4722 10:00 AM",
+        source_date="2026-06-01",
+        source_offset=3,
+    )
+    activation = signal.signal_time_chart
+    monkeypatch.setattr(mt5_executor_trailing, "_wall_clock_chart_now", lambda: activation + timedelta(minutes=1))
+    plan = NewSignalPlan(
+        signal=signal,
+        action="FOLLOW",
+        rationale="test",
+        orders=[PlannedOrder(0, signal.side, 4750.0, 4756.0, 0.10, 96.6)],
+        pending_expires_at=activation + timedelta(minutes=630),
+        final_target_label="TP3",
+        final_target_price=4722.0,
+        total_initial_risk_dollars=96.6,
+        pending_activates_at=activation,
+        trailing_open_distance=2.0,
+    )
+
+    # Bid 4750.5 < planned 4750 + 2 -> still waiting to arm.
+    mt5 = _FakeMt5(bid=4750.5, ask=4750.8)
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.place_signal(signal, plan)
+
+    assert log.placed == 0
+    waiting_line = next(a for a in log.actions if "trailing-open waiting" in a)
+    assert "arms when Bid>=4752" in waiting_line
+    assert "planned 4750+2" in waiting_line
+    assert "SELL STOP" in waiting_line
+    assert "pullback" in waiting_line
+    assert "LIMIT" not in waiting_line
