@@ -452,3 +452,31 @@ def test_reconcile_plain_limit_fill_has_no_trailing_trigger_line():
     pos.entries[0].fill_time = None
     log = executor.reconcile_with_mt5(pos, DD40_COMMAND_CONFIG, chart, datetime(2026, 6, 4, 14, 0))
     assert not any("TRAILING-OPEN TRIGGERED" in a for a in log.actions)
+
+
+def test_warn_on_unknown_warns_once_per_process():
+    """An untracked MT5 position warns once, not every cycle; a different
+    ticket is a new warning."""
+    Mt5Executor._session_warned_unknown.clear()
+
+    unknown = _FakePosition(
+        ticket=57695956, magic=0, type_=_FakeMt5.POSITION_TYPE_BUY,
+        sl=0.0, tp=0.0, volume=0.10, comment="",
+    )
+    mt5 = _FakeMt5([unknown])
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    first = executor.warn_on_unknown(known_magics=set())
+    second = executor.warn_on_unknown(known_magics=set())
+    assert sum("ticket=57695956" in w for w in first) == 1
+    assert all("ticket=57695956" not in w for w in second)
+
+    # A different untracked ticket is still surfaced once.
+    other = _FakePosition(
+        ticket=57695957, magic=0, type_=_FakeMt5.POSITION_TYPE_BUY,
+        sl=0.0, tp=0.0, volume=0.10, comment="",
+    )
+    mt5._positions.append(other)
+    third = executor.warn_on_unknown(known_magics=set())
+    assert sum("ticket=57695957" in w for w in third) == 1
+    assert all("ticket=57695956" not in w for w in third)
