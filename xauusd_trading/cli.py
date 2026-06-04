@@ -54,11 +54,21 @@ def _execution_log_has_output(log: Any) -> bool:
     )
 
 
-def _remember_auto_status(state: dict[str, str], signal_key: str, text: str) -> bool:
-    """Return True when this candidate status should be printed this cycle."""
-    if state.get(signal_key) == text:
+def _remember_auto_status(
+        state: dict[str, str], signal_key: str, text: str,
+        dedup_text: str | None = None,
+) -> bool:
+    """Return True when this candidate status should be printed this cycle.
+
+    ``dedup_text`` lets a status dedupe on a stable key while still displaying a
+    line that contains volatile detail (e.g. a played-out signal whose replay
+    realized P&L re-computes every cycle). When omitted, the display text is the
+    key, preserving the prior behaviour.
+    """
+    key = dedup_text if dedup_text is not None else text
+    if state.get(signal_key) == key:
         return False
-    state[signal_key] = text
+    state[signal_key] = key
     return True
 
 
@@ -98,8 +108,9 @@ def _auto_record_candidate_action(
         state: dict[str, str],
         signal_key: str,
         text: str,
+        dedup_text: str | None = None,
 ) -> None:
-    if _remember_auto_status(state, signal_key, text):
+    if _remember_auto_status(state, signal_key, text, dedup_text):
         log.actions.append(text)
 
 
@@ -355,7 +366,13 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
 
         if rec.new_signal.action == "SKIP_INVALIDATED":
             status = _auto_skip_invalidated_status_line(signal.signal_key, rec)
-            _auto_record_candidate_action(log, candidate_console_state, signal.signal_key, status)
+            # Played-out is terminal per signal; its line carries a replay
+            # realized P&L that re-computes every cycle, so dedupe on a stable
+            # key to announce once instead of re-printing the flapping number.
+            _auto_record_candidate_action(
+                log, candidate_console_state, signal.signal_key, status,
+                dedup_text=f"SKIP_INVALIDATED:{signal.signal_key}",
+            )
             if signal.signal_key not in notified_keys["skipped"]:
                 notifier.signal_skipped(signal_key=signal.signal_key, side=signal.side, reason=status)
                 notified_keys["skipped"].add(signal.signal_key)
