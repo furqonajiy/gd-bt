@@ -131,3 +131,38 @@ python tools\auto_self.py `
   --runner-after-tp3 false --tp3-lock-target TP2 --trailing-open-distance 0.5 --trailing-close-distance 0.5 `
   --account live --max-concurrent-positions 2 --max-daily-loss-pct 10 --place-max-spread-points 40 `
   --notifications notifications.jsonl --forensic-log forensic.jsonl
+
+ python tools/auto_explicit.py `
+   --signals generated/live_provider_high_growth.txt `
+   --positions-json positions_demo.json `
+   --watch-interval 5 `
+   --mt5-symbol XAUUSD `
+   --mt5-server-offset 3 `
+   --mt5-history-bars 3000 `
+   --initial-capital 6500 `
+   --sizing-mode risk `
+   --lot 0.5 `
+   --risk 0.02 `
+   --minimum-lot 0.01 `
+   --lot-step 0.01 `
+   --bonus-per-closed-lot 0.0 `
+   --entries 1 `
+   --entry-ladder range_uniform `
+   --entry-sl-gap 1.0 `
+   --activation-delay 1 `
+   --pending-expiry 900 `
+   --max-hold 45 `
+   --sl-multiplier 1.15 `
+   --final-target TP3 `
+   --lock-after-tp1 true `
+   --lock-after-tp2 true `
+   --tp1-lock-delay-minutes 3 `
+   --tp2-lock-delay-minutes 5 `
+   --profit-lock-mode tp_levels `
+   --bep-trigger-distance 3.0 `
+   --tp1-lock-fraction 0.5 `
+   --tp2-lock-target TP2 `
+   --runner-after-tp3 false `
+   --tp3-lock-target TP2 `
+   --trailing-open-distance 1.0 `
+   --trailing-close-distance 2.0
