@@ -168,6 +168,11 @@ class Mt5Executor:
     # exit must succeed; a few points of slippage is preferable to a reject.
     CLOSE_DEVIATION_POINTS = 50
 
+    # Process-local guard. Auto rebuilds the executor every cycle, so this
+    # class-level set keeps an untracked (e.g. manual) MT5 order/position from
+    # re-warning every watch interval; a fresh process re-warns once.
+    _session_warned_unknown: set[str] = set()
+
     def __init__(self, conn: Mt5Connection, symbol: str,
                  min_lot: float = DEFAULT_MIN_LOT,
                  lot_step: float = DEFAULT_LOT_STEP,
@@ -291,16 +296,22 @@ class Mt5Executor:
         warnings: list[str] = []
         for o in (self.mt5.orders_get(symbol=self.symbol) or []):
             if o.magic not in known_magics:
-                warnings.append(
+                msg = (
                     f"Unknown MT5 order on {self.symbol}: ticket={o.ticket} "
                     f"magic={o.magic} comment={o.comment!r}"
                 )
+                if msg not in self._session_warned_unknown:
+                    self._session_warned_unknown.add(msg)
+                    warnings.append(msg)
         for p in (self.mt5.positions_get(symbol=self.symbol) or []):
             if p.magic not in known_magics:
-                warnings.append(
+                msg = (
                     f"Unknown MT5 position on {self.symbol}: ticket={p.ticket} "
                     f"magic={p.magic} comment={p.comment!r}"
                 )
+                if msg not in self._session_warned_unknown:
+                    self._session_warned_unknown.add(msg)
+                    warnings.append(msg)
         return warnings
 
     # ---- reconciliation ------------------------------------------------

@@ -76,6 +76,16 @@ class Mt5Executor(_BaseMt5Executor):
     _session_skipped_stale_entries: set[str] = set()
     _session_skipped_expired_signal_keys: set[str] = set()
     _session_failed_signal_keys: set[str] = set()
+    # Each cycle re-replays the signal from scratch, so a live position whose
+    # replay status is non-terminal (e.g. TRAILING_STOP, which is absent from
+    # _REPLAY_CLOSED_STATUSES) gets re-patched to OPEN and would re-announce the
+    # same fill every interval. Key by the actual MT5 fill so each reconcile is
+    # announced once, not by the flapping engine-side status.
+    _session_announced_reconciles: set[str] = set()
+    # Trailing-open STOP fills are announced once per (signal, entry); the fill
+    # is observed when reconcile flips a PENDING/NO_FILL slot to OPEN, and a
+    # flapping replay could revisit PENDING, so the set guards against re-firing.
+    _session_announced_triggers: set[str] = set()
 
     def _broker_epoch_to_chart_time(self, epoch: int) -> datetime:
         """MT5 broker-time-as-UTC-epoch -> chart-time naive datetime."""
@@ -372,12 +382,18 @@ class Mt5Executor(_BaseMt5Executor):
             if not needs_patch:
                 continue
 
-            log.actions.append(
-                f"  Reconciled #{idx} ({signal_key}): MT5 fill at "
-                f"{actual_price:g} lot={actual_lot:.2f} at "
-                f"{fill_time_chart:%Y-%m-%d %H:%M:%S} GMT+3 "
-                f"(engine had {before_status} at {before_price:g})"
+            announce_sig = (
+                f"{signal_key}|{idx}|{actual_price:.5f}|{actual_lot:.5f}|"
+                f"{fill_time_chart:%Y-%m-%d %H:%M:%S}"
             )
+            if announce_sig not in self._session_announced_reconciles:
+                self._session_announced_reconciles.add(announce_sig)
+                log.actions.append(
+                    f"  Reconciled #{idx} ({signal_key}): MT5 fill at "
+                    f"{actual_price:g} lot={actual_lot:.2f} at "
+                    f"{fill_time_chart:%Y-%m-%d %H:%M:%S} GMT+3 "
+                    f"(engine had {before_status} at {before_price:g})"
+                )
             if self.forensic is not None:
                 self.forensic.reconcile_action(
                     signal_key=signal_key,
@@ -395,8 +411,22 @@ class Mt5Executor(_BaseMt5Executor):
             entry.fill_time = fill_time_chart
             entry.entry_price = actual_price
             entry.lot = actual_lot
+
+            trailing_open = float(getattr(config, "trailing_open_distance", 0.0) or 0.0)
+            if before_status in ("PENDING", "NO_FILL") and trailing_open > 0:
+                # A trailing-open STOP fill is the trigger event the operator is
+                # watching for; surface it explicitly (deduped), not just as the
+                # generic reconcile line.
+                trigger_sig = f"{signal_key}|{idx}"
+                if trigger_sig not in self._session_announced_triggers:
+                    self._session_announced_triggers.add(trigger_sig)
+                    log.actions.append(
+                        f"  TRAILING-OPEN TRIGGERED #{idx} ({signal_key}): "
+                        f"{engine_pos.signal.side} filled at {actual_price:g}, "
+                        f"SL {float(mt5_pos.sl):g}"
+                    )
             if before_status in ("PENDING", "NO_FILL") and self.notifier is not None:
-                if float(getattr(config, "trailing_open_distance", 0.0) or 0.0) > 0:
+                if trailing_open > 0:
                     self.notifier.trailing_open_filled(
                         signal_key=signal_key, side=engine_pos.signal.side,
                         entry_index=idx, ticket=int(mt5_pos.ticket),

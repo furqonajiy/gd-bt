@@ -248,3 +248,59 @@ def test_auto_watch_prints_hourly_heartbeat(tmp_path, monkeypatch, capsys):
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.out.count("[auto heartbeat #1") == 1
+
+def test_auto_played_out_status_dedupes_despite_flapping_realized(tmp_path, monkeypatch, capsys):
+    """A fully played-out signal is terminal; its line carries a replay realized
+    P&L that re-computes each cycle. The line must print once, not re-spam when
+    only that dollar figure changes."""
+    signal = _signal()
+    signals_path = tmp_path / "signals.txt"
+    signals_path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda path: [signal])
+
+    realized = {"v": 67.60}
+
+    def fake_decide(*args, **kwargs):
+        entries = [
+            SimpleNamespace(
+                entry_index=0, lot=0.01, status="TP1",
+                fill_time=datetime(2026, 6, 2, 8, 5, 10), entry_price=4470.10,
+                exit_time=datetime(2026, 6, 2, 8, 20, 30), exit_price=4478.00, pnl=7.90,
+            ),
+            SimpleNamespace(
+                entry_index=1, lot=0.01, status="NO_FILL",
+                fill_time=None, entry_price=4467.40,
+                exit_time=None, exit_price=None, pnl=None,
+            ),
+        ]
+        rp = SimpleNamespace(
+            entries=entries, signal=SimpleNamespace(side="BUY"),
+            realized_pnl=lambda: realized["v"],
+        )
+        plan = SimpleNamespace(
+            action="SKIP_INVALIDATED", orders=[], replay_position=rp,
+            rationale="", pending_expires_at=datetime(2026, 6, 2, 14, 30),
+        )
+        return SimpleNamespace(new_signal=plan)
+
+    monkeypatch.setattr(cli, "decide", fake_decide)
+
+    state: dict[str, str] = {}
+
+    def run_once():
+        return cli._auto_pass(
+            _args(tmp_path), DEFAULT_CONFIG, _FakeConn(),
+            _FakeChart(datetime(2026, 6, 2, 6, 0)), signals_path,
+            iteration=1, candidate_console_state=state,
+        )
+
+    assert run_once() == 0
+    realized["v"] = 64.22  # replay re-computes the realized P&L next cycle
+    assert run_once() == 0
+
+    captured = capsys.readouterr()
+    # Header + per-entry breakdown all dedupe to a single print despite the flap.
+    assert captured.out.count("every entry has already played out in backtest replay") == 1
+    assert captured.out.count("#1 BUY 0.01 lot  filled 08:05:10 @4470.10 -> closed 08:20:30 @4478.00 TP1 | move +7.90 | $+7.90") == 1
+    assert captured.out.count("#2 BUY 0.01 lot  no fill | move -- | $0.00") == 1
+    assert "[auto heartbeat" not in captured.out

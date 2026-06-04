@@ -58,6 +58,34 @@ class Mt5Executor(_Tp2Mt5Executor):
             return None
         return bid - distance
 
+    @staticmethod
+    def _trailing_open_waiting_line(signal, waiting_entries, distance: float) -> str:
+        """Operator-facing 'where it will trigger' line for un-armed entries.
+
+        Reports the arm threshold (a fixed function of the planned entry, so the
+        line is stable across cycles and dedupes to one print) rather than the
+        live tick, and names the STOP direction -- the prior wording said 'LIMIT'
+        and gave no price levels.
+        """
+        side = signal.side
+        move = "rebound" if side == "BUY" else "pullback"
+        # Header carries the shared mechanic; one entry per line keeps multi-entry
+        # ladders readable. The whole block is one log action (stable across
+        # cycles), so it still dedupes to a single print.
+        lines = [
+            f"Signal {signal.signal_key}: trailing-open waiting ({side}); on arm a "
+            f"{side} STOP triggers on a {distance:g} {move} (no order placed yet):"
+        ]
+        for entry_index, planned_entry in waiting_entries:
+            label = entry_index + 1  # match the .N suffix shown once the STOP is placed
+            if side == "BUY":
+                arm = planned_entry - distance
+                lines.append(f"  #{label} arms when Ask<={arm:g} (planned {planned_entry:g}-{distance:g})")
+            else:
+                arm = planned_entry + distance
+                lines.append(f"  #{label} arms when Bid>={arm:g} (planned {planned_entry:g}+{distance:g})")
+        return "\n".join(lines)
+
     def place_signal(self, signal, plan) -> ExecutionLog:
         trailing_open_distance = self._plan_trailing_open_distance(plan)
         if trailing_open_distance <= 0:
@@ -138,7 +166,7 @@ class Mt5Executor(_Tp2Mt5Executor):
                 signal.side, float(order.entry_price), bid, ask, trailing_open_distance
             )
             if trigger is None:
-                waiting.append(signal_entry_key(signal.signal_key, order.entry_index))
+                waiting.append((order.entry_index, float(order.entry_price)))
             else:
                 rounded_lots[order.entry_index] = lot
                 trigger_prices[order.entry_index] = trigger
@@ -148,9 +176,7 @@ class Mt5Executor(_Tp2Mt5Executor):
 
         if waiting:
             log.actions.append(
-                f"Signal {signal.signal_key}: trailing-open waiting; "
-                f"{len(waiting)} entr{'y has' if len(waiting) == 1 else 'ies have'} not yet moved "
-                f"{trailing_open_distance:g} beyond the planned entry. No broker LIMIT is placed."
+                self._trailing_open_waiting_line(signal, waiting, trailing_open_distance)
             )
             return log
 
