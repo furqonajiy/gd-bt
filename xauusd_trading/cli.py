@@ -89,6 +89,48 @@ def _auto_skip_invalidated_status_line(signal_key: str, rec: Any) -> str:
     )
 
 
+def _auto_skip_invalidated_detail_lines(rec: Any) -> list[str]:
+    """Per-entry breakdown for a played-out signal: size, fill, close, move, $.
+
+    Values come straight off the replay Position's entries; getattr keeps it
+    robust to an entry that filled but has not closed (shown as 'still open').
+    Console-only -- the notifier still gets the single-line header.
+    """
+    rp = getattr(rec.new_signal, "replay_position", None)
+    if rp is None:
+        return []
+    side = getattr(getattr(rp, "signal", None), "side", "?")
+    lines: list[str] = []
+    for e in getattr(rp, "entries", []) or []:
+        label = int(getattr(e, "entry_index", 0)) + 1
+        lot = float(getattr(e, "lot", 0.0) or 0.0)
+        head = f"  #{label} {side} {lot:g} lot"
+        fill_time = getattr(e, "fill_time", None)
+        if fill_time is None:
+            lines.append(f"{head}  no fill | move -- | $0.00")
+            continue
+        entry_price = float(getattr(e, "entry_price", 0.0) or 0.0)
+        status = getattr(e, "status", "?")
+        pnl = getattr(e, "pnl", None)
+        pnl_str = f"${(pnl if pnl is not None else 0.0):+.2f}"
+        exit_time = getattr(e, "exit_time", None)
+        exit_price = getattr(e, "exit_price", None)
+        if exit_time is None or exit_price is None:
+            lines.append(
+                f"{head}  filled {fill_time:%H:%M:%S} @{entry_price:.2f} "
+                f"-> still open ({status}) | move -- | {pnl_str}"
+            )
+            continue
+        exit_price = float(exit_price)
+        move = (exit_price - entry_price) if side == "BUY" else (entry_price - exit_price)
+        lines.append(
+            f"{head}  filled {fill_time:%H:%M:%S} @{entry_price:.2f} "
+            f"-> closed {exit_time:%H:%M:%S} @{exit_price:.2f} {status} "
+            f"| move {move:+.2f} | {pnl_str}"
+        )
+    return lines
+
+
 def _auto_partial_placement_status_line(signal_key: str, rec: Any) -> str:
     rp = rec.new_signal.replay_position
     placed = len(rec.new_signal.orders)
@@ -365,16 +407,20 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             continue
 
         if rec.new_signal.action == "SKIP_INVALIDATED":
-            status = _auto_skip_invalidated_status_line(signal.signal_key, rec)
+            header = _auto_skip_invalidated_status_line(signal.signal_key, rec)
+            detail = _auto_skip_invalidated_detail_lines(rec)
+            console_status = "\n".join([header, *detail]) if detail else header
             # Played-out is terminal per signal; its line carries a replay
             # realized P&L that re-computes every cycle, so dedupe on a stable
             # key to announce once instead of re-printing the flapping number.
             _auto_record_candidate_action(
-                log, candidate_console_state, signal.signal_key, status,
+                log, candidate_console_state, signal.signal_key, console_status,
                 dedup_text=f"SKIP_INVALIDATED:{signal.signal_key}",
             )
             if signal.signal_key not in notified_keys["skipped"]:
-                notifier.signal_skipped(signal_key=signal.signal_key, side=signal.side, reason=status)
+                # Notify with the single-line header only; the per-entry detail
+                # is console-only and would bloat the Telegram message.
+                notifier.signal_skipped(signal_key=signal.signal_key, side=signal.side, reason=header)
                 notified_keys["skipped"].add(signal.signal_key)
             continue
 

@@ -51,8 +51,9 @@ def _install_auto_execution_history_filter() -> None:
     def _is_replay_detail_line(line: str) -> bool:
         stripped = line.strip()
         return (
-            (stripped.startswith("#") and "(" in stripped and "):" in stripped)
-            or stripped.startswith("Backtest realized so far:")
+                (stripped.startswith("#") and "(" in stripped and "):" in stripped)
+                or (stripped.startswith("#") and "| move " in stripped)
+                or stripped.startswith("Backtest realized so far:")
         )
 
     def _filter_execution_log_text(text: str) -> str | None:
@@ -68,9 +69,9 @@ def _install_auto_execution_history_filter() -> None:
 
         meaningful = [line for line in filtered[1:] if line.strip()]
         if (
-            filtered
-            and filtered[0].startswith("EXECUTION:  placed=0  modified=0  cancelled=0  closed=0")
-            and not meaningful
+                filtered
+                and filtered[0].startswith("EXECUTION:  placed=0  modified=0  cancelled=0  closed=0")
+                and not meaningful
         ):
             return None
         return "\n".join(filtered) if filtered else None
@@ -102,10 +103,10 @@ def _install_auto_execution_history_filter() -> None:
             return None
 
         if stripped.startswith((
-            "SANITY CHECKS FAILED",
-            "[signals]",
-            "[mt5]",
-            "Interrupted;",
+                "SANITY CHECKS FAILED",
+                "[signals]",
+                "[mt5]",
+                "Interrupted;",
         )):
             state["dashboard"] = False
             return original_print(*args, **kwargs)
