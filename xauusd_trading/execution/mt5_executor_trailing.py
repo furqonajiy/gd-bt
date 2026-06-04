@@ -68,22 +68,23 @@ class Mt5Executor(_Tp2Mt5Executor):
         and gave no price levels.
         """
         side = signal.side
-        parts = []
+        move = "rebound" if side == "BUY" else "pullback"
+        # Header carries the shared mechanic; one entry per line keeps multi-entry
+        # ladders readable. The whole block is one log action (stable across
+        # cycles), so it still dedupes to a single print.
+        lines = [
+            f"Signal {signal.signal_key}: trailing-open waiting ({side}); on arm a "
+            f"{side} STOP triggers on a {distance:g} {move} (no order placed yet):"
+        ]
         for entry_index, planned_entry in waiting_entries:
-            # 1-based to match the .N suffix shown once the STOP is placed.
-            label = entry_index + 1
+            label = entry_index + 1  # match the .N suffix shown once the STOP is placed
             if side == "BUY":
                 arm = planned_entry - distance
-                parts.append(f"#{label} arms when Ask<={arm:g} (planned {planned_entry:g}-{distance:g})")
+                lines.append(f"  #{label} arms when Ask<={arm:g} (planned {planned_entry:g}-{distance:g})")
             else:
                 arm = planned_entry + distance
-                parts.append(f"#{label} arms when Bid>={arm:g} (planned {planned_entry:g}+{distance:g})")
-        move = "rebound" if side == "BUY" else "pullback"
-        return (
-                f"Signal {signal.signal_key}: trailing-open waiting ({side}) -- "
-                + "; ".join(parts)
-                + f"; on arm, a {side} STOP triggers on a {distance:g} {move} (no order placed yet)."
-        )
+                lines.append(f"  #{label} arms when Bid>={arm:g} (planned {planned_entry:g}+{distance:g})")
+        return "\n".join(lines)
 
     def place_signal(self, signal, plan) -> ExecutionLog:
         trailing_open_distance = self._plan_trailing_open_distance(plan)
