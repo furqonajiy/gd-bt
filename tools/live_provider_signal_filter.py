@@ -161,9 +161,13 @@ def write_filtered(signals: list[ProviderSignal], output_path: Path) -> None:
     lines: list[str] = []
     for date_key in sorted(grouped):
         lines.append(f"{date_key} GMT+3")
-        for idx, sig in enumerate(sorted(grouped[date_key], key=lambda s: s.chart_time), start=1):
+        # Emit the provider's own per-day number (source_id), not a fresh 1..N
+        # count. The engine derives day_id -> signal_key from this prefix, so
+        # keeping it aligns signal_key with signals.txt / the Telegram channel
+        # for operator cross-reference; gaps (e.g. only 2 and 3 kept) are fine.
+        for sig in sorted(grouped[date_key], key=lambda s: s.chart_time):
             lines.append(
-                f"{idx}. {sig.side} XAUUSD {sig.r1} - {sig.r2} "
+                f"{sig.source_id}. {sig.side} XAUUSD {sig.r1} - {sig.r2} "
                 f"SL {sig.sl} TP1 {sig.tp1} TP2 {sig.tp2} TP3 {sig.tp3} "
                 f"{_time_ampm(sig.chart_time)}"
             )
