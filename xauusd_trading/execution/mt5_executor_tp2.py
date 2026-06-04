@@ -76,6 +76,12 @@ class Mt5Executor(_BaseMt5Executor):
     _session_skipped_stale_entries: set[str] = set()
     _session_skipped_expired_signal_keys: set[str] = set()
     _session_failed_signal_keys: set[str] = set()
+    # Each cycle re-replays the signal from scratch, so a live position whose
+    # replay status is non-terminal (e.g. TRAILING_STOP, which is absent from
+    # _REPLAY_CLOSED_STATUSES) gets re-patched to OPEN and would re-announce the
+    # same fill every interval. Key by the actual MT5 fill so each reconcile is
+    # announced once, not by the flapping engine-side status.
+    _session_announced_reconciles: set[str] = set()
 
     def _broker_epoch_to_chart_time(self, epoch: int) -> datetime:
         """MT5 broker-time-as-UTC-epoch -> chart-time naive datetime."""
@@ -372,12 +378,18 @@ class Mt5Executor(_BaseMt5Executor):
             if not needs_patch:
                 continue
 
-            log.actions.append(
-                f"  Reconciled #{idx} ({signal_key}): MT5 fill at "
-                f"{actual_price:g} lot={actual_lot:.2f} at "
-                f"{fill_time_chart:%Y-%m-%d %H:%M:%S} GMT+3 "
-                f"(engine had {before_status} at {before_price:g})"
+            announce_sig = (
+                f"{signal_key}|{idx}|{actual_price:.5f}|{actual_lot:.5f}|"
+                f"{fill_time_chart:%Y-%m-%d %H:%M:%S}"
             )
+            if announce_sig not in self._session_announced_reconciles:
+                self._session_announced_reconciles.add(announce_sig)
+                log.actions.append(
+                    f"  Reconciled #{idx} ({signal_key}): MT5 fill at "
+                    f"{actual_price:g} lot={actual_lot:.2f} at "
+                    f"{fill_time_chart:%Y-%m-%d %H:%M:%S} GMT+3 "
+                    f"(engine had {before_status} at {before_price:g})"
+                )
             if self.forensic is not None:
                 self.forensic.reconcile_action(
                     signal_key=signal_key,

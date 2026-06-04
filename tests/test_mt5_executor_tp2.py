@@ -50,7 +50,7 @@ class _Tick:
 
 
 class _FakePosition:
-    def __init__(self, *, ticket, magic, type_, sl, tp, volume=0.5, comment="", time=0):
+    def __init__(self, *, ticket, magic, type_, sl, tp, volume=0.5, comment="", time=0, price_open=0.0):
         self.ticket = ticket
         self.magic = magic
         self.type = type_
@@ -59,6 +59,7 @@ class _FakePosition:
         self.volume = volume
         self.comment = comment
         self.time = time
+        self.price_open = price_open
 
 
 class _FakeMt5:
@@ -268,3 +269,106 @@ def test_trailing_close_notifies_broker_clamped_sl_not_requested():
     assert call["new_sl"] == 4474.98
     assert call["new_sl"] != 4473.83
     assert "clamp" in call["reason"].lower()
+
+def _reconcile_chart_stub():
+    class _Chart:
+        def bars_between(self, start, end):
+            return []
+    return _Chart()
+
+
+def test_reconcile_announces_each_fill_once_across_cycles():
+    """A live position whose replay status keeps coming back non-terminal
+    (TRAILING_STOP, absent from _REPLAY_CLOSED_STATUSES) is re-patched to OPEN
+    every cycle. The stdout announcement must fire once; the engine patch must
+    still happen every cycle so manage/close keep seeing the real fill."""
+    Mt5Executor._session_announced_reconciles.clear()
+
+    signal = parse_one_signal(
+        "1. BUY XAUUSD 4518 - 4516 SL 4511 TP1 4526 TP2 4536 TP3 4551 11:25 AM",
+        source_date="2026-06-04",
+        source_offset=7,
+    )
+    pos = open_position(signal, equity=1000.0, config=DD40_COMMAND_CONFIG)
+
+    mt5_pos = _FakePosition(
+        ticket=4242,
+        magic=signal_to_magic(signal.signal_key),
+        type_=_FakeMt5.POSITION_TYPE_BUY,
+        sl=signal.tp1,
+        tp=signal.tp3,
+        volume=0.20,
+        comment=f"{signal.signal_key}.1",
+        time=1_780_000_000,
+        price_open=4494.8,
+    )
+    mt5 = _FakeMt5([mt5_pos])
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+    chart = _reconcile_chart_stub()
+    now = datetime(2026, 6, 4, 14, 0)
+
+    def reset_replay_divergence():
+        # Simulate the engine re-replaying the trailing exit each cycle: the slot
+        # comes back TRAILING_STOP at a price that differs from the live fill.
+        entry = pos.entries[0]
+        entry.status = "TRAILING_STOP"
+        entry.entry_price = 4488.55
+        entry.fill_time = None
+        entry.lot = 0.0
+
+    reset_replay_divergence()
+    log1 = executor.reconcile_with_mt5(pos, DD40_COMMAND_CONFIG, chart, now)
+    reconciled1 = [a for a in log1.actions if "Reconciled #0" in a]
+    assert len(reconciled1) == 1
+    # The patch still landed despite the divergent replay status.
+    assert pos.entries[0].status == "OPEN"
+    assert abs(pos.entries[0].entry_price - 4494.8) < 1e-9
+
+    reset_replay_divergence()
+    log2 = executor.reconcile_with_mt5(pos, DD40_COMMAND_CONFIG, chart, now)
+    reconciled2 = [a for a in log2.actions if "Reconciled #0" in a]
+    assert reconciled2 == []  # same fill -> announced once, not re-spammed
+    # ...but the engine entry was still patched back to the real fill this cycle.
+    assert pos.entries[0].status == "OPEN"
+    assert abs(pos.entries[0].entry_price - 4494.8) < 1e-9
+
+
+def test_reconcile_reannounces_when_actual_fill_changes():
+    """A genuinely new MT5 fill (different price) is a new event and must print."""
+    Mt5Executor._session_announced_reconciles.clear()
+
+    signal = parse_one_signal(
+        "1. BUY XAUUSD 4518 - 4516 SL 4511 TP1 4526 TP2 4536 TP3 4551 11:25 AM",
+        source_date="2026-06-04",
+        source_offset=7,
+    )
+    pos = open_position(signal, equity=1000.0, config=DD40_COMMAND_CONFIG)
+    mt5_pos = _FakePosition(
+        ticket=4243,
+        magic=signal_to_magic(signal.signal_key),
+        type_=_FakeMt5.POSITION_TYPE_BUY,
+        sl=signal.tp1,
+        tp=signal.tp3,
+        volume=0.20,
+        comment=f"{signal.signal_key}.1",
+        time=1_780_000_000,
+        price_open=4494.8,
+    )
+    mt5 = _FakeMt5([mt5_pos])
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+    chart = _reconcile_chart_stub()
+    now = datetime(2026, 6, 4, 14, 0)
+
+    pos.entries[0].status = "NO_FILL"
+    pos.entries[0].entry_price = 4516.0
+    pos.entries[0].fill_time = None
+    log1 = executor.reconcile_with_mt5(pos, DD40_COMMAND_CONFIG, chart, now)
+    assert len([a for a in log1.actions if "Reconciled #0" in a]) == 1
+
+    # Broker reports a different fill price for the same slot -> new signature.
+    mt5_pos.price_open = 4495.6
+    pos.entries[0].status = "NO_FILL"
+    pos.entries[0].entry_price = 4516.0
+    pos.entries[0].fill_time = None
+    log2 = executor.reconcile_with_mt5(pos, DD40_COMMAND_CONFIG, chart, now)
+    assert len([a for a in log2.actions if "Reconciled #0" in a]) == 1
