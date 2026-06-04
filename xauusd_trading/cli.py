@@ -89,7 +89,7 @@ def _auto_skip_invalidated_status_line(signal_key: str, rec: Any) -> str:
     )
 
 
-def _auto_skip_invalidated_detail_lines(rec: Any) -> list[str]:
+def _auto_skip_invalidated_detail_lines(signal_key: str, rec: Any) -> list[str]:
     """Per-entry breakdown for a played-out signal: size, fill, close, move, $.
 
     Values come straight off the replay Position's entries; getattr keeps it
@@ -100,11 +100,15 @@ def _auto_skip_invalidated_detail_lines(rec: Any) -> list[str]:
     if rp is None:
         return []
     side = getattr(getattr(rp, "signal", None), "side", "?")
+    # day_id from the signal_key ('...#02' -> '02') tags each line to the signal
+    # and matches the .N suffix shown once a STOP is placed: #02.1, #02.2.
+    day_tag = signal_key.rsplit("#", 1)[-1] if "#" in signal_key else None
     lines: list[str] = []
     for e in getattr(rp, "entries", []) or []:
         label = int(getattr(e, "entry_index", 0)) + 1
+        entry_tag = f"#{day_tag}.{label}" if day_tag else f"#{label}"
         lot = float(getattr(e, "lot", 0.0) or 0.0)
-        head = f"  #{label} {side} {lot:g} lot"
+        head = f"  {entry_tag} {side} {lot:g} lot"
         fill_time = getattr(e, "fill_time", None)
         if fill_time is None:
             lines.append(f"{head}  no fill | move -- | $0.00")
@@ -400,7 +404,12 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                 f"{rec.new_signal.pending_expires_at:%Y-%m-%d %H:%M} GMT+3 "
                 f"(now {replay_end:%H:%M}). Skipped."
             )
-            _auto_record_candidate_action(log, candidate_console_state, signal.signal_key, status)
+            # The 'now HH:MM' clock changes every minute, so dedupe on a stable
+            # per-signal key; expiry is terminal and only needs announcing once.
+            _auto_record_candidate_action(
+                log, candidate_console_state, signal.signal_key, status,
+                dedup_text=f"SKIP_EXPIRED:{signal.signal_key}",
+            )
             if signal.signal_key not in notified_keys["skipped"]:
                 notifier.signal_skipped(signal_key=signal.signal_key, side=signal.side, reason=status)
                 notified_keys["skipped"].add(signal.signal_key)
@@ -408,7 +417,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
 
         if rec.new_signal.action == "SKIP_INVALIDATED":
             header = _auto_skip_invalidated_status_line(signal.signal_key, rec)
-            detail = _auto_skip_invalidated_detail_lines(rec)
+            detail = _auto_skip_invalidated_detail_lines(signal.signal_key, rec)
             console_status = "\n".join([header, *detail]) if detail else header
             # Played-out is terminal per signal; its line carries a replay
             # realized P&L that re-computes every cycle, so dedupe on a stable

@@ -301,6 +301,39 @@ def test_auto_played_out_status_dedupes_despite_flapping_realized(tmp_path, monk
     captured = capsys.readouterr()
     # Header + per-entry breakdown all dedupe to a single print despite the flap.
     assert captured.out.count("every entry has already played out in backtest replay") == 1
-    assert captured.out.count("#1 BUY 0.01 lot  filled 08:05:10 @4470.10 -> closed 08:20:30 @4478.00 TP1 | move +7.90 | $+7.90") == 1
-    assert captured.out.count("#2 BUY 0.01 lot  no fill | move -- | $0.00") == 1
+    assert captured.out.count("#01.1 BUY 0.01 lot  filled 08:05:10 @4470.10 -> closed 08:20:30 @4478.00 TP1 | move +7.90 | $+7.90") == 1
+    assert captured.out.count("#01.2 BUY 0.01 lot  no fill | move -- | $0.00") == 1
     assert "[auto heartbeat" not in captured.out
+
+
+def test_auto_expired_skip_dedupes_across_minute_change(tmp_path, monkeypatch, capsys):
+    """The expired-skip line embeds a 'now HH:MM' clock; it must print once even
+    as that clock ticks to a new minute across cycles (expiry is terminal)."""
+    signal = _signal()
+    signals_path = tmp_path / "signals.txt"
+    signals_path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda path: [signal])
+
+    def fake_decide(*args, **kwargs):
+        plan = SimpleNamespace(
+            action="SKIP_EXPIRED", orders=[], replay_position=None,
+            rationale="", pending_expires_at=datetime(2026, 6, 2, 5, 50),
+        )
+        return SimpleNamespace(new_signal=plan)
+
+    monkeypatch.setattr(cli, "decide", fake_decide)
+
+    state: dict[str, str] = {}
+
+    def run_once(now):
+        return cli._auto_pass(
+            _args(tmp_path), DEFAULT_CONFIG, _FakeConn(),
+            _FakeChart(now), signals_path,
+            iteration=1, candidate_console_state=state,
+        )
+
+    assert run_once(datetime(2026, 6, 2, 6, 0)) == 0
+    assert run_once(datetime(2026, 6, 2, 6, 1)) == 0  # 'now' advances a minute
+
+    captured = capsys.readouterr()
+    assert captured.out.count("pending window already closed") == 1
