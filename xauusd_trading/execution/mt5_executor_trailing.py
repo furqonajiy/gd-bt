@@ -290,11 +290,14 @@ class Mt5Executor(_Tp2Mt5Executor):
 
     def _modify_stop(self, p, sl: float, signal_key: str, action_name: str,
                      label: str, log: ExecutionLog,
-                     locked: list[int], failed: list[tuple[int, str]]) -> None:
+                     locked: list[int], failed: list[tuple[int, str]]) -> float | None:
+        # Returns the SL actually written to the broker (after stops_level/freeze
+        # clamping), or None if skipped/failed. Callers must report THIS value, not
+        # the requested one -- the broker can move the stop off the requested level.
         safe = prepare_sltp_modify_request(self, p, sl, signal_key, action_name, label, log)
         if safe is None:
             failed.append((p.ticket, "SLTP skipped by broker stop/freeze clamp"))
-            return
+            return None
         req = safe.request
         res = self.mt5.order_send(req)
         success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
@@ -306,10 +309,11 @@ class Mt5Executor(_Tp2Mt5Executor):
             if safe.changed:
                 suffix = f" (requested {safe.requested_sl:g}, clamped for broker stops)"
             log.actions.append(f"  Locked SL on #{p.ticket} to {label} {safe.clamped_sl:g}{suffix} ({signal_key})")
-        else:
-            reason = str(res.comment if res else self.mt5.last_error())
-            failed.append((p.ticket, reason))
-            log.actions.append(f"  FAILED {label} SL-lock on #{p.ticket}: {reason}")
+            return float(safe.clamped_sl)
+        reason = str(res.comment if res else self.mt5.last_error())
+        failed.append((p.ticket, reason))
+        log.actions.append(f"  FAILED {label} SL-lock on #{p.ticket}: {reason}")
+        return None
 
     def _apply_trailing_close_stops(self, engine_pos, config) -> ExecutionLog:
         has_fixed_trailing_close = float(getattr(config, "trailing_close_distance", 0.0) or 0.0) > 0
@@ -335,15 +339,21 @@ class Mt5Executor(_Tp2Mt5Executor):
             )
             if not improves:
                 continue
-            self._modify_stop(
+            applied_sl = self._modify_stop(
                 p, target_sl, signal_key, "modify_trailing_close_sl", "trailing-stop",
                 log, locked, failed,
             )
-            if self.notifier is not None and int(p.ticket) in locked:
+            if self.notifier is not None and applied_sl is not None:
+                # Report the SL the broker actually holds. When stops_level pushed it
+                # off the engine's target, say so -- otherwise the operator is told a
+                # stop level that isn't really there.
+                reason = "trailing-stop"
+                if abs(applied_sl - target_sl) > tolerance:
+                    reason = f"trailing-stop (target {target_sl:g} clamped to broker minimum)"
                 self.notifier.sl_moved(
                     signal_key=signal_key, side=engine_pos.signal.side,
                     entry_index=entry.entry_index, old_sl=current_sl,
-                    new_sl=target_sl, reason="trailing-stop",
+                    new_sl=applied_sl, reason=reason,
                 )
         return log
 

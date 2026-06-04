@@ -204,3 +204,67 @@ def test_external_sl_change_warns_without_modify_when_executor_issued_no_modify(
     assert not any(req.get("action") == mt5.TRADE_ACTION_SLTP for req in mt5.requests)
     assert any("external SL change detected" in warning for warning in log.warnings)
     assert any("MT5 native trailing enabled" in warning for warning in log.warnings)
+
+
+class _RecordingNotifier:
+    """Captures sl_moved; no-ops any other notifier method the executor calls."""
+    def __init__(self):
+        self.sl_moved_calls = []
+
+    def sl_moved(self, **kw):
+        self.sl_moved_calls.append(kw)
+
+    def __getattr__(self, _name):
+        return lambda *a, **k: None
+
+
+def test_trailing_close_notifies_broker_clamped_sl_not_requested():
+    # Reproduces live signal 2026-06-04#01: the engine's trailing-close target sits
+    # below the market, so stops_level clamps it. The notification must report the
+    # clamped SL the broker actually holds, not the (unattainable) requested level.
+    signal = parse_one_signal(
+        "1. SELL XAUUSD 4476 - 4474 SL 4481 TP1 4464 TP2 4454 TP3 4434 07:25 AM",
+        source_date="2026-06-04",
+        source_offset=3,
+    )
+    cfg = replace(
+        DD40_COMMAND_CONFIG,
+        entry_count=1,
+        trailing_close_distance=0.5,
+        activation_delay_minutes=0,
+        lock_after_tp1=False,
+        lock_after_tp2=False,
+    )
+    pos = open_position(signal, equity=1000.0, config=cfg)
+    pos.stage = 0
+    e = pos.entries[0]
+    e.status = "OPEN"
+    e.fill_time = datetime(2026, 6, 4, 7, 27)
+    e.trailing_stop = 4473.83  # ratcheted short stop = bar low 4473.33 + 0.5
+
+    mt5_pos = _FakePosition(
+        ticket=4242,
+        magic=signal_to_magic(signal.signal_key),
+        type_=_FakeMt5.POSITION_TYPE_SELL,
+        sl=4480.23,
+        tp=signal.tp1,
+        volume=0.22,
+        comment=f"{signal.signal_key}.1",
+    )
+    # Ask 4474.58 + stops_level 40 pts (0.40) => a SELL SL must be >= 4474.98,
+    # so the engine's 4473.83 target is clamped UP to 4474.98.
+    mt5 = _FakeMt5([mt5_pos], tick=_Tick(bid=4474.31, ask=4474.58), stops=40)
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+    notifier = _RecordingNotifier()
+    executor.notifier = notifier
+
+    executor.manage_position(pos, cfg, datetime(2026, 6, 4, 7, 28, 36))
+
+    # Broker holds the clamped SL...
+    assert mt5_pos.sl == 4474.98
+    # ...and the operator is told THAT, not the requested 4473.83 (the bug).
+    assert len(notifier.sl_moved_calls) == 1
+    call = notifier.sl_moved_calls[0]
+    assert call["new_sl"] == 4474.98
+    assert call["new_sl"] != 4473.83
+    assert "clamp" in call["reason"].lower()
