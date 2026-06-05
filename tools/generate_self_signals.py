@@ -57,7 +57,7 @@ def _read_mt5_csv(path: Path) -> pd.DataFrame:
     out["time"] = pd.to_datetime(
         df["DATE"].astype(str) + " " + df["TIME"].astype(str),
         format="%Y.%m.%d %H:%M:%S",
-    )
+        )
     for src, dst in (("OPEN", "open"), ("HIGH", "high"), ("LOW", "low"), ("CLOSE", "close"), ("SPREAD", "spread")):
         out[dst] = pd.to_numeric(df[src], errors="coerce")
     out["source_file"] = path.name
@@ -135,6 +135,61 @@ def _load_working_m15(m15_patterns: list[str] | None, m1_patterns: list[str] | N
     return combined[["time", "open", "high", "low", "close", "spread"]]
 
 
+# ---------------------------------------------------------------------------
+# 1H trend gate (optional; OFF by default so it is a clean A/B against the
+# single-timeframe generator).
+# ---------------------------------------------------------------------------
+def _resample_ohlc(df: pd.DataFrame, rule: str, min_bars: int) -> pd.DataFrame:
+    """Aggregate OHLC(+spread) bars to a coarser timeframe.
+
+    min_bars drops the still-forming final bucket -- the same anti-look-ahead
+    guard the M1->M15 path uses: a higher-timeframe bar may only inform a signal
+    once it has fully closed.
+    """
+    if df.empty:
+        return pd.DataFrame(columns=["time", "open", "high", "low", "close", "spread"])
+    indexed = df.sort_values("time").set_index("time")
+    agg = indexed.resample(rule, label="left", closed="left").agg(
+        open=("open", "first"),
+        high=("high", "max"),
+        low=("low", "min"),
+        close=("close", "last"),
+        spread=("spread", "last"),
+        bar_count=("close", "count"),
+    )
+    agg = agg[agg["bar_count"] >= min_bars].drop(columns=["bar_count"])
+    return agg.dropna(subset=["open", "high", "low", "close", "spread"]).reset_index()
+
+
+def _h1_bars(working_m15: pd.DataFrame, h1_patterns: list[str] | None) -> pd.DataFrame:
+    """1H bars for the trend gate: prefer explicit --h1-charts, else derive them
+    from the working M15 (4 closed M15 bars per hour) so no extra file is needed."""
+    if h1_patterns:
+        direct = _load_csvs(_expand_patterns(h1_patterns))
+        if not direct.empty:
+            return direct[["time", "open", "high", "low", "close", "spread"]]
+    return _resample_ohlc(working_m15, "1h", 4)
+
+
+def _build_h1_trend(working_m15: pd.DataFrame, h1_patterns: list[str] | None,
+                    ema_fast: int, ema_slow: int) -> pd.DataFrame:
+    """Per-1H-bar trend (+1 up / -1 down / 0 flat) from an EMA cross, stamped at
+    the bar's CLOSE time (open + 1h) so a backward merge_asof attaches only an
+    already-closed 1H trend to each M15 signal -- no look-ahead."""
+    h1 = _h1_bars(working_m15, h1_patterns).sort_values("time").reset_index(drop=True)
+    if h1.empty:
+        return pd.DataFrame(columns=["trend_known_time", "h1_trend"])
+    fast = h1["close"].ewm(span=ema_fast, adjust=False).mean()
+    slow = h1["close"].ewm(span=ema_slow, adjust=False).mean()
+    trend = pd.Series(0, index=h1.index, dtype="int64")
+    trend[fast > slow] = 1
+    trend[fast < slow] = -1
+    return pd.DataFrame({
+        "trend_known_time": h1["time"] + pd.Timedelta(hours=1),
+        "h1_trend": trend,
+    }).sort_values("trend_known_time").reset_index(drop=True)
+
+
 def _add_indicators(m15: pd.DataFrame, ema_fast: int, ema_slow: int, atr_period: int) -> pd.DataFrame:
     out = m15.copy()
     out["ema_fast"] = out["close"].ewm(span=ema_fast, adjust=False).mean()
@@ -145,7 +200,7 @@ def _add_indicators(m15: pd.DataFrame, ema_fast: int, ema_slow: int, atr_period:
             out["high"] - out["low"],
             (out["high"] - prev_close).abs(),
             (out["low"] - prev_close).abs(),
-        ],
+            ],
         axis=1,
     ).max(axis=1)
     out["atr"] = true_range.rolling(atr_period, min_periods=atr_period).mean()
@@ -161,14 +216,14 @@ def _fmt_time(value: datetime) -> str:
 
 
 def _build_signal(
-    row,
-    side: str,
-    entry_offset: float,
-    range_width: float,
-    sl_gap: float,
-    tp1_distance: float,
-    tp2_distance: float,
-    tp3_distance: float,
+        row,
+        side: str,
+        entry_offset: float,
+        range_width: float,
+        sl_gap: float,
+        tp1_distance: float,
+        tp2_distance: float,
+        tp3_distance: float,
 ) -> SignalRow:
     close = round(float(row.close), 2)
     if side == "BUY":
@@ -191,6 +246,20 @@ def _build_signal(
 def _generate_from_m15(m15: pd.DataFrame, args: argparse.Namespace) -> list[SignalRow]:
     data = _add_indicators(m15, args.ema_fast, args.ema_slow, args.atr_period)
     data["signal_time"] = data["time"] + pd.Timedelta(minutes=15)
+
+    # 1H trend gate: 1H sets direction, M15 times the entry. A backward
+    # merge_asof attaches the latest CLOSED 1H trend to each M15 signal. When the
+    # flag is off, nothing below changes and output is byte-identical.
+    h1_filter = bool(getattr(args, "h1_trend_filter", False))
+    if h1_filter:
+        h1_trend = _build_h1_trend(
+            m15, getattr(args, "h1_charts", None),
+            getattr(args, "h1_ema_fast", 21), getattr(args, "h1_ema_slow", 55),
+        )
+        data = pd.merge_asof(
+            data.sort_values("signal_time"), h1_trend,
+            left_on="signal_time", right_on="trend_known_time", direction="backward",
+        ).reset_index(drop=True)
 
     start_raw = getattr(args, "start_date", None)
     end_raw = getattr(args, "end_date", None)
@@ -220,6 +289,12 @@ def _generate_from_m15(m15: pd.DataFrame, args: argparse.Namespace) -> list[Sign
             side = "SELL"
         if side is None:
             continue
+
+        if h1_filter:
+            # Drop signals that disagree with (or precede) the closed 1H trend.
+            h1t = row.h1_trend
+            if pd.isna(h1t) or (side == "BUY" and h1t <= 0) or (side == "SELL" and h1t >= 0):
+                continue
 
         previous_same_side = last_side_time[side]
         if previous_same_side is not None and signal_time - previous_same_side < pd.Timedelta(minutes=args.same_side_spacing_minutes):
@@ -289,6 +364,12 @@ def add_generation_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--tp1-distance", type=float, default=4.00)
     p.add_argument("--tp2-distance", type=float, default=7.00)
     p.add_argument("--tp3-distance", type=float, default=12.00)
+    # 1H trend gate (off by default -> single-timeframe behaviour unchanged).
+    p.add_argument("--h1-trend-filter", action="store_true",
+                   help="Gate M15 signals to the 1H EMA trend direction (1H sets "
+                        "direction, M15 times entry). Off by default for a clean A/B.")
+    p.add_argument("--h1-ema-fast", type=int, default=21)
+    p.add_argument("--h1-ema-slow", type=int, default=55)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -296,6 +377,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--m15-charts", nargs="+", default=["data/XAUUSD_M15_*_ELEV8.csv"])
     p.add_argument("--m1-charts", nargs="+", default=["data/XAUUSD_M1_*_ELEV8.csv"])
     p.add_argument("--charts", nargs="+", default=None, help="Legacy M1 chart alias; used only when --m1-charts is omitted.")
+    p.add_argument("--h1-charts", nargs="+", default=None,
+                   help="Optional 1H bar source for the trend gate; if omitted while "
+                        "--h1-trend-filter is set, 1H is aggregated from the working M15.")
     p.add_argument("--output", required=True)
     p.add_argument("--alias-output", default=None)
     p.add_argument("--start-date", default="2025-01-01")
@@ -327,6 +411,10 @@ def generation_summary(args: argparse.Namespace, signals: list[SignalRow], outpu
             "tp1_distance": args.tp1_distance,
             "tp2_distance": args.tp2_distance,
             "tp3_distance": args.tp3_distance,
+            "h1_trend_filter": bool(getattr(args, "h1_trend_filter", False)),
+            "h1_ema_fast": getattr(args, "h1_ema_fast", 21),
+            "h1_ema_slow": getattr(args, "h1_ema_slow", 55),
+            "h1_charts": list(getattr(args, "h1_charts", None) or []),
         },
     }
 
