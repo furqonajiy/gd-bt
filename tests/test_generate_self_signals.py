@@ -4,6 +4,9 @@ import importlib.util
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+
+from xauusd_trading import Bar
 
 
 def _load_tool(repo_root: Path):
@@ -32,6 +35,24 @@ def _write_m15_chart(path: Path) -> None:
     path.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 
+def _live_args_without_dates() -> SimpleNamespace:
+    return SimpleNamespace(
+        ema_fast=21,
+        ema_slow=55,
+        atr_period=14,
+        min_atr=0.30,
+        max_atr=80.0,
+        same_side_spacing_minutes=30,
+        max_signals_per_day=40,
+        entry_offset=1.0,
+        range_width=2.0,
+        sl_gap_from_range=3.5,
+        tp1_distance=4.0,
+        tp2_distance=7.0,
+        tp3_distance=12.0,
+    )
+
+
 def test_generate_self_signals_writes_gmt3_pullback_signals(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     tool = _load_tool(repo_root)
@@ -54,3 +75,31 @@ def test_generate_self_signals_writes_gmt3_pullback_signals(tmp_path: Path) -> N
     assert "2025-01-01 GMT+3" in text
     assert "BUY XAUUSD" in text
     assert " SL " in text and " TP1 " in text and " TP2 " in text and " TP3 " in text
+
+
+def test_live_m1_generation_does_not_require_batch_date_filters() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    tool = _load_tool(repo_root)
+
+    t = datetime(2025, 1, 1, 0, 0)
+    bars = []
+    for i in range(90 * 15):
+        price = 2600.0 + i * 0.02
+        bars.append(
+            Bar(
+                time=t,
+                open=price,
+                high=price + 0.20,
+                low=price - 0.20,
+                close=price + 0.05,
+                spread_points=25,
+                spread_price=0.25,
+            )
+        )
+        t += timedelta(minutes=1)
+
+    signals = tool.generate_signals_from_m1_bars(bars, _live_args_without_dates())
+
+    assert signals
+    assert signals[0].side == "BUY"
+    assert hasattr(signals[0], "signal_time_chart")
