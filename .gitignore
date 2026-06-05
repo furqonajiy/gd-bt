@@ -219,3 +219,6 @@ __marimo__/
 
 signal_overrides.jsonl
 signal_overrides.jsonl.offset
+
+# BTC runtime state (positions, forensic) -- never commit
+btcusd_trading/runtime/
