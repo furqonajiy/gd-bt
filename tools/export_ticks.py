@@ -8,7 +8,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -86,6 +86,32 @@ def _is_header_only_tick_file(path: Path) -> bool:
     return len(lines) == 1 and lines[0].strip() == HEADER_LINE
 
 
+def _last_tick_msc(path: Path) -> Optional[int]:
+    """Last recorded tick's <TIME_MSC>, or None if the file holds no ticks.
+
+    Tail-reads a small trailing window rather than the whole file: a month of
+    ticks is millions of rows and merge only needs the final timestamp. The
+    final data line is always complete because every row this tool writes ends
+    in a line terminator, so it sits well inside the trailing window.
+    """
+    if not path.exists() or path.stat().st_size == 0:
+        return None
+    with path.open("rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        window = min(size, 65536)
+        f.seek(size - window)
+        tail = f.read().decode("utf-8", errors="replace")
+    for line in reversed(tail.splitlines()):
+        line = line.strip()
+        if not line or line == HEADER_LINE:
+            continue
+        cols = line.split("\t")
+        if len(cols) >= 3 and cols[2].isdigit():
+            return int(cols[2])
+    return None
+
+
 def _tick_rows(ticks, server_offset_hours: int) -> Iterable[dict[str, str]]:
     for tick in ticks:
         bid = float(tick["bid"])
@@ -131,20 +157,42 @@ def _export_month(conn: Mt5Connection, args: argparse.Namespace, month_start: da
     mt5 = conn.mt5
     out_path = Path(args.output_dir) / f"{args.symbol}_TICK_{month_start:%Y%m}_ELEV8.csv"
 
+    # A header-only file is a stale artifact of a prior run that hit a no-tick
+    # window; drop it so it neither blocks a re-fetch nor counts as data.
     if _is_header_only_tick_file(out_path):
         out_path.unlink()
         print(f"[empty] removed header-only tick file: {out_path}")
 
-    if out_path.exists() and out_path.stat().st_size > 0 and not args.overwrite:
-        print(f"[skip] {out_path} exists; use --overwrite to replace.")
-        return 0
-    if out_path.exists() and args.overwrite:
+    out_exists = out_path.exists() and out_path.stat().st_size > 0
+
+    if out_exists and args.overwrite:
         out_path.unlink()
+        out_exists = False
+
+    # Merge resumes from the last stored tick and appends only newer ones, so
+    # earlier ticks -- which may already have aged out of the broker's tick
+    # window -- are never re-fetched. --overwrite would re-pull and thus lose
+    # them; merge is the safe way to grow a rolling-month tick file.
+    resume_msc: Optional[int] = None
+    fetch_start = month_start
+    append = False
+    if out_exists and args.merge:
+        resume_msc = _last_tick_msc(out_path)
+        if resume_msc is not None:
+            append = True
+            # copy_ticks_range is second-granular on input, so resume at the
+            # whole second holding the last tick and drop time_msc <= last_msc
+            # below: that re-pulls only the boundary second and de-dupes it.
+            resume_chart = _mt5_msc_to_chart_time((resume_msc // 1000) * 1000, args.mt5_server_offset)
+            fetch_start = max(resume_chart, month_start)
+    elif out_exists and not args.overwrite:
+        print(f"[skip] {out_path} exists; use --overwrite to replace or --merge to extend.")
+        return 0
 
     total = 0
     wrote_header = False
 
-    for chunk_start, chunk_end in _iter_chunks(month_start, month_end, args.chunk_hours):
+    for chunk_start, chunk_end in _iter_chunks(fetch_start, month_end, args.chunk_hours):
         start_epoch = _chart_to_mt5_epoch(chunk_start, args.mt5_server_offset)
         end_epoch = _chart_to_mt5_epoch(chunk_end, args.mt5_server_offset)
 
@@ -165,8 +213,13 @@ def _export_month(conn: Mt5Connection, args: argparse.Namespace, month_start: da
                 time.sleep(args.sleep_seconds)
             continue
 
-        wrote = _write_rows(out_path, _tick_rows(ticks, args.mt5_server_offset), write_header=not wrote_header)
-        wrote_header = True
+        rows = _tick_rows(ticks, args.mt5_server_offset)
+        if resume_msc is not None:
+            rows = (r for r in rows if int(r["<TIME_MSC>"]) > resume_msc)
+
+        wrote = _write_rows(out_path, rows, write_header=(not append and not wrote_header))
+        if wrote:
+            wrote_header = True
         total += wrote
 
         if args.progress:
@@ -179,12 +232,19 @@ def _export_month(conn: Mt5Connection, args: argparse.Namespace, month_start: da
             time.sleep(args.sleep_seconds)
 
     if total == 0:
-        if out_path.exists():
-            out_path.unlink()
-        print(f"[empty] {args.symbol} {month_start:%Y-%m}: no ticks; skipped file creation.")
+        if append:
+            # Existing file is already current; a no-op merge must never delete it.
+            print(f"[merge] {out_path}: up to date (+0 ticks).")
+        else:
+            if out_path.exists():
+                out_path.unlink()
+            print(f"[empty] {args.symbol} {month_start:%Y-%m}: no ticks; skipped file creation.")
         return 0
 
-    print(f"[done] {out_path}: {total:,} ticks")
+    if append:
+        print(f"[merge] {out_path}: +{total:,} ticks (resumed {fetch_start:%Y-%m-%d %H:%M:%S}).")
+    else:
+        print(f"[done] {out_path}: {total:,} ticks")
     return total
 
 
@@ -197,8 +257,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mt5-server-offset", type=int, default=3)
     p.add_argument("--chunk-hours", type=int, default=6)
     p.add_argument("--sleep-seconds", type=float, default=0.2)
-    p.add_argument("--overwrite", action="store_true")
     p.add_argument("--progress", action="store_true")
+
+    # Re-running on an existing monthly file: extend it forward (--merge) or
+    # rebuild it wholesale (--overwrite). Mutually exclusive; default is skip.
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--overwrite", action="store_true",
+                      help="Delete and re-fetch the whole month (loses ticks aged out of the broker window).")
+    mode.add_argument("--merge", action="store_true",
+                      help="Append ticks newer than the last recorded one to an existing monthly file.")
 
     p.add_argument("--mt5-path", default=None)
     p.add_argument("--mt5-login", type=int, default=None)
