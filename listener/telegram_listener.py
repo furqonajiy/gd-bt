@@ -76,6 +76,12 @@ NOTIFICATIONS_POLL_SECONDS = 2.0
 # per-chat flood limit.
 NOTIFICATIONS_SEND_GAP_SECONDS = 0.5
 
+# Listener -> auto control bridge. When VICTOR edits or deletes a signal we have
+# already written, the listener appends one JSON object per line here; the live
+# `auto`/`manage` loop consumes it (matching by magic) to amend or revoke the
+# actual MT5 order. File-only IPC keeps the listener free of any MT5 dependency.
+OVERRIDES_PATH = REPO_ROOT / "signal_overrides.jsonl"
+
 # VICTOR posts in GMT+7. Must match the existing section headers in
 # signals.txt; if the channel ever changes timezone, change both together.
 SIGNAL_SOURCE_TZ_OFFSET = 7
@@ -604,6 +610,24 @@ def _section_signal_count(lines: list[str], header_idx: int) -> int:
     return count
 
 
+def _next_index_in_section(lines: list[str], header_idx: int) -> int:
+    """Next free signal number = max existing number + 1.
+
+    Counting lines would reuse a number after a deletion (1,3 -> next 3 collides
+    with the live #3); keying off the max keeps a deleted number permanently
+    retired so signal_key/magic stay unique and stable -- a gap is harmless
+    because the engine keys on the printed `N.`, not on position.
+    """
+    mx = 0
+    for line in lines[header_idx + 1:]:
+        if DATE_HEADER_RE.match(line):
+            break
+        m = SIGNAL_LINE_RE.match(line)
+        if m:
+            mx = max(mx, int(m.group("id")))
+    return mx + 1
+
+
 class DuplicateSignalError(ValueError):
     """Raised by append_manual_signal when the content already exists."""
 
@@ -688,12 +712,104 @@ def write_signal_to_file(parsed: ParsedSignal, signal_dt_gmt7: datetime) -> tupl
         signal_line = parsed.to_line(day_index, time_text)
         lines = _append_new_section(lines, date_str, SIGNAL_SOURCE_TZ_OFFSET, signal_line)
     else:
-        day_index = _section_signal_count(lines, header_idx) + 1
+        day_index = _next_index_in_section(lines, header_idx)
         signal_line = parsed.to_line(day_index, time_text)
         lines = _insert_into_section(lines, header_idx, signal_line)
 
     _atomic_write_lines(lines)
     return signal_line, day_index, False
+
+
+# ---------------------------------------------------------------------------
+# edit / delete propagation: rewrite or remove a line by signal_key, and emit a
+# control record for `auto` to act on the live MT5 order (file-only IPC).
+# ---------------------------------------------------------------------------
+
+def emit_override(record: dict) -> None:
+    """Append one amend/revoke control record for `auto` to consume.
+
+    Append-only JSONL: `auto` tails it with a byte-offset sidecar, so a plain
+    append is the right write -- a torn final line is re-read next poll, never
+    half-applied.
+    """
+    with open(OVERRIDES_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, separators=(",", ":")) + "\n")
+
+
+def _parse_signal_key(signal_key: str) -> Optional[tuple[str, int]]:
+    """`2026-06-05#03` -> ('2026-06-05', 3); None when malformed."""
+    try:
+        date_str, idx_str = signal_key.split("#", 1)
+        return date_str, int(idx_str)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _find_line_index_by_id(lines: list[str], header_idx: int, day_index: int) -> Optional[int]:
+    """List index of the signal numbered `day_index` within a date section."""
+    for j in range(header_idx + 1, len(lines)):
+        if DATE_HEADER_RE.match(lines[j]):
+            break
+        m = SIGNAL_LINE_RE.match(lines[j])
+        if m and int(m.group("id")) == day_index:
+            return j
+    return None
+
+
+def update_signal_in_file(signal_key: str, parsed: ParsedSignal) -> Optional[tuple[str, str]]:
+    """Rewrite the line for `signal_key` in place from `parsed`.
+
+    Keeps the original `N.` and the original post-time -- an edit corrects the
+    values, not the identity, so signal_key/magic are unchanged and `auto`'s
+    reconciliation still matches. Returns (old_line, new_line), or None when the
+    line isn't present (e.g. it was a content-duplicate that never got its own
+    line) so the caller can skip emitting an ambiguous amend.
+    """
+    parts = _parse_signal_key(signal_key)
+    if parts is None:
+        return None
+    date_str, day_index = parts
+    lines = _read_signals_lines()
+    header_idx = _find_section(lines, date_str)
+    if header_idx is None:
+        return None
+    li = _find_line_index_by_id(lines, header_idx, day_index)
+    if li is None:
+        return None
+    old_line = lines[li].strip()
+    m = STRICT_LINE_RE.match(lines[li])
+    time_text = m.group("time") if m else _format_time(
+        datetime.now(SIGNAL_SOURCE_TZ).replace(tzinfo=None)
+    )
+    new_line = parsed.to_line(day_index, time_text)
+    if new_line.strip() != old_line:
+        lines[li] = new_line
+        _atomic_write_lines(lines)
+    return old_line, new_line
+
+
+def remove_signal_from_file(signal_key: str) -> Optional[str]:
+    """Delete the line for `signal_key`; leave every other number untouched.
+
+    A numbering gap is harmless (the engine keys on the printed `N.`), so no
+    renumbering and no flat-book cutover. The (possibly now-empty) date header is
+    left in place. Returns the removed line, or None when it isn't present.
+    """
+    parts = _parse_signal_key(signal_key)
+    if parts is None:
+        return None
+    date_str, day_index = parts
+    lines = _read_signals_lines()
+    header_idx = _find_section(lines, date_str)
+    if header_idx is None:
+        return None
+    li = _find_line_index_by_id(lines, header_idx, day_index)
+    if li is None:
+        return None
+    removed = lines[li].strip()
+    del lines[li]
+    _atomic_write_lines(lines)
+    return removed
 
 
 def append_manual_signal(line: str) -> tuple[str, int, list[str], str, Optional[float]]:
@@ -734,7 +850,7 @@ def append_manual_signal(line: str) -> tuple[str, int, list[str], str, Optional[
         if match is not None:
             raise DuplicateSignalError(match[0], match[1])
 
-    new_index = 1 if header_idx is None else _section_signal_count(lines, header_idx) + 1
+    new_index = 1 if header_idx is None else _next_index_in_section(lines, header_idx)
     rendered = parsed.to_line(new_index, time_text)
     if not STRICT_LINE_RE.match(rendered):
         raise ValueError("Line is unparseable after renumbering -- nothing was written.")
@@ -752,7 +868,7 @@ def next_day_index(date_str: str) -> int:
     header_idx = _find_section(lines, date_str)
     if header_idx is None:
         return 1
-    return _section_signal_count(lines, header_idx) + 1
+    return _next_index_in_section(lines, header_idx)
 
 
 # ---------------------------------------------------------------------------
@@ -925,6 +1041,7 @@ class Listener:
 
         self.client.add_event_handler(self._on_channel_new, events.NewMessage(chats=self.channel_id))
         self.client.add_event_handler(self._on_channel_edit, events.MessageEdited(chats=self.channel_id))
+        self.client.add_event_handler(self._on_channel_delete, events.MessageDeleted(chats=self.channel_id))
         self.client.add_event_handler(self._on_saved, events.NewMessage(chats=self.saved_id, from_users=self.saved_id))
 
     async def catch_up(self, lookback_hours: int = 24) -> None:
@@ -948,6 +1065,37 @@ class Listener:
 
     async def _on_channel_edit(self, event) -> None:
         await self._process_message(event.message, is_edit=True)
+
+    async def _on_channel_delete(self, event) -> None:
+        """VICTOR deleted message(s): revoke any signal we wrote for them.
+
+        Telegram delete events are best-effort and carry only ids, so each id is
+        mapped to a tracked signal_key via our own state -- unknown ids are
+        ignored. Removes the feed line and queues an MT5 revoke (decision B:
+        cancel the pending order / close the open position, no debounce).
+        """
+        async with self._lock:
+            for mid in list(getattr(event, "deleted_ids", []) or []):
+                existing = state_get(self.state, mid)
+                if not existing or existing.get("status") != "written":
+                    continue
+                signal_key = existing["signal_key"]
+                if self.dry_run:
+                    log.info(f"[dry-run] would revoke {signal_key} (deleted message {mid})")
+                    continue
+                removed = remove_signal_from_file(signal_key)
+                record = dict(existing)
+                record.update(status="deleted_by_source", line=removed or existing.get("line", ""))
+                state_set(self.state, mid, record)
+                save_state(self.state)
+                emit_override({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "message_id": mid,
+                    "signal_key": signal_key,
+                    "action": "revoke",
+                })
+                log.info(f"Revoked {signal_key} (deleted message {mid}): {removed}")
+                await self._notify_revoke(signal_key, removed or existing.get("line", ""))
 
     async def _on_saved(self, event) -> None:
         text = (event.message.message or "").strip()
@@ -995,10 +1143,10 @@ class Listener:
         async with self._lock:
             existing = state_get(self.state, message_id)
 
-            if existing and existing.get("status") == "written":
+            if existing and existing.get("status") == "written" and not is_edit:
                 log.debug(
-                    f"Message {message_id} already written as {existing.get('signal_key')}; ignoring "
-                    f"({'edit' if is_edit else 'new'} event)"
+                    f"Message {message_id} already written as {existing.get('signal_key')}; "
+                    f"ignoring (re-seen as new)."
                 )
                 return
 
@@ -1016,6 +1164,17 @@ class Listener:
                 parsed_raw = parse_victor_signal(raw)
             except ValueError as e:
                 log.warning(f"Parse failure on message {message_id}: {e}")
+                if existing and existing.get("status") == "written":
+                    # An edit turned a signal we already wrote into something
+                    # unparseable: keep the written line and the live order as-is
+                    # and let a human judge it -- never silently drop a position.
+                    sk = existing.get("signal_key")
+                    if not self.dry_run:
+                        await self._reply_saved(
+                            f"⚠️ VICTOR edited {sk} into something I can't parse ({e}). "
+                            f"Left signals.txt and any live order unchanged -- review manually."
+                        )
+                    return
                 state_set(self.state, message_id, {"status": "quarantined", "reason": str(e), "raw": raw[:500]})
                 save_state(self.state)
                 if not self.dry_run:
@@ -1034,6 +1193,47 @@ class Listener:
                 rr_display = f"{fix.tp1_rr_best_entry:.2f}" if fix.tp1_rr_best_entry is not None else "n/a"
                 log.warning(f"Message {message_id} classified LOW_TP1_RR (best-entry TP1 RR={rr_display})")
             parsed = fix.corrected
+
+            # Edit of a signal we already wrote: correct the line in place (same
+            # N. -> same signal_key/magic) and queue an MT5 amend. We never
+            # re-number or re-place here; identity is the slot, not the values.
+            if is_edit and existing and existing.get("status") == "written":
+                signal_key = existing["signal_key"]
+                if self.dry_run:
+                    log.info(f"[dry-run] would amend {signal_key} from edited message {message_id}")
+                    return
+                result = update_signal_in_file(signal_key, parsed)
+                if result is None:
+                    log.warning(f"Edit on {signal_key}: no matching feed line; skipping amend.")
+                    await self._reply_saved(
+                        f"⚠️ VICTOR edited a signal mapped to {signal_key}, but I couldn't find "
+                        f"its line in signals.txt to update. Review manually."
+                    )
+                    return
+                old_line, new_line = result
+                record = dict(existing)
+                record.update(
+                    status="written", line=new_line, edited=True,
+                    rr_bucket=fix.rr_bucket, tp1_rr_best_entry=fix.tp1_rr_best_entry,
+                )
+                state_set(self.state, message_id, record)
+                save_state(self.state)
+                if old_line == new_line:
+                    log.info(f"Edit on {signal_key}: no value change; nothing to amend.")
+                    return
+                emit_override({
+                    "ts": msg_dt_utc.isoformat(),
+                    "message_id": message_id,
+                    "signal_key": signal_key,
+                    "action": "amend",
+                    "new": {
+                        "side": parsed.side, "r1": parsed.r1, "r2": parsed.r2, "sl": parsed.sl,
+                        "tp1": parsed.tp1, "tp2": parsed.tp2, "tp3": parsed.tp3,
+                    },
+                })
+                log.info(f"Amended {signal_key}: {old_line} -> {new_line}")
+                await self._notify_amend(signal_key, old_line, new_line, fix.changes)
+                return
 
             try:
                 if self.dry_run:
@@ -1126,6 +1326,33 @@ class Listener:
             await self.client.send_message(self.saved_id, body)
         except Exception as e:
             log.warning(f"Saved Messages LOW_TP1_RR notice failed: {e}")
+
+    async def _notify_amend(self, signal_key: str, old_line: str, new_line: str, changes: list[str]) -> None:
+        """Tell the user VICTOR edited a signal we already wrote. Best-effort."""
+        extra = f"\nCorrections applied: {', '.join(changes)}" if changes else ""
+        body = (
+            f"\u270f\ufe0f VICTOR edited {signal_key} -- updated signals.txt and queued an MT5 amend "
+            f"(a pending order is re-placed at the new levels; a filled position keeps its "
+            f"entry and only SL/TP move).\n"
+            f"was: `{old_line}`\n"
+            f"now: `{new_line}`{extra}"
+        )
+        try:
+            await self.client.send_message(self.saved_id, body)
+        except Exception as e:
+            log.warning(f"Saved Messages amend notice failed: {e}")
+
+    async def _notify_revoke(self, signal_key: str, line: str) -> None:
+        """Tell the user VICTOR deleted a signal we already wrote. Best-effort."""
+        body = (
+            f"\U0001f5d1\ufe0f VICTOR deleted {signal_key} -- removed it from signals.txt and queued an "
+            f"MT5 revoke (cancel the pending order; close the position if it is already open).\n"
+            f"removed: `{line}`"
+        )
+        try:
+            await self.client.send_message(self.saved_id, body)
+        except Exception as e:
+            log.warning(f"Saved Messages revoke notice failed: {e}")
 
     async def _reply_saved(self, text: str) -> None:
         try:
