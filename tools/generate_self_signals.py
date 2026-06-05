@@ -187,8 +187,10 @@ def _generate_from_m15(m15: pd.DataFrame, args: argparse.Namespace) -> list[Sign
     data = _add_indicators(m15, args.ema_fast, args.ema_slow, args.atr_period)
     data["signal_time"] = data["time"] + pd.Timedelta(minutes=15)
 
-    start = pd.Timestamp(args.start_date) if args.start_date else pd.Timestamp.min
-    end = pd.Timestamp(args.end_date) + pd.Timedelta(days=1) if args.end_date else pd.Timestamp.max
+    start_raw = getattr(args, "start_date", None)
+    end_raw = getattr(args, "end_date", None)
+    start = pd.Timestamp(start_raw) if start_raw else pd.Timestamp.min
+    end = pd.Timestamp(end_raw) + pd.Timedelta(days=1) if end_raw else pd.Timestamp.max
 
     last_side_time: dict[str, pd.Timestamp | None] = {"BUY": None, "SELL": None}
     daily_count: defaultdict[object, int] = defaultdict(int)
