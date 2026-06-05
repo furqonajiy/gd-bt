@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Iterable
 
 import pandas as pd
 
@@ -27,6 +28,10 @@ class SignalRow:
     tp1: float
     tp2: float
     tp3: float
+
+    @property
+    def signal_time_chart(self) -> datetime:
+        return self.signal_time
 
 
 def _expand_patterns(patterns: list[str] | None) -> list[Path]:
@@ -65,6 +70,24 @@ def _load_csvs(paths: list[Path]) -> pd.DataFrame:
     frames = [_read_mt5_csv(path) for path in paths]
     df = pd.concat(frames, ignore_index=True)
     return df.sort_values(["time", "source_file"]).drop_duplicates("time", keep="last").reset_index(drop=True)
+
+
+def bars_to_dataframe(bars: Iterable[object]) -> pd.DataFrame:
+    rows = []
+    for bar in bars:
+        rows.append({
+            "time": bar.time,
+            "open": float(bar.open),
+            "high": float(bar.high),
+            "low": float(bar.low),
+            "close": float(bar.close),
+            "spread": int(bar.spread_points),
+            "source_file": "MT5_LIVE",
+        })
+    if not rows:
+        return pd.DataFrame(columns=["time", "open", "high", "low", "close", "spread", "source_file"])
+    df = pd.DataFrame(rows)
+    return df.sort_values("time").drop_duplicates("time", keep="last").reset_index(drop=True)
 
 
 def _m1_to_m15(m1: pd.DataFrame) -> pd.DataFrame:
@@ -124,8 +147,8 @@ def _add_indicators(m15: pd.DataFrame, ema_fast: int, ema_slow: int, atr_period:
     return out
 
 
-def _fmt_price(value: float) -> str:
-    return f"{value:.2f}".rstrip("0").rstrip(".")
+def _fmt_price(value: float, digits: int = 2) -> str:
+    return f"{value:.{digits}f}".rstrip("0").rstrip(".")
 
 
 def _fmt_time(value: datetime) -> str:
@@ -160,8 +183,7 @@ def _build_signal(
     return SignalRow(row.signal_time.to_pydatetime(), side, r1, r2, sl, tp1, tp2, tp3)
 
 
-def generate_signals(args: argparse.Namespace) -> list[SignalRow]:
-    m15 = _load_working_m15(args.m15_charts, args.m1_charts, args.charts)
+def _generate_from_m15(m15: pd.DataFrame, args: argparse.Namespace) -> list[SignalRow]:
     data = _add_indicators(m15, args.ema_fast, args.ema_slow, args.atr_period)
     data["signal_time"] = data["time"] + pd.Timedelta(minutes=15)
 
@@ -212,7 +234,15 @@ def generate_signals(args: argparse.Namespace) -> list[SignalRow]:
     return rows
 
 
-def write_signal_file(signals: list[SignalRow], output_path: Path, source_tz_offset: int) -> None:
+def generate_signals_from_m1_bars(bars: Iterable[object], args: argparse.Namespace) -> list[SignalRow]:
+    return _generate_from_m15(_m1_to_m15(bars_to_dataframe(bars)), args)
+
+
+def generate_signals(args: argparse.Namespace) -> list[SignalRow]:
+    return _generate_from_m15(_load_working_m15(args.m15_charts, args.m1_charts, args.charts), args)
+
+
+def write_signal_file(signals: list[SignalRow], output_path: Path, source_tz_offset: int, price_digits: int = 2) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     grouped: dict[str, list[SignalRow]] = defaultdict(list)
     for signal in signals:
@@ -227,26 +257,18 @@ def write_signal_file(signals: list[SignalRow], output_path: Path, source_tz_off
         for day_id, signal in enumerate(sorted(grouped[date_key], key=lambda s: s.signal_time), start=1):
             lines.append(
                 f"{day_id}. {signal.side} XAUUSD "
-                f"{_fmt_price(signal.r1)} - {_fmt_price(signal.r2)} "
-                f"SL {_fmt_price(signal.sl)} "
-                f"TP1 {_fmt_price(signal.tp1)} "
-                f"TP2 {_fmt_price(signal.tp2)} "
-                f"TP3 {_fmt_price(signal.tp3)} "
+                f"{_fmt_price(signal.r1, price_digits)} - {_fmt_price(signal.r2, price_digits)} "
+                f"SL {_fmt_price(signal.sl, price_digits)} "
+                f"TP1 {_fmt_price(signal.tp1, price_digits)} "
+                f"TP2 {_fmt_price(signal.tp2, price_digits)} "
+                f"TP3 {_fmt_price(signal.tp3, price_digits)} "
                 f"{_fmt_time(signal.signal_time)}"
             )
 
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Generate self-made XAUUSD M15 trend-pullback signals.")
-    p.add_argument("--m15-charts", nargs="+", default=["data/XAUUSD_M15_*_ELEV8.csv"])
-    p.add_argument("--m1-charts", nargs="+", default=["data/XAUUSD_M1_*_ELEV8.csv"])
-    p.add_argument("--charts", nargs="+", default=None, help="Legacy M1 chart alias; used only when --m1-charts is omitted.")
-    p.add_argument("--output", required=True)
-    p.add_argument("--alias-output", default=None)
-    p.add_argument("--start-date", default="2025-01-01")
-    p.add_argument("--end-date", default=None)
+def add_generation_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--ema-fast", type=int, default=21)
     p.add_argument("--ema-slow", type=int, default=55)
     p.add_argument("--atr-period", type=int, default=14)
@@ -260,31 +282,32 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tp1-distance", type=float, default=4.00)
     p.add_argument("--tp2-distance", type=float, default=7.00)
     p.add_argument("--tp3-distance", type=float, default=12.00)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Generate self-made XAUUSD M15 trend-pullback signals.")
+    p.add_argument("--m15-charts", nargs="+", default=["data/XAUUSD_M15_*_ELEV8.csv"])
+    p.add_argument("--m1-charts", nargs="+", default=["data/XAUUSD_M1_*_ELEV8.csv"])
+    p.add_argument("--charts", nargs="+", default=None, help="Legacy M1 chart alias; used only when --m1-charts is omitted.")
+    p.add_argument("--output", required=True)
+    p.add_argument("--alias-output", default=None)
+    p.add_argument("--start-date", default="2025-01-01")
+    p.add_argument("--end-date", default=None)
     p.add_argument("--source-tz-offset", type=int, default=CHART_TZ_OFFSET)
+    p.add_argument("--price-digits", type=int, default=2)
+    add_generation_args(p)
     return p
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    signals = generate_signals(args)
-
-    output_path = Path(args.output)
-    write_signal_file(signals, output_path, args.source_tz_offset)
-
-    if args.alias_output:
-        alias_path = Path(args.alias_output)
-        alias_path.parent.mkdir(parents=True, exist_ok=True)
-        if alias_path.resolve() != output_path.resolve():
-            shutil.copyfile(output_path, alias_path)
-
+def generation_summary(args: argparse.Namespace, signals: list[SignalRow], output_path: Path, alias_output: str | None = None) -> dict:
     side_counts = Counter(signal.side for signal in signals)
-    summary = {
+    return {
         "output": str(output_path),
-        "alias_output": args.alias_output,
+        "alias_output": alias_output,
         "signals": len(signals),
         "buy": side_counts.get("BUY", 0),
         "sell": side_counts.get("SELL", 0),
-        "source_tz_offset": args.source_tz_offset,
+        "source_tz_offset": getattr(args, "source_tz_offset", CHART_TZ_OFFSET),
         "strategy": {
             "ema_fast": args.ema_fast,
             "ema_slow": args.ema_slow,
@@ -299,7 +322,22 @@ def main(argv: list[str] | None = None) -> int:
             "tp3_distance": args.tp3_distance,
         },
     }
-    print(json.dumps(summary, indent=2, default=str))
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    signals = generate_signals(args)
+
+    output_path = Path(args.output)
+    write_signal_file(signals, output_path, args.source_tz_offset, args.price_digits)
+
+    if args.alias_output:
+        alias_path = Path(args.alias_output)
+        alias_path.parent.mkdir(parents=True, exist_ok=True)
+        if alias_path.resolve() != output_path.resolve():
+            shutil.copyfile(output_path, alias_path)
+
+    print(json.dumps(generation_summary(args, signals, output_path, args.alias_output), indent=2, default=str))
     return 0
 
 
