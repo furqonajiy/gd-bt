@@ -60,7 +60,7 @@ def chart_source_from_path(path: Path) -> str:
     return "UNKNOWN"
 
 
-def load_chart(paths: Iterable[Path]) -> pd.DataFrame:
+def load_chart(paths: Iterable[Path], point_value: float = POINT_VALUE) -> pd.DataFrame:
     """Load and concatenate one or more MT5-compatible M1 CSV files.
 
     Returns columns: time, open, high, low, close, spread, spread_price,
@@ -88,7 +88,7 @@ def load_chart(paths: Iterable[Path]) -> pd.DataFrame:
         )
         for c in ("OPEN", "HIGH", "LOW", "CLOSE", "SPREAD"):
             df[c.lower()] = pd.to_numeric(df[c], errors="coerce")
-        df["spread_price"] = df["spread"] * POINT_VALUE
+        df["spread_price"] = df["spread"] * point_value
         df["source"] = chart_source_from_path(p)
         df["source_file"] = p.name
         df["source_priority"] = df["source"].map(SOURCE_PRIORITY).fillna(0).astype(int)
