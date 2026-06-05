@@ -1,26 +1,11 @@
 #!/usr/bin/env python3
-"""Single live runner: self-rejection signal generation + execution, 24/7.
+"""Single live runner: self M15 signal generation + explicit MT5 execution.
 
-Each watch pass it (1) regenerates the executable signal feed from the latest
-CLOSED M1 bars using the exact same `generate_rejection_signals` the backtest
-uses, then (2) hands that feed to the validated auto execution pass
-(`_auto_pass`). The executor and engine are NOT modified or forked: the feed
-file is the seam, and `_auto_pass` already re-parses it every pass and places
-any new signal.
-
-All safety guards (account mode, max concurrent positions, daily-loss halt,
-placement spread) are enforced by controlling WHICH new signals are written
-into the executable feed this pass. Open positions keep being managed
-regardless, because `_auto_pass` manages off the registry, not the feed.
-
-The executable feed (`--signals`) is a rolling window, so it is NOT a good
-backtest input. When `--backtest-archive` is given, every generated signal is
-also appended to a cumulative full-history file (optionally seeded once from
-CSV charts via `--seed-archive-charts`). Point `backtest_explicit.py` at THAT
-file. The archive is a side output only and never affects live execution.
-
-Strategy-contract args are reused verbatim from auto_explicit so the live
-contract is single-sourced with the validated backtest contract.
+Each watch pass regenerates the executable signal feed from latest CLOSED MT5 M1
+bars, aggregates them to M15 with the same generator used by
+``tools/generate_self_signals.py``, then hands that feed to the validated auto
+execution pass. CSV files are only for archive/backtest seeding, never for live
+signal freshness.
 """
 from __future__ import annotations
 
@@ -31,6 +16,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -39,18 +25,14 @@ TOOLS = Path(__file__).resolve().parent
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-import auto_explicit  # sibling tool; reuse its validated strategy-contract parser/config
+import auto_explicit  # noqa: E402
+import generate_self_signals as selfgen  # noqa: E402
 
 from xauusd_trading import (  # noqa: E402
-    CsvChartSource,
     Mt5ChartSource,
     Mt5Connection,
-    RejectionSignalConfig,
     SignalRegistry,
     archive_m1_by_month,
-    format_generated_signals,
-    generate_rejection_signals,
-    iter_bars,
     mt5_equity,
     parse_signals_file,
     render_archive_summary,
@@ -63,72 +45,49 @@ from xauusd_trading.cli import (  # noqa: E402
     _print_auto_watch_heartbeat,
 )
 
-# Render the executable feed over a fixed trailing window of whole calendar
-# days. Whole days (not a mid-day slice) keep per-day numbering stable across
-# rewrites, so an already-placed signal's signal_key never shifts. Two days
-# comfortably exceeds the actionable horizon (pending_expiry ~10.5h) yet stays
-# inside the 5000-bar (~3.5 day) history window, so every rendered day is fully
-# present. The same window bounds archive appends, so appended signals are also
-# numbered from a full day (matching the seed's per-day numbering).
 FEED_WINDOW_DAYS = 2
 
 
 # ---------------------------------------------------------------------------
-# feed construction (pure; unit-tested)
+# feed construction
 # ---------------------------------------------------------------------------
 
 def _keyed_signals(signals):
-    """[(GeneratedSignal, "YYYY-MM-DD#NN")] with the same per-day numbering
-    `format_generated_signals` produces: sorted by (time, side), 1-based
-    counter reset per calendar day. The signal_key is therefore deterministic
-    from content and stable while a day's full signal set is reproduced.
-    """
     ordered = sorted(signals, key=lambda s: (s.signal_time_chart, s.side))
     out = []
     per_day: dict[str, int] = {}
-    for s in ordered:
-        d = s.signal_time_chart.date().isoformat()
-        per_day[d] = per_day.get(d, 0) + 1
-        out.append((s, f"{d}#{per_day[d]:02d}"))
+    for signal in ordered:
+        date_key = signal.signal_time_chart.date().isoformat()
+        per_day[date_key] = per_day.get(date_key, 0) + 1
+        out.append((signal, f"{date_key}#{per_day[date_key]:02d}"))
     return out
 
 
-def _signal_line(s, day_id: int, price_digits: int) -> str:
+def _signal_line(signal, day_id: int, price_digits: int) -> str:
     digits = int(price_digits)
 
-    def px(v: float) -> str:
-        return f"{v:.{digits}f}"
+    def px(value: float) -> str:
+        return f"{value:.{digits}f}"
 
-    t = s.signal_time_chart.strftime("%I:%M %p")
+    t = signal.signal_time_chart.strftime("%I:%M %p")
     return (
-        f"{day_id}. {s.side} XAUUSD {px(s.r1)} - {px(s.r2)} "
-        f"SL {px(s.sl)} TP1 {px(s.tp1)} TP2 {px(s.tp2)} TP3 {px(s.tp3)} {t}"
+        f"{day_id}. {signal.side} XAUUSD {px(signal.r1)} - {px(signal.r2)} "
+        f"SL {px(signal.sl)} TP1 {px(signal.tp1)} TP2 {px(signal.tp2)} TP3 {px(signal.tp3)} {t}"
     )
 
 
-def _select_allowed_keys(keyed, placed_keys, *, cap, placed_count,
-                         block_new, min_new_time=None):
-    """Decide which keys appear in the executable feed this pass.
-
-    Already-placed keys are always kept (so numbering/keys stay matched to the
-    registry). New keys are admitted NEWEST-first up to the remaining slot
-    count: the freshest signal is the one most likely still PENDING/OPEN and
-    actually placeable, so admitting oldest-first lets already-played-out
-    signals consume the cap and starve fresh signals. A guard blocks all new
-    entries, and signals older than the executor's acceptance window are never
-    admitted.
-    """
-    allowed = {key for _s, key in keyed if key in placed_keys}
+def _select_allowed_keys(keyed, placed_keys, *, cap, placed_count, block_new, min_new_time=None):
+    allowed = {key for _signal, key in keyed if key in placed_keys}
     if block_new:
         return allowed
     remaining = max(0, int(cap) - int(placed_count))
     if remaining <= 0:
         return allowed
     used = 0
-    for s, key in sorted(keyed, key=lambda sk: sk[0].signal_time_chart, reverse=True):
+    for signal, key in sorted(keyed, key=lambda sk: sk[0].signal_time_chart, reverse=True):
         if key in placed_keys:
             continue
-        if min_new_time is not None and s.signal_time_chart <= min_new_time:
+        if min_new_time is not None and signal.signal_time_chart <= min_new_time:
             continue
         allowed.add(key)
         used += 1
@@ -138,25 +97,20 @@ def _select_allowed_keys(keyed, placed_keys, *, cap, placed_count,
 
 
 def _render_feed(keyed, allowed_keys, *, source_tz_offset, price_digits):
-    """Render the allowed keys in the human signal-file format. Byte-compatible
-    with `format_generated_signals` so the SAME file backtests identically; the
-    printed line number is the stable per-day id (gaps from withheld signals
-    are fine -- the parser reads the printed number, not line position).
-    """
     tz = f"GMT+{source_tz_offset}" if source_tz_offset >= 0 else f"GMT{source_tz_offset}"
     lines: list[str] = []
     last_date: str | None = None
-    for s, key in keyed:
+    for signal, key in keyed:
         if key not in allowed_keys:
             continue
-        d = s.signal_time_chart.date().isoformat()
+        date_key = signal.signal_time_chart.date().isoformat()
         day_id = int(key.split("#")[1])
-        if d != last_date:
+        if date_key != last_date:
             if lines:
                 lines.append("")
-            lines.append(f"{d} {tz}")
-            last_date = d
-        lines.append(_signal_line(s, day_id, price_digits))
+            lines.append(f"{date_key} {tz}")
+            last_date = date_key
+        lines.append(_signal_line(signal, day_id, price_digits))
     return ("\n".join(lines) + "\n") if lines else ""
 
 
@@ -169,61 +123,72 @@ def _atomic_write(path: Path, text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# cumulative backtest archive (side output; never affects execution)
+# archive seeding/appending
 # ---------------------------------------------------------------------------
 
 def _expand_globs(patterns) -> list[Path]:
     out: list[Path] = []
-    for pat in patterns:
-        if any(ch in pat for ch in "*?["):
-            matches = sorted(glob.glob(pat))
+    for pattern in patterns or []:
+        if any(ch in pattern for ch in "*?["):
+            matches = sorted(glob.glob(pattern))
             if not matches:
-                raise SystemExit(f"No files match pattern: {pat}")
-            out.extend(Path(m) for m in matches)
+                continue
+            out.extend(Path(match) for match in matches)
         else:
-            p = Path(pat)
-            if not p.exists():
-                raise SystemExit(f"Chart file not found: {pat}")
-            out.append(p)
-    if not out:
-        raise SystemExit("No chart files provided for --seed-archive-charts")
+            path = Path(pattern)
+            if path.exists():
+                out.append(path)
     return out
 
 
-def _seed_archive_if_missing(args, rcfg) -> None:
-    """Build the full-history archive once from CSV charts if it does not yet
-    exist. This is the same batch generation tools/generate_self_signals.py
-    does; the live loop then extends the archive going forward.
-    """
-    if not args.backtest_archive or not args.seed_archive_charts:
+def _seed_namespace(args) -> SimpleNamespace:
+    m1_charts = args.seed_archive_m1_charts or args.seed_archive_charts
+    return SimpleNamespace(
+        m15_charts=args.seed_archive_m15_charts,
+        m1_charts=m1_charts,
+        charts=None,
+        start_date=args.seed_archive_start_date,
+        end_date=None,
+        source_tz_offset=3,
+        price_digits=args.price_digits,
+        ema_fast=args.ema_fast,
+        ema_slow=args.ema_slow,
+        atr_period=args.atr_period,
+        min_atr=args.min_atr,
+        max_atr=args.max_atr,
+        same_side_spacing_minutes=args.same_side_spacing_minutes,
+        max_signals_per_day=args.max_signals_per_day,
+        entry_offset=args.entry_offset,
+        range_width=args.range_width,
+        sl_gap_from_range=args.sl_gap_from_range,
+        tp1_distance=args.tp1_distance,
+        tp2_distance=args.tp2_distance,
+        tp3_distance=args.tp3_distance,
+    )
+
+
+def _seed_archive_if_missing(args) -> None:
+    if not args.backtest_archive:
+        return
+    if not (args.seed_archive_charts or args.seed_archive_m1_charts or args.seed_archive_m15_charts):
         return
     archive = Path(args.backtest_archive)
     if archive.exists() and archive.stat().st_size > 0:
         print(f"[auto_self] backtest archive {archive} exists; loop will extend it.")
         return
-    chart = CsvChartSource(_expand_globs(args.seed_archive_charts))
-    df = chart.dataframe
-    if args.seed_archive_start_date:
-        start = datetime.strptime(args.seed_archive_start_date, "%Y-%m-%d")
-        df = df[df["time"] >= start]
-    sigs = generate_rejection_signals(iter_bars(df), rcfg)
-    archive.parent.mkdir(parents=True, exist_ok=True)
-    archive.write_text(
-        format_generated_signals(sigs, source_tz_offset=3, price_digits=rcfg.price_digits),
-        encoding="utf-8",
+
+    seed_args = _seed_namespace(args)
+    if not _expand_globs(seed_args.m1_charts) and not _expand_globs(seed_args.m15_charts):
+        raise SystemExit("No seed archive chart files found.")
+    signals = selfgen.generate_signals(seed_args)
+    selfgen.write_signal_file(signals, archive, source_tz_offset=3, price_digits=args.price_digits)
+    print(
+        f"[auto_self] seeded backtest archive {archive}: {len(signals)} signals "
+        f"from {args.seed_archive_start_date or 'start'}."
     )
-    print(f"[auto_self] seeded backtest archive {archive}: {len(sigs)} signals "
-          f"from {args.seed_archive_start_date or 'start'}.")
 
 
 def _append_to_archive(archive_path, keyed, price_digits: int) -> None:
-    """Append generated signals whose key is not already in the archive,
-    preserving per-day numbering: past days are frozen, today's new signals
-    append in time order under the existing/created day header. `keyed` is the
-    same whole-day-windowed list used for the executable feed, so numbering
-    matches the seed. On any parse hiccup we skip rather than risk corrupting
-    the archive (it is a backtest input, never the live feed).
-    """
     archive = Path(archive_path)
     existing_keys: set[str] = set()
     last_date: str | None = None
@@ -233,24 +198,24 @@ def _append_to_archive(archive_path, keyed, price_digits: int) -> None:
             parsed = parse_signals_file(archive)
         except Exception:
             return
-        existing_keys = {s.signal_key for s in parsed}
+        existing_keys = {signal.signal_key for signal in parsed}
         if parsed:
             last_date = parsed[-1].signal_time_chart.date().isoformat()
 
-    new = [(s, k) for s, k in keyed if k not in existing_keys]
+    new = [(signal, key) for signal, key in keyed if key not in existing_keys]
     if not new:
         return
 
     lines: list[str] = []
-    for s, key in new:  # ascending time
-        d = s.signal_time_chart.date().isoformat()
+    for signal, key in new:
+        date_key = signal.signal_time_chart.date().isoformat()
         day_id = int(key.split("#")[1])
-        if d != last_date:
+        if date_key != last_date:
             if file_has_content or lines:
                 lines.append("")
-            lines.append(f"{d} GMT+3")
-            last_date = d
-        lines.append(_signal_line(s, day_id, price_digits))
+            lines.append(f"{date_key} GMT+3")
+            last_date = date_key
+        lines.append(_signal_line(signal, day_id, price_digits))
 
     archive.parent.mkdir(parents=True, exist_ok=True)
     with open(archive, "a", encoding="utf-8") as f:
@@ -258,7 +223,7 @@ def _append_to_archive(archive_path, keyed, price_digits: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# day-loss circuit breaker state (persisted; survives restarts)
+# guards
 # ---------------------------------------------------------------------------
 
 def _load_day_guard(path: Path) -> dict:
@@ -275,14 +240,7 @@ def _save_day_guard(path: Path, state: dict) -> None:
     Path(path).write_text(json.dumps(state), encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
-# guards
-# ---------------------------------------------------------------------------
-
 def _assert_account_mode(conn, expected: str) -> None:
-    """Refuse to run if --account does not match the connected MT5 account.
-    Prevents ever pointing a demo-tuned or live config at the wrong account.
-    """
     info = conn.mt5.account_info()
     if info is None:
         raise SystemExit("account_info() returned None; cannot verify account mode.")
@@ -299,10 +257,6 @@ def _assert_account_mode(conn, expected: str) -> None:
 
 
 def _evaluate_guards(args, conn, equity, chart_now, day_guard_path):
-    """Returns (block_new, halted, spread_block). The daily-loss halt is
-    equity-based (includes floating P&L), trips once per day, and stays tripped
-    until the chart date rolls over.
-    """
     today = chart_now.date().isoformat()
     state = _load_day_guard(day_guard_path)
     if state.get("date") != today:
@@ -333,24 +287,21 @@ def _evaluate_guards(args, conn, equity, chart_now, day_guard_path):
 
 
 # ---------------------------------------------------------------------------
-# generation step
+# live generation
 # ---------------------------------------------------------------------------
 
-def _regenerate_feed(args, config, rcfg, chart, chart_now, signals_path,
-                     registry_path, block_new) -> None:
-    bars = chart.recent_closed_bars(args.mt5_history_bars)
-    sigs = generate_rejection_signals(bars, rcfg)
+def _regenerate_feed(args, config, chart, chart_now, signals_path, registry_path, block_new) -> None:
+    bars_needed = max(int(args.mt5_history_bars), int(args.live_generation_bars))
+    bars = chart.recent_closed_bars(bars_needed)
+    signals = selfgen.generate_signals_from_m1_bars(bars, args)
 
     cutoff_date = (chart_now - timedelta(days=FEED_WINDOW_DAYS - 1)).date()
-    sigs = [s for s in sigs if s.signal_time_chart.date() >= cutoff_date]
+    signals = [signal for signal in signals if signal.signal_time_chart.date() >= cutoff_date]
 
-    keyed = _keyed_signals(sigs)
+    keyed = _keyed_signals(signals)
     entries = SignalRegistry(registry_path).load()
     placed_keys = {item.get("signal_key") for item in entries}
     placed_count = len(entries)
-
-    # Mirror the executor's acceptance window so we don't expose new signals it
-    # would only reject as expired.
     min_new_time = chart_now - timedelta(minutes=config.pending_expiry_minutes + 5)
 
     allowed = _select_allowed_keys(
@@ -360,22 +311,20 @@ def _regenerate_feed(args, config, rcfg, chart, chart_now, signals_path,
         block_new=block_new,
         min_new_time=min_new_time,
     )
-    _atomic_write(signals_path, _render_feed(keyed, allowed, source_tz_offset=3,
-                                             price_digits=rcfg.price_digits))
+    _atomic_write(
+        signals_path,
+        _render_feed(keyed, allowed, source_tz_offset=3, price_digits=args.price_digits),
+    )
 
-    # Cumulative backtest archive: append every generated signal (guards do NOT
-    # apply here -- the archive must reflect the full signal strategy for parity
-    # backtests; guards are a live-only overlay on the executable feed).
     if args.backtest_archive:
-        _append_to_archive(args.backtest_archive, keyed, rcfg.price_digits)
+        _append_to_archive(args.backtest_archive, keyed, args.price_digits)
 
 
 # ---------------------------------------------------------------------------
 # watch loop
 # ---------------------------------------------------------------------------
 
-def _run_self_watch(args, config, rcfg, conn, chart, signals_path,
-                    registry_path, day_guard_path) -> int:
+def _run_self_watch(args, config, conn, chart, signals_path, registry_path, day_guard_path) -> int:
     interval = float(args.watch_interval)
     iteration = 0
     candidate_console_state: dict[str, str] = {}
@@ -399,13 +348,8 @@ def _run_self_watch(args, config, rcfg, conn, chart, signals_path,
                 time.sleep(interval)
                 continue
 
-            block_new, _halted, _spread = _evaluate_guards(
-                args, conn, equity, chart_now, day_guard_path
-            )
-            _regenerate_feed(
-                args, config, rcfg, chart, chart_now,
-                signals_path, registry_path, block_new,
-            )
+            block_new, _halted, _spread = _evaluate_guards(args, conn, equity, chart_now, day_guard_path)
+            _regenerate_feed(args, config, chart, chart_now, signals_path, registry_path, block_new)
 
             exit_code = _auto_pass(
                 args, config, conn, chart, signals_path,
@@ -413,11 +357,8 @@ def _run_self_watch(args, config, rcfg, conn, chart, signals_path,
                 candidate_console_state=candidate_console_state,
                 notified_keys=notified_keys,
             )
-            # A non-zero pass is a transient MT5/sanity condition. Surface it
-            # but keep the 24/7 loop alive; the next pass retries.
             if exit_code != 0:
-                print(f"[auto_self] pass returned {exit_code}; retrying next cycle.",
-                      file=sys.stderr)
+                print(f"[auto_self] pass returned {exit_code}; retrying next cycle.", file=sys.stderr)
 
             now_monotonic = time.monotonic()
             if now_monotonic - last_heartbeat >= AUTO_HEARTBEAT_SECONDS:
@@ -444,76 +385,31 @@ def _nonneg_int(raw: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = auto_explicit.build_parser()
     p.description = (
-        "Generate self-rejection signals from closed MT5 bars and execute them "
-        "live, 24/7, with safety guards. --signals is the rolling executable feed "
-        "this tool (re)writes; use --backtest-archive for a cumulative full-history "
-        "file to backtest."
+        "Generate self M15 trend-pullback signals from closed MT5 M1 bars and "
+        "execute them live with the explicit strategy contract."
     )
 
-    gen = p.add_argument_group("self-signal generation (defaults match the validated backtest)")
-    gen.add_argument("--lookback-bars", type=int, default=20)
-    gen.add_argument("--min-wick", type=float, default=1.0)
-    gen.add_argument("--min-bar-range", type=float, default=1.5)
-    gen.add_argument("--wick-body-ratio", type=float, default=1.2)
-    gen.add_argument("--zone-buffer", type=float, default=0.25)
-    gen.add_argument("--zone-size", type=float, default=1.0)
-    gen.add_argument("--cooldown-minutes", type=int, default=20)
-    gen.add_argument("--same-zone-cooldown-minutes", type=int, default=120)
-    gen.add_argument("--max-spread-points", type=int, default=35,
-                     help="Signal-time spread filter on the rejection bar; -1 disables.")
-    gen.add_argument("--session-start-hour", type=int, default=7, help="-1 disables.")
-    gen.add_argument("--session-end-hour", type=int, default=22, help="-1 disables.")
-    gen.add_argument("--entry-range-width", type=float, default=2.0)
-    gen.add_argument("--sl-distance", type=float, default=5.0)
-    gen.add_argument("--tp1-distance", type=float, default=10.0)
-    gen.add_argument("--tp2-distance", type=float, default=20.0)
-    gen.add_argument("--tp3-distance", type=float, default=40.0)
+    gen = p.add_argument_group("self-signal generation")
+    selfgen.add_generation_args(gen)
     gen.add_argument("--price-digits", type=int, default=2)
+    gen.add_argument("--live-generation-bars", type=int, default=5000,
+                     help="Closed MT5 M1 bars used to build live M15 indicators.")
 
     arch = p.add_argument_group("backtest archive (optional, cumulative full history)")
-    arch.add_argument("--backtest-archive", default=None,
-                      help="Cumulative signal file that grows with every generated signal -- "
-                           "point backtest_explicit at THIS. The live --signals feed stays a rolling window.")
+    arch.add_argument("--backtest-archive", default=None)
     arch.add_argument("--seed-archive-charts", nargs="+", default=None,
-                      help="If the archive is missing, build it once at startup from these M1 CSV(s); globs ok.")
+                      help="Legacy alias for --seed-archive-m1-charts.")
+    arch.add_argument("--seed-archive-m1-charts", nargs="+", default=None)
+    arch.add_argument("--seed-archive-m15-charts", nargs="+", default=None)
     arch.add_argument("--seed-archive-start-date", default=None, metavar="YYYY-MM-DD")
 
     safety = p.add_argument_group("live safety (required)")
-    safety.add_argument("--account", choices=["demo", "live"], required=True,
-                        help="Checked against MT5 trade_mode at startup and every pass.")
-    safety.add_argument("--max-concurrent-positions", type=int, required=True,
-                        help="Hard cap on live signals/positions; new entries withheld at the cap.")
-    safety.add_argument("--max-daily-loss-pct", type=float, required=True,
-                        help="Intraday equity drawdown vs day-start that halts new entries; 0 disables.")
-    safety.add_argument("--place-max-spread-points", type=_nonneg_int, required=True,
-                        help="Skip new placements while current spread exceeds this (points).")
-    safety.add_argument("--day-guard-json", default=None,
-                        help="Path for the daily-loss state file; defaults next to --positions-json.")
+    safety.add_argument("--account", choices=["demo", "live"], required=True)
+    safety.add_argument("--max-concurrent-positions", type=int, required=True)
+    safety.add_argument("--max-daily-loss-pct", type=float, required=True)
+    safety.add_argument("--place-max-spread-points", type=_nonneg_int, required=True)
+    safety.add_argument("--day-guard-json", default=None)
     return p
-
-
-def _build_rejection_config(args) -> RejectionSignalConfig:
-    def or_none(v):
-        return None if v < 0 else v
-    return RejectionSignalConfig(
-        lookback_bars=args.lookback_bars,
-        min_wick=args.min_wick,
-        min_bar_range=args.min_bar_range,
-        wick_body_ratio=args.wick_body_ratio,
-        zone_buffer=args.zone_buffer,
-        zone_size=args.zone_size,
-        cooldown_minutes=args.cooldown_minutes,
-        same_zone_cooldown_minutes=args.same_zone_cooldown_minutes,
-        max_spread_points=or_none(args.max_spread_points),
-        session_start_hour=or_none(args.session_start_hour),
-        session_end_hour=or_none(args.session_end_hour),
-        entry_range_width=args.entry_range_width,
-        sl_distance=args.sl_distance,
-        tp1_distance=args.tp1_distance,
-        tp2_distance=args.tp2_distance,
-        tp3_distance=args.tp3_distance,
-        price_digits=args.price_digits,
-    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -525,11 +421,12 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--max-daily-loss-pct must be >= 0")
     if args.watch_interval < 1.0:
         raise SystemExit("--watch-interval must be >= 1.0")
-    if args.seed_archive_charts and not args.backtest_archive:
-        raise SystemExit("--seed-archive-charts requires --backtest-archive")
+    if args.live_generation_bars < 2000:
+        raise SystemExit("--live-generation-bars must be >= 2000")
+    if (args.seed_archive_charts or args.seed_archive_m1_charts or args.seed_archive_m15_charts) and not args.backtest_archive:
+        raise SystemExit("seed archive chart flags require --backtest-archive")
 
     config = auto_explicit.config_from_args(args)
-    rcfg = _build_rejection_config(args)
 
     signals_path = Path(args.signals)
     signals_path.parent.mkdir(parents=True, exist_ok=True)
@@ -540,8 +437,10 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     conn = Mt5Connection(
-        path=args.mt5_path, login=args.mt5_login,
-        password=args.mt5_password, server=args.mt5_server,
+        path=args.mt5_path,
+        login=args.mt5_login,
+        password=args.mt5_password,
+        server=args.mt5_server,
     )
     conn.initialize()
     try:
@@ -549,7 +448,9 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             summary = archive_m1_by_month(
-                conn, args.mt5_symbol, ARCHIVE_DIR,
+                conn,
+                args.mt5_symbol,
+                ARCHIVE_DIR,
                 months_back=ARCHIVE_MONTHS,
                 server_offset_hours=args.mt5_server_offset,
                 overwrite=False,
@@ -559,10 +460,11 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as e:
             print(f"[mt5] archive failed (continuing): {e}", file=sys.stderr)
 
-        _seed_archive_if_missing(args, rcfg)
+        _seed_archive_if_missing(args)
 
         chart = Mt5ChartSource(
-            conn, symbol=args.mt5_symbol,
+            conn,
+            symbol=args.mt5_symbol,
             server_offset_hours=args.mt5_server_offset,
             history_bars=args.mt5_history_bars,
         )
@@ -572,13 +474,13 @@ def main(argv: list[str] | None = None) -> int:
             f"daily_loss_pct={args.max_daily_loss_pct} "
             f"place_max_spread={args.place_max_spread_points}"
         )
-        print(f"[auto_self] feed={signals_path} archive={args.backtest_archive} "
-              f"registry={registry_path} day_guard={day_guard_path}")
-
-        return _run_self_watch(
-            args, config, rcfg, conn, chart,
-            signals_path, registry_path, day_guard_path,
+        print(
+            f"[auto_self] live_generation_bars={args.live_generation_bars} "
+            f"feed={signals_path} archive={args.backtest_archive} "
+            f"registry={registry_path} day_guard={day_guard_path}"
         )
+
+        return _run_self_watch(args, config, conn, chart, signals_path, registry_path, day_guard_path)
     finally:
         conn.shutdown()
 
