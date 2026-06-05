@@ -277,26 +277,30 @@ def _evaluate_guards(args, conn, equity, chart_now, day_guard_path):
             )
 
     spread_block = False
+    cur_spread = -1  # -1 = unknown (symbol_info unavailable); shown as 'n/a'
     if args.place_max_spread_points >= 0:
         si = conn.mt5.symbol_info(args.mt5_symbol)
-        cur = int(si.spread) if si is not None else 0
-        if cur > args.place_max_spread_points:
+        cur_spread = int(si.spread) if si is not None else 0
+        if cur_spread > args.place_max_spread_points:
             spread_block = True
 
-    return (halted or spread_block), halted, spread_block
+    return (halted or spread_block), halted, spread_block, cur_spread
 
 
 # ---------------------------------------------------------------------------
 # live generation
 # ---------------------------------------------------------------------------
 
-def _regenerate_feed(args, config, chart, chart_now, signals_path, registry_path, block_new) -> None:
+def _regenerate_feed(args, config, chart, chart_now, signals_path, registry_path, block_new) -> dict:
     bars_needed = max(int(args.mt5_history_bars), int(args.live_generation_bars))
     bars = chart.recent_closed_bars(bars_needed)
+    bars_count = len(bars)
     signals = selfgen.generate_signals_from_m1_bars(bars, args)
+    generated = len(signals)
 
     cutoff_date = (chart_now - timedelta(days=FEED_WINDOW_DAYS - 1)).date()
     signals = [signal for signal in signals if signal.signal_time_chart.date() >= cutoff_date]
+    in_window = len(signals)
 
     keyed = _keyed_signals(signals)
     entries = SignalRegistry(registry_path).load()
@@ -319,6 +323,38 @@ def _regenerate_feed(args, config, chart, chart_now, signals_path, registry_path
     if args.backtest_archive:
         _append_to_archive(args.backtest_archive, keyed, args.price_digits)
 
+    return {
+        "bars": bars_count, "generated": generated, "in_window": in_window,
+        "allowed": len(allowed), "placed": placed_count,
+        "cap": int(args.max_concurrent_positions),
+    }
+
+
+def _format_gen_diag(stats: dict, *, halted: bool, spread_block: bool,
+                     cur_spread: int, block_new: bool) -> tuple[str, str]:
+    """Per-cycle feed diagnostic: a console line plus a stable dedup signature.
+
+    The dedup signature deliberately omits the raw spread (it flaps every tick)
+    but keeps the derived block flags, so the line reprints only on a meaningful
+    transition -- a signal entering/leaving the window, a placement, or the
+    spread crossing the place threshold -- not on every watch interval.
+    """
+    if block_new:
+        reason = "halt+spread" if (halted and spread_block) else ("halt" if halted else "spread")
+    else:
+        reason = "no"
+    spread_txt = cur_spread if cur_spread >= 0 else "n/a"
+    line = (
+        f"[gen] bars={stats['bars']} generated={stats['generated']} "
+        f"in-window={stats['in_window']} allowed={stats['allowed']} "
+        f"placed={stats['placed']}/{stats['cap']} spread={spread_txt} block_new={reason}"
+    )
+    sig = (
+        f"{stats['bars'] > 0}|{stats['generated']}|{stats['in_window']}|"
+        f"{stats['allowed']}|{stats['placed']}|{stats['cap']}|{halted}|{spread_block}"
+    )
+    return line, sig
+
 
 # ---------------------------------------------------------------------------
 # watch loop
@@ -330,6 +366,7 @@ def _run_self_watch(args, config, conn, chart, signals_path, registry_path, day_
     candidate_console_state: dict[str, str] = {}
     notified_keys: dict[str, set] = {"detected": set(), "skipped": set()}
     last_heartbeat = time.monotonic()
+    last_gen_diag: str | None = None  # dedups the [gen] line to state transitions
     try:
         while True:
             iteration += 1
@@ -348,8 +385,17 @@ def _run_self_watch(args, config, conn, chart, signals_path, registry_path, day_
                 time.sleep(interval)
                 continue
 
-            block_new, _halted, _spread = _evaluate_guards(args, conn, equity, chart_now, day_guard_path)
-            _regenerate_feed(args, config, chart, chart_now, signals_path, registry_path, block_new)
+            block_new, halted, spread_block, cur_spread = _evaluate_guards(
+                args, conn, equity, chart_now, day_guard_path)
+            feed_stats = _regenerate_feed(
+                args, config, chart, chart_now, signals_path, registry_path, block_new)
+
+            diag_line, diag_sig = _format_gen_diag(
+                feed_stats, halted=halted, spread_block=spread_block,
+                cur_spread=cur_spread, block_new=block_new)
+            if diag_sig != last_gen_diag:
+                print(diag_line)
+                last_gen_diag = diag_sig
 
             exit_code = _auto_pass(
                 args, config, conn, chart, signals_path,
