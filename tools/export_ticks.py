@@ -30,6 +30,7 @@ FIELDNAMES = [
     "<FLAGS>",
     "<SPREAD>",
 ]
+HEADER_LINE = "\t".join(FIELDNAMES)
 
 
 def _parse_date(value: str) -> datetime:
@@ -73,6 +74,16 @@ def _mt5_msc_to_chart_time(epoch_msc: int, server_offset_hours: int) -> datetime
     shift = timedelta(hours=3 - server_offset_hours)
     broker_naive = datetime.fromtimestamp(int(epoch_msc) / 1000.0, UTC).replace(tzinfo=None)
     return broker_naive + shift
+
+
+def _is_header_only_tick_file(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except UnicodeDecodeError:
+        return False
+    return len(lines) == 1 and lines[0].strip() == HEADER_LINE
 
 
 def _tick_rows(ticks, server_offset_hours: int) -> Iterable[dict[str, str]]:
@@ -119,6 +130,10 @@ def _write_rows(path: Path, rows: Iterable[dict[str, str]], *, write_header: boo
 def _export_month(conn: Mt5Connection, args: argparse.Namespace, month_start: datetime, month_end: datetime) -> int:
     mt5 = conn.mt5
     out_path = Path(args.output_dir) / f"{args.symbol}_TICK_{month_start:%Y%m}_ELEV8.csv"
+
+    if _is_header_only_tick_file(out_path):
+        out_path.unlink()
+        print(f"[empty] removed header-only tick file: {out_path}")
 
     if out_path.exists() and out_path.stat().st_size > 0 and not args.overwrite:
         print(f"[skip] {out_path} exists; use --overwrite to replace.")
