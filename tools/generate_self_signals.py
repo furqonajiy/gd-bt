@@ -100,7 +100,12 @@ def _m1_to_m15(m1: pd.DataFrame) -> pd.DataFrame:
         low=("low", "min"),
         close=("close", "last"),
         spread=("spread", "last"),
+        bar_count=("close", "count"),
     )
+    # Live MT5 passes only closed M1 bars. Without this guard, the currently
+    # forming M15 bucket can be emitted early with signal_time = bucket + 15min.
+    m15 = m15[m15["bar_count"] >= 15]
+    m15 = m15.drop(columns=["bar_count"])
     return m15.dropna(subset=["open", "high", "low", "close", "spread"]).reset_index()
 
 
