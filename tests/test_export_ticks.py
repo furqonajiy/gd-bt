@@ -31,24 +31,43 @@ def _load_tool(repo_root: Path):
     return module
 
 
-def test_export_month_skips_empty_tick_file(tmp_path: Path) -> None:
-    tool = _load_tool(Path(__file__).resolve().parents[1])
-    args = SimpleNamespace(
+def _args(tmp_path: Path, *, overwrite: bool) -> SimpleNamespace:
+    return SimpleNamespace(
         symbol="XAUUSD",
         output_dir=str(tmp_path),
-        overwrite=True,
+        overwrite=overwrite,
         chunk_hours=6,
         mt5_server_offset=3,
         progress=False,
         sleep_seconds=0.0,
     )
 
+
+def test_export_month_skips_empty_tick_file(tmp_path: Path) -> None:
+    tool = _load_tool(Path(__file__).resolve().parents[1])
+
     total = tool._export_month(
         _Conn(),
-        args,
+        _args(tmp_path, overwrite=True),
         datetime(2024, 1, 1),
         datetime(2024, 2, 1),
     )
 
     assert total == 0
     assert not (tmp_path / "XAUUSD_TICK_202401_ELEV8.csv").exists()
+
+
+def test_export_month_removes_existing_header_only_tick_file(tmp_path: Path) -> None:
+    tool = _load_tool(Path(__file__).resolve().parents[1])
+    path = tmp_path / "XAUUSD_TICK_202604_ELEV8.csv"
+    path.write_text("\t".join(tool.FIELDNAMES) + "\n", encoding="utf-8")
+
+    total = tool._export_month(
+        _Conn(),
+        _args(tmp_path, overwrite=False),
+        datetime(2026, 4, 1),
+        datetime(2026, 5, 1),
+    )
+
+    assert total == 0
+    assert not path.exists()
