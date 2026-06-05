@@ -53,6 +53,24 @@ def _live_args_without_dates() -> SimpleNamespace:
     )
 
 
+def _trend_bars(start: datetime, minutes: int) -> list[Bar]:
+    bars: list[Bar] = []
+    for i in range(minutes):
+        price = 2600.0 + i * 0.02
+        bars.append(
+            Bar(
+                time=start + timedelta(minutes=i),
+                open=price,
+                high=price + 0.20,
+                low=price - 0.20,
+                close=price + 0.05,
+                spread_points=25,
+                spread_price=0.25,
+            )
+        )
+    return bars
+
+
 def test_generate_self_signals_writes_gmt3_pullback_signals(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     tool = _load_tool(repo_root)
@@ -81,25 +99,22 @@ def test_live_m1_generation_does_not_require_batch_date_filters() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     tool = _load_tool(repo_root)
 
-    t = datetime(2025, 1, 1, 0, 0)
-    bars = []
-    for i in range(90 * 15):
-        price = 2600.0 + i * 0.02
-        bars.append(
-            Bar(
-                time=t,
-                open=price,
-                high=price + 0.20,
-                low=price - 0.20,
-                close=price + 0.05,
-                spread_points=25,
-                spread_price=0.25,
-            )
-        )
-        t += timedelta(minutes=1)
-
-    signals = tool.generate_signals_from_m1_bars(bars, _live_args_without_dates())
+    signals = tool.generate_signals_from_m1_bars(
+        _trend_bars(datetime(2025, 1, 1, 0, 0), 90 * 15),
+        _live_args_without_dates(),
+    )
 
     assert signals
     assert signals[0].side == "BUY"
     assert hasattr(signals[0], "signal_time_chart")
+
+
+def test_live_m1_generation_ignores_incomplete_current_m15_bucket() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    tool = _load_tool(repo_root)
+
+    bars = _trend_bars(datetime(2026, 6, 5, 0, 0), 5 * 60 + 50)
+    signals = tool.generate_signals_from_m1_bars(bars, _live_args_without_dates())
+
+    assert signals
+    assert max(signal.signal_time_chart for signal in signals) <= datetime(2026, 6, 5, 5, 45)
