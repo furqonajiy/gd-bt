@@ -88,9 +88,9 @@ conda activate trading
 git checkout feature/improve
 
 python tools/backtest_explicit.py `
-  --signals generated/live_provider_all.txt `
+  --signals generated/self_m15_archive.txt `
   --charts data/XAUUSD_M1_*.csv `
-  --output-dir reports/better_c7_12k_risk0022_2025_202606 `
+  --output-dir reports/tick_tuned_to3_tc5_archive_risk0022_2025_202606 `
   --max-drawdown-limit-pct 40 `
   --progress-interval-seconds 30 `
   --start-date 2025-01-01 `
@@ -119,8 +119,8 @@ python tools/backtest_explicit.py `
   --tp2-lock-target TP1 `
   --runner-after-tp3 false `
   --tp3-lock-target TP2 `
-  --trailing-open-distance 0.5 `
-  --trailing-close-distance 0.5
+  --trailing-open-distance 3.0 `
+  --trailing-close-distance 5.0
 
 python tools/auto_explicit.py `
   --signals generated/live_provider_all.txt `
