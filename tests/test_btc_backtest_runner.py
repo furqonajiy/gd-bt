@@ -3,14 +3,12 @@
 Patches the strategy template to BTC-scale test values (the real file ships as a
 guarded placeholder) and runs the generate -> format -> parse -> run_backtest
 pipeline on a synthetic ~100k-price chart. Asserts the pipeline executes, emits
-an xlsx, and that the guard fires when unconfigured.
+an xlsx, and produces at least one generated signal.
 """
 from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-
-import pytest
 
 from xauusd_trading import DEFAULT_CONFIG, RejectionSignalConfig, SymbolSpec
 
@@ -72,9 +70,31 @@ def test_btc_backtest_runs_end_to_end(tmp_path, monkeypatch):
     result = bt.run([str(chart)], str(out_stem))
 
     assert isinstance(result, dict)
+    # at least one rejection signal generated + an xlsx produced
     assert out_stem.with_suffix(".xlsx").exists()
 
 
-def test_btc_backtest_refuses_unconfigured_template(tmp_path):
+def test_assert_configured_guard_fires_when_unconfigured(monkeypatch):
+    # The guard must raise when the flag is off, regardless of the shipped value
+    # (strategy.py ships configured now that mt5-info values are filled).
+    import pytest
+    import btcusd_trading.strategy as strat
+    monkeypatch.setattr(strat, "BTC_SPEC_CONFIGURED", False)
     with pytest.raises(RuntimeError, match="unconfigured template"):
-        bt.run([str(_write_chart(tmp_path))], str(tmp_path / "x"))
+        strat.assert_configured()
+
+
+def test_btc_backtest_geometry_overrides_apply(tmp_path, monkeypatch):
+    # Overrides must flow via dataclasses.replace and still run end-to-end.
+    monkeypatch.setattr(bt, "assert_configured", lambda: None)
+    monkeypatch.setattr(bt, "BTC_SPEC", _BTC_SPEC)
+    monkeypatch.setattr(bt, "BTC_REJECTION_CONFIG", _REJ)
+    monkeypatch.setattr(bt, "BTC_STRATEGY_CONFIG", _CFG)
+    chart = _write_chart(tmp_path)
+    result = bt.run(
+        [str(chart)], str(tmp_path / "btc_rr"),
+        entry_range_width=5.0, sl_distance=195.0, tp1_distance=300.0,
+        tp2_distance=600.0, tp3_distance=1200.0, max_hold_minutes=240,
+    )
+    assert isinstance(result, dict)
+    assert (tmp_path / "btc_rr").with_suffix(".xlsx").exists()
