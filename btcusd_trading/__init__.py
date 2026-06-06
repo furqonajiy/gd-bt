@@ -6,6 +6,7 @@ symbol constants -- lives here (see strategy.py). Import direction is one-way:
 btcusd_trading depends on xauusd_trading, never the reverse.
 """
 from .strategy import (
+    BTC_MOMENTUM_CONFIG,
     BTC_REJECTION_CONFIG,
     BTC_SPEC,
     BTC_SPEC_CONFIGURED,
@@ -15,6 +16,7 @@ from .strategy import (
 
 __all__ = [
     "BTC_SPEC",
+    "BTC_MOMENTUM_CONFIG",
     "BTC_SPEC_CONFIGURED",
     "BTC_REJECTION_CONFIG",
     "BTC_STRATEGY_CONFIG",

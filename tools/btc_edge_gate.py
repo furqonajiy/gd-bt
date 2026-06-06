@@ -48,9 +48,11 @@ if str(ROOT) not in sys.path:
 
 from xauusd_trading import (  # noqa: E402
     CsvChartSource,
+    generate_momentum_signals,
     generate_rejection_signals,
 )
 from btcusd_trading import (  # noqa: E402
+    BTC_MOMENTUM_CONFIG,
     BTC_REJECTION_CONFIG,
     BTC_SPEC,
     assert_configured,
@@ -174,14 +176,17 @@ def _parse_floats(text: str) -> list[float]:
 
 
 def run(chart_patterns: list[str], tick_patterns: list[str], out_csv: str, *,
-        horizons_min: list[int], stops: list[float], rrs: list[float],
+        signal_kind: str, horizons_min: list[int], stops: list[float], rrs: list[float],
         max_hold_min: int, server_offset: int, entry_tol_min: int) -> dict:
     assert_configured()  # never measure on placeholder BTC values
 
     chart = CsvChartSource(_expand_charts(chart_patterns), point_value=BTC_SPEC.point_value)
     bars = list(chart.bars_between(chart.first_time(), chart.last_time()))
-    signals = generate_rejection_signals(bars, BTC_REJECTION_CONFIG)
-    print(f"[signals] generated {len(signals)} rejection signal(s) from "
+    if signal_kind == "momentum":
+        signals = generate_momentum_signals(bars, BTC_MOMENTUM_CONFIG)
+    else:
+        signals = generate_rejection_signals(bars, BTC_REJECTION_CONFIG)
+    print(f"[signals] {signal_kind}: generated {len(signals)} signal(s) from "
           f"{len(bars):,} M1 bars.")
     if not signals:
         raise SystemExit("No signals generated; nothing to measure.")
@@ -315,6 +320,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="BTC rejection-signal edge gate (tick MFE/MAE + first-touch).")
     p.add_argument("--charts", nargs="+", required=True, help="BTC M1 CSV path(s)/glob(s) for signal generation.")
     p.add_argument("--ticks", nargs="+", required=True, help="BTC tick CSV path(s)/glob(s); fulls OR halves, not both.")
+    p.add_argument("--signal", choices=["rejection", "momentum"], default="rejection",
+                   help="Which signal hypothesis to measure.")
     p.add_argument("--out", default="reports/btc_edge_gate_signals.csv", help="Per-signal detail CSV.")
     p.add_argument("--horizons", default="15,60,240", help="MFE/MAE horizons in minutes, comma-separated.")
     p.add_argument("--stops", default="62,120,200", help="Stop distances in $, comma-separated (>= 62 = BTC floor).")
@@ -330,6 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     run(
         args.charts, args.ticks, args.out,
+        signal_kind=args.signal,
         horizons_min=[int(x) for x in args.horizons.split(",") if x.strip()],
         stops=_parse_floats(args.stops),
         rrs=_parse_floats(args.rr),
