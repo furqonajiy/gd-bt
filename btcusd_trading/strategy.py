@@ -1,17 +1,16 @@
-"""BTC strategy definition (TEMPLATE).
+"""BTC strategy definition.
 
-This is the ONLY file holding BTC-specific values. It is a template: the
-numbers below are placeholder sentinels, NOT tradeable values. The runner calls
-assert_configured() and refuses to run until you:
+BTC_SPEC fields are facts from mt5-info (ELEV8 BTCUSD, 2026-06-06). The distances
+in BTC_REJECTION_CONFIG / BTC_STRATEGY_CONFIG are a FIRST-PRINCIPLES starting
+geometry, anchored to the broker's hard constraints (stops_level $62, spread ~$28)
+and BTC's ~$60.7k price -- NOT tuned to a backtest number. The first backtest's
+job is viability (signal count, fill rate, stop-out vs target-hit), not P&L
+bragging; adjust geometry for what's structurally broken, never to chase profit.
 
-  1. Run mt5-info for BTCUSD and paste the verified values into BTC_SPEC.
-  2. Choose BTC-magnitude distances for BTC_REJECTION_CONFIG / BTC_STRATEGY_CONFIG
-     (gold's $1-$40 distances are noise at ~$100k) and validate them on a BTC
-     backtest first -- do NOT tune to chase a number.
-  3. Set BTC_SPEC_CONFIGURED = True.
-
-Nothing here trades on placeholders: the sentinels are zeros and the guard
-raises until you flip the flag.
+BTC_SPEC_CONFIGURED = True enables the (non-trading) backtest only. There is no
+live runner yet, and this geometry is unvalidated -- do NOT trade it live until a
+BTC backtest clears the bar (fixed-lot net profit positive, combined gold+BTC
+DD <= 40%) and the live runner (batch 2b) is built.
 """
 from __future__ import annotations
 
@@ -19,84 +18,76 @@ from dataclasses import replace
 
 from xauusd_trading import DEFAULT_CONFIG, RejectionSignalConfig, SymbolSpec
 
-# Flip to True only after every TODO below is filled with verified values.
-BTC_SPEC_CONFIGURED = False
+BTC_SPEC_CONFIGURED = True
 
 
-# --- 1. Symbol constants: paste from `mt5-info` for BTCUSD -------------------
-# Confirm the exact Market Watch name first (BTCUSD vs BTCUSD.r vs a .Daily
-# variant) -- pick the continuously-traded one with no daily expiry.
+# --- 1. Symbol constants (facts: mt5-info ELEV8 BTCUSD) ----------------------
 BTC_SPEC = SymbolSpec(
-    symbol="BTCUSD",     # TODO: exact Market Watch symbol
-    point_value=0.0,     # TODO: tick size (mt5-info trade_tick_size / point); = 10**-digits
-    digits=0,            # TODO: mt5-info digits
-    contract_size=0.0,   # TODO: mt5-info trade_contract_size (units per 1.00 lot)
-    min_lot=0.0,         # TODO: mt5-info volume_min
-    lot_step=0.0,        # TODO: mt5-info volume_step
+    symbol="BTCUSD",
+    point_value=0.01,     # point / trade_tick_size
+    digits=2,
+    contract_size=1.0,    # 1 lot = 1 BTC
+    min_lot=0.01,
+    lot_step=0.01,
 )
 
 
-# --- 2. Self-rejection signal generation (BTC magnitude) ---------------------
-# Distances are in PRICE units. session hours None -> BTC trades ~24/7.
-# All distance TODOs must be re-derived for BTC's price scale + validated on a
-# BTC backtest before going live.
+# --- 2. Self-rejection signal generation (BTC magnitude; price units = $) ----
+# Distances respect stops_level ($62) and clear spread (~$28). session None = 24/7.
+# min_wick / min_bar_range gate how many candles qualify -- calibrate frequency
+# off the first backtest's signal count, not its P&L.
 BTC_REJECTION_CONFIG = RejectionSignalConfig(
     lookback_bars=20,
-    min_wick=0.0,             # TODO: BTC-scale wick threshold
-    min_bar_range=0.0,        # TODO
+    min_wick=50.0,
+    min_bar_range=50.0,
     wick_body_ratio=1.2,
-    zone_buffer=0.0,          # TODO
-    zone_size=0.0,            # TODO
+    zone_buffer=30.0,
+    zone_size=50.0,
     cooldown_minutes=20,
     same_zone_cooldown_minutes=120,
-    max_spread_points=None,   # TODO: BTC spread cap in points (mt5-info-relative)
-    session_start_hour=None,  # 24/7
-    session_end_hour=None,    # 24/7
-    entry_range_width=0.0,    # TODO
-    sl_distance=0.0,          # TODO
-    tp1_distance=0.0,         # TODO  (tp2 > tp1, tp3 > tp2 required)
-    tp2_distance=0.0,         # TODO
-    tp3_distance=0.0,         # TODO
-    price_digits=2,           # TODO: match BTC_SPEC.digits
+    max_spread_points=5000,    # $50 cap; normal ~$28, skips spread spikes
+    session_start_hour=None,   # 24/7
+    session_end_hour=None,     # 24/7
+    entry_range_width=40.0,
+    sl_distance=120.0,         # effective SL ($120) clears the $62 floor
+    tp1_distance=120.0,        # 1:1
+    tp2_distance=240.0,        # 2:1
+    tp3_distance=480.0,        # 4:1
+    price_digits=2,
 )
 
 
-# --- 3. Executor params (shape mirrors the validated trailing self-strategy) -
-# Structural fields are set; magnitude/sizing fields are TODO (spec + backtest).
-# DEFAULT_CONFIG stays the gold DD40 anchor -- this is a derived copy, never a
-# mutation of it.
+# --- 3. Executor params: FIRST backtest = raw-edge read --------------------
+# Fixed-lot (judge per-trade edge on fixed lot, per the mission), trailing OFF,
+# no locks, exit at TP1 or SL -- a clean binary to see if entering on rejections
+# beats spread on BTC. Risk-sizing + trailing + combined-DD come AFTER raw edge
+# is confirmed. DEFAULT_CONFIG (gold DD40 anchor) is untouched; this is a copy.
 BTC_STRATEGY_CONFIG = replace(
     DEFAULT_CONFIG,
-    initial_capital=0.0,          # TODO: BTC sub-account / allocation
-    sizing_mode="risk",
-    risk_per_signal=0.0,          # TODO: small -- shares the account DD budget with gold
-    minimum_lot=0.0,              # TODO: = BTC_SPEC.min_lot
-    lot_step=0.0,                 # TODO: = BTC_SPEC.lot_step
+    initial_capital=10_000.0,     # account ballpark (shared with gold)
+    sizing_mode="fixed",
+    lot_per_entry=0.01,
+    minimum_lot=0.01,
+    lot_step=0.01,
     entry_count=1,
     entry_ladder="range_uniform",
-    entry_sl_gap=0.0,             # TODO: BTC-scale
+    entry_sl_gap=20.0,            # unused with range_uniform
     activation_delay_minutes=0,
     pending_expiry_minutes=630,
-    max_hold_minutes=15,
-    sl_multiplier=0.0,            # TODO: BTC-scale
+    max_hold_minutes=90,
+    sl_multiplier=1.0,            # effective SL = signal SL distance
     final_target="TP1",
-    lock_after_tp1=True,
-    lock_after_tp2=True,
-    profit_lock_mode="tp_levels",
-    bep_trigger_distance=0.0,     # TODO: BTC-scale
-    tp1_lock_fraction=0.5,
-    trailing_open_distance=0.0,   # TODO: >= broker stops_level, BTC-scale
-    trailing_close_distance=0.0,  # TODO: >= broker stops_level, BTC-scale
-    bonus_per_closed_lot=3.0,
+    lock_after_tp1=False,
+    lock_after_tp2=False,
+    trailing_open_distance=0.0,   # OFF for the raw-edge read
+    trailing_close_distance=0.0,  # OFF
+    bonus_per_closed_lot=0.0,     # no-bonus edge ($3/lot is negligible at 0.01 lot anyway)
+    bep_trigger_distance=30.0,    # unused (no locks)
 )
 
 
 def assert_configured() -> None:
-    """Raise unless BTC_SPEC has been filled from mt5-info and verified.
-
-    The runner calls this before doing anything, so the template can never place
-    an order on placeholder numbers.
-    """
+    """Raise unless BTC_SPEC has been filled from mt5-info and verified."""
     if not BTC_SPEC_CONFIGURED:
         raise RuntimeError(
             "btcusd_trading.strategy is an unconfigured template. Paste verified "
