@@ -1,149 +1,438 @@
 #!/usr/bin/env python3
-"""Generate research-only self signals from MT5 M1 chart exports."""
 from __future__ import annotations
 
 import argparse
 import glob
 import json
-import sys
-from collections import Counter
-from datetime import datetime, timedelta
+import shutil
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+from typing import Iterable
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from xauusd_trading import (  # noqa: E402
-    CsvChartSource,
-    RejectionSignalConfig,
-    format_generated_signals,
-    generate_rejection_signals,
-    iter_bars,
-)
+import pandas as pd
 
 
-def _expand_chart_paths(patterns: list[str]) -> list[Path]:
-    out: list[Path] = []
-    for pat in patterns:
-        if any(ch in pat for ch in "*?["):
-            matches = sorted(glob.glob(pat))
-            if not matches:
-                raise SystemExit(f"No files match pattern: {pat}")
-            out.extend(Path(m) for m in matches)
-        else:
-            path = Path(pat)
-            if not path.exists():
-                raise SystemExit(f"Chart file not found: {pat}")
-            out.append(path)
-    if not out:
-        raise SystemExit("No chart files provided")
+POINT_VALUE = 0.01
+CHART_TZ_OFFSET = 3
+
+
+@dataclass(frozen=True)
+class SignalRow:
+    signal_time: datetime
+    side: str
+    r1: float
+    r2: float
+    sl: float
+    tp1: float
+    tp2: float
+    tp3: float
+
+    @property
+    def signal_time_chart(self) -> datetime:
+        return self.signal_time
+
+
+def _expand_patterns(patterns: list[str] | None) -> list[Path]:
+    paths: list[Path] = []
+    for pattern in patterns or []:
+        matches = sorted(glob.glob(pattern)) if any(ch in pattern for ch in "*?[") else [pattern]
+        for match in matches:
+            path = Path(match)
+            if path.exists():
+                paths.append(path)
+    return sorted({p.resolve(): p for p in paths}.values())
+
+
+def _read_mt5_csv(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path, sep="\t")
+    df.columns = [str(c).strip("<>").upper() for c in df.columns]
+    required = {"DATE", "TIME", "OPEN", "HIGH", "LOW", "CLOSE", "SPREAD"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"{path} missing required columns: {sorted(missing)}")
+
+    out = pd.DataFrame()
+    out["time"] = pd.to_datetime(
+        df["DATE"].astype(str) + " " + df["TIME"].astype(str),
+        format="%Y.%m.%d %H:%M:%S",
+        )
+    for src, dst in (("OPEN", "open"), ("HIGH", "high"), ("LOW", "low"), ("CLOSE", "close"), ("SPREAD", "spread")):
+        out[dst] = pd.to_numeric(df[src], errors="coerce")
+    out["source_file"] = path.name
+    return out.dropna(subset=["time", "open", "high", "low", "close", "spread"])
+
+
+def _load_csvs(paths: list[Path]) -> pd.DataFrame:
+    if not paths:
+        return pd.DataFrame(columns=["time", "open", "high", "low", "close", "spread", "source_file"])
+    frames = [_read_mt5_csv(path) for path in paths]
+    df = pd.concat(frames, ignore_index=True)
+    return df.sort_values(["time", "source_file"]).drop_duplicates("time", keep="last").reset_index(drop=True)
+
+
+def bars_to_dataframe(bars: Iterable[object]) -> pd.DataFrame:
+    rows = []
+    for bar in bars:
+        rows.append({
+            "time": bar.time,
+            "open": float(bar.open),
+            "high": float(bar.high),
+            "low": float(bar.low),
+            "close": float(bar.close),
+            "spread": int(bar.spread_points),
+            "source_file": "MT5_LIVE",
+        })
+    if not rows:
+        return pd.DataFrame(columns=["time", "open", "high", "low", "close", "spread", "source_file"])
+    df = pd.DataFrame(rows)
+    return df.sort_values("time").drop_duplicates("time", keep="last").reset_index(drop=True)
+
+
+def _m1_to_m15(m1: pd.DataFrame) -> pd.DataFrame:
+    if m1.empty:
+        return pd.DataFrame(columns=["time", "open", "high", "low", "close", "spread"])
+    indexed = m1.sort_values("time").set_index("time")
+    m15 = indexed.resample("15min", label="left", closed="left").agg(
+        open=("open", "first"),
+        high=("high", "max"),
+        low=("low", "min"),
+        close=("close", "last"),
+        spread=("spread", "last"),
+        bar_count=("close", "count"),
+    )
+    # Live MT5 passes only closed M1 bars. Without this guard, the currently
+    # forming M15 bucket can be emitted early with signal_time = bucket + 15min.
+    m15 = m15[m15["bar_count"] >= 15]
+    m15 = m15.drop(columns=["bar_count"])
+    return m15.dropna(subset=["open", "high", "low", "close", "spread"]).reset_index()
+
+
+def _load_working_m15(m15_patterns: list[str] | None, m1_patterns: list[str] | None, legacy_charts: list[str] | None) -> pd.DataFrame:
+    if legacy_charts and not m1_patterns:
+        m1_patterns = legacy_charts
+
+    direct_m15 = _load_csvs(_expand_patterns(m15_patterns))
+    from_m1 = _m1_to_m15(_load_csvs(_expand_patterns(m1_patterns)))
+
+    frames: list[pd.DataFrame] = []
+    if not from_m1.empty:
+        temp = from_m1.copy()
+        temp["source_priority"] = 0
+        frames.append(temp)
+    if not direct_m15.empty:
+        temp = direct_m15.copy()
+        temp["source_priority"] = 1
+        frames.append(temp)
+    if not frames:
+        raise SystemExit("No chart files found. Provide --m15-charts and/or --m1-charts.")
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined = combined.sort_values(["time", "source_priority"])
+    combined = combined.drop_duplicates("time", keep="last")
+    combined = combined.sort_values("time").reset_index(drop=True)
+    return combined[["time", "open", "high", "low", "close", "spread"]]
+
+
+# ---------------------------------------------------------------------------
+# 1H trend gate (optional; OFF by default so it is a clean A/B against the
+# single-timeframe generator).
+# ---------------------------------------------------------------------------
+def _resample_ohlc(df: pd.DataFrame, rule: str, min_bars: int) -> pd.DataFrame:
+    """Aggregate OHLC(+spread) bars to a coarser timeframe.
+
+    min_bars drops the still-forming final bucket -- the same anti-look-ahead
+    guard the M1->M15 path uses: a higher-timeframe bar may only inform a signal
+    once it has fully closed.
+    """
+    if df.empty:
+        return pd.DataFrame(columns=["time", "open", "high", "low", "close", "spread"])
+    indexed = df.sort_values("time").set_index("time")
+    agg = indexed.resample(rule, label="left", closed="left").agg(
+        open=("open", "first"),
+        high=("high", "max"),
+        low=("low", "min"),
+        close=("close", "last"),
+        spread=("spread", "last"),
+        bar_count=("close", "count"),
+    )
+    agg = agg[agg["bar_count"] >= min_bars].drop(columns=["bar_count"])
+    return agg.dropna(subset=["open", "high", "low", "close", "spread"]).reset_index()
+
+
+def _h1_bars(working_m15: pd.DataFrame, h1_patterns: list[str] | None) -> pd.DataFrame:
+    """1H bars for the trend gate: prefer explicit --h1-charts, else derive them
+    from the working M15 (4 closed M15 bars per hour) so no extra file is needed."""
+    if h1_patterns:
+        direct = _load_csvs(_expand_patterns(h1_patterns))
+        if not direct.empty:
+            return direct[["time", "open", "high", "low", "close", "spread"]]
+    return _resample_ohlc(working_m15, "1h", 4)
+
+
+def _build_h1_trend(working_m15: pd.DataFrame, h1_patterns: list[str] | None,
+                    ema_fast: int, ema_slow: int) -> pd.DataFrame:
+    """Per-1H-bar trend (+1 up / -1 down / 0 flat) from an EMA cross, stamped at
+    the bar's CLOSE time (open + 1h) so a backward merge_asof attaches only an
+    already-closed 1H trend to each M15 signal -- no look-ahead."""
+    h1 = _h1_bars(working_m15, h1_patterns).sort_values("time").reset_index(drop=True)
+    if h1.empty:
+        return pd.DataFrame(columns=["trend_known_time", "h1_trend"])
+    fast = h1["close"].ewm(span=ema_fast, adjust=False).mean()
+    slow = h1["close"].ewm(span=ema_slow, adjust=False).mean()
+    trend = pd.Series(0, index=h1.index, dtype="int64")
+    trend[fast > slow] = 1
+    trend[fast < slow] = -1
+    return pd.DataFrame({
+        "trend_known_time": h1["time"] + pd.Timedelta(hours=1),
+        "h1_trend": trend,
+    }).sort_values("trend_known_time").reset_index(drop=True)
+
+
+def _add_indicators(m15: pd.DataFrame, ema_fast: int, ema_slow: int, atr_period: int) -> pd.DataFrame:
+    out = m15.copy()
+    out["ema_fast"] = out["close"].ewm(span=ema_fast, adjust=False).mean()
+    out["ema_slow"] = out["close"].ewm(span=ema_slow, adjust=False).mean()
+    prev_close = out["close"].shift(1)
+    true_range = pd.concat(
+        [
+            out["high"] - out["low"],
+            (out["high"] - prev_close).abs(),
+            (out["low"] - prev_close).abs(),
+            ],
+        axis=1,
+    ).max(axis=1)
+    out["atr"] = true_range.rolling(atr_period, min_periods=atr_period).mean()
     return out
 
 
-def _parse_date(value: str | None) -> datetime | None:
-    return datetime.strptime(value, "%Y-%m-%d") if value else None
+def _fmt_price(value: float, digits: int = 2) -> str:
+    return f"{value:.{digits}f}".rstrip("0").rstrip(".")
 
 
-def _hour_or_none(raw: str) -> int | None:
-    value = int(raw)
-    if value < 0:
-        return None
-    if value > 24:
-        raise argparse.ArgumentTypeError("hour must be -1, or 0..24")
-    return value
+def _fmt_time(value: datetime) -> str:
+    return value.strftime("%I:%M %p").lstrip("0")
 
 
-def _spread_or_none(raw: str) -> int | None:
-    value = int(raw)
-    if value < 0:
-        return None
-    return value
+def _build_signal(
+        row,
+        side: str,
+        entry_offset: float,
+        range_width: float,
+        sl_gap: float,
+        tp1_distance: float,
+        tp2_distance: float,
+        tp3_distance: float,
+) -> SignalRow:
+    close = round(float(row.close), 2)
+    if side == "BUY":
+        r1 = round(close - entry_offset, 2)
+        r2 = round(r1 - range_width, 2)
+        sl = round(r2 - sl_gap, 2)
+        tp1 = round(r1 + tp1_distance, 2)
+        tp2 = round(r1 + tp2_distance, 2)
+        tp3 = round(r1 + tp3_distance, 2)
+    else:
+        r1 = round(close + entry_offset, 2)
+        r2 = round(r1 + range_width, 2)
+        sl = round(r2 + sl_gap, 2)
+        tp1 = round(r1 - tp1_distance, 2)
+        tp2 = round(r1 - tp2_distance, 2)
+        tp3 = round(r1 - tp3_distance, 2)
+    return SignalRow(row.signal_time.to_pydatetime(), side, r1, r2, sl, tp1, tp2, tp3)
+
+
+def _generate_from_m15(m15: pd.DataFrame, args: argparse.Namespace) -> list[SignalRow]:
+    data = _add_indicators(m15, args.ema_fast, args.ema_slow, args.atr_period)
+    data["signal_time"] = data["time"] + pd.Timedelta(minutes=15)
+
+    # 1H trend gate: 1H sets direction, M15 times the entry. A backward
+    # merge_asof attaches the latest CLOSED 1H trend to each M15 signal. When the
+    # flag is off, nothing below changes and output is byte-identical.
+    h1_filter = bool(getattr(args, "h1_trend_filter", False))
+    if h1_filter:
+        h1_trend = _build_h1_trend(
+            m15, getattr(args, "h1_charts", None),
+            getattr(args, "h1_ema_fast", 21), getattr(args, "h1_ema_slow", 55),
+        )
+        data = pd.merge_asof(
+            data.sort_values("signal_time"), h1_trend,
+            left_on="signal_time", right_on="trend_known_time", direction="backward",
+        ).reset_index(drop=True)
+
+    start_raw = getattr(args, "start_date", None)
+    end_raw = getattr(args, "end_date", None)
+    start = pd.Timestamp(start_raw) if start_raw else pd.Timestamp.min
+    end = pd.Timestamp(end_raw) + pd.Timedelta(days=1) if end_raw else pd.Timestamp.max
+
+    last_side_time: dict[str, pd.Timestamp | None] = {"BUY": None, "SELL": None}
+    daily_count: defaultdict[object, int] = defaultdict(int)
+    rows: list[SignalRow] = []
+
+    for i, row in data.iterrows():
+        signal_time = row.signal_time
+        if signal_time < start or signal_time >= end:
+            continue
+        if not (args.min_atr <= float(row.atr) <= args.max_atr):
+            continue
+
+        signal_date = signal_time.date()
+        if daily_count[signal_date] >= args.max_signals_per_day:
+            continue
+
+        ema_delta = float(row.ema_fast) - float(data.iloc[i - 1].ema_fast) if i > 0 else 0.0
+        side: str | None = None
+        if row.ema_fast > row.ema_slow and ema_delta > 0 and row.close > row.ema_fast:
+            side = "BUY"
+        elif row.ema_fast < row.ema_slow and ema_delta < 0 and row.close < row.ema_fast:
+            side = "SELL"
+        if side is None:
+            continue
+
+        if h1_filter:
+            # Drop signals that disagree with (or precede) the closed 1H trend.
+            h1t = row.h1_trend
+            if pd.isna(h1t) or (side == "BUY" and h1t <= 0) or (side == "SELL" and h1t >= 0):
+                continue
+
+        previous_same_side = last_side_time[side]
+        if previous_same_side is not None and signal_time - previous_same_side < pd.Timedelta(minutes=args.same_side_spacing_minutes):
+            continue
+
+        rows.append(_build_signal(
+            row,
+            side,
+            args.entry_offset,
+            args.range_width,
+            args.sl_gap_from_range,
+            args.tp1_distance,
+            args.tp2_distance,
+            args.tp3_distance,
+        ))
+        last_side_time[side] = signal_time
+        daily_count[signal_date] += 1
+
+    return rows
+
+
+def generate_signals_from_m1_bars(bars: Iterable[object], args: argparse.Namespace) -> list[SignalRow]:
+    return _generate_from_m15(_m1_to_m15(bars_to_dataframe(bars)), args)
+
+
+def generate_signals(args: argparse.Namespace) -> list[SignalRow]:
+    return _generate_from_m15(_load_working_m15(args.m15_charts, args.m1_charts, args.charts), args)
+
+
+def write_signal_file(signals: list[SignalRow], output_path: Path, source_tz_offset: int, price_digits: int = 2) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    grouped: dict[str, list[SignalRow]] = defaultdict(list)
+    for signal in signals:
+        grouped[signal.signal_time.strftime("%Y-%m-%d")].append(signal)
+
+    lines: list[str] = []
+    tz_label = f"GMT+{source_tz_offset}" if source_tz_offset >= 0 else f"GMT{source_tz_offset}"
+    for date_key in sorted(grouped):
+        if lines:
+            lines.append("")
+        lines.append(f"{date_key} {tz_label}")
+        for day_id, signal in enumerate(sorted(grouped[date_key], key=lambda s: s.signal_time), start=1):
+            lines.append(
+                f"{day_id}. {signal.side} XAUUSD "
+                f"{_fmt_price(signal.r1, price_digits)} - {_fmt_price(signal.r2, price_digits)} "
+                f"SL {_fmt_price(signal.sl, price_digits)} "
+                f"TP1 {_fmt_price(signal.tp1, price_digits)} "
+                f"TP2 {_fmt_price(signal.tp2, price_digits)} "
+                f"TP3 {_fmt_price(signal.tp3, price_digits)} "
+                f"{_fmt_time(signal.signal_time)}"
+            )
+
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def add_generation_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--ema-fast", type=int, default=21)
+    p.add_argument("--ema-slow", type=int, default=55)
+    p.add_argument("--atr-period", type=int, default=14)
+    p.add_argument("--min-atr", type=float, default=0.30)
+    p.add_argument("--max-atr", type=float, default=80.00)
+    p.add_argument("--same-side-spacing-minutes", type=int, default=30)
+    p.add_argument("--max-signals-per-day", type=int, default=40)
+    p.add_argument("--entry-offset", type=float, default=1.00)
+    p.add_argument("--range-width", type=float, default=2.00)
+    p.add_argument("--sl-gap-from-range", type=float, default=3.50)
+    p.add_argument("--tp1-distance", type=float, default=4.00)
+    p.add_argument("--tp2-distance", type=float, default=7.00)
+    p.add_argument("--tp3-distance", type=float, default=12.00)
+    # 1H trend gate (off by default -> single-timeframe behaviour unchanged).
+    p.add_argument("--h1-trend-filter", action="store_true",
+                   help="Gate M15 signals to the 1H EMA trend direction (1H sets "
+                        "direction, M15 times entry). Off by default for a clean A/B.")
+    p.add_argument("--h1-ema-fast", type=int, default=21)
+    p.add_argument("--h1-ema-slow", type=int, default=55)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        description="Generate closed-candle rejection-zone self signals for trailing-open research."
-    )
-    p.add_argument("--charts", required=True, nargs="+", help="MT5 M1 chart CSV path(s), supports globs.")
-    p.add_argument("--output", required=True, help="Output signal file, e.g. generated/self_rejection_v1.txt.")
-    p.add_argument("--start-date", default=None, metavar="YYYY-MM-DD")
-    p.add_argument("--end-date", default=None, metavar="YYYY-MM-DD")
-    p.add_argument("--lookback-bars", type=int, default=20)
-    p.add_argument("--min-wick", type=float, default=1.0)
-    p.add_argument("--min-bar-range", type=float, default=1.5)
-    p.add_argument("--wick-body-ratio", type=float, default=1.2)
-    p.add_argument("--zone-buffer", type=float, default=0.25)
-    p.add_argument("--zone-size", type=float, default=1.0)
-    p.add_argument("--cooldown-minutes", type=int, default=20)
-    p.add_argument("--same-zone-cooldown-minutes", type=int, default=120)
-    p.add_argument("--max-spread-points", type=_spread_or_none, default=35, help="-1 disables spread filter.")
-    p.add_argument("--session-start-hour", type=_hour_or_none, default=7, help="-1 disables session filter.")
-    p.add_argument("--session-end-hour", type=_hour_or_none, default=22, help="-1 disables session filter.")
-    p.add_argument("--entry-range-width", type=float, default=2.0)
-    p.add_argument("--sl-distance", type=float, default=5.0)
-    p.add_argument("--tp1-distance", type=float, default=10.0)
-    p.add_argument("--tp2-distance", type=float, default=20.0)
-    p.add_argument("--tp3-distance", type=float, default=40.0)
+    p = argparse.ArgumentParser(description="Generate self-made XAUUSD M15 trend-pullback signals.")
+    p.add_argument("--m15-charts", nargs="+", default=["data/XAUUSD_M15_*_ELEV8.csv"])
+    p.add_argument("--m1-charts", nargs="+", default=["data/XAUUSD_M1_*_ELEV8.csv"])
+    p.add_argument("--charts", nargs="+", default=None, help="Legacy M1 chart alias; used only when --m1-charts is omitted.")
+    p.add_argument("--h1-charts", nargs="+", default=None,
+                   help="Optional 1H bar source for the trend gate; if omitted while "
+                        "--h1-trend-filter is set, 1H is aggregated from the working M15.")
+    p.add_argument("--output", required=True)
+    p.add_argument("--alias-output", default=None)
+    p.add_argument("--start-date", default="2025-01-01")
+    p.add_argument("--end-date", default=None)
+    p.add_argument("--source-tz-offset", type=int, default=CHART_TZ_OFFSET)
     p.add_argument("--price-digits", type=int, default=2)
+    add_generation_args(p)
     return p
+
+
+def generation_summary(args: argparse.Namespace, signals: list[SignalRow], output_path: Path, alias_output: str | None = None) -> dict:
+    side_counts = Counter(signal.side for signal in signals)
+    return {
+        "output": str(output_path),
+        "alias_output": alias_output,
+        "signals": len(signals),
+        "buy": side_counts.get("BUY", 0),
+        "sell": side_counts.get("SELL", 0),
+        "source_tz_offset": getattr(args, "source_tz_offset", CHART_TZ_OFFSET),
+        "strategy": {
+            "ema_fast": args.ema_fast,
+            "ema_slow": args.ema_slow,
+            "atr_period": args.atr_period,
+            "same_side_spacing_minutes": args.same_side_spacing_minutes,
+            "max_signals_per_day": args.max_signals_per_day,
+            "entry_offset": args.entry_offset,
+            "range_width": args.range_width,
+            "sl_gap_from_range": args.sl_gap_from_range,
+            "tp1_distance": args.tp1_distance,
+            "tp2_distance": args.tp2_distance,
+            "tp3_distance": args.tp3_distance,
+            "h1_trend_filter": bool(getattr(args, "h1_trend_filter", False)),
+            "h1_ema_fast": getattr(args, "h1_ema_fast", 21),
+            "h1_ema_slow": getattr(args, "h1_ema_slow", 55),
+            "h1_charts": list(getattr(args, "h1_charts", None) or []),
+        },
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    signals = generate_signals(args)
 
-    chart = CsvChartSource(_expand_chart_paths(args.charts))
-    df = chart.dataframe
+    output_path = Path(args.output)
+    write_signal_file(signals, output_path, args.source_tz_offset, args.price_digits)
 
-    start = _parse_date(args.start_date)
-    end = _parse_date(args.end_date)
-    if end is not None:
-        end = end + timedelta(days=1)
+    if args.alias_output:
+        alias_path = Path(args.alias_output)
+        alias_path.parent.mkdir(parents=True, exist_ok=True)
+        if alias_path.resolve() != output_path.resolve():
+            shutil.copyfile(output_path, alias_path)
 
-    if start is not None:
-        df = df[df["time"] >= start]
-    if end is not None:
-        df = df[df["time"] < end]
-
-    config = RejectionSignalConfig(
-        lookback_bars=args.lookback_bars,
-        min_wick=args.min_wick,
-        min_bar_range=args.min_bar_range,
-        wick_body_ratio=args.wick_body_ratio,
-        zone_buffer=args.zone_buffer,
-        zone_size=args.zone_size,
-        cooldown_minutes=args.cooldown_minutes,
-        same_zone_cooldown_minutes=args.same_zone_cooldown_minutes,
-        max_spread_points=args.max_spread_points,
-        session_start_hour=args.session_start_hour,
-        session_end_hour=args.session_end_hour,
-        entry_range_width=args.entry_range_width,
-        sl_distance=args.sl_distance,
-        tp1_distance=args.tp1_distance,
-        tp2_distance=args.tp2_distance,
-        tp3_distance=args.tp3_distance,
-        price_digits=args.price_digits,
-    )
-
-    signals = generate_rejection_signals(iter_bars(df), config)
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        format_generated_signals(signals, source_tz_offset=3, price_digits=args.price_digits),
-        encoding="utf-8",
-    )
-
-    side_counts = Counter(signal.side for signal in signals)
-    summary = {
-        "output": str(output),
-        "signals": len(signals),
-        "buy": side_counts.get("BUY", 0),
-        "sell": side_counts.get("SELL", 0),
-        "chart_start": str(df["time"].iloc[0]) if not df.empty else None,
-        "chart_end": str(df["time"].iloc[-1]) if not df.empty else None,
-        "config": config.__dict__,
-    }
-    print(json.dumps(summary, indent=2, default=str))
+    print(json.dumps(generation_summary(args, signals, output_path, args.alias_output), indent=2, default=str))
     return 0
 
 

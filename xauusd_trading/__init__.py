@@ -144,6 +144,12 @@ from .core.config import (
     StrategyConfig,
 )
 
+# 1b. core.symbol (constants only -> depends on core.config)
+from .core.symbol import (
+    SymbolSpec,
+    XAU_SPEC,
+)
+
 # 2. core.chart
 from .core.chart import (
     Bar,
@@ -260,6 +266,7 @@ from .execution.mt5_executor_trailing import Mt5Executor
 
 __all__ = [
     "CHART_TIMEZONE_OFFSET", "CONTRACT_SIZE_OZ", "DEFAULT_CONFIG", "POINT_VALUE", "StrategyConfig",
+    "SymbolSpec", "XAU_SPEC",
     "Bar", "iter_bars", "latest_bar", "load_chart", "slice_bars",
     "Signal", "compute_entries", "parse_one_signal", "parse_signal_line", "parse_signals_file",
     "fill_trigger", "initial_stop_for_entry", "stop_trigger", "target_trigger",

@@ -346,15 +346,25 @@ def _first_of_next_month(year: int, month: int) -> datetime:
     return datetime(year, month + 1, 1)
 
 
-def _archive_filename(symbol: str, year: int, month: int, source: str = "ELEV8") -> str:
-    """Canonical chart archive filename.
-
-    Use the normalized project symbol in filenames even if the broker symbol
-    has a suffix, so all historical files sort together:
-        XAUUSD_M1_202605_ELEV8.csv
-        XAUUSD_M1_202401_INTERNET.csv
+def _normalize_file_symbol(symbol: str) -> str:
+    """Map a broker symbol (which may carry a suffix like '.r' or 'm', or be an
+    alias like 'GOLD') to the canonical project symbol used in archive
+    filenames. Every gold variant collapses to XAUUSD so legacy XAUUSD_M1_*
+    files keep sorting together; other instruments (e.g. BTCUSD) keep their own
+    dot-stripped root.
     """
-    return f"XAUUSD_M1_{year:04d}{month:02d}_{source.upper()}.csv"
+    root = symbol.upper().split(".", 1)[0]   # 'XAUUSD.r' -> 'XAUUSD'
+    if root.startswith("XAU") or root == "GOLD":
+        return "XAUUSD"
+    return root
+
+
+def _archive_filename(symbol: str, year: int, month: int, source: str = "ELEV8") -> str:
+    """Canonical chart archive filename, e.g. XAUUSD_M1_202605_ELEV8.csv or
+    BTCUSD_M1_202605_ELEV8.csv. Uses the normalized project symbol so files sort
+    together regardless of the broker's exact Market Watch name.
+    """
+    return f"{_normalize_file_symbol(symbol)}_M1_{year:04d}{month:02d}_{source.upper()}.csv"
 
 
 def archive_m1_by_month(

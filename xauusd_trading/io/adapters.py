@@ -11,7 +11,7 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
-from xauusd_trading import Bar, latest_bar, load_chart, slice_bars, iter_bars
+from xauusd_trading import Bar, POINT_VALUE, latest_bar, load_chart, slice_bars, iter_bars
 from xauusd_trading import Position
 
 
@@ -39,8 +39,8 @@ class ChartSource(ABC):
 class CsvChartSource(ChartSource):
     """Backed by one or more MT5 M1 CSV files."""
 
-    def __init__(self, paths: Iterable[Path]):
-        self._df = load_chart([Path(p) for p in paths])
+    def __init__(self, paths: Iterable[Path], point_value: float = POINT_VALUE):
+        self._df = load_chart([Path(p) for p in paths], point_value=point_value)
 
     @property
     def dataframe(self) -> pd.DataFrame:
