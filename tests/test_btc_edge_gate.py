@@ -64,3 +64,16 @@ def test_breakeven_winrate():
     assert gate.breakeven_winrate(target=2.0, stop=2.0) == 0.5
     assert abs(gate.breakeven_winrate(target=4.0, stop=2.0) - (1.0 / 3.0)) < 1e-9
     assert abs(gate.breakeven_winrate(target=2.0, stop=4.0) - (2.0 / 3.0)) < 1e-9
+
+
+def test_excursion_empty_window_returns_nan():
+    empty = _arr([])
+    for side in ("BUY", "SELL"):
+        mfe, mae = gate.excursion(side, 100.0, 100.0, empty, empty)
+        assert np.isnan(mfe) and np.isnan(mae)
+
+
+def test_first_touch_empty_window_is_timeout():
+    empty = _arr([])
+    for side in ("BUY", "SELL"):
+        assert gate.first_touch(side, 100.0, 100.0, empty, empty, 2.0, 2.0) == "timeout"

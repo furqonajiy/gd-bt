@@ -73,6 +73,8 @@ def excursion(side: str, entry_ask: float, entry_bid: float,
     bid and is marked against the ask. MFE is favourable (>= the start drawdown),
     MAE is adverse (<= 0 once the spread is paid).
     """
+    if bid_win.size == 0:  # signal sits in a tick gap shorter than this horizon
+        return float("nan"), float("nan")
     if side == "BUY":
         return float(bid_win.max()) - entry_ask, float(bid_win.min()) - entry_ask
     return entry_bid - float(ask_win.min()), entry_bid - float(ask_win.max())
@@ -87,6 +89,8 @@ def first_touch(side: str, entry_ask: float, entry_bid: float,
     target+stop ambiguity to resolve pessimistically -- whichever index comes
     first simply wins.
     """
+    if bid_win.size == 0:
+        return "timeout"
     if side == "BUY":
         win = bid_win >= entry_ask + target
         loss = bid_win <= entry_ask - stop
@@ -171,7 +175,7 @@ def _parse_floats(text: str) -> list[float]:
 
 def run(chart_patterns: list[str], tick_patterns: list[str], out_csv: str, *,
         horizons_min: list[int], stops: list[float], rrs: list[float],
-        max_hold_min: int, server_offset: int) -> dict:
+        max_hold_min: int, server_offset: int, entry_tol_min: int) -> dict:
     assert_configured()  # never measure on placeholder BTC values
 
     chart = CsvChartSource(_expand_charts(chart_patterns), point_value=BTC_SPEC.point_value)
@@ -189,6 +193,7 @@ def run(chart_patterns: list[str], tick_patterns: list[str], out_csv: str, *,
 
     horizons_ms = {h: h * 60_000 for h in horizons_min}
     max_hold_ms = max_hold_min * 60_000
+    entry_tol_ms = entry_tol_min * 60_000
     pairs = [(s, s * rr) for s in stops for rr in rrs]  # (stop, target)
 
     rows: list[dict] = []
@@ -202,7 +207,9 @@ def run(chart_patterns: list[str], tick_patterns: list[str], out_csv: str, *,
     for sig in signals:
         sig_msc = _chart_to_mt5_epoch(sig.signal_time_chart, server_offset) * 1000
         lo = int(np.searchsorted(msc, sig_msc, side="left"))
-        if lo >= len(msc):
+        # No tick at/after the signal, or the nearest one is beyond the tolerance
+        # (a market gap, or the signal predates tick coverage): not enterable, skip.
+        if lo >= len(msc) or int(msc[lo]) - sig_msc > entry_tol_ms:
             no_cover += 1
             continue
         measured += 1
@@ -220,6 +227,10 @@ def run(chart_patterns: list[str], tick_patterns: list[str], out_csv: str, *,
         for h in horizons_min:
             hi = int(np.searchsorted(msc, sig_msc + horizons_ms[h], side="right"))
             mfe, mae = excursion(sig.side, entry_ask, entry_bid, bid[lo:hi], ask[lo:hi])
+            if np.isnan(mfe):
+                row[f"mfe_{h}m"] = ""
+                row[f"mae_{h}m"] = ""
+                continue
             mfe_acc[h].append(mfe)
             mae_acc[h].append(mae)
             row[f"mfe_{h}m"] = round(mfe, 2)
@@ -309,6 +320,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stops", default="62,120,200", help="Stop distances in $, comma-separated (>= 62 = BTC floor).")
     p.add_argument("--rr", default="1.0,1.5,2.0", help="Reward:risk multipliers, comma-separated (target = stop*rr).")
     p.add_argument("--max-hold", type=int, default=240, help="First-touch horizon in minutes.")
+    p.add_argument("--entry-tolerance-min", type=int, default=5,
+                   help="Skip a signal if the nearest tick is more than this many minutes away.")
     p.add_argument("--mt5-server-offset", type=int, default=3)
     return p
 
@@ -322,6 +335,7 @@ def main(argv: list[str] | None = None) -> int:
         rrs=_parse_floats(args.rr),
         max_hold_min=args.max_hold,
         server_offset=args.mt5_server_offset,
+        entry_tol_min=args.entry_tolerance_min,
     )
     return 0
 
