@@ -1,6 +1,7 @@
 """Tests for xauusd_trading.strategy.momentum_signals.generate_momentum_signals."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 from xauusd_trading import Bar, MomentumSignalConfig, generate_momentum_signals
@@ -58,3 +59,13 @@ def test_no_signal_when_close_is_wick_heavy():
     # Pokes above recent high (104) but closes back near its low -> fails close_position.
     bars = _base() + [_bar("2026-06-03 09:03:00", 101.2, 104.0, 101.0, 101.4)]
     assert generate_momentum_signals(bars, _CFG) == []
+
+
+def test_bar_minutes_fires_signal_at_bar_close():
+    # M15: the close is 15 minutes after the bar's open timestamp -> no look-ahead.
+    cfg = replace(_CFG, bar_minutes=15)
+    bars = _base() + [_bar("2026-06-03 09:03:00", 101.5, 104.0, 101.2, 103.8)]
+    signals = generate_momentum_signals(bars, cfg)
+    assert len(signals) == 1
+    assert signals[0].source_bar_time == datetime(2026, 6, 3, 9, 3)
+    assert signals[0].signal_time_chart == datetime(2026, 6, 3, 9, 18)

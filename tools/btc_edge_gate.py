@@ -37,6 +37,7 @@ import argparse
 import csv
 import glob
 import sys
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -53,6 +54,7 @@ from xauusd_trading import (  # noqa: E402
 )
 from btcusd_trading import (  # noqa: E402
     BTC_MOMENTUM_CONFIG,
+    BTC_MOMENTUM_M15_CONFIG,
     BTC_REJECTION_CONFIG,
     BTC_SPEC,
     assert_configured,
@@ -175,19 +177,43 @@ def _parse_floats(text: str) -> list[float]:
     return [float(x) for x in text.split(",") if x.strip()]
 
 
+def _infer_bar_minutes(times) -> int:
+    """Most-common spacing (minutes) between consecutive bars; the mode survives gaps."""
+    if len(times) < 2:
+        return 1
+    ts = sorted(times)
+    deltas = Counter(int(round((b - a).total_seconds() / 60)) for a, b in zip(ts, ts[1:]))
+    deltas.pop(0, None)  # ignore any duplicate-timestamp zero gaps
+    return deltas.most_common(1)[0][0] if deltas else 1
+
+
 def run(chart_patterns: list[str], tick_patterns: list[str], out_csv: str, *,
-        signal_kind: str, horizons_min: list[int], stops: list[float], rrs: list[float],
+        signal_kind: str, timeframe: str, horizons_min: list[int], stops: list[float], rrs: list[float],
         max_hold_min: int, server_offset: int, entry_tol_min: int) -> dict:
     assert_configured()  # never measure on placeholder BTC values
 
+    if signal_kind == "rejection" and timeframe != "m1":
+        raise SystemExit("--signal rejection is M1-only (its generator fires at +1 min).")
+
     chart = CsvChartSource(_expand_charts(chart_patterns), point_value=BTC_SPEC.point_value)
     bars = list(chart.bars_between(chart.first_time(), chart.last_time()))
+
     if signal_kind == "momentum":
-        signals = generate_momentum_signals(bars, BTC_MOMENTUM_CONFIG)
+        cfg = BTC_MOMENTUM_M15_CONFIG if timeframe == "m15" else BTC_MOMENTUM_CONFIG
+        expected_bar_min = cfg.bar_minutes
+        # Guard the look-ahead footgun: if --charts are not the timeframe the
+        # config assumes, the signal would fire mid-bar at a price not yet printed.
+        inferred = _infer_bar_minutes([b.time for b in bars])
+        if inferred != expected_bar_min:
+            raise SystemExit(
+                f"--charts look like {inferred}-min bars but --timeframe {timeframe} "
+                f"expects {expected_bar_min}-min. Point --charts at the matching files."
+            )
+        signals = generate_momentum_signals(bars, cfg)
     else:
         signals = generate_rejection_signals(bars, BTC_REJECTION_CONFIG)
-    print(f"[signals] {signal_kind}: generated {len(signals)} signal(s) from "
-          f"{len(bars):,} M1 bars.")
+    print(f"[signals] {signal_kind}/{timeframe}: generated {len(signals)} signal(s) from "
+          f"{len(bars):,} bars.")
     if not signals:
         raise SystemExit("No signals generated; nothing to measure.")
 
@@ -322,6 +348,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ticks", nargs="+", required=True, help="BTC tick CSV path(s)/glob(s); fulls OR halves, not both.")
     p.add_argument("--signal", choices=["rejection", "momentum"], default="rejection",
                    help="Which signal hypothesis to measure.")
+    p.add_argument("--timeframe", choices=["m1", "m15"], default="m1",
+                   help="Chart timeframe for signal generation (momentum supports m15; --charts must match).")
     p.add_argument("--out", default="reports/btc_edge_gate_signals.csv", help="Per-signal detail CSV.")
     p.add_argument("--horizons", default="15,60,240", help="MFE/MAE horizons in minutes, comma-separated.")
     p.add_argument("--stops", default="62,120,200", help="Stop distances in $, comma-separated (>= 62 = BTC floor).")
@@ -338,6 +366,7 @@ def main(argv: list[str] | None = None) -> int:
     run(
         args.charts, args.ticks, args.out,
         signal_kind=args.signal,
+        timeframe=args.timeframe,
         horizons_min=[int(x) for x in args.horizons.split(",") if x.strip()],
         stops=_parse_floats(args.stops),
         rrs=_parse_floats(args.rr),

@@ -27,6 +27,7 @@ from .self_signals import GeneratedSignal, _in_session, _make_signal, _zone_key
 @dataclass(frozen=True)
 class MomentumSignalConfig:
     lookback_bars: int = 20
+    bar_minutes: int = 1            # bar duration; signal fires at bar close (= open + bar_minutes), so M15 must set 15
     min_body: float = 50.0          # directional conviction: large real body
     min_bar_range: float = 80.0     # range expansion: a real impulse, not drift
     close_position: float = 0.6     # close in the top (BUY) / bottom (SELL) fraction of its range
@@ -48,6 +49,8 @@ class MomentumSignalConfig:
 def _validate_config(config: MomentumSignalConfig) -> None:
     if config.lookback_bars < 1:
         raise ValueError("lookback_bars must be >= 1")
+    if config.bar_minutes < 1:
+        raise ValueError("bar_minutes must be >= 1")
     if config.entry_range_width <= 0:
         raise ValueError("entry_range_width must be > 0")
     if config.sl_distance <= 0:
@@ -86,7 +89,9 @@ def generate_momentum_signals(
 
     for i in range(config.lookback_bars, len(ordered)):
         bar = ordered[i]
-        signal_time = bar.time + timedelta(minutes=1)
+        # Signal fires at the bar's CLOSE (open + bar_minutes): on M15 the close is
+        # 15 min after bar.time, so +1 would read a price the bar hasn't printed yet.
+        signal_time = bar.time + timedelta(minutes=config.bar_minutes)
 
         if not _in_session(signal_time, config.session_start_hour, config.session_end_hour):
             continue

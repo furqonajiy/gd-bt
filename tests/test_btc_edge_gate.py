@@ -77,3 +77,12 @@ def test_first_touch_empty_window_is_timeout():
     empty = _arr([])
     for side in ("BUY", "SELL"):
         assert gate.first_touch(side, 100.0, 100.0, empty, empty, 2.0, 2.0) == "timeout"
+
+
+def test_infer_bar_minutes_mode_survives_gaps():
+    from datetime import datetime, timedelta
+    base = datetime(2026, 1, 1, 0, 0, 0)
+    m15 = [base + timedelta(minutes=15 * i) for i in range(10)] + [base + timedelta(days=2)]
+    assert gate._infer_bar_minutes(m15) == 15
+    m1 = [base + timedelta(minutes=i) for i in range(6)]
+    assert gate._infer_bar_minutes(m1) == 1

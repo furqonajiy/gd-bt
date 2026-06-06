@@ -83,6 +83,32 @@ BTC_MOMENTUM_CONFIG = MomentumSignalConfig(
 )
 
 
+# --- 2c. Momentum on M15 -- higher timeframe, where the spread is a small ----
+# fraction of the move and trends carry structure M1 lacks. bar_minutes=15 so the
+# signal fires at the M15 close (no look-ahead). Thresholds scaled to M15
+# magnitude; first-principles, unvalidated -- for the edge gate only.
+BTC_MOMENTUM_M15_CONFIG = MomentumSignalConfig(
+    bar_minutes=15,
+    lookback_bars=20,          # 20 x M15 = a 5-hour breakout window
+    min_body=150.0,
+    min_bar_range=250.0,
+    close_position=0.6,
+    breakout_buffer=0.0,
+    cooldown_minutes=60,
+    same_zone_cooldown_minutes=240,
+    zone_size=100.0,
+    max_spread_points=5000,
+    session_start_hour=None,   # 24/7
+    session_end_hour=None,     # 24/7
+    entry_range_width=100.0,
+    sl_distance=300.0,
+    tp1_distance=300.0,
+    tp2_distance=600.0,
+    tp3_distance=1200.0,
+    price_digits=2,
+)
+
+
 # --- 3. Executor params: FIRST backtest = raw-edge read --------------------
 # Fixed-lot (judge per-trade edge on fixed lot, per the mission), trailing OFF,
 # no locks, exit at TP1 or SL -- a clean binary to see if entering on rejections
