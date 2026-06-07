@@ -218,16 +218,21 @@ def compute_lot(equity: float, signal: Signal, config: StrategyConfig, contract_
     first = entries[0]
     raw_distance = first - signal.sl if signal.side == "BUY" else signal.sl - first
     base_stop_distance = raw_distance * config.sl_multiplier
+    # A sizeable signal always trades at least the broker minimum: when the
+    # computed per-entry lot floors below `minimum_lot` we clamp it UP to the
+    # minimum (e.g. an 8-entry ladder on a small risk budget) instead of zeroing
+    # the entry. Only genuinely unsizable signals (no entries, zero price-risk)
+    # stay at 0.0.
+    min_lot = config.minimum_lot if config.minimum_lot > 0 else 0.01
     if getattr(config, "sizing_mode", "risk") == "fixed":
         lot = _floor_to_step(getattr(config, "lot_per_entry", 0.0), config.lot_step if config.lot_step > 0 else 0.01)
-        return (0.0 if lot < config.minimum_lot - 1e-9 else lot), base_stop_distance
+        return max(lot, min_lot), base_stop_distance
     risk_amount = equity * config.risk_per_signal
     total_price_risk = sum(abs(e - initial_stop_for_entry(signal.side, e, base_stop_distance)) for e in entries)
     if total_price_risk <= 0:
         return 0.0, base_stop_distance
     lot = _floor_to_step(risk_amount / (total_price_risk * contract_size), config.lot_step if config.lot_step > 0 else 0.01)
-    min_lot = config.minimum_lot if config.minimum_lot > 0 else 0.01
-    return (0.0 if lot < min_lot - 1e-9 else lot), base_stop_distance
+    return max(lot, min_lot), base_stop_distance
 
 
 def _pnl(side: str, entry: float, exit_price: float, lot: float, contract_size: float) -> float:
