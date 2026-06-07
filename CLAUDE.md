@@ -102,6 +102,37 @@ When you change CLI flags, config defaults, the lifecycle, or the
 `docs/demo_runbook_trailing_open.md`. The docs are treated as part of the
 contract, not afterthoughts.
 
+## Git workflow & contribution process
+
+Every change ships through the same flow — apply it even to docs-only changes
+(including edits to this file):
+
+1. **Branch off `main` with a descriptive name.** The name says *what you are
+   updating*, not who is doing it: `feature/<what-changed>` (e.g.
+   `feature/sync-docs-with-code`, `feature/document-git-workflow`). Use
+   hyphens, never spaces — Git rejects spaces in ref names. Do not name a
+   branch after a person.
+2. **Author commits as the project owner.** Set
+   `git config user.name "C - Furqon Aji Yudhistira"` and
+   `git config user.email "furqonajiy@gmail.com"` so both author and committer
+   carry that identity. Don't leave commits authored as `Claude` / a bot.
+3. **Write a representative commit subject** that describes the change
+   (`docs: sync markdown with code, add Claude/ChatGPT project instructions`),
+   not a generic placeholder.
+4. **Open a PR into `main`** with a summary of what changed and how it was
+   verified.
+5. **Merge with no fast-forward** so a real merge commit is recorded
+   (`git merge --no-ff`, or the GitHub merge method `merge`). Never squash or
+   fast-forward.
+6. **Give the merge commit a representative message too.** Set an explicit
+   merge commit title/message (e.g. via the merge API's `commit_title` /
+   `commit_message`); do not accept the default `Merge pull request #NN
+   from …` subject.
+7. **Keep docs in sync in the same change** (see the section above) and run
+   `pytest` before merging.
+8. **Delete the feature branch after merge.** (If branch deletion is blocked
+   in the current environment, say so and leave it for the maintainer.)
+
 ## Style
 
 Match the surrounding code: `from __future__ import annotations`, PEP 604
