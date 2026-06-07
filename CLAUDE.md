@@ -1,0 +1,112 @@
+# CLAUDE.md
+
+Project instructions for Claude / Claude Code working in this repository.
+
+## What this project is
+
+A Python engine that backtests and live-trades Victor-style XAUUSD (gold)
+text signals through MetaTrader 5. The same engine drives both paths, so a
+backtest and a live run produce the same modeled lifecycle. A signal line:
+
+```
+1. BUY XAUUSD 4543 - 4541 SL 4536 TP1 4551 TP2 4561 TP3 4576 2:02 PM
+```
+
+The lifecycle: entry laddering → pending activation/expiry → fill → SL/target
+management → SL-to-TP1 (and optional TP2) lock → time-exit at `max_hold` →
+optional virtual trailing-open entry and trailing-close exit / trend runner.
+
+## Layout
+
+- `xauusd_trading/` — the engine (parsing, lifecycle, backtest, MT5 adapter,
+  executor, CLI). This is where almost all real logic lives.
+- `btcusd_trading/` — a BTC self-rejection backtest that reuses the XAUUSD
+  engine path; never mutate the blessed strategy config for a research run.
+- `tools/` — research/ops scripts (sweeps, signal generators, the explicit
+  full-parameter runners `auto_explicit.py` / `backtest_explicit.py`,
+  `dump_forensic.py`, tick tooling).
+- `listener/telegram_listener.py` — ingests Victor's Telegram channel into
+  `signals.txt`.
+- `tests/` — `pytest` suite, heavy on live/backtest parity.
+- `docs/` — `MT5_SETUP.md`, `OPERATIONS_PLAYBOOK.md`,
+  `demo_runbook_trailing_open.md`.
+
+## Architecture conventions — follow these
+
+- **Import from the package root.** Everything is re-exported from
+  `xauusd_trading/__init__.py`. Internal modules, CLI, tests, and tools all
+  do `from xauusd_trading import X`, never `from xauusd_trading.core.foo
+  import X`. The re-export block is dependency-ordered — when you move a
+  symbol between files, update `__init__.py` and keep the ordering valid.
+- **CLI structure.** `xauusd_trading/cli.py` is a thin wrapper that
+  `import *`s the historical implementation from `cli_orig.py` and overrides
+  **only** the `auto` console presentation (append-only event log). New
+  subcommands/flags go in `cli_orig.py`'s `build_parser()`; keep `cli.py`
+  delegating. Entry point is `python -m xauusd_trading.cli`.
+- **`decide` lives in `strategy.trailing_engine`** (re-exported as
+  `xauusd_trading.decide`). The wrapper preserves the legacy lifecycle when
+  trailing distances are 0 and adds trailing behavior when enabled.
+- **Config.** `core/config.py` `DEFAULT_CONFIG` is the validated
+  DD40-compatible provider contract. Trailing-open / trailing-close /
+  trend-runner default to **disabled** and are enabled **explicitly per run
+  via CLI flags** — they are deliberately NOT read from environment vars, so
+  `DEFAULT_CONFIG` is always reproducible regardless of shell state. Don't
+  add env-var config reads.
+- **Chart timezone is GMT+3** (`CHART_TIMEZONE_OFFSET = 3`). CSV charts and
+  MT5 server time are GMT+3; signal times come in some source tz
+  (`--signal-tz`, Victor uses GMT+7) and are converted internally. Don't
+  hardcode tz conversions outside the existing helpers.
+- **`positions.json`** is the tracked-signal registry (`SignalRegistry` in
+  `execution/mt5_executor.py`). Entry shape:
+  `{"signal_key", "signal", "date", "tz", "equity_at_open", "executed_at"?}`.
+  It is auto-pruned by `--execute` / `auto` when a signal's MT5 magic has no
+  footprint. Keep examples in docs consistent with this shape.
+
+## Invariants to respect
+
+- **Don't tune `core/config.py` to chase a bigger backtest number.** Strategy
+  changes go through `tools/sweep.py`, then lock the result into
+  `tests/test_smoke.py`, then deploy. See `docs/OPERATIONS_PLAYBOOK.md`.
+- **Live/backtest parity is the contract.** Many tests
+  (`test_*parity*.py`, `test_reconcile.py`, `test_intrabar_*lock*.py`,
+  `test_live_wall_clock_expiry.py`) pin the exact behavior the docs promise.
+  If you change lifecycle logic, run them and keep them green — update them
+  only when intentionally changing behavior, and update the prose docs to
+  match.
+- **The executor owns protective trailing SL**, not MT5 native trailing.
+  Don't introduce behavior that fights the executor's `TRADE_ACTION_SLTP`.
+- **`--execute` places real orders with no confirmation prompt** and implies
+  `--mt5` + live equity. Be careful in any code path that reaches it.
+
+## Commands
+
+```bash
+pip install -r requirements.txt        # pandas, openpyxl, pytest
+pytest                                  # full suite
+pytest tests/test_smoke.py             # quick strategy-baseline check
+
+python -m xauusd_trading.cli backtest --signals victor_signals.txt --charts "data/XAUUSD_M1_*.csv"
+python -m xauusd_trading.cli decide --signal "..." --signal-date 2026-05-07 --signal-tz 7 --charts "data/XAUUSD_M1_*.csv"
+```
+
+Live MT5 (`mt5-info`, `decide --execute`, `manage`, `auto`, `fetch`) requires
+the Windows-only `MetaTrader5` package and a running terminal — it cannot run
+in this Linux/CI environment. Validate engine changes through the backtest
+and `pytest`, which use CSV data and a stub MT5 layer.
+
+## Docs to keep in sync with code
+
+When you change CLI flags, config defaults, the lifecycle, or the
+`positions.json` shape, update the matching prose in `README.md`,
+`docs/MT5_SETUP.md`, `docs/OPERATIONS_PLAYBOOK.md`, and
+`docs/demo_runbook_trailing_open.md`. The docs are treated as part of the
+contract, not afterthoughts.
+
+## Style
+
+Match the surrounding code: `from __future__ import annotations`, PEP 604
+unions (`X | None`), dataclasses for config/state, and the existing comment
+density (these files explain *why*, often at length — keep that where it adds
+signal). No new runtime dependencies beyond `pandas` / `openpyxl` without a
+strong reason.
+</content>
