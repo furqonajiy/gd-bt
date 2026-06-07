@@ -124,19 +124,22 @@ Every change ships through the same flow — apply it even to docs-only changes
 5. **Merge with no fast-forward** so a real merge commit is recorded
    (`git merge --no-ff`, or the GitHub merge method `merge`). Never squash or
    fast-forward.
-6. **Give the merge commit a representative message too.** Set an explicit
-   merge commit title/message (e.g. via the merge API's `commit_title` /
-   `commit_message`); do not accept the default `Merge pull request #NN
-   from …` subject.
+6. **Give the merge commit a representative message that ends with the PR
+   number.** Set an explicit merge commit title (e.g. via the merge API's
+   `commit_title`) in the form `Representative description (#NN)` — for
+   example `Update Project Instructions to the Latest State (#47)`. Never
+   accept the default `Merge pull request #NN from …` subject.
 7. **Keep docs in sync in the same change** (see the section above) and run
    `pytest` before merging.
-8. **Bump the sync-marker file.** The repo root holds a single empty marker
-   file named for a timestamp, `YYYY-MM-DD_HHMM.txt` (e.g.
-   `2026-06-07_1809.txt`). On every update, rename it to the current
-   timestamp in the same change: `git mv <old>.txt "$(date +%Y-%m-%d_%H%M).txt"`.
+8. **Bump the sync-marker file (Jakarta time).** The repo root holds a single
+   empty marker file named for a timestamp in **Jakarta time (WIB, UTC+7)**,
+   `YYYY-MM-DD_HHMM.txt` (e.g. `2026-06-08_0120.txt`). On every update, rename
+   it to the current Jakarta time in the same change — always pin the zone, do
+   not rely on the machine clock (this environment is UTC):
+   `git mv <old>.txt "$(TZ='Asia/Jakarta' date +%Y-%m-%d_%H%M).txt"`.
    Its filename is the "last synced" stamp used to check whether the tree is
    up to date, so there must always be exactly one such file and it must
-   reflect this change's time.
+   reflect this change's Jakarta-time moment.
 9. **Delete the feature branch after merge.** (If branch deletion is blocked
    in the current environment, say so and leave it for the maintainer.)
 
