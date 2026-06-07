@@ -130,7 +130,14 @@ Every change ships through the same flow — apply it even to docs-only changes
    from …` subject.
 7. **Keep docs in sync in the same change** (see the section above) and run
    `pytest` before merging.
-8. **Delete the feature branch after merge.** (If branch deletion is blocked
+8. **Bump the sync-marker file.** The repo root holds a single empty marker
+   file named for a timestamp, `YYYY-MM-DD_HHMM.txt` (e.g.
+   `2026-06-07_1809.txt`). On every update, rename it to the current
+   timestamp in the same change: `git mv <old>.txt "$(date +%Y-%m-%d_%H%M).txt"`.
+   Its filename is the "last synced" stamp used to check whether the tree is
+   up to date, so there must always be exactly one such file and it must
+   reflect this change's time.
+9. **Delete the feature branch after merge.** (If branch deletion is blocked
    in the current environment, say so and leave it for the maintainer.)
 
 ## Style

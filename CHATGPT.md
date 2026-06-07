@@ -131,8 +131,12 @@ author, not a bot; (3) write a representative commit subject, not a
 placeholder; (4) open a PR into `main`; (5) merge with no fast-forward (a real
 merge commit — never squash/fast-forward); (6) give the merge commit a
 representative message too, not the default `Merge pull request #NN from …`;
-(7) keep docs in sync in the same change and run `pytest` first; (8) delete the
-feature branch after merge (or note if branch deletion is blocked).
+(7) keep docs in sync in the same change and run `pytest` first; (8) bump the
+sync-marker file — the repo root holds one empty `YYYY-MM-DD_HHMM.txt` file
+whose name is the "last synced" stamp, so on every update rename it to the
+current time (`git mv <old>.txt "$(date +%Y-%m-%d_%H%M).txt"`), keeping exactly
+one such file; (9) delete the feature branch after merge (or note if branch
+deletion is blocked).
 
 ## Working style
 
