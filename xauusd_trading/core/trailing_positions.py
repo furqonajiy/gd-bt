@@ -13,6 +13,9 @@ from .positions import (
     _bep_triggered,
     _close_entry,
     _delay_elapsed,
+    _scale_out_mode,
+    _stage1_active,
+    _stage2_active,
     _stop_status,
     _target_levels_hit,
     _time_exit_price,
@@ -30,6 +33,23 @@ from .trend_runner import (
 
 def _entry_open_before_bar(entry: Entry, bar: Bar) -> bool:
     return entry.status == "OPEN" and entry.fill_time is not None and entry.fill_time < bar.time
+
+
+def _scale_out_worst(position: Position, bar: Bar, target_price: float, status: str,
+                     contract_size: float) -> bool:
+    """Close the worst open leg at a TP level, keeping the rest as runners.
+
+    Worst = leg furthest from the signal SL (BUY: highest fill, SELL: lowest fill) --
+    the worst risk:reward leg. Only legs filled before this bar are eligible (the
+    same touch-applies rule the stage locks use), and at least two such legs must be
+    open so a runner remains; otherwise no scale-out happens and the single leg runs.
+    """
+    eligible = [e for e in position.open_entries() if _entry_open_before_bar(e, bar)]
+    if len(eligible) < 2:
+        return False
+    worst = max(eligible, key=lambda e: abs(e.entry_price - position.signal.sl))
+    _close_entry(worst, status, bar.time, target_price, position.signal.side, contract_size, None)
+    return True
 
 
 def _set_first_fill(position: Position, entry: Entry, bar: Bar, config: StrategyConfig) -> None:
@@ -184,6 +204,13 @@ def advance_one_bar(
         trend_runner_holds = bool(target_hit and runner_can_hold(position, config))
         runner_was_active = bool(getattr(position, "trend_runner_active", False))
         runner_should_ratchet_after_stops = bool(trend_runner_holds or runner_was_active)
+        # Pure-trail: the scale-out remainder rides the trailing stop past the final
+        # target instead of force-closing there.
+        pure_trail = bool(
+            _scale_out_mode(config)
+            and getattr(config, "runner_no_final_cap", False)
+            and float(getattr(config, "trailing_close_distance", 0.0) or 0.0) > 0
+        )
         if trend_runner_holds and not runner_was_active:
             _engage_trend_runner(position, bar)
 
@@ -204,21 +231,31 @@ def advance_one_bar(
                 status = stop_status_for(e, stop_level, fallback_status)
                 _close_entry(e, status, bar.time, stop_level, side, contract_size, stop_level)
             elif (target_hit and not runner_after_tp3 and not trend_runner_holds
-                  and not runner_was_active and _entry_open_before_bar(e, bar)):
+                  and not runner_was_active and not pure_trail and _entry_open_before_bar(e, bar)):
                 _close_entry(e, config.final_target.upper(), bar.time, position.target_level,
                              side, contract_size)
 
+        # Scale-out runs after the stop loop so the same-bar SL-wins convention holds:
+        # if the worst leg's stop triggered this bar it is already closed, and the
+        # scale-out then takes the worst still-open leg at the TP level.
+        if getattr(config, "scale_out_at_tp1", False) and tp1_hit and not position.scaled_tp1:
+            if _scale_out_worst(position, bar, position.signal.tp1, "TP1", contract_size):
+                position.scaled_tp1 = True
+        if getattr(config, "scale_out_at_tp2", False) and tp2_hit and not position.scaled_tp2:
+            if _scale_out_worst(position, bar, position.signal.tp2, "TP2", contract_size):
+                position.scaled_tp2 = True
+
         stageable_entries = [e for e in position.open_entries() if _entry_open_before_bar(e, bar)]
 
-        if config.lock_after_tp1 and position.stage1_time is None and tp1_hit and stageable_entries:
+        if _stage1_active(config) and position.stage1_time is None and tp1_hit and stageable_entries:
             position.stage1_time = bar.time
-        if config.lock_after_tp2 and position.stage2_time is None and tp2_hit and stageable_entries:
+        if _stage2_active(config) and position.stage2_time is None and tp2_hit and stageable_entries:
             position.stage2_time = bar.time
 
-        if config.lock_after_tp1 and position.stage < 1 and stageable_entries:
+        if _stage1_active(config) and position.stage < 1 and stageable_entries:
             if _delay_elapsed(position.stage1_time, bar.time, config.tp1_lock_delay_minutes):
                 position.stage = 1
-        if config.lock_after_tp2 and position.stage < 2 and stageable_entries:
+        if _stage2_active(config) and position.stage < 2 and stageable_entries:
             if _delay_elapsed(position.stage2_time, bar.time, config.tp2_lock_delay_minutes):
                 position.stage = 2
         if runner_after_tp3 and position.stage < 3 and tp3_hit and stageable_entries:

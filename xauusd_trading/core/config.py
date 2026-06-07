@@ -53,6 +53,17 @@ class StrategyConfig:
     lock_after_tp1: bool = True
     lock_after_tp2: bool = False
 
+    # Multi-entry scale-out exit (research; all default off so DEFAULT_CONFIG and
+    # the validated TRAILING-0.5 contract are byte-identical). When ANY of these is
+    # set, the scale-out stop ladder (initial SL -> BEP+buffer -> trailing) replaces
+    # the legacy lock_after_tp1/2 stop levels for that run.
+    scale_out_at_tp1: bool = False          # at TP1 touch, close the worst open leg (furthest from signal SL)
+    scale_out_at_tp2: bool = False          # at TP2 touch, close the worst remaining open leg
+    bep_after_tp1: bool = False             # at TP1, move remaining legs' stop to entry +/- bep_buffer
+    bep_buffer: float = 0.0                 # profit locked beyond entry (price units); use >=0.40 for live placement
+    trailing_close_after_stage: int = 0     # trailing-close engages only at/after this stage (0=from open)
+    runner_no_final_cap: bool = False       # True => trailing remainder pure-trails (no force-close at final target)
+
     # Optional trailing behaviour. 0.0 disables each feature. Set per run via the
     # --trailing-open-distance / --trailing-close-distance CLI flags.
     trailing_open_distance: float = 0.0

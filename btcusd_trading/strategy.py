@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from xauusd_trading import DEFAULT_CONFIG, RejectionSignalConfig, SymbolSpec
+from xauusd_trading import DEFAULT_CONFIG, MomentumSignalConfig, RejectionSignalConfig, SymbolSpec
 
 BTC_SPEC_CONFIGURED = True
 
@@ -53,6 +53,58 @@ BTC_REJECTION_CONFIG = RejectionSignalConfig(
     tp1_distance=120.0,        # 1:1
     tp2_distance=240.0,        # 2:1
     tp3_distance=480.0,        # 4:1
+    price_digits=2,
+)
+
+
+# --- 2b. Breakout-continuation (momentum) signal -- the inverse hypothesis ---
+# The edge gate found rejection anti-predictive on BTC (price continued past the
+# level), so the next signal to measure is its mirror: trade WITH a strong bar
+# that closes beyond a recent extreme. First-principles geometry (same scale as
+# rejection); unvalidated -- this exists for the edge gate, not for live trading.
+BTC_MOMENTUM_CONFIG = MomentumSignalConfig(
+    lookback_bars=20,
+    min_body=50.0,             # strong directional body
+    min_bar_range=80.0,        # range expansion: a real impulse, not drift
+    close_position=0.6,        # close in the top/bottom 40% of the bar
+    breakout_buffer=0.0,       # close strictly beyond the recent extreme
+    cooldown_minutes=20,
+    same_zone_cooldown_minutes=120,
+    zone_size=50.0,
+    max_spread_points=5000,
+    session_start_hour=None,   # 24/7
+    session_end_hour=None,     # 24/7
+    entry_range_width=40.0,
+    sl_distance=120.0,
+    tp1_distance=120.0,
+    tp2_distance=240.0,
+    tp3_distance=480.0,
+    price_digits=2,
+)
+
+
+# --- 2c. Momentum on M15 -- higher timeframe, where the spread is a small ----
+# fraction of the move and trends carry structure M1 lacks. bar_minutes=15 so the
+# signal fires at the M15 close (no look-ahead). Thresholds scaled to M15
+# magnitude; first-principles, unvalidated -- for the edge gate only.
+BTC_MOMENTUM_M15_CONFIG = MomentumSignalConfig(
+    bar_minutes=15,
+    lookback_bars=20,          # 20 x M15 = a 5-hour breakout window
+    min_body=150.0,
+    min_bar_range=250.0,
+    close_position=0.6,
+    breakout_buffer=0.0,
+    cooldown_minutes=60,
+    same_zone_cooldown_minutes=240,
+    zone_size=100.0,
+    max_spread_points=5000,
+    session_start_hour=None,   # 24/7
+    session_end_hour=None,     # 24/7
+    entry_range_width=100.0,
+    sl_distance=300.0,
+    tp1_distance=300.0,
+    tp2_distance=600.0,
+    tp3_distance=1200.0,
     price_digits=2,
 )
 
