@@ -129,13 +129,18 @@ Every change ships through the same flow — apply it even to docs-only changes
    `commit_title`) in the form `Representative description (#NN)` — for
    example `Update Project Instructions to the Latest State (#47)`. Never
    accept the default `Merge pull request #NN from …` subject.
-7. **Keep docs in sync in the same change** (see the section above) and run
-   `pytest` before merging.
-8. **Bump the sync-marker file (Jakarta time).** The repo root holds a single
-   empty marker file named for a timestamp in **Jakarta time (WIB, UTC+7)**,
-   `YYYY-MM-DD_HHMM.txt` (e.g. `2026-06-08_0120.txt`). On every update, rename
-   it to the current Jakarta time in the same change — always pin the zone, do
-   not rely on the machine clock (this environment is UTC):
+7. **Keep docs and project instructions in sync inside this same feature
+   branch** (see the section above), and run `pytest` before merging. Never
+   open a separate branch/PR just to update `CLAUDE.md` / `CHATGPT.md` or to
+   bump the marker — fold those into the feature branch that carries the
+   change, before merging it. A standalone instructions-only or marker-only PR
+   is noise.
+8. **Bump the sync-marker file (Jakarta time) in this same branch, before the
+   merge.** The repo root holds a single empty marker file named for a
+   timestamp in **Jakarta time (WIB, UTC+7)**, `YYYY-MM-DD_HHMM.txt` (e.g.
+   `2026-06-08_0120.txt`). On every update, rename it to the current Jakarta
+   time in the same change — always pin the zone, do not rely on the machine
+   clock (this environment is UTC):
    `git mv <old>.txt "$(TZ='Asia/Jakarta' date +%Y-%m-%d_%H%M).txt"`.
    Its filename is the "last synced" stamp used to check whether the tree is
    up to date, so there must always be exactly one such file and it must

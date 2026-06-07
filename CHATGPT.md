@@ -66,12 +66,16 @@ Ship every change (including docs-only) this way:
 6. The merge-commit title must be representative and end with the PR number —
    `Description (#NN)`, e.g. `Update Project Instructions to the Latest State
    (#47)`. Never the default `Merge pull request #NN from …`.
-7. Keep docs in sync in the same change and run `pytest` first (green before
-   merge).
-8. Bump the sync-marker: the repo root holds one empty `YYYY-MM-DD_HHMM.txt`
-   stamp in **Jakarta time (WIB, UTC+7)**. Rename it to now —
-   `git mv <old>.txt "$(TZ='Asia/Jakarta' date +%Y-%m-%d_%H%M).txt"` (pin the
-   zone; this environment is UTC). Keep exactly one such file.
+7. Keep docs/project instructions in sync inside this same feature branch and
+   run `pytest` first (green before merge). Never open a separate branch/PR
+   just to edit `CLAUDE.md` / `CHATGPT.md` or bump the marker — fold them into
+   the feature branch that carries the change; a standalone instructions/marker
+   PR is noise.
+8. Bump the sync-marker in this same branch before merge: the repo root holds
+   one empty `YYYY-MM-DD_HHMM.txt` stamp in **Jakarta time (WIB, UTC+7)**.
+   Rename it to now — `git mv <old>.txt "$(TZ='Asia/Jakarta' date
+   +%Y-%m-%d_%H%M).txt"` (pin the zone; this environment is UTC). Keep exactly
+   one such file.
 9. Delete the feature branch after merge (or note if deletion is blocked).
 
 ## Working style
