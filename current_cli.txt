@@ -8,18 +8,18 @@ git checkout main
 git pull origin main
 
 # =========================================================================
-# 1. Telegram Listener  ->  writes raw signals.txt
+# 1. Telegram Listener  ->  writes raw victor_signals.txt
 #    First-time setup only: `python listener\telegram_listener.py list-chats`
 #    to find the channel id, then paste it into listener_config.json.
 # =========================================================================
-python listener\telegram_listener.py
+python listener\telegram_listener.py --signals-file victor_signals.txt
 
 # =========================================================================
-# 2. Signal Filter  ->  reads signals.txt, writes the GMT+3 feed
+# 2. Signal Filter  ->  reads victor_signals.txt, writes the GMT+3 feed
 #    `--preset all` keeps every signal so the live feed matches the backtest.
 # =========================================================================
 python tools/live_provider_signal_filter.py `
-  --input signals.txt `
+  --input victor_signals.txt `
   --output generated/live_provider_all.txt `
   --preset all `
   --watch `

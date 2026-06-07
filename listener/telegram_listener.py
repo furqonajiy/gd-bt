@@ -1475,9 +1475,21 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("listen", help="Start the listener (the default).")
     p.add_argument(
         "--dry-run", action="store_true",
-        help="Parse messages but don't write signals.txt or send notifications.",
+        help="Parse messages but don't write the signals file or send notifications.",
+    )
+    p.add_argument(
+        "--signals-file", default="signals.txt",
+        help="Output feed the listener appends parsed signals to "
+             "(default: signals.txt). Relative paths resolve against the repo "
+             "root, so CWD doesn't matter.",
     )
     return p
+
+
+def _resolve_signals_path(raw: str) -> Path:
+    """Resolve the --signals-file value; relative paths sit under REPO_ROOT."""
+    p = Path(raw)
+    return p if p.is_absolute() else REPO_ROOT / p
 
 
 def main() -> int:
@@ -1488,6 +1500,12 @@ def main() -> int:
     )
     args = _build_parser().parse_args()
     cfg = Config.load(CONFIG_PATH)
+
+    # Redirect the output feed if asked (default signals.txt). The rest of the
+    # module reads the SIGNALS_PATH global at call time, so rebinding it here is
+    # all that's needed (and matches how the tests override it).
+    global SIGNALS_PATH
+    SIGNALS_PATH = _resolve_signals_path(args.signals_file)
 
     if args.cmd == "list-chats":
         return asyncio.run(_cmd_list_chats(cfg))
