@@ -1,5 +1,23 @@
+# Live trading pipeline (PowerShell, conda env `trading`).
+# Run blocks 1-3 each in their own window, in order: listener -> filter -> auto.
+# The auto runner's strategy parameters mirror the parity backtest at the bottom.
+
+cd C:\Git\github.com\furqonajiy\xauusd-backtest
+conda activate trading
+git checkout main
+git pull origin main
+
+# =========================================================================
+# 1. Telegram Listener  ->  writes raw signals.txt
+#    First-time setup only: `python listener\telegram_listener.py list-chats`
+#    to find the channel id, then paste it into listener_config.json.
+# =========================================================================
 python listener\telegram_listener.py
 
+# =========================================================================
+# 2. Signal Filter  ->  reads signals.txt, writes the GMT+3 feed
+#    `--preset all` keeps every signal so the live feed matches the backtest.
+# =========================================================================
 python tools/live_provider_signal_filter.py `
   --input signals.txt `
   --output generated/live_provider_all.txt `
@@ -7,153 +25,81 @@ python tools/live_provider_signal_filter.py `
   --watch `
   --interval 2
 
+# =========================================================================
+# 3. Live Auto  ->  reads the filtered feed, places + manages orders on MT5
+#    Strategy parameters are byte-identical to the parity backtest below.
+# =========================================================================
 python tools/auto_explicit.py `
   --signals generated/live_provider_all.txt `
-  --positions-json positions_candidate49_research.json `
+  --positions-json positions_aggressive_entry8_risk005.json `
   --watch-interval 15 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
   --mt5-history-bars 5000 `
-  --initial-capital 10000 `
+  --initial-capital 5000 `
   --sizing-mode risk `
   --lot 0.01 `
-  --risk 0.022 `
+  --risk 0.05 `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
-  --entries 4 `
-  --entry-ladder range_uniform `
-  --entry-sl-gap 5 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
   --activation-delay 0 `
-  --pending-expiry 630 `
-  --max-hold 60 `
-  --sl-multiplier 1.5 `
-  --final-target TP2 `
-  --lock-after-tp1 false `
-  --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 0 `
-  --tp2-lock-delay-minutes 0 `
-  --profit-lock-mode tp_levels `
-  --bep-trigger-distance 0 `
-  --tp1-lock-fraction 1.0 `
-  --tp2-lock-target TP1 `
-  --runner-after-tp3 false `
-  --tp3-lock-target TP2 `
-  --trailing-open-distance 0.75 `
-  --trailing-close-distance 1.0
-
-python tools/backtest_explicit.py `
-  --signals generated/live_provider_all.txt `
-  --charts data/XAUUSD_M1_*.csv `
-  --output-dir reports/aggressive_candidate_49_risk0022_all_2025_202606 `
-  --max-drawdown-limit-pct 40 `
-  --progress-interval-seconds 30 `
-  --start-date 2025-01-01 `
-  --initial-capital 10000 `
-  --sizing-mode risk `
-  --lot 0.01 `
-  --risk 0.022 `
-  --minimum-lot 0.01 `
-  --lot-step 0.01 `
-  --bonus-per-closed-lot 3 `
-  --entries 4 `
-  --entry-ladder range_uniform `
-  --entry-sl-gap 5 `
-  --activation-delay 0 `
-  --pending-expiry 630 `
-  --max-hold 60 `
-  --sl-multiplier 1.5 `
-  --final-target TP2 `
-  --lock-after-tp1 false `
-  --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 0 `
-  --tp2-lock-delay-minutes 0 `
-  --profit-lock-mode tp_levels `
-  --bep-trigger-distance 0 `
-  --tp1-lock-fraction 1.0 `
-  --tp2-lock-target TP1 `
-  --runner-after-tp3 false `
-  --tp3-lock-target TP2 `
-  --trailing-open-distance 0.75 `
-  --trailing-close-distance 1.0
-
-=====
-
-cd C:\Git\github.com\furqonajiy\xauusd-backtest
-conda activate trading
-git checkout feature/improve
-
-cd C:\Git\github.com\furqonajiy\xauusd-backtest
-conda activate trading
-git checkout feature/improve
-
-python tools/backtest_explicit.py `
-  --signals generated/self_m15_archive.txt `
-  --charts data/XAUUSD_M1_*.csv `
-  --output-dir reports/tick_tuned_to3_tc5_archive_risk0022_2025_202606 `
-  --max-drawdown-limit-pct 40 `
-  --progress-interval-seconds 30 `
-  --start-date 2025-01-01 `
-  --initial-capital 10000 `
-  --sizing-mode risk `
-  --lot 0.01 `
-  --risk 0.022 `
-  --minimum-lot 0.01 `
-  --lot-step 0.01 `
-  --bonus-per-closed-lot 3 `
-  --entries 2 `
-  --entry-ladder range_uniform `
-  --entry-sl-gap 5 `
-  --activation-delay 0 `
-  --pending-expiry 630 `
-  --max-hold 60 `
-  --sl-multiplier 0.85 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
   --final-target TP3 `
   --lock-after-tp1 true `
   --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 0 `
+  --tp1-lock-delay-minutes 10 `
   --tp2-lock-delay-minutes 0 `
   --profit-lock-mode tp_levels `
-  --bep-trigger-distance 0 `
-  --tp1-lock-fraction 1.0 `
+  --bep-trigger-distance 3 `
+  --tp1-lock-fraction 0.5 `
   --tp2-lock-target TP1 `
   --runner-after-tp3 false `
   --tp3-lock-target TP2 `
-  --trailing-open-distance 3.0 `
-  --trailing-close-distance 5.0
+  --trailing-open-distance 0 `
+  --trailing-close-distance 0 `
+  --trailing-close-after-stage 0
 
-python tools/auto_explicit.py `
-  --signals generated/live_provider_all.txt `
-  --positions-json positions_candidate7_aggressive.json `
-  --watch-interval 15 `
-  --mt5-symbol XAUUSD `
-  --mt5-server-offset 3 `
-  --mt5-history-bars 5000 `
-  --initial-capital 10000 `
+# =========================================================================
+# Parity backtest (reference; same strategy parameters as the auto runner).
+# =========================================================================
+python tools/backtest_explicit.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --start-date 2025-01-01 `
+  --output-dir reports/backtest_3_aggressive_notrail_entry8_2025 `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --initial-capital 5000 `
   --sizing-mode risk `
   --lot 0.01 `
-  --risk 0.022 `
+  --risk 0.05 `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
-  --entries 2 `
-  --entry-ladder range_uniform `
-  --entry-sl-gap 5 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
   --activation-delay 0 `
-  --pending-expiry 630 `
-  --max-hold 60 `
-  --sl-multiplier 0.85 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
   --final-target TP3 `
   --lock-after-tp1 true `
   --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 0 `
+  --tp1-lock-delay-minutes 10 `
   --tp2-lock-delay-minutes 0 `
   --profit-lock-mode tp_levels `
-  --bep-trigger-distance 0 `
-  --tp1-lock-fraction 1.0 `
+  --bep-trigger-distance 3 `
+  --tp1-lock-fraction 0.5 `
   --tp2-lock-target TP1 `
   --runner-after-tp3 false `
   --tp3-lock-target TP2 `
-  --trailing-open-distance 0.5 `
-  --trailing-close-distance 0.5
-
+  --trailing-open-distance 0 `
+  --trailing-close-distance 0 `
+  --trailing-close-after-stage 0
