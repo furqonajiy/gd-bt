@@ -121,6 +121,19 @@ need the Windows-only `MetaTrader5` package and a running terminal; they
 cannot run in Linux/CI. Validate engine changes via the backtest and pytest,
 which use CSV data and a stub MT5 layer.
 
+## Git workflow
+
+Ship every change (including docs-only) the same way: (1) branch off `main`
+with a descriptive `feature/<what-changed>` name (hyphens, never spaces, never
+named after a person); (2) set `git config user.name "C - Furqon Aji
+Yudhistira"` and `user.email "furqonajiy@gmail.com"` so commits carry that
+author, not a bot; (3) write a representative commit subject, not a
+placeholder; (4) open a PR into `main`; (5) merge with no fast-forward (a real
+merge commit — never squash/fast-forward); (6) give the merge commit a
+representative message too, not the default `Merge pull request #NN from …`;
+(7) keep docs in sync in the same change and run `pytest` first; (8) delete the
+feature branch after merge (or note if branch deletion is blocked).
+
 ## Working style
 
 Match the surrounding code: `from __future__ import annotations`, PEP 604
