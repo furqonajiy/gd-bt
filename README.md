@@ -1,232 +1,163 @@
-# MT5 integration — setup guide
+# XAUUSD signal backtester & live MT5 executor
 
-You can replace `--charts CSV` with live data from a running MetaTrader
-5 terminal. Same engine, same numbers — only the data source changes.
+A Python engine that turns Victor-style XAUUSD (gold) text signals into a
+fully-modeled trade lifecycle — entry laddering, stop/target management,
+SL-to-TP locking, time-exit, and optional trailing entry/exit — and runs it
+two ways from the **same engine and the same numbers**:
 
-For the daily live-trading procedures (Modes A and B), see
-`OPERATIONS_PLAYBOOK.md`. For repo overview, see `../README.md`.
+- **Backtest** against historical M1 CSV charts.
+- **Live** against a running MetaTrader 5 terminal (read-only diagnostics, or
+  real order placement with `--execute` / `auto`).
 
-## 1. Install the package
+A signal looks like:
 
-On Windows, with your MT5 terminal already installed:
+```
+1. BUY XAUUSD 4543 - 4541 SL 4536 TP1 4551 TP2 4561 TP3 4576 2:02 PM
+```
+
+## Repository layout
+
+| Path | What it is |
+|------|------------|
+| `xauusd_trading/` | The engine. Signal parsing, position lifecycle, backtest, MT5 adapter, executor, CLI. |
+| `xauusd_trading/cli.py` | CLI entry point: `python -m xauusd_trading.cli <subcommand>`. |
+| `btcusd_trading/` | BTC self-rejection backtest runner that reuses the XAUUSD engine path. |
+| `tools/` | Research/ops scripts: parameter sweeps, signal generators, explicit-config live/backtest runners, forensic dumper, tick tooling. |
+| `listener/` | `telegram_listener.py` — ingests Victor's Telegram channel into `signals.txt`. |
+| `tests/` | `pytest` suite (live/backtest parity, reconcile, sizing, listener, etc.). |
+| `docs/` | Setup and operations guides (see below). |
+
+## Install
+
+Requires Python 3.10+ (the code uses `from __future__ import annotations`
+and PEP 604 `X | Y` typing).
+
+```bash
+pip install -r requirements.txt   # pandas, openpyxl, pytest
+```
+
+For **live MT5 use**, additionally install the Windows-only MT5 package:
 
 ```powershell
 pip install MetaTrader5
 ```
 
-The `MetaTrader5` package is **Windows-only** and requires the MT5
-terminal to be installed. The terminal does not have to be running with
-a chart open, but it must be installed and capable of being launched.
+See [`docs/MT5_SETUP.md`](docs/MT5_SETUP.md) for the full live-data setup.
 
-## 2. Allow Python access in MT5
+## Quick start — backtest
 
-In MT5: **Tools → Options → Expert Advisors**
-
-- ✅ Allow algorithmic trading
-- ✅ Allow DLL imports
-
-(These are the typical defaults; double-check.)
-
-## 3. Find your symbol name
-
-Symbols vary by broker:
-
-| Broker style                | Likely symbol                 |
-|-----------------------------|-------------------------------|
-| Standard                    | `XAUUSD`                      |
-| Pepperstone / cTrader-style | `XAUUSD.r`                    |
-| FXCM / IC Markets           | `GOLD` or `XAUUSD`            |
-| ECN suffix                  | `XAUUSDm`, `XAUUSD-ECN`, etc. |
-
-Check **Market Watch** in MT5 — right-click → Show All — and use the
-exact string you see there.
-
-## 4. Confirm your broker server timezone
-
-Most XAUUSD brokers run their server clock at **GMT+3** (year-round, no
-DST, or with the same DST rule as Europe/Athens). This matches the
-project's chart timezone, so no shift is needed and
-`--mt5-server-offset 3` (the default) works.
-
-If your broker is on a different offset (e.g. some are GMT+2, GMT+0),
-pass the right value:
-
-```powershell
---mt5-server-offset 2
+```bash
+python -m xauusd_trading.cli backtest \
+  --signals victor_signals.txt \
+  --charts "data/XAUUSD_M1_*.csv"
 ```
 
-You can verify with `mt5-info` (next step) — the printed "Latest bar"
-time should match the time you see in MT5's chart window.
+Writes an Excel report (`backtest_results*.xlsx`) with per-signal and
+per-entry detail. Charts are M1 OHLC CSVs in the broker's **GMT+3** chart
+timezone.
 
-## 5. Test the connection
+## Quick start — decide on one signal
 
-```powershell
-python -m xauusd_trading.cli mt5-info --mt5-symbol XAUUSD
+```bash
+python -m xauusd_trading.cli decide \
+  --signal "1. BUY XAUUSD 4543 - 4541 SL 4536 TP1 4551 TP2 4561 TP3 4576 2:02 PM" \
+  --signal-date 2026-05-07 --signal-tz 7 \
+  --charts "data/XAUUSD_M1_*.csv"
 ```
 
-Expected output (your equity will differ):
+Swap `--charts ...` for `--mt5 --equity-from-mt5` to run against live MT5
+data instead of CSV. Add `--execute` to actually place the orders (it
+implies `--mt5` and live equity — no confirmation prompt).
 
-```
-Symbol:           XAUUSD
-Server offset:    GMT+3
-Latest bar:       2026-05-07 14:32:00  close=4555.18  spread=27 pts
-Account equity:   $1,000.00
+## CLI subcommands
 
-Open MT5 positions / pending orders for the symbol:
-  (none)
-```
+`python -m xauusd_trading.cli <subcommand>` (prog name `xauusd`):
 
-If the bar time is wrong, adjust `--mt5-server-offset`. If the symbol
-is not found, check the spelling against Market Watch.
+| Subcommand | Purpose |
+|------------|---------|
+| `backtest` | Run a historical backtest over signals + M1 charts; writes an Excel report. |
+| `decide`   | Evaluate one signal. With `--execute`, place and manage orders on MT5. |
+| `manage`   | Manage tracked signals: lock SL to TP1, cancel expired pendings, time-close. `--watch` loops. |
+| `auto`     | Continuous live trading: read `signals.txt`, place orders, manage positions, append-only event log. |
+| `mt5-info` | Diagnostic: latest bar, account equity, open MT5 positions/orders for the symbol. |
+| `fetch`    | Pull the last ~2 months of M1 history into `data/` (per-month CSV archive). |
 
-## 6. Decide on a new signal using live MT5 data
+Common flag groups (added to most subcommands):
 
-```powershell
-python -m xauusd_trading.cli decide ^
-  --signal "1. BUY XAUUSD 4543 - 4541 SL 4536 TP1 4551 TP2 4561 TP3 4576 2:02 PM" ^
-  --signal-date 2026-05-07 ^
-  --signal-tz 7 ^
-  --mt5 ^
-  --equity-from-mt5
-```
+- **Strategy overrides:** `--initial-capital`, `--risk`, `--entries`,
+  `--entry-ladder {range_uniform,range_to_sl}`, `--entry-sl-gap`.
+- **Research toggles (default OFF):** `--trailing-open-distance`,
+  `--trailing-close-distance`, `--trend-runner` (+ `--trend-runner-ema-fast`,
+  `--trend-runner-ema-slow`, `--trend-runner-atr-period`,
+  `--trend-runner-atr-multiplier`).
+- **MT5 connection:** `--mt5-symbol` (default `XAUUSD`),
+  `--mt5-server-offset` (default `3`), `--mt5-history-bars` (default `5000`),
+  `--mt5-path`, `--mt5-login`, `--mt5-password`, `--mt5-server`.
+- **Notifications / forensics:** `--notifications` / `--no-notifications`,
+  `--forensic-log` / `--no-forensic`.
 
-That command:
-- Pulls the most recent M1 bars directly from MT5
-- Reads your account equity from MT5
-- Outputs the same decision report as the CSV path
+For the full strategy parameter surface (max-hold, pending-expiry,
+sl-multiplier, lock delays, profit-lock model, etc.) used in the
+trailing-open research config, see the explicit runners
+`tools/auto_explicit.py` and `tools/backtest_explicit.py`, documented in
+[`docs/demo_runbook_trailing_open.md`](docs/demo_runbook_trailing_open.md).
 
-## 7. M1 archive: build a long history one fetch at a time
+## Default strategy config
 
-MT5 only exposes the last ~103 days of M1 history (varies by broker).
-Every `decide --mt5` call automatically fetches the available range and
-saves it to **per-month CSV files** in `data/`. Over time you
-accumulate a growing archive that goes beyond what MT5 itself keeps —
-exactly the data you need for re-running backtests on your own broker's
-quotes.
+Defaults live in `xauusd_trading/core/config.py` (`DEFAULT_CONFIG`) — the
+validated DD40-compatible provider contract. Headlines:
 
-```
-data/
-├── XAUUSD_M1_202602.csv     ← built up over many fetches
-├── XAUUSD_M1_202603.csv
-├── XAUUSD_M1_202604.csv
-└── XAUUSD_M1_202605.csv     ← appends new bars on each call
-```
+| Setting | Default |
+|---------|---------|
+| `sizing_mode` | `risk` |
+| `risk_per_signal` | `0.05575` |
+| `entry_count` | `3` |
+| `entry_ladder` | `range_to_sl` |
+| `activation_delay_minutes` | `3` |
+| `pending_expiry_minutes` | `630` |
+| `max_hold_minutes` | `90` |
+| `sl_multiplier` | `1.61` |
+| `final_target` | `TP3` |
+| `lock_after_tp1` / `lock_after_tp2` | `True` / `False` |
+| `trailing_open_distance` / `trailing_close_distance` | `0.0` / `0.0` (disabled) |
 
-Each save **merges** with the existing file: bars with new timestamps
-are added, bars with matching timestamps are replaced with MT5's latest
-values, and bars only present in the existing file (e.g. early-month
-bars that have since fallen out of MT5's window) are **preserved**.
-This is the safe default.
+Trailing-open, trailing-close, and trend-runner are **off by default** and
+are enabled explicitly per run via CLI flags — they are deliberately not
+read from the environment, so backtests are reproducible regardless of shell
+state.
 
-### One-off bulk fetch
+## Live trading
 
-If you just want to pull data without running a decision:
+`positions.json` is the registry of currently-tracked signals. Each entry is
+`{"signal_key", "signal", "date", "tz", "equity_at_open", "executed_at"}`
+(the last is optional). `--execute` / `auto` auto-prune entries whose MT5
+footprint is gone.
 
-```powershell
-python -m xauusd_trading.cli fetch --mt5-symbol XAUUSD
-```
+Two live modes:
 
-Useful for filling the archive on a schedule (e.g. a daily Task
-Scheduler job that captures the latest day before older data falls off
-MT5's window).
+- **Mode A — one-shot `decide --execute`:** manual, signal-by-signal.
+- **Mode B — continuous `auto`:** run the Telegram listener + `auto`
+  side-by-side, hands-off.
 
-### Using the archive for backtests
+Full procedures, sanity checks, and failure recovery are in
+[`docs/OPERATIONS_PLAYBOOK.md`](docs/OPERATIONS_PLAYBOOK.md). MT5 connection
+setup is in [`docs/MT5_SETUP.md`](docs/MT5_SETUP.md).
 
-```powershell
-python -m xauusd_trading.cli backtest ^
-  --signals my_signals.txt ^
-  --charts data\XAUUSD_M1_*.csv
-```
+## Tests
 
-The CSV format is identical to the original repo files, so they're
-directly interchangeable.
-
-## 8. Including currently-open signals
-
-The engine uses `positions.json` to know which **signals** you are
-currently in. MT5 alone does not preserve enough context (TP1, TP2,
-TP3, range, signal time) to reconstruct the engine's position state, so
-you maintain a small JSON file with the prior signals you have orders
-or fills on. Entries auto-prune as positions close under `--execute` or
-`auto`.
-
-`positions.json`:
-
-```json
-[
-  {
-    "signal_key": "2026-05-07#01",
-    "signal": "10. SELL XAUUSD 4555 - 4557 SL 4562 TP1 4547 TP2 4537 TP3 4522 1:14 PM",
-    "date": "2026-05-07",
-    "tz": 7,
-    "equity_at_open": 50000.0,
-    "executed_at": "2026-05-07T13:14:22"
-  }
-]
+```bash
+pytest
 ```
 
-Then:
+The suite includes live/backtest execution-parity tests that pin the engine
+behavior the docs describe (SL-to-TP1 lock parity, reconcile, wall-clock
+expiry, terminal catch-up, sizing, listener overrides).
 
-```powershell
-python -m xauusd_trading.cli decide ^
-  --signal "..." --signal-date 2026-05-07 --signal-tz 7 ^
-  --mt5 --equity-from-mt5 ^
-  --positions-json positions.json
-```
+## Documentation
 
-The engine replays each prior signal against the live MT5 chart up to
-"now" to reconstruct stage / floating P&L / time-exit countdown, then
-prints the combined report.
-
-## 9. Auto-execution (`--execute`)
-
-`decide --execute` places the planned orders directly on MT5 and
-manages existing tracked signals (cancels expired pendings, locks SL to
-TP1 on TP1 touch, time-closes on max-hold deadline). Read-only
-diagnostic output without `--execute`; with `--execute`, real orders
-are sent.
-
-```powershell
-python -m xauusd_trading.cli decide ^
-  --signal "..." --signal-date 2026-05-07 --signal-tz 7 ^
-  --mt5 --equity-from-mt5 ^
-  --positions-json positions.json ^
-  --execute
-```
-
-The executor cross-checks account equity against the engine's recent
-expectation; if they diverge by more than 50%, it aborts before placing
-orders (safety against running on the wrong account).
-
-## Sanity-check: does MT5 agree with positions.json?
-
-The `mt5-info` output lists what MT5 thinks is currently open for the
-symbol. After placing orders for a signal, run it to confirm everything
-is in. After closing orders, run it again to confirm they are gone —
-and update `positions.json` to match (or let `--execute` / `auto` auto-
-prune it for you).
-
-## Optional: connecting to a specific terminal / login
-
-By default `mt5.initialize()` connects to whatever terminal session is
-currently active. To pin to a specific install or login non-
-interactively:
-
-```powershell
---mt5-path "C:\Program Files\MetaTrader 5\terminal64.exe" ^
---mt5-login 12345678 ^
---mt5-password "..." ^
---mt5-server "MyBroker-Live"
-```
-
-Use this only if you have multiple terminals or want a scripted login.
-For a single terminal that's already running, none of these are needed.
-
-## What is NOT implemented (and why)
-
-- **Auto-detect open positions from MT5.** MT5 stores ticket / open
-  price / SL / TP / comment / magic, but not the original signal's
-  TP1/TP2/TP3 range and issue time. To fully reconstruct an engine
-  `Position`, you need the signal text. `positions.json` is the
-  canonical source of truth for active signals; `mt5-info` is a sanity
-  check, not a substitute.
+- [`docs/MT5_SETUP.md`](docs/MT5_SETUP.md) — connect the engine to a live MT5 terminal.
+- [`docs/OPERATIONS_PLAYBOOK.md`](docs/OPERATIONS_PLAYBOOK.md) — daily live-trading procedures (Modes A and B).
+- [`docs/demo_runbook_trailing_open.md`](docs/demo_runbook_trailing_open.md) — demo parity protocol for the trailing-open candidate config.
+- [`CLAUDE.md`](CLAUDE.md) — project instructions for Claude / Claude Code.
+- [`CHATGPT.md`](CHATGPT.md) — project instructions for ChatGPT.
+</content>
