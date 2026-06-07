@@ -195,6 +195,7 @@ on, and remove them as they close.
 ```json
 [
   {
+    "signal_key": "2026-05-07#10",
     "signal": "10. SELL XAUUSD 4555 - 4557 SL 4562 TP1 4547 TP2 4537 TP3 4522 1:14 PM",
     "date": "2026-05-07",
     "tz": 7,
