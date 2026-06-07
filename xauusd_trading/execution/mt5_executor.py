@@ -69,15 +69,17 @@ def mt5_entry_comment(signal_key: str, entry_index: int, max_len: int = 31) -> s
 def round_lot(lot: float, min_lot: float = 0.01, lot_step: float = 0.01) -> float:
     """Floor `lot` to a multiple of `lot_step` and enforce `min_lot`.
 
-    Epsilon on the floor prevents FP dust (0.15 → 0.14). Returns 0.0 if
-    floored value is below `min_lot`.
+    Epsilon on the floor prevents FP dust (0.15 → 0.14). A positive lot that
+    floors below `min_lot` is bumped UP to `min_lot` (a placeable order can
+    never be smaller than the broker minimum); only a non-positive lot returns
+    0.0, which the caller treats as "nothing to place".
     """
     if lot <= 0:
         return 0.0
     steps = math.floor(lot / lot_step + 1e-9)
     rounded = round(steps * lot_step, 2)
     if rounded < min_lot - 1e-9:
-        return 0.0
+        return min_lot
     return rounded
 
 
