@@ -1,0 +1,23 @@
+git rm <old_root_sync_marker>.txt
+git add xauusd_trading/core/config.py xauusd_trading/core/positions.py `
+        xauusd_trading/core/trailing_positions.py `
+        tools/backtest_explicit.py tools/auto_explicit.py `
+        tests/test_scale_out_exit.py 2026-06-07_0750.txt
+git commit -F- <<'MSG'
+feat(exit): multi-entry scale-out with BEP-buffer and staged trailing
+
+Add an opt-in scale-out exit: close the worst leg at TP1 and again at TP2,
+lock survivors to BEP+buffer after TP1, trail after a configurable stage, and
+cap at the final target or pure-trail past it. Six new StrategyConfig fields,
+all default off so DD40/TRAILING-0.5 and the smoke anchor are byte-identical.
+Wired into tools/backtest_explicit.py and tools/auto_explicit.py as optional
+flags. 12 new tests; suite 200 passed / 2 skipped.
+
+Files:
+- xauusd_trading/core/config.py
+- xauusd_trading/core/positions.py
+- xauusd_trading/core/trailing_positions.py
+- tools/backtest_explicit.py
+- tools/auto_explicit.py
+- tests/test_scale_out_exit.py
+MSG

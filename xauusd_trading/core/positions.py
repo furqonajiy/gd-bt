@@ -21,6 +21,37 @@ TERMINAL = {
 }
 
 
+def _scale_out_mode(config: StrategyConfig) -> bool:
+    """True when any multi-entry scale-out flag is set.
+
+    Gates the alternate stop ladder so legacy runs (all flags off) are untouched.
+    """
+    return bool(
+        getattr(config, "scale_out_at_tp1", False)
+        or getattr(config, "scale_out_at_tp2", False)
+        or getattr(config, "bep_after_tp1", False)
+        or int(getattr(config, "trailing_close_after_stage", 0) or 0) > 0
+        or getattr(config, "runner_no_final_cap", False)
+    )
+
+
+def _stage1_active(config: StrategyConfig) -> bool:
+    # Broadened so stage promotion also fires when a stage-1-dependent scale-out
+    # feature is enabled; with all new flags off this equals lock_after_tp1.
+    return bool(
+        getattr(config, "lock_after_tp1", False)
+        or getattr(config, "bep_after_tp1", False)
+        or int(getattr(config, "trailing_close_after_stage", 0) or 0) == 1
+    )
+
+
+def _stage2_active(config: StrategyConfig) -> bool:
+    return bool(
+        getattr(config, "lock_after_tp2", False)
+        or int(getattr(config, "trailing_close_after_stage", 0) or 0) == 2
+    )
+
+
 @dataclass
 class Entry:
     entry_index: int
@@ -56,6 +87,8 @@ class Position:
     time_exit_deadline: Optional[datetime] = None
     last_processed_time: Optional[datetime] = None
     executed_at: Optional[datetime] = None
+    scaled_tp1: bool = False
+    scaled_tp2: bool = False
 
     def is_terminal(self) -> bool:
         return all(e.status in TERMINAL for e in self.entries)
@@ -82,6 +115,23 @@ class Position:
         if lock_after_tp1 and self.stage >= 1 and self._stage_touch_applies_to(entry, self.stage1_time):
             return 1
         return 0
+
+    def _raw_stage_for(self, entry: Entry) -> int:
+        # Same touch-applies gating as lock_stage_for but without the lock flags, so
+        # the scale-out ladder can key off the real stage independent of legacy locks.
+        if entry.fill_time is None:
+            return 0
+        if self.stage >= 3 and self._stage_touch_applies_to(entry, self.stage3_time):
+            return 3
+        if self.stage >= 2 and self._stage_touch_applies_to(entry, self.stage2_time):
+            return 2
+        if self.stage >= 1 and self._stage_touch_applies_to(entry, self.stage1_time):
+            return 1
+        return 0
+
+    def _bep_lock_stop(self, entry: Entry, buffer: float) -> float:
+        buf = max(0.0, float(buffer))
+        return entry.entry_price + buf if self.signal.side == "BUY" else entry.entry_price - buf
 
     def _half_tp1_stop_for(self, entry: Entry, fraction: float) -> float:
         fraction = max(0.0, min(1.0, float(fraction)))
@@ -112,6 +162,23 @@ class Position:
             mode = "tp_levels"
 
         stage = self.lock_stage_for(entry, lock_after_tp1, lock_after_tp2)
+
+        if config is not None and _scale_out_mode(config):
+            # Scale-out ladder, independent of legacy locks:
+            #   stage 0  -> initial SL
+            #   stage>=1 -> BEP + buffer (if bep_after_tp1)
+            # The ratcheting trailing stop is folded in only once the leg reaches
+            # the configured engage stage (trailing_close_after_stage; 0 = from open).
+            eff_stage = self._raw_stage_for(entry)
+            if getattr(config, "bep_after_tp1", False) and eff_stage >= 1:
+                stop = self._bep_lock_stop(entry, getattr(config, "bep_buffer", 0.0))
+            else:
+                stop = entry.initial_sl
+            after = int(getattr(config, "trailing_close_after_stage", 0) or 0)
+            if after > 0 and eff_stage < after:
+                return stop
+            return self._combine_with_trailing_stop(entry, stop, config)
+
         if mode == "bep_plus_half_tp1" and config is not None:
             if stage >= 3:
                 stop = self._tp3_runner_stop(config)
@@ -214,6 +281,16 @@ def _stop_status(lock_stage: int, stop_level: float, entry: Entry, config: Strat
         if lock_stage >= 1:
             return "LOCK_HALF_TP1"
         if entry.bep_armed and abs(stop_level - entry.entry_price) < 1e-9:
+            return "BEP"
+        return "SL"
+    if _scale_out_mode(config):
+        # lock_stage is legacy-gated (0 when locks are off), so detect the BEP lock
+        # by matching the stop to the entry +/- buffer level instead.
+        buf = abs(float(getattr(config, "bep_buffer", 0.0)))
+        if getattr(config, "bep_after_tp1", False) and (
+            abs(stop_level - (entry.entry_price + buf)) < 1e-9
+            or abs(stop_level - (entry.entry_price - buf)) < 1e-9
+        ):
             return "BEP"
         return "SL"
     return "LOCK_TP2" if lock_stage >= 2 else "LOCK_TP1" if lock_stage >= 1 else "SL"

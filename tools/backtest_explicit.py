@@ -298,6 +298,24 @@ def add_required_strategy_args(p: argparse.ArgumentParser) -> None:
                           help="Trailing-close (ratcheting) stop distance in price units; 0 disables.")
 
 
+def add_scale_out_args(p: argparse.ArgumentParser) -> None:
+    """Optional multi-entry scale-out exit. All default off so omitting them keeps
+    the DD40/TRAILING-0.5 contract byte-identical; sweep by passing them explicitly."""
+    g = p.add_argument_group("optional scale-out exit (default off)")
+    g.add_argument("--scale-out-at-tp1", type=_bool_text, default=False,
+                   help="At TP1 touch, close the worst open leg (furthest from signal SL). Needs >=2 filled legs.")
+    g.add_argument("--scale-out-at-tp2", type=_bool_text, default=False,
+                   help="At TP2 touch, close the worst remaining open leg.")
+    g.add_argument("--bep-after-tp1", type=_bool_text, default=False,
+                   help="At TP1, move remaining legs' stop to entry +/- --bep-buffer.")
+    g.add_argument("--bep-buffer", type=_positive_float, default=0.0,
+                   help="Profit locked beyond entry (price units) when --bep-after-tp1; use >=0.40 for live.")
+    g.add_argument("--trailing-close-after-stage", type=_positive_int, default=0,
+                   help="Trailing-close engages only at/after this stage (0=from open, 1=after TP1, 2=after TP2).")
+    g.add_argument("--runner-final-cap", choices=["tp3", "none"], default="tp3",
+                   help="tp3 = trailing remainder force-closes at the final target; none = pure trail.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Run backtest with no hidden strategy defaults.")
     p.add_argument("--signals", required=True, help="Executable/filtered signal file to backtest.")
@@ -316,6 +334,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fail-on-drawdown-limit", action="store_true")
     p.add_argument("--progress-interval-seconds", type=float, required=True)
     add_required_strategy_args(p)
+    add_scale_out_args(p)
     return p
 
 
@@ -328,6 +347,8 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         raise SystemExit("--risk must be > 0 when --sizing-mode risk")
     if args.sizing_mode == "fixed" and args.lot <= 0:
         raise SystemExit("--lot must be > 0 when --sizing-mode fixed")
+    if not 0 <= args.trailing_close_after_stage <= 3:
+        raise SystemExit("--trailing-close-after-stage must be between 0 and 3")
 
     return StrategyConfig(
         initial_capital=args.initial_capital,
@@ -357,6 +378,12 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         tp3_lock_target=args.tp3_lock_target,
         trailing_open_distance=args.trailing_open_distance,
         trailing_close_distance=args.trailing_close_distance,
+        scale_out_at_tp1=args.scale_out_at_tp1,
+        scale_out_at_tp2=args.scale_out_at_tp2,
+        bep_after_tp1=args.bep_after_tp1,
+        bep_buffer=args.bep_buffer,
+        trailing_close_after_stage=args.trailing_close_after_stage,
+        runner_no_final_cap=(args.runner_final_cap == "none"),
     )
 
 
