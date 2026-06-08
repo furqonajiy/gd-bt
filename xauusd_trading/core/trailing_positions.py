@@ -215,15 +215,17 @@ def _advance_per_entry_target_bar(position: Position, bar: Bar, config: Strategy
                                   contract_size: float) -> None:
     """One bar of the per-entry-target strategy.
 
-    Each leg exits at its OWN target (TP1/TP2/TP3); RUN legs hold once TP3 is
-    touched and trail by trailing_close_distance (and skip the max-hold time
-    exit). Independently, once a filled leg is bep_after_move price units in
-    favour its SL ratchets to entry +/- bep_buffer.
+    Each leg exits at its OWN target (TP1/TP2/TP3); RUN legs engage a trailing
+    stop once `runner_trail_from` (default TP3) is touched, then trail by
+    trailing_close_distance (and skip the max-hold time exit). The trail never
+    runs from entry. Independently, once a filled leg is bep_after_move price
+    units in favour its SL ratchets to entry +/- bep_buffer.
     """
     side = position.signal.side
     sp = bar.spread_price
     h, l, c = bar.high, bar.low, bar.close
-    tp3 = position.signal.tp3
+    tp_levels = {"TP1": position.signal.tp1, "TP2": position.signal.tp2, "TP3": position.signal.tp3}
+    trail_from = tp_levels.get(str(getattr(config, "runner_trail_from", "TP3")).upper(), position.signal.tp3)
     bep_move = float(getattr(config, "bep_after_move", 0.0) or 0.0)
     bep_buffer = float(getattr(config, "bep_buffer", 0.0) or 0.0)
     trail_dist = float(getattr(config, "trailing_close_distance", 0.0) or 0.0)
@@ -260,7 +262,7 @@ def _advance_per_entry_target_bar(position: Position, bar: Bar, config: Strategy
             if _favorable_move(side, e.entry_price, h, l) >= bep_move:
                 e.bep_after_move_armed = True
         if e.target_label == "RUN" and not e.runner_engaged and before_bar:
-            if target_trigger(side, h, l, tp3, sp):
+            if target_trigger(side, h, l, trail_from, sp):
                 e.runner_engaged = True
 
     # Trail engaged runners after the stop loop (protects from the next bar on).

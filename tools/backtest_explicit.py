@@ -375,6 +375,9 @@ def add_scale_out_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("--bep-after-move", type=_positive_float, default=0.0,
                    help="Per-leg break-even+ (per-entry-targets mode): once a filled leg is this "
                         "many price units in favour, move its SL to entry +/- --bep-buffer. 0=off.")
+    g.add_argument("--runner-trail-from", choices=["TP1", "TP2", "TP3"], default="TP3",
+                   help="RUN legs engage their trailing stop when this TP is touched, then trail "
+                        "by --trailing-close-distance. Never trails from entry. Default TP3.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -468,6 +471,7 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         shared_sl=args.shared_sl,
         per_entry_targets=_parse_entry_targets(args.entry_targets, args.entries),
         bep_after_move=args.bep_after_move,
+        runner_trail_from=args.runner_trail_from,
     )
 
 

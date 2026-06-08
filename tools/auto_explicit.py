@@ -109,6 +109,9 @@ def build_parser() -> argparse.ArgumentParser:
     scale.add_argument("--bep-after-move", type=_positive_float, default=0.0,
                        help="Per-leg break-even+ once a leg is this many price units in favour "
                             "(per-entry-targets mode); moves SL to entry +/- --bep-buffer. 0=off.")
+    scale.add_argument("--runner-trail-from", choices=["TP1", "TP2", "TP3"], default="TP3",
+                       help="RUN legs engage their trailing stop when this TP is touched (never "
+                            "from entry), then trail by --trailing-close-distance. Default TP3.")
 
     obs = p.add_argument_group("observability")
     obs.add_argument("--notifications", default=None)
@@ -186,6 +189,7 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         shared_sl=_bool_text(args.shared_sl),
         per_entry_targets=_parse_entry_targets(args.entry_targets, args.entries),
         bep_after_move=args.bep_after_move,
+        runner_trail_from=args.runner_trail_from,
     )
 
 

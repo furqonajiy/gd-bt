@@ -102,6 +102,31 @@ def test_bep_after_move_locks_break_even_plus(tmp_path):
     assert er["exit_price"] == 101                              # entry 100 + buffer 1
 
 
+def test_runner_trail_engages_at_configured_tp_not_from_entry(tmp_path):
+    # Price reaches TP2 (120) and reverses, never touching TP3 (130).
+    rows = [
+        _bar("2026.06.02", "11:00:00", 100, 100.2, 99.9, 100),
+        _bar("2026.06.02", "11:01:00", 100, 101, 98, 100),     # fill @100
+        _bar("2026.06.02", "11:02:00", 100, 121, 100, 120),    # touch TP2 -> engage (trail 116)
+        _bar("2026.06.02", "11:03:00", 120, 126, 120, 125),    # trail -> 121
+        _bar("2026.06.02", "11:04:00", 125, 125, 119, 120),    # low 119 <= 121 -> TRAILING_STOP
+    ]
+    base = dict(entry_count=1, entry_ladder="range_uniform", sl_multiplier=1.0,
+                activation_delay_minutes=0, pending_expiry_minutes=60, max_hold_minutes=240,
+                lock_after_tp1=False, per_entry_targets=("RUN",), trailing_close_distance=5.0)
+
+    # runner_trail_from=TP2: engages at TP2 and trails out at 121, before TP3.
+    cfg_tp2 = replace(DEFAULT_CONFIG, runner_trail_from="TP2", **base)
+    er = run_backtest([_sig()], _chart(tmp_path, rows, "tp2.csv"), cfg_tp2)["entry_rows"][0]
+    assert er["entry_status"] == "TRAILING_STOP"
+    assert er["exit_price"] == 121
+
+    # Default TP3: never touched (peak 126), so the runner never engages -> stays OPEN.
+    cfg_tp3 = replace(DEFAULT_CONFIG, runner_trail_from="TP3", **base)
+    er3 = run_backtest([_sig()], _chart(tmp_path, rows, "tp3.csv"), cfg_tp3)["entry_rows"][0]
+    assert er3["entry_status"] == "OPEN"
+
+
 # --- CLI parsing ------------------------------------------------------------
 
 def _load(name):

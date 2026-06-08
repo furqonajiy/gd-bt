@@ -70,6 +70,11 @@ class StrategyConfig:
     # per_entry_targets mode.
     bep_after_move: float = 0.0
 
+    # For RUN legs (per_entry_targets mode): the TP level whose touch ENGAGES the
+    # trailing stop, which then trails by trailing_close_distance. The trail never
+    # runs from entry -- only from this level onward. "TP1" | "TP2" | "TP3".
+    runner_trail_from: str = "TP3"
+
     # Multi-entry scale-out exit (research; all default off so DEFAULT_CONFIG and
     # the validated TRAILING-0.5 contract are byte-identical). When ANY of these is
     # set, the scale-out stop ladder (initial SL -> BEP+buffer -> trailing) replaces
