@@ -368,6 +368,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Only backtest signals on/before this date (chart time GMT+3, "
                         "inclusive of the whole day).")
     p.add_argument("--output-dir", required=True)
+    p.add_argument("--mt5-history", default=None, metavar="FILE",
+                   help="MT5 History export (.xlsx/.csv/.html). Matches live positions to "
+                        "backtest entries by the order Comment (= entry_key) and adds a LIVE "
+                        "column group + live R to the Per-Entry Detail.")
     p.add_argument("--exclude-structural-anomalies", action="store_true")
     p.add_argument("--max-drawdown-limit-pct", type=float, required=True)
     p.add_argument("--fail-on-drawdown-limit", action="store_true")
@@ -490,6 +494,17 @@ def main(argv: list[str] | None = None) -> int:
             config,
             exclude_structural_anomalies=args.exclude_structural_anomalies,
         )
+
+    # Merge real MT5 fills (matched by Comment == entry_key) into the entry rows.
+    if args.mt5_history:
+        from xauusd_trading.reporting.mt5_history import attach_live_history, parse_mt5_history
+        live = parse_mt5_history(args.mt5_history)
+        info = attach_live_history(result, live)
+        print(f"[mt5-history] matched {info['matched']} live position(s) to backtest entries; "
+              f"{len(info['unmatched'])} live comment(s) unmatched.", file=sys.stderr)
+        if info["unmatched"]:
+            print(f"[mt5-history] unmatched comments: {', '.join(info['unmatched'][:10])}"
+                  f"{' ...' if len(info['unmatched']) > 10 else ''}", file=sys.stderr)
 
     summary = {k: v for k, v in result.items() if k not in {"rows", "entry_rows"}}
     dd_abs = abs(min(0.0, float(result.get("max_drawdown_pct", 0.0) or 0.0)))

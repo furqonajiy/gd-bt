@@ -38,7 +38,14 @@ ID_BANNER_FILL = PatternFill("solid", fgColor="305496")
 ORIG_HEADER_FILL = PatternFill("solid", fgColor="8EAADB")     # lighter blue
 EXEC_HEADER_FILL = PatternFill("solid", fgColor="A9D08E")     # lighter green
 ORIGINAL_CELL_FILL = PatternFill("solid", fgColor="DDEBF7")   # constant tint for signal cols
+LIVE_BANNER_FILL = PatternFill("solid", fgColor="7030A0")     # purple
+LIVE_HEADER_FILL = PatternFill("solid", fgColor="CCC0DA")     # light purple
+LIVE_CELL_FILL = PatternFill("solid", fgColor="E9E1F2")       # constant tint for live cols
+LIVE_DIFF_FILL = PatternFill("solid", fgColor="FFC000")       # plan-vs-live mismatch
 BANNER_FONT = Font(bold=True, color="FFFFFF", size=11)
+
+# A live cell differs from the plan when their prices are apart by more than this.
+LIVE_DIFF_TOL = 0.005
 
 STATUS_FILL = {
     # Signal-level
@@ -384,6 +391,17 @@ ENTRY_LAYOUT = [
     ("rr", "R", "rr", "exec"),
 ]
 
+# Appended only when an MT5 history was merged. Each live column that mirrors a
+# plan column names it for diff-highlighting (mismatch -> orange).
+LIVE_LAYOUT = [
+    ("live_entry", "Live Entry", "price", "live", "entry_price"),
+    ("live_sl", "Live SL", "price", "live", "effective_SL"),
+    ("live_exit", "Live Exit", "price", "live", "exit_price"),
+    ("live_exit_time", "Live Exit Time", None, "live", None),
+    ("live_pnl", "Live P&L", "money", "live", None),
+    ("live_rr", "Live R", "rr", "live", None),
+]
+
 
 def _source_time_header(rows: list[dict]) -> str:
     tzs = {r.get("source_tz") for r in rows if r.get("source_tz")}
@@ -393,13 +411,17 @@ def _source_time_header(rows: list[dict]) -> str:
 def _write_entries_sheet(ws: Worksheet, result: dict) -> None:
     ws.title = "Per-Entry Detail"
     rows = result.get("entry_rows", []) or []
+    has_live = bool(result.get("has_live"))
 
-    layout = list(ENTRY_LAYOUT)
+    # (key, header, kind, group, compare_key) — compare_key only used by live cols.
+    layout = [(k, h, kind, g, None) for k, h, kind, g in ENTRY_LAYOUT]
+    if has_live:
+        layout += list(LIVE_LAYOUT)
     # Dynamic source-time header (e.g. "Time (GMT+7)").
-    layout[2] = (layout[2][0], _source_time_header(rows), layout[2][2], layout[2][3])
+    layout[2] = (layout[2][0], _source_time_header(rows), layout[2][2], layout[2][3], None)
 
-    groups = [g for *_, g in layout]
-    headers = [h for _, h, _, _ in layout]
+    groups = [g for _, _, _, g, _ in layout]
+    headers = [h for _, h, _, _, _ in layout]
 
     def _span(group: str) -> tuple[int, int]:
         idx = [i for i, g in enumerate(groups) if g == group]
@@ -410,12 +432,14 @@ def _write_entries_sheet(ws: Worksheet, result: dict) -> None:
         "id": ("SIGNAL", ID_BANNER_FILL),
         "orig": ("ORIGINAL  (from the signal)", ORIG_BANNER_FILL),
         "exec": ("EXECUTED  (backtest result)", EXEC_BANNER_FILL),
+        "live": ("LIVE  (MT5 execution)", LIVE_BANNER_FILL),
     }
     for group, (text, fill) in banner.items():
+        if group not in groups:
+            continue
         c0, c1 = _span(group)
         ws.merge_cells(start_row=1, start_column=c0, end_row=1, end_column=c1)
         cell = ws.cell(row=1, column=c0, value=text)
-        cell.fill = fill
         cell.font = BANNER_FONT
         cell.alignment = Alignment(horizontal="center", vertical="center")
         for c in range(c0, c1 + 1):
@@ -423,17 +447,17 @@ def _write_entries_sheet(ws: Worksheet, result: dict) -> None:
             ws.cell(row=1, column=c).border = GRID
 
     # Row 2: column headers, tinted by group.
-    header_fills = [
-        ORIG_HEADER_FILL if g == "orig" else EXEC_HEADER_FILL if g == "exec" else SUBHEADER_FILL
-        for g in groups
-    ]
+    group_header_fill = {
+        "orig": ORIG_HEADER_FILL, "exec": EXEC_HEADER_FILL, "live": LIVE_HEADER_FILL,
+    }
+    header_fills = [group_header_fill.get(g, SUBHEADER_FILL) for g in groups]
     _write_header(ws, 2, headers, fills=header_fills)
 
     # Data rows.
     for r_idx, row in enumerate(rows, start=3):
         status = row.get("entry_status", "")
         exec_fill = STATUS_FILL.get(status)
-        for c_idx, (key, _label, kind, group) in enumerate(layout, start=1):
+        for c_idx, (key, _label, kind, group, compare_key) in enumerate(layout, start=1):
             value = row.get(key)
             if kind == "datetime":
                 value = _fmt_dt(value)
@@ -448,11 +472,20 @@ def _write_entries_sheet(ws: Worksheet, result: dict) -> None:
             elif kind == "rr":
                 _style_rr_cell(cell, value if isinstance(value, (int, float)) else None)
             # Group fills: ORIGINAL columns get a constant tint so the signal's
-            # stated levels stand out; EXECUTED columns get the outcome colour.
+            # stated levels stand out; EXECUTED columns get the outcome colour;
+            # LIVE columns get a constant tint, with mismatches vs the plan flagged.
             if group == "orig":
                 cell.fill = ORIGINAL_CELL_FILL
             elif group == "exec" and exec_fill is not None:
                 cell.fill = exec_fill
+            elif group == "live":
+                cell.fill = LIVE_CELL_FILL
+                if compare_key is not None:
+                    plan = row.get(compare_key)
+                    if (isinstance(value, (int, float)) and isinstance(plan, (int, float))
+                            and abs(value - plan) > LIVE_DIFF_TOL):
+                        cell.fill = LIVE_DIFF_FILL
+                        cell.font = Font(bold=True, color="7030A0")
 
     ws.freeze_panes = "A3"
     if rows:
