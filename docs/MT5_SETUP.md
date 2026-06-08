@@ -259,6 +259,31 @@ currently active. To pin to a specific install or login non-interactively:
 Use this only if you have multiple terminals or want a scripted login. For
 a single terminal that's already running, none of these are needed.
 
+## Parity check: overlay your live MT5 fills on the backtest
+
+`tools/backtest_explicit.py --mt5-history <FILE>` overlays your real MT5
+execution onto the backtest so you can compare them entry-by-entry.
+
+1. In MT5, open the **History** tab, set it to **Positions**, make sure the
+   **Comment** column is visible, then right-click → **Report** (or **Save as
+   Report**) and save as `.xlsx` (or `.csv`/`.html`).
+2. Run the backtest with that file:
+
+   ```powershell
+   python tools/backtest_explicit.py `
+     --signals victor_signals.txt --charts data\XAUUSD_M1_*.csv `
+     --output-dir reports\parity --mt5-history history.xlsx `
+     ... (the rest of your strategy flags)
+   ```
+
+Each live position is matched to a backtest entry by the order **Comment**,
+which the executor writes as the entry key (`2026-06-08#02.1`). The Per-Entry
+Detail sheet then gains a **LIVE (MT5 execution)** column group — Live Entry /
+SL / Exit / P&L / R — next to the **EXECUTED (backtest result)** group, and any
+live value that differs from the plan is highlighted, so a parity gap (e.g. a
+TP1-lock exit that filled at market live vs at the level in the backtest) is
+easy to spot. The runner prints how many comments matched / were unmatched.
+
 ## What is NOT implemented (and why)
 
 - **Auto-detect open positions from MT5.** MT5 stores ticket / open price /
