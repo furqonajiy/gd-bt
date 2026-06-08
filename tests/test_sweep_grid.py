@@ -38,6 +38,10 @@ def test_parse_grid_types_and_unknown_field():
     grid = sg.parse_grid(["lock_after_tp1=true,false"], BASE)
     assert grid == {"lock_after_tp1": [True, False]}
 
+    # the shared-SL knob is sweepable like any other bool config field
+    grid = sg.parse_grid(["shared_sl=true,false"], BASE)
+    assert grid == {"shared_sl": [True, False]}
+
     with pytest.raises(SystemExit):
         sg.parse_grid(["not_a_field=1,2"], BASE)
 

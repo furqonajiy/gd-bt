@@ -89,6 +89,10 @@ class Position:
     executed_at: Optional[datetime] = None
     scaled_tp1: bool = False
     scaled_tp2: bool = False
+    # Set when config.shared_sl is on: the single SL level every entry defends.
+    # Used so an on-fill stop recompute keeps the shared level instead of
+    # re-anchoring to the fill price.
+    shared_sl_level: Optional[float] = None
 
     def is_terminal(self) -> bool:
         return all(e.status in TERMINAL for e in self.entries)
@@ -211,6 +215,23 @@ def _floor_to_step(value: float, step: float) -> float:
     return round(out, 2) if math.isclose(step, 0.01, abs_tol=1e-9) else round(out, 8)
 
 
+def entry_stop_levels(side: str, entry_prices: list[float], base_stop_distance: float,
+                      config: StrategyConfig) -> list[float]:
+    """Initial SL level for each entry price.
+
+    Default (``shared_sl`` off): each entry stops ``base_stop_distance`` from its
+    own price, so deeper legs have lower (BUY) / higher (SELL) stops. With
+    ``config.shared_sl`` the whole ladder collapses to ONE stop level, anchored on
+    the first (reference) entry, so every leg defends the same SL price.
+    """
+    if not entry_prices:
+        return []
+    if getattr(config, "shared_sl", False):
+        shared = initial_stop_for_entry(side, entry_prices[0], base_stop_distance)
+        return [shared] * len(entry_prices)
+    return [initial_stop_for_entry(side, p, base_stop_distance) for p in entry_prices]
+
+
 def compute_lot(equity: float, signal: Signal, config: StrategyConfig, contract_size: float = CONTRACT_SIZE_OZ) -> tuple[float, float]:
     entries = compute_entries(signal, config)
     if not entries:
@@ -228,7 +249,10 @@ def compute_lot(equity: float, signal: Signal, config: StrategyConfig, contract_
         lot = _floor_to_step(getattr(config, "lot_per_entry", 0.0), config.lot_step if config.lot_step > 0 else 0.01)
         return max(lot, min_lot), base_stop_distance
     risk_amount = equity * config.risk_per_signal
-    total_price_risk = sum(abs(e - initial_stop_for_entry(signal.side, e, base_stop_distance)) for e in entries)
+    # Risk = each leg's real distance to its own stop, which collapses to the
+    # shared level when shared_sl is on (deeper legs then risk less/more).
+    stops = entry_stop_levels(signal.side, entries, base_stop_distance, config)
+    total_price_risk = sum(abs(e - s) for e, s in zip(entries, stops))
     if total_price_risk <= 0:
         return 0.0, base_stop_distance
     lot = _floor_to_step(risk_amount / (total_price_risk * contract_size), config.lot_step if config.lot_step > 0 else 0.01)
@@ -241,13 +265,15 @@ def _pnl(side: str, entry: float, exit_price: float, lot: float, contract_size: 
 
 def open_position(signal: Signal, equity: float, config: StrategyConfig, contract_size: float = CONTRACT_SIZE_OZ) -> Position:
     lot, base_stop_distance = compute_lot(equity, signal, config, contract_size)
-    entries = [
-        Entry(i, p, initial_stop_for_entry(signal.side, p, base_stop_distance), lot)
-        for i, p in enumerate(compute_entries(signal, config))
-    ]
+    entry_prices = compute_entries(signal, config)
+    stops = entry_stop_levels(signal.side, entry_prices, base_stop_distance, config)
+    entries = [Entry(i, p, stops[i], lot) for i, p in enumerate(entry_prices)]
     target = {"TP1": signal.tp1, "TP2": signal.tp2, "TP3": signal.tp3}[config.final_target.upper()]
     activation = signal.signal_time_chart + timedelta(minutes=config.activation_delay_minutes)
-    return Position(signal, entries, base_stop_distance, target, activation, activation + timedelta(minutes=config.pending_expiry_minutes))
+    position = Position(signal, entries, base_stop_distance, target, activation, activation + timedelta(minutes=config.pending_expiry_minutes))
+    if getattr(config, "shared_sl", False) and stops:
+        position.shared_sl_level = stops[0]
+    return position
 
 
 def _close_entry(entry: Entry, status: str, t: datetime, exit_price: float, side: str, contract_size: float, stop_at: Optional[float] = None) -> None:

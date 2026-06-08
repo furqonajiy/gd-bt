@@ -314,6 +314,10 @@ def add_scale_out_args(p: argparse.ArgumentParser) -> None:
                    help="Trailing-close engages only at/after this stage (0=from open, 1=after TP1, 2=after TP2).")
     g.add_argument("--runner-final-cap", choices=["tp3", "none"], default="tp3",
                    help="tp3 = trailing remainder force-closes at the final target; none = pure trail.")
+    g.add_argument("--shared-sl", type=_bool_text, default=False,
+                   help="All entries share ONE stop level (anchored on the first entry) instead of "
+                        "each entry getting its own per-price stop. Risk-sizing uses each leg's "
+                        "real distance to the shared level. Sweep by passing true/false.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -384,6 +388,7 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         bep_buffer=args.bep_buffer,
         trailing_close_after_stage=args.trailing_close_after_stage,
         runner_no_final_cap=(args.runner_final_cap == "none"),
+        shared_sl=args.shared_sl,
     )
 
 
