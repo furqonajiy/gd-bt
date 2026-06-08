@@ -182,6 +182,7 @@ from .core.positions import (
     Entry,
     Position,
     compute_lot,
+    entry_stop_levels,
     open_position,
 )
 
@@ -276,7 +277,7 @@ __all__ = [
     "Bar", "iter_bars", "latest_bar", "load_chart", "slice_bars",
     "Signal", "compute_entries", "parse_one_signal", "parse_signal_line", "parse_signals_file",
     "fill_trigger", "initial_stop_for_entry", "stop_trigger", "target_trigger",
-    "TERMINAL", "Entry", "Position", "advance_bars", "advance_one_bar", "compute_lot", "open_position",
+    "TERMINAL", "Entry", "Position", "advance_bars", "advance_one_bar", "compute_lot", "entry_stop_levels", "open_position",
     "ChartSource", "CsvChartSource", "ManualPositionSource", "PositionSource",
     "EntryStatus", "NewSignalPlan", "PlannedOrder", "PositionStatus", "Recommendation",
     "decide", "format_replay_outcome", "render_report",

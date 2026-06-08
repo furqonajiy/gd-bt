@@ -453,6 +453,7 @@ def candidate_config(rng: random.Random, *, include_trend_runner: bool) -> dict[
         "tp2_lock_target": rng.choice(["TP1", "TP2"]),
         "trailing_open_distance": rng.choice([0.0, 1.0, 2.0, 3.0, 5.0]),
         "trailing_close_distance": rng.choice([0.0, 2.0, 3.0, 5.0, 8.0]),
+        "shared_sl": rng.choice([False, True]),
     })
 
     if not cfg["lock_after_tp1"]:

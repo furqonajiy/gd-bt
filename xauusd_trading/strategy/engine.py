@@ -24,7 +24,7 @@ from typing import Optional
 from xauusd_trading import ChartSource, PositionSource
 from xauusd_trading import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
 from xauusd_trading import (
-    Entry, Position, advance_bars, compute_lot, open_position,
+    Entry, Position, advance_bars, compute_lot, entry_stop_levels, open_position,
 )
 from xauusd_trading import Signal, compute_entries
 
@@ -207,8 +207,11 @@ def _build_new_signal_plan(
     lot, base_stop_distance = compute_lot(equity, signal, config, contract_size)
     orders: list[PlannedOrder] = []
     side = signal.side
-    for idx, ep in enumerate(compute_entries(signal, config)):
-        sl = ep - base_stop_distance if side == "BUY" else ep + base_stop_distance
+    entry_prices = list(compute_entries(signal, config))
+    # Shared-SL collapses every leg's stop to one level; otherwise per-entry.
+    stops = entry_stop_levels(side, entry_prices, base_stop_distance, config)
+    for idx, ep in enumerate(entry_prices):
+        sl = stops[idx]
         risk_dollars = abs(ep - sl) * lot * contract_size
         orders.append(PlannedOrder(
             entry_index=idx, side=side, entry_price=ep,

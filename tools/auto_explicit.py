@@ -100,6 +100,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Trailing-close engages only at/after this stage (0=from open, 1=after TP1, 2=after TP2).")
     scale.add_argument("--runner-final-cap", choices=["tp3", "none"], default="tp3",
                        help="tp3 = trailing remainder force-closes at the final target; none = pure trail.")
+    scale.add_argument("--shared-sl", choices=["true", "false"], default="false",
+                       help="All entries share ONE stop level (anchored on the first entry) instead "
+                            "of per-entry stops; risk-sizing uses each leg's real distance to it.")
 
     obs = p.add_argument_group("observability")
     obs.add_argument("--notifications", default=None)
@@ -159,6 +162,7 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         bep_buffer=args.bep_buffer,
         trailing_close_after_stage=args.trailing_close_after_stage,
         runner_no_final_cap=(args.runner_final_cap == "none"),
+        shared_sl=_bool_text(args.shared_sl),
     )
 
 

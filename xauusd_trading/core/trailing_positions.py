@@ -63,7 +63,12 @@ def _fill_entry_at_market_side(position: Position, entry: Entry, fill_price: flo
     entry.status = "OPEN"
     entry.fill_time = bar.time
     entry.entry_price = fill_price
-    entry.initial_sl = initial_stop_for_entry(position.signal.side, fill_price, position.base_stop_distance)
+    # Shared-SL legs keep the one common level; otherwise re-anchor the stop to
+    # the actual fill price (preserving base_stop_distance through slippage).
+    if position.shared_sl_level is not None:
+        entry.initial_sl = position.shared_sl_level
+    else:
+        entry.initial_sl = initial_stop_for_entry(position.signal.side, fill_price, position.base_stop_distance)
     _set_first_fill(position, entry, bar, config)
 
 
