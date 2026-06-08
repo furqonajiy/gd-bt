@@ -218,7 +218,11 @@ def run_backtest(
             # never filled/closed or has no risk distance.
             entry_rr = _realized_rr(sig.side, e.entry_price, e.initial_sl, e.exit_price,
                                     filled=e.fill_time is not None)
-            entry_rr_planned = _planned_rr(e.entry_price, e.initial_sl, pos.target_level)
+            # Per-entry-target mode gives each leg its own target; else the single
+            # position target. R:R is to whichever target this leg aims at.
+            entry_target_price = e.target_price if e.target_price is not None else pos.target_level
+            entry_target_label = e.target_label or config.final_target.upper()
+            entry_rr_planned = _planned_rr(e.entry_price, e.initial_sl, entry_target_price)
             entry_rows.append({
                 "global_id": sig.global_id,
                 "signal_key": sig.signal_key,
@@ -235,8 +239,8 @@ def run_backtest(
                 "TP1": sig.tp1,
                 "TP2": sig.tp2,
                 "TP3": sig.tp3,
-                "final_target_label": config.final_target.upper(),
-                "final_target_price": pos.target_level,
+                "final_target_label": entry_target_label,
+                "final_target_price": entry_target_price,
                 "entry_index": e.entry_index,
                 "entry_price": e.entry_price,
                 "effective_SL": e.initial_sl,
