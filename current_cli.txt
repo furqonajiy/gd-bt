@@ -36,7 +36,7 @@ python tools/auto_explicit.py `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
   --mt5-history-bars 5000 `
-  --initial-capital 1000 `
+  --initial-capital 5000 `
   --sizing-mode risk `
   --lot 0.01 `
   --risk 0.05 `
@@ -53,8 +53,8 @@ python tools/auto_explicit.py `
   --final-target TP3 `
   --lock-after-tp1 true `
   --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 10 `
-  --tp2-lock-delay-minutes 0 `
+  --tp1-lock-delay-minutes 9 `
+  --tp2-lock-delay-minutes 2 `
   --profit-lock-mode tp_levels `
   --bep-trigger-distance 3 `
   --tp1-lock-fraction 0.5 `
@@ -72,10 +72,10 @@ python tools/backtest_explicit.py `
   --signals victor_signals.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
   --start-date 2025-01-01 `
-  --output-dir reports/backtest_3_risk005_notrail_entry8_2025 `
+  --output-dir reports/backtest_no_trailing_dd50_delay9_2_risk0055_2025 `
   --max-drawdown-limit-pct 50 `
   --progress-interval-seconds 30 `
-  --initial-capital 1000 `
+  --initial-capital 5000 `
   --sizing-mode risk `
   --lot 0.01 `
   --risk 0.05 `
@@ -92,8 +92,8 @@ python tools/backtest_explicit.py `
   --final-target TP3 `
   --lock-after-tp1 true `
   --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 10 `
-  --tp2-lock-delay-minutes 0 `
+  --tp1-lock-delay-minutes 9 `
+  --tp2-lock-delay-minutes 2 `
   --profit-lock-mode tp_levels `
   --bep-trigger-distance 3 `
   --tp1-lock-fraction 0.5 `
