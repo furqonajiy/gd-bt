@@ -44,6 +44,41 @@ def _positive_float(raw: str) -> float:
     return value
 
 
+# Default M1 archive location + window, matching the main CLI's auto-fetch.
+ARCHIVE_DIR = "data"
+ARCHIVE_MONTHS = 2
+
+
+def _sync_charts_from_mt5(symbol: str, server_offset: int, months_back: int) -> None:
+    """Best-effort: pull the latest M1 from MT5 into data/ before backtesting.
+
+    Mirrors the main CLI's pre-backtest auto-fetch. Soft-fails (warn + continue)
+    when MetaTrader5 is unavailable (Linux/CI) or the terminal isn't reachable,
+    so the run falls back to whatever CSVs already exist. Writes/merges per-month
+    ``data/<symbol>_M1_<YYYYMM>.csv`` — matching a ``--charts
+    data/<symbol>_M1_*.csv`` glob.
+    """
+    try:
+        from xauusd_trading import (
+            Mt5Connection, archive_m1_by_month, render_archive_summary,
+        )
+    except Exception as e:
+        print(f"[mt5] skipped chart sync (import failed: {e})", file=sys.stderr)
+        return
+    try:
+        with Mt5Connection() as conn:
+            summary = archive_m1_by_month(
+                conn, symbol, ARCHIVE_DIR,
+                months_back=months_back,
+                server_offset_hours=server_offset,
+                overwrite=False,
+            )
+            print(render_archive_summary(summary))
+            print()
+    except Exception as e:
+        print(f"[mt5] skipped chart sync ({e})", file=sys.stderr)
+
+
 def _bool_text(raw: str) -> bool:
     text = str(raw).strip().lower()
     if text not in {"true", "false"}:
@@ -339,7 +374,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--progress-interval-seconds", type=float, required=True)
     add_required_strategy_args(p)
     add_scale_out_args(p)
+    add_chart_sync_args(p)
     return p
+
+
+def add_chart_sync_args(p: argparse.ArgumentParser) -> None:
+    """Pull fresh M1 from MT5 into data/ before the backtest (default on)."""
+    g = p.add_argument_group("chart sync (fetch latest M1 from MT5 before the run)")
+    g.add_argument("--sync-charts", type=_bool_text, default=True,
+                   help="Fetch the latest M1 from MT5 into data/ before running (default true). "
+                        "Soft-fails to the existing CSVs when MT5 is unavailable (e.g. Linux/CI). "
+                        "Pass false to skip the fetch.")
+    g.add_argument("--mt5-symbol", default="XAUUSD",
+                   help="MT5 symbol to sync (default XAUUSD); writes data/<symbol>_M1_<YYYYMM>.csv.")
+    g.add_argument("--mt5-server-offset", type=int, default=3,
+                   help="Broker server GMT offset used by the sync (default 3).")
+    g.add_argument("--sync-months", type=_positive_int, default=ARCHIVE_MONTHS,
+                   help=f"Months of M1 history to pull on sync (default {ARCHIVE_MONTHS}).")
 
 
 def config_from_args(args: argparse.Namespace) -> StrategyConfig:
@@ -422,6 +473,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = config_from_args(args)
     progress_enabled = args.progress_interval_seconds > 0
+
+    # Sync the chart archive from MT5 first so the backtest runs on fresh bars.
+    if args.sync_charts:
+        _sync_charts_from_mt5(args.mt5_symbol, args.mt5_server_offset, args.sync_months)
 
     signals = filter_signals_by_date(
         parse_signals_file(Path(args.signals)), args.start_date, args.end_date
