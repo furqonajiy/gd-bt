@@ -8,7 +8,10 @@ from __future__ import annotations
 from dataclasses import replace
 
 from xauusd_trading import CsvChartSource, DEFAULT_CONFIG, parse_one_signal, run_backtest
-from xauusd_trading.strategy.backtest import _payoff_ratio, _realized_rr
+from xauusd_trading.strategy.backtest import _payoff_ratio, _planned_rr, _realized_rr
+from xauusd_trading.reporting.excel_report import (
+    _fmt_payoff, _fmt_rr_planned, _fmt_rr_realized,
+)
 
 
 # --- pure helpers -----------------------------------------------------------
@@ -32,6 +35,27 @@ def test_payoff_ratio_avg_win_over_avg_loss():
     assert _payoff_ratio([10.0, 20.0], [-5.0, -5.0]) == 3.0   # avg win 15 / avg loss 5
     assert _payoff_ratio([10.0], []) is None
     assert _payoff_ratio([], [-5.0]) is None
+
+
+def test_planned_rr_reward_over_risk():
+    # reward 10 (100->110) over risk 5 (100->95) = 2.0; positive regardless of side.
+    assert _planned_rr(100.0, 95.0, 110.0) == 2.0
+    assert _planned_rr(4314.0, 4329.75, 4276.0) == 38.0 / 15.75
+    assert _planned_rr(100.0, 100.0, 110.0) is None     # zero risk
+    assert _planned_rr(100.0, 95.0, None) is None
+
+
+def test_rr_formats_as_ratio():
+    # planned -> 1:N (one decimal)
+    assert _fmt_rr_planned(2.41) == "1:2.4"
+    assert _fmt_rr_planned(None) is None
+    # realized -> win 1:N (two decimals), loss -N R
+    assert _fmt_rr_realized(0.51) == "1:0.51"
+    assert _fmt_rr_realized(-1.0) == "-1.0R"
+    assert _fmt_rr_realized(None) is None
+    # payoff -> 1:N, or "-" when undefined
+    assert _fmt_payoff(1.5) == "1:1.50"
+    assert _fmt_payoff(None) == "-"
 
 
 # --- end-to-end through run_backtest ----------------------------------------
@@ -82,10 +106,12 @@ def test_run_backtest_emits_entry_rr_and_outcome_aggregates(tmp_path):
     for key in ("entry_total", "entry_status_counts", "entry_statuses_present",
                 "entry_filled", "entry_rr_avg", "entry_payoff_ratio"):
         assert key in result
-    # The single entry filled and hit TP1 -> +2R realized.
+    # The single entry filled and hit TP1 -> +2R realized; planned R:R 110/95 = 2.0.
     er = result["entry_rows"][0]
     assert er["entry_status"] == "TP1"
     assert er["rr"] == 2.0
+    assert er["rr_planned"] == 2.0
+    assert result["entry_rrp_avg"] == 2.0
     assert result["entry_status_counts"]["TP1"] == 1
 
 

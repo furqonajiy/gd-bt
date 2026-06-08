@@ -146,14 +146,33 @@ def _style_pct_cell(cell, value: float | None = None) -> None:
         cell.font = Font(color="9C0006", bold=True)
 
 
-def _style_rr_cell(cell, value: float | None) -> None:
-    cell.number_format = RR_FMT
+def _fmt_rr_planned(r: float | None) -> str | None:
+    """Planned setup R:R as a 1:N ratio (always positive), e.g. 1:2.4."""
+    return f"1:{r:.1f}" if isinstance(r, (int, float)) else None
+
+
+def _fmt_rr_realized(r: float | None) -> str | None:
+    """Realized R as a ratio: a win is 1:N (e.g. 1:0.51), a loss is -N R (e.g. -1.0R)."""
+    if not isinstance(r, (int, float)):
+        return None
+    return f"1:{r:.2f}" if r >= 0 else f"{r:.1f}R"
+
+
+def _fmt_payoff(p: float | None) -> str:
+    """Realized payoff (avg win / avg loss) as 1:N."""
+    return f"1:{p:.2f}" if isinstance(p, (int, float)) else "-"
+
+
+def _style_rr_planned_cell(cell) -> None:
+    cell.font = Font(bold=True)
+    cell.alignment = Alignment(horizontal="center")
+
+
+def _style_rr_realized_cell(cell, value: float | None) -> None:
+    cell.alignment = Alignment(horizontal="center")
     if value is None:
         return
-    if value > 0:
-        cell.font = Font(color="006100", bold=True)
-    elif value < 0:
-        cell.font = Font(color="9C0006", bold=True)
+    cell.font = Font(color="006100" if value >= 0 else "9C0006", bold=True)
 
 
 # ---------------------------------------------------------------------------
@@ -238,14 +257,16 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
     row += 2
 
     rr_avg = result.get("entry_rr_avg")
+    rrp_avg = result.get("entry_rrp_avg")
     payoff = result.get("entry_payoff_ratio")
-    row = _kv_section(ws, row, "Realized Risk:Reward (executed)", [
+    row = _kv_section(ws, row, "Risk:Reward (executed)", [
         ("Filled entries", result.get("entry_filled", 0)),
         ("No-fill entries", result.get("entry_no_fill", 0)),
         ("Winning entries", result.get("entry_win_count", 0)),
         ("Losing entries", result.get("entry_loss_count", 0)),
-        ("Avg R (realized)", f"{rr_avg:.2f}" if rr_avg is not None else "-"),
-        ("Payoff (avg win / avg loss)", f"{payoff:.2f}" if payoff is not None else "-"),
+        ("Avg planned R:R", _fmt_rr_planned(rrp_avg) or "-"),
+        ("Avg realized R", _fmt_rr_realized(rr_avg) or "-"),
+        ("Payoff (avg win / avg loss)", _fmt_payoff(payoff)),
     ])
 
     # Monthly breakdown table.
@@ -297,7 +318,7 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
     ws.title = "Daily Breakdown"
     statuses = result.get("entry_statuses_present", []) or []
     base = ["Date", "Signals", "Wins", "Losses"]
-    tail = ["Entries", "Avg R", "Trading P&L", "Bonus", "Closed lots",
+    tail = ["Entries", "Avg R:R", "Avg R", "Trading P&L", "Bonus", "Closed lots",
             "Net P&L", "P&L %", "Equity EoD", "Drawdown %"]
     headers = base + statuses + tail
     _write_header(ws, 1, headers)
@@ -319,13 +340,14 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
         drawdown_pct = (equity_end - peak_equity) / peak_equity * 100.0 if peak_equity else 0.0
         pnl_pct = d.get("pnl_pct", 0.0) or 0.0
         rr_avg = d.get("entry_rr_avg")
+        rrp_avg = d.get("entry_rrp_avg")
         status_counts = d.get("entry_status_counts", {}) or {}
 
         cells = [d.get("date"), signals, d.get("wins", 0), d.get("losses", 0)]
         cells += [status_counts.get(s, 0) for s in statuses]
         cells += [
             d.get("entry_total", 0),
-            rr_avg,
+            _fmt_rr_planned(rrp_avg), _fmt_rr_realized(rr_avg),
             trading_pnl, bonus, closed_lots, pnl,
             f"{pnl_pct:+.2f}%", equity_end, f"{drawdown_pct:.2f}%",
         ]
@@ -339,16 +361,20 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
         elif pnl < 0:
             _apply_row_fill(ws, r_idx, len(headers), LOSS_FILL)
 
-        avg_r_col = n_base + n_status + 2          # Entries then Avg R
-        money_cols = {avg_r_col + 1, avg_r_col + 2, avg_r_col + 4}   # Trading P&L, Bonus, Net P&L
-        lots_col = avg_r_col + 3
-        pnlpct_col = avg_r_col + 5
-        dd_col = avg_r_col + 7
+        entries_col = n_base + n_status + 1        # Entries, then Avg R:R, Avg R
+        rrp_col = entries_col + 1
+        rrr_col = entries_col + 2
+        money_cols = {entries_col + 3, entries_col + 4, entries_col + 6}  # Trading P&L, Bonus, Net P&L
+        lots_col = entries_col + 5
+        pnlpct_col = entries_col + 7
+        dd_col = entries_col + 9
         for c_idx, v in enumerate(cells, start=1):
             cell = ws.cell(row=r_idx, column=c_idx, value=v)
             cell.border = GRID
-            if c_idx == avg_r_col:
-                _style_rr_cell(cell, rr_avg)
+            if c_idx == rrp_col:
+                _style_rr_planned_cell(cell)
+            elif c_idx == rrr_col:
+                _style_rr_realized_cell(cell, rr_avg)
             elif c_idx in money_cols:
                 _style_money_cell(cell, float(v or 0.0) if isinstance(v, (int, float)) else None)
             elif c_idx == lots_col:
@@ -388,7 +414,8 @@ ENTRY_LAYOUT = [
     ("exit_time", "Exit Time", "datetime", "exec"),
     ("exit_price", "Exit Price", "price", "exec"),
     ("trading_pnl", "P&L ($)", "money", "exec"),
-    ("rr", "R", "rr", "exec"),
+    ("rr_planned", "R:R", "rrp", "exec"),
+    ("rr", "R", "rrr", "exec"),
 ]
 
 # Appended only when an MT5 history was merged. Each live column that mirrors a
@@ -399,7 +426,7 @@ LIVE_LAYOUT = [
     ("live_exit", "Live Exit", "price", "live", "exit_price"),
     ("live_exit_time", "Live Exit Time", None, "live", None),
     ("live_pnl", "Live P&L", "money", "live", None),
-    ("live_rr", "Live R", "rr", "live", None),
+    ("live_rr", "Live R", "rrr", "live", None),
 ]
 
 
@@ -458,19 +485,27 @@ def _write_entries_sheet(ws: Worksheet, result: dict) -> None:
         status = row.get("entry_status", "")
         exec_fill = STATUS_FILL.get(status)
         for c_idx, (key, _label, kind, group, compare_key) in enumerate(layout, start=1):
-            value = row.get(key)
+            raw = row.get(key)
+            num = raw if isinstance(raw, (int, float)) else None
+            value = raw
             if kind == "datetime":
-                value = _fmt_dt(value)
+                value = _fmt_dt(raw)
+            elif kind == "rrp":
+                value = _fmt_rr_planned(raw)
+            elif kind == "rrr":
+                value = _fmt_rr_realized(raw)
             cell = ws.cell(row=r_idx, column=c_idx, value=value)
             cell.border = GRID
             if kind == "money":
-                _style_money_cell(cell, float(value or 0.0) if isinstance(value, (int, float)) else None)
+                _style_money_cell(cell, num)
             elif kind == "price":
                 cell.number_format = PRICE_FMT
             elif kind == "lot":
                 cell.number_format = LOT_FMT
-            elif kind == "rr":
-                _style_rr_cell(cell, value if isinstance(value, (int, float)) else None)
+            elif kind == "rrp":
+                _style_rr_planned_cell(cell)
+            elif kind == "rrr":
+                _style_rr_realized_cell(cell, num)
             # Group fills: ORIGINAL columns get a constant tint so the signal's
             # stated levels stand out; EXECUTED columns get the outcome colour;
             # LIVE columns get a constant tint, with mismatches vs the plan flagged.
