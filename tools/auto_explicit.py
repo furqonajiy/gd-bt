@@ -103,6 +103,12 @@ def build_parser() -> argparse.ArgumentParser:
     scale.add_argument("--shared-sl", choices=["true", "false"], default="false",
                        help="All entries share ONE stop level (anchored on the first entry) instead "
                             "of per-entry stops; risk-sizing uses each leg's real distance to it.")
+    scale.add_argument("--entry-targets", default=None, metavar="T1,T2,...",
+                       help="Per-entry targets, one per entry from {TP1,TP2,TP3,RUN}; RUN holds at "
+                            "TP3 then trails by --trailing-close-distance. Empty = single --final-target.")
+    scale.add_argument("--bep-after-move", type=_positive_float, default=0.0,
+                       help="Per-leg break-even+ once a leg is this many price units in favour "
+                            "(per-entry-targets mode); moves SL to entry +/- --bep-buffer. 0=off.")
 
     obs = p.add_argument_group("observability")
     obs.add_argument("--notifications", default=None)
@@ -110,6 +116,21 @@ def build_parser() -> argparse.ArgumentParser:
     obs.add_argument("--forensic-log", default=None)
     obs.add_argument("--no-forensic", action="store_true")
     return p
+
+
+_TARGET_TOKENS = {"TP1", "TP2", "TP3", "RUN"}
+
+
+def _parse_entry_targets(raw: str | None, entries: int) -> tuple[str, ...]:
+    if not raw:
+        return ()
+    toks = tuple(t.strip().upper() for t in raw.split(",") if t.strip())
+    bad = [t for t in toks if t not in _TARGET_TOKENS]
+    if bad:
+        raise SystemExit(f"--entry-targets tokens must be TP1/TP2/TP3/RUN (got: {','.join(bad)})")
+    if len(toks) != entries:
+        raise SystemExit(f"--entry-targets needs one token per entry (--entries {entries}); got {len(toks)}")
+    return toks
 
 
 def _bool_text(raw: str) -> bool:
@@ -163,6 +184,8 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         trailing_close_after_stage=args.trailing_close_after_stage,
         runner_no_final_cap=(args.runner_final_cap == "none"),
         shared_sl=_bool_text(args.shared_sl),
+        per_entry_targets=_parse_entry_targets(args.entry_targets, args.entries),
+        bep_after_move=args.bep_after_move,
     )
 
 

@@ -5,6 +5,7 @@ that are disabled by default so DD40 behaviour is preserved.
 """
 from __future__ import annotations
 
+import math
 from datetime import timedelta
 
 from .chart import Bar
@@ -185,10 +186,115 @@ def _update_trailing_close_stops(position: Position, bar: Bar, config: StrategyC
             e.trailing_stop = candidate if current is None else min(float(current), candidate)
 
 
+# ---------------------------------------------------------------------------
+# Per-entry-target mode (gated by config.per_entry_targets)
+# ---------------------------------------------------------------------------
+
+def _favorable_move(side: str, entry_price: float, high: float, low: float) -> float:
+    return (high - entry_price) if side == "BUY" else (entry_price - low)
+
+
+def _bep_plus_stop(side: str, entry_price: float, buffer: float) -> float:
+    return entry_price + buffer if side == "BUY" else entry_price - buffer
+
+
+def _tighter_stop(side: str, a: float, b: float) -> float:
+    """The more protective of two stop levels (higher for BUY, lower for SELL)."""
+    return max(a, b) if side == "BUY" else min(a, b)
+
+
+def _per_entry_stop_status(side: str, e: Entry, stop: float, bep_buffer: float) -> str:
+    if e.runner_engaged and e.trailing_stop is not None and math.isclose(stop, float(e.trailing_stop)):
+        return "TRAILING_STOP"
+    if e.bep_after_move_armed and math.isclose(stop, _bep_plus_stop(side, e.entry_price, bep_buffer)):
+        return "BEP"
+    return "SL"
+
+
+def _advance_per_entry_target_bar(position: Position, bar: Bar, config: StrategyConfig,
+                                  contract_size: float) -> None:
+    """One bar of the per-entry-target strategy.
+
+    Each leg exits at its OWN target (TP1/TP2/TP3); RUN legs hold once TP3 is
+    touched and trail by trailing_close_distance (and skip the max-hold time
+    exit). Independently, once a filled leg is bep_after_move price units in
+    favour its SL ratchets to entry +/- bep_buffer.
+    """
+    side = position.signal.side
+    sp = bar.spread_price
+    h, l, c = bar.high, bar.low, bar.close
+    tp3 = position.signal.tp3
+    bep_move = float(getattr(config, "bep_after_move", 0.0) or 0.0)
+    bep_buffer = float(getattr(config, "bep_buffer", 0.0) or 0.0)
+    trail_dist = float(getattr(config, "trailing_close_distance", 0.0) or 0.0)
+
+    if position.activation_time <= bar.time <= position.expiry_time:
+        _normal_limit_fills(position, bar, config)
+    if bar.time > position.expiry_time:
+        for e in position.entries:
+            if e.status == "PENDING":
+                e.status = "NO_FILL"
+
+    for e in list(position.open_entries()):
+        before_bar = _entry_open_before_bar(e, bar)
+        # Protective stop uses state established on PRIOR bars, so a BEP/runner
+        # stop that arms this bar can't pre-empt a target also reached this bar
+        # (the favourable move that arms it happened first, on the way up).
+        stop = e.initial_sl
+        if e.bep_after_move_armed:
+            stop = _tighter_stop(side, stop, _bep_plus_stop(side, e.entry_price, bep_buffer))
+        if e.runner_engaged and e.trailing_stop is not None:
+            stop = _tighter_stop(side, stop, float(e.trailing_stop))
+
+        if stop_trigger(side, h, l, stop, sp):
+            status = _per_entry_stop_status(side, e, stop, bep_buffer)
+            _close_entry(e, status, bar.time, stop, side, contract_size, stop)
+            continue
+        if before_bar and e.target_label in ("TP1", "TP2", "TP3"):
+            if target_trigger(side, h, l, e.target_price, sp):
+                _close_entry(e, e.target_label, bar.time, e.target_price, side, contract_size)
+                continue
+
+        # Arm protective mechanics for the NEXT bar.
+        if bep_move > 0 and not e.bep_after_move_armed and before_bar:
+            if _favorable_move(side, e.entry_price, h, l) >= bep_move:
+                e.bep_after_move_armed = True
+        if e.target_label == "RUN" and not e.runner_engaged and before_bar:
+            if target_trigger(side, h, l, tp3, sp):
+                e.runner_engaged = True
+
+    # Trail engaged runners after the stop loop (protects from the next bar on).
+    if trail_dist > 0:
+        for e in position.open_entries():
+            if not (e.target_label == "RUN" and e.runner_engaged and _entry_open_before_bar(e, bar)):
+                continue
+            if side == "BUY":
+                cand = bar.high - trail_dist
+                if cand > e.entry_price:
+                    e.trailing_stop = cand if e.trailing_stop is None else max(float(e.trailing_stop), cand)
+            else:
+                cand = bar.low + trail_dist
+                if cand < e.entry_price:
+                    e.trailing_stop = cand if e.trailing_stop is None else min(float(e.trailing_stop), cand)
+
+    # Max-hold time exit — engaged runners are exempt so they keep trailing.
+    if position.time_exit_deadline is not None and bar.time >= position.time_exit_deadline:
+        exit_price = _time_exit_price(side, c, sp)
+        for e in position.entries:
+            if e.status == "OPEN" and not (e.target_label == "RUN" and e.runner_engaged):
+                _close_entry(e, "TIME_EXIT", bar.time, exit_price, side, contract_size)
+
+    position.last_processed_time = bar.time
+
+
 def advance_one_bar(
         position: Position, bar: Bar, config: StrategyConfig,
         contract_size: float = CONTRACT_SIZE_OZ,
 ) -> None:
+    if getattr(config, "per_entry_targets", ()):
+        _advance_per_entry_target_bar(position, bar, config, contract_size)
+        return
+
     side = position.signal.side
     sp = bar.spread_price
     h, l, c = bar.high, bar.low, bar.close

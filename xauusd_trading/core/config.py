@@ -54,12 +54,21 @@ class StrategyConfig:
     lock_after_tp2: bool = False
 
     # Stop-loss placement across the entry ladder. Default (False) gives each
-    # entry its own stop `base_stop_distance` from its own price, so a deeper
-    # entry has a lower (BUY) / higher (SELL) stop. When True the whole ladder
-    # shares ONE stop level, anchored on the first (reference) entry, so e.g. 8
-    # entries at 4700..4705 all defend the same SL. Risk-sizing accounts for
-    # each leg's real distance to that shared level.
+    # entry its own stop `base_stop_distance` from its own price. When True the
+    # whole ladder shares ONE stop level, anchored on the first (reference)
+    # entry; risk-sizing accounts for each leg's real distance to that level.
     shared_sl: bool = False
+
+    # Per-entry targets (research). Empty = legacy single `final_target` for the
+    # whole position. When set it holds one token per entry, each in
+    # {"TP1","TP2","TP3","RUN"}; RUN = hold at TP3 then trail by
+    # trailing_close_distance. Gated so all other behaviour is untouched when off.
+    per_entry_targets: tuple[str, ...] = ()
+
+    # Per-leg break-even+ lock: once a filled leg is this many price units in
+    # favour, move its SL to entry +/- bep_buffer. 0.0 = off. Only active in the
+    # per_entry_targets mode.
+    bep_after_move: float = 0.0
 
     # Multi-entry scale-out exit (research; all default off so DEFAULT_CONFIG and
     # the validated TRAILING-0.5 contract are byte-identical). When ANY of these is

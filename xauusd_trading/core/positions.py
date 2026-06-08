@@ -69,6 +69,13 @@ class Entry:
     trailing_open_extreme: Optional[float] = None
     trailing_open_touched_at: Optional[datetime] = None
     trailing_stop: Optional[float] = None
+    # Per-entry-target mode: this leg's own target ("TP1"/"TP2"/"TP3"/"RUN") and
+    # its price; whether the +move BEP lock has armed; and (RUN legs) whether the
+    # leg has reached TP3 and started trailing.
+    target_label: Optional[str] = None
+    target_price: Optional[float] = None
+    bep_after_move_armed: bool = False
+    runner_engaged: bool = False
 
 
 @dataclass
@@ -273,7 +280,19 @@ def open_position(signal: Signal, equity: float, config: StrategyConfig, contrac
     position = Position(signal, entries, base_stop_distance, target, activation, activation + timedelta(minutes=config.pending_expiry_minutes))
     if getattr(config, "shared_sl", False) and stops:
         position.shared_sl_level = stops[0]
+    per_entry = getattr(config, "per_entry_targets", ()) or ()
+    if per_entry:
+        for i, e in enumerate(entries):
+            label = (per_entry[i] if i < len(per_entry) else config.final_target).upper()
+            e.target_label = label
+            e.target_price = target_price_for_label(label, signal)
     return position
+
+
+def target_price_for_label(label: str, signal: Signal) -> float:
+    """Price for a per-entry target token. RUN targets TP3 (then trails)."""
+    return {"TP1": signal.tp1, "TP2": signal.tp2, "TP3": signal.tp3,
+            "RUN": signal.tp3}[label.upper()]
 
 
 def _close_entry(entry: Entry, status: str, t: datetime, exit_price: float, side: str, contract_size: float, stop_at: Optional[float] = None) -> None:

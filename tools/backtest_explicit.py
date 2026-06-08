@@ -86,6 +86,21 @@ def _bool_text(raw: str) -> bool:
     return text == "true"
 
 
+_TARGET_TOKENS = {"TP1", "TP2", "TP3", "RUN"}
+
+
+def _parse_entry_targets(raw: str | None, entries: int) -> tuple[str, ...]:
+    if not raw:
+        return ()
+    toks = tuple(t.strip().upper() for t in raw.split(",") if t.strip())
+    bad = [t for t in toks if t not in _TARGET_TOKENS]
+    if bad:
+        raise SystemExit(f"--entry-targets tokens must be TP1/TP2/TP3/RUN (got: {','.join(bad)})")
+    if len(toks) != entries:
+        raise SystemExit(f"--entry-targets needs one token per entry (--entries {entries}); got {len(toks)}")
+    return toks
+
+
 def _expand_chart_paths(patterns: list[str]) -> list[Path]:
     out: list[Path] = []
     for pat in patterns:
@@ -353,6 +368,13 @@ def add_scale_out_args(p: argparse.ArgumentParser) -> None:
                    help="All entries share ONE stop level (anchored on the first entry) instead of "
                         "each entry getting its own per-price stop. Risk-sizing uses each leg's "
                         "real distance to the shared level. Sweep by passing true/false.")
+    g.add_argument("--entry-targets", default=None, metavar="T1,T2,...",
+                   help="Per-entry targets, one token per entry from {TP1,TP2,TP3,RUN}; RUN holds "
+                        "at TP3 then trails by --trailing-close-distance. Empty = single "
+                        "--final-target. Length must equal --entries.")
+    g.add_argument("--bep-after-move", type=_positive_float, default=0.0,
+                   help="Per-leg break-even+ (per-entry-targets mode): once a filled leg is this "
+                        "many price units in favour, move its SL to entry +/- --bep-buffer. 0=off.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -444,6 +466,8 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         trailing_close_after_stage=args.trailing_close_after_stage,
         runner_no_final_cap=(args.runner_final_cap == "none"),
         shared_sl=args.shared_sl,
+        per_entry_targets=_parse_entry_targets(args.entry_targets, args.entries),
+        bep_after_move=args.bep_after_move,
     )
 
 
