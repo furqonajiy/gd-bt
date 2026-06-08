@@ -112,6 +112,21 @@ def _realized_rr(side: str, entry_price: float, sl: float,
     return favourable / risk
 
 
+def _planned_rr(entry_price: float | None, sl: float | None,
+                target: float | None) -> float | None:
+    """Planned setup R:R = reward (entry->target) / risk (entry->SL). Positive.
+
+    A setup property (defined even for an entry that never filled). Returned as
+    the reward multiple N, displayed as 1:N.
+    """
+    if entry_price is None or sl is None or target is None:
+        return None
+    risk = abs(entry_price - sl)
+    if risk <= 0:
+        return None
+    return abs(target - entry_price) / risk
+
+
 def _payoff_ratio(win_pnls: list[float], loss_pnls: list[float]) -> float | None:
     """Realized payoff: average win $ / average loss $ (positive number)."""
     if not win_pnls or not loss_pnls:
@@ -203,6 +218,7 @@ def run_backtest(
             # never filled/closed or has no risk distance.
             entry_rr = _realized_rr(sig.side, e.entry_price, e.initial_sl, e.exit_price,
                                     filled=e.fill_time is not None)
+            entry_rr_planned = _planned_rr(e.entry_price, e.initial_sl, pos.target_level)
             entry_rows.append({
                 "global_id": sig.global_id,
                 "signal_key": sig.signal_key,
@@ -236,6 +252,7 @@ def run_backtest(
                 "bonus": entry_bonus,
                 "pnl": entry_total_pnl,
                 "rr": entry_rr,
+                "rr_planned": entry_rr_planned,
                 "first_fill_time": pos.first_fill_time,
                 "time_exit_deadline": pos.time_exit_deadline,
                 "signal_status": status,
@@ -292,11 +309,13 @@ def run_backtest(
     daily_entry: dict[str, dict] = {}
     for er in entry_rows:
         dk = er["signal_time_chart"].strftime("%Y-%m-%d")
-        de = daily_entry.setdefault(dk, {"statuses": Counter(), "rr": [], "entries": 0})
+        de = daily_entry.setdefault(dk, {"statuses": Counter(), "rr": [], "rrp": [], "entries": 0})
         de["entries"] += 1
         de["statuses"][er["entry_status"]] += 1
         if er.get("rr") is not None:
             de["rr"].append(er["rr"])
+        if er.get("rr_planned") is not None:
+            de["rrp"].append(er["rr_planned"])
 
     daily_by_key: dict[str, dict] = {}
     for r in rows:
@@ -319,6 +338,8 @@ def run_backtest(
         bucket["entry_status_counts"] = dict(de["statuses"]) if de else {}
         rr_list = de["rr"] if de else []
         bucket["entry_rr_avg"] = sum(rr_list) / len(rr_list) if rr_list else None
+        rrp_list = de["rrp"] if de else []
+        bucket["entry_rrp_avg"] = sum(rrp_list) / len(rrp_list) if rrp_list else None
 
     # Daily rows span only the traded window [first signal day, last signal day],
     # so pre-start padding (e.g. 2024 days when the run starts 2025) is excluded.
@@ -347,6 +368,7 @@ def run_backtest(
         + [s for s in entry_status_counts if s not in ENTRY_STATUS_ORDER]
     )
     rr_values = [er["rr"] for er in entry_rows if er.get("rr") is not None]
+    rrp_values = [er["rr_planned"] for er in entry_rows if er.get("rr_planned") is not None]
     filled_pnls = [
         er["trading_pnl"] for er in entry_rows
         if er["fill_time"] is not None and er["exit_time"] is not None and er.get("trading_pnl") is not None
@@ -380,6 +402,7 @@ def run_backtest(
         "entry_win_count": len(win_pnls),
         "entry_loss_count": len(loss_pnls),
         "entry_rr_avg": sum(rr_values) / len(rr_values) if rr_values else None,
+        "entry_rrp_avg": sum(rrp_values) / len(rrp_values) if rrp_values else None,
         "entry_payoff_ratio": _payoff_ratio(win_pnls, loss_pnls),
         "rows": rows,
         "entry_rows": entry_rows,
