@@ -11,6 +11,7 @@ be redundant. Both code paths share the same `core` modules.
 """
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -86,6 +87,38 @@ def _entry_closed_lots(pos: Position) -> float:
 
 def _bonus_for_position(pos: Position, config: StrategyConfig) -> float:
     return _entry_closed_lots(pos) * float(getattr(config, "bonus_per_closed_lot", 0.0) or 0.0)
+
+
+# Entry exit statuses in display order (for per-day / summary outcome columns).
+ENTRY_STATUS_ORDER = [
+    "NO_FILL", "SL", "BEP", "LOCK_HALF_TP1", "LOCK_TP1", "LOCK_TP2",
+    "TP1", "TP2", "TP3", "TIME_EXIT", "TRAILING_STOP", "PENDING", "OPEN",
+]
+
+
+def _realized_rr(side: str, entry_price: float, sl: float,
+                 exit_price: float | None, *, filled: bool) -> float | None:
+    """Realized R-multiple of one entry: favourable move / risk distance to SL.
+
+    Side-aware (a winning SELL is +R). Returns None for an entry that never
+    filled or hasn't closed, or when the risk distance is zero.
+    """
+    if not filled or exit_price is None or entry_price is None or sl is None:
+        return None
+    risk = abs(entry_price - sl)
+    if risk <= 0:
+        return None
+    favourable = (exit_price - entry_price) if side == "BUY" else (entry_price - exit_price)
+    return favourable / risk
+
+
+def _payoff_ratio(win_pnls: list[float], loss_pnls: list[float]) -> float | None:
+    """Realized payoff: average win $ / average loss $ (positive number)."""
+    if not win_pnls or not loss_pnls:
+        return None
+    avg_win = sum(win_pnls) / len(win_pnls)
+    avg_loss = abs(sum(loss_pnls) / len(loss_pnls))
+    return avg_win / avg_loss if avg_loss > 0 else None
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +198,11 @@ def run_backtest(
             entry_bonus = entry_closed_lots * float(getattr(config, "bonus_per_closed_lot", 0.0) or 0.0)
             entry_trading_pnl = e.pnl
             entry_total_pnl = (entry_trading_pnl + entry_bonus) if entry_trading_pnl is not None and status != "OPEN" else entry_trading_pnl
+            # Realized R-multiple = favourable price move / risk distance to the
+            # executed SL. Side-aware so a winning SELL is +R. None when an entry
+            # never filled/closed or has no risk distance.
+            entry_rr = _realized_rr(sig.side, e.entry_price, e.initial_sl, e.exit_price,
+                                    filled=e.fill_time is not None)
             entry_rows.append({
                 "global_id": sig.global_id,
                 "signal_key": sig.signal_key,
@@ -197,6 +235,7 @@ def run_backtest(
                 "closed_lots": entry_closed_lots,
                 "bonus": entry_bonus,
                 "pnl": entry_total_pnl,
+                "rr": entry_rr,
                 "first_fill_time": pos.first_fill_time,
                 "time_exit_deadline": pos.time_exit_deadline,
                 "signal_status": status,
@@ -248,6 +287,17 @@ def run_backtest(
     for b in monthly_rows:
         _finalize_bucket(b)
 
+    # Per-entry aggregation (status counts + realized R) keyed by day, used by
+    # both the Daily Breakdown and the Summary.
+    daily_entry: dict[str, dict] = {}
+    for er in entry_rows:
+        dk = er["signal_time_chart"].strftime("%Y-%m-%d")
+        de = daily_entry.setdefault(dk, {"statuses": Counter(), "rr": [], "entries": 0})
+        de["entries"] += 1
+        de["statuses"][er["entry_status"]] += 1
+        if er.get("rr") is not None:
+            de["rr"].append(er["rr"])
+
     daily_by_key: dict[str, dict] = {}
     for r in rows:
         dk = r["signal_time_chart"].strftime("%Y-%m-%d")
@@ -263,12 +313,22 @@ def run_backtest(
             bucket["closed_lots"] += r.get("closed_lots") or 0.0
         bucket["equity_end"] = r["equity_after"]
 
+    def _attach_entry_detail(bucket: dict, dk: str) -> None:
+        de = daily_entry.get(dk)
+        bucket["entry_total"] = de["entries"] if de else 0
+        bucket["entry_status_counts"] = dict(de["statuses"]) if de else {}
+        rr_list = de["rr"] if de else []
+        bucket["entry_rr_avg"] = sum(rr_list) / len(rr_list) if rr_list else None
+
+    # Daily rows span only the traded window [first signal day, last signal day],
+    # so pre-start padding (e.g. 2024 days when the run starts 2025) is excluded.
     daily_rows: list[dict] = []
-    if chart_start is not None and chart_end is not None:
-        cur: date = chart_start.date()
-        end_date: date = chart_end.date()
+    if rows:
+        first_day: date = min(r["signal_time_chart"].date() for r in rows)
+        last_day: date = max(r["signal_time_chart"].date() for r in rows)
+        cur = first_day
         running_equity = config.initial_capital
-        while cur <= end_date:
+        while cur <= last_day:
             dk = cur.strftime("%Y-%m-%d")
             if dk in daily_by_key:
                 b = daily_by_key[dk]
@@ -276,12 +336,23 @@ def run_backtest(
             else:
                 b = _new_bucket("date", dk, running_equity)
             _finalize_bucket(b)
+            _attach_entry_detail(b, dk)
             daily_rows.append(b)
             cur += timedelta(days=1)
-    else:
-        for b in sorted(daily_by_key.values(), key=lambda x: x["date"]):
-            _finalize_bucket(b)
-            daily_rows.append(b)
+
+    # Summary-level entry outcomes + realized risk:reward.
+    entry_status_counts = Counter(er["entry_status"] for er in entry_rows)
+    statuses_present = (
+        [s for s in ENTRY_STATUS_ORDER if entry_status_counts.get(s)]
+        + [s for s in entry_status_counts if s not in ENTRY_STATUS_ORDER]
+    )
+    rr_values = [er["rr"] for er in entry_rows if er.get("rr") is not None]
+    filled_pnls = [
+        er["trading_pnl"] for er in entry_rows
+        if er["fill_time"] is not None and er["exit_time"] is not None and er.get("trading_pnl") is not None
+    ]
+    win_pnls = [p for p in filled_pnls if p > 0]
+    loss_pnls = [p for p in filled_pnls if p < 0]
 
     return {
         "config": asdict(config),
@@ -300,6 +371,16 @@ def run_backtest(
         "no_fills": no_fills, "open": open_count,
         "win_rate_pct": wins / (wins + losses) * 100.0 if (wins + losses) else 0.0,
         "max_drawdown_pct": max_dd_pct,
+        # Entry-level outcome breakdown + realized R:R.
+        "entry_total": len(entry_rows),
+        "entry_status_counts": dict(entry_status_counts),
+        "entry_statuses_present": statuses_present,
+        "entry_filled": sum(1 for er in entry_rows if er["fill_time"] is not None),
+        "entry_no_fill": entry_status_counts.get("NO_FILL", 0),
+        "entry_win_count": len(win_pnls),
+        "entry_loss_count": len(loss_pnls),
+        "entry_rr_avg": sum(rr_values) / len(rr_values) if rr_values else None,
+        "entry_payoff_ratio": _payoff_ratio(win_pnls, loss_pnls),
         "rows": rows,
         "entry_rows": entry_rows,
         "monthly": monthly_rows,
