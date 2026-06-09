@@ -23,7 +23,7 @@ A signal looks like:
 | `xauusd_trading/cli.py` | CLI entry point: `python -m xauusd_trading.cli <subcommand>`. |
 | `btcusd_trading/` | BTC self-rejection backtest runner that reuses the XAUUSD engine path. |
 | `tools/` | Research/ops scripts: parameter sweeps, signal generators, explicit-config live/backtest runners, forensic dumper, tick tooling. |
-| `listener/` | `telegram_listener.py` — ingests Victor's Telegram channel into `signals.txt`. |
+| `listener/` | `telegram_listener.py` — ingests Victor's Telegram channel into `signals.txt` (override with `--signals-file`, e.g. `victor_signals.txt`). |
 | `tests/` | `pytest` suite (live/backtest parity, reconcile, sizing, listener, etc.). |
 | `docs/` | Setup and operations guides (see below). |
 
@@ -52,9 +52,20 @@ python -m xauusd_trading.cli backtest \
   --charts "data/XAUUSD_M1_*.csv"
 ```
 
-Writes an Excel report (`backtest_results*.xlsx`) with per-signal and
-per-entry detail. Charts are M1 OHLC CSVs in the broker's **GMT+3** chart
-timezone.
+Writes an Excel report (`backtest_results*.xlsx`) with three sheets:
+
+- **Summary** — config, overall stats, entry-outcome counts (entries
+  skipped / filled / TP / SL), realized risk:reward shown as `1:N` ratios,
+  and the monthly breakdown.
+- **Daily Breakdown** — one row per traded day (pre-start padding excluded),
+  with per-entry outcome counts and realized R per day.
+- **Per-Entry Detail** — one row per Entry slot, split into **ORIGINAL**
+  (the signal as written) vs **EXECUTED** (backtest result) column groups.
+
+Charts are M1 OHLC CSVs in the broker's **GMT+3** chart timezone. To compare
+a backtest against what really filled on MT5, overlay a native MT5 history
+export with the explicit runner's `--mt5-history FILE` (see
+[`docs/MT5_SETUP.md`](docs/MT5_SETUP.md)).
 
 ## Quick start — decide on one signal
 
@@ -78,7 +89,7 @@ implies `--mt5` and live equity — no confirmation prompt).
 | `backtest` | Run a historical backtest over signals + M1 charts; writes an Excel report. |
 | `decide`   | Evaluate one signal. With `--execute`, place and manage orders on MT5. |
 | `manage`   | Manage tracked signals: lock SL to TP1, cancel expired pendings, time-close. `--watch` loops. |
-| `auto`     | Continuous live trading: read `signals.txt`, place orders, manage positions, append-only event log. |
+| `auto`     | Continuous live trading: read `signals.txt`, place orders, manage positions, append-only event log. `--replace-missing-entries` self-heals limit orders cancelled by hand. |
 | `mt5-info` | Diagnostic: latest bar, account equity, open MT5 positions/orders for the symbol. |
 | `fetch`    | Pull the last ~2 months of M1 history into `data/` (per-month CSV archive). |
 
@@ -90,6 +101,14 @@ Common flag groups (added to most subcommands):
   `--trailing-close-distance`, `--trend-runner` (+ `--trend-runner-ema-fast`,
   `--trend-runner-ema-slow`, `--trend-runner-atr-period`,
   `--trend-runner-atr-multiplier`).
+- **Research strategy modes (explicit runners only, default OFF):** the full
+  flag surface in `tools/backtest_explicit.py` / `tools/auto_explicit.py`
+  adds `--shared-sl` (all entries share one stop anchored on entry #1, with
+  per-leg risk sizing), `--entry-targets T1,T2,...` (per-entry targets from
+  `{TP1,TP2,TP3,RUN}`, one per entry; `RUN` legs trail past
+  `--runner-trail-from {TP1,TP2,TP3}` by `--trailing-close-distance`),
+  `--bep-after-move` (per-leg break-even+ once a leg is N price units in
+  favour), and `--sync-charts` (refetch M1 before a backtest, default on).
 - **MT5 connection:** `--mt5-symbol` (default `XAUUSD`),
   `--mt5-server-offset` (default `3`), `--mt5-history-bars` (default `5000`),
   `--mt5-path`, `--mt5-login`, `--mt5-password`, `--mt5-server`.
@@ -120,11 +139,15 @@ validated DD40-compatible provider contract. Headlines:
 | `final_target` | `TP3` |
 | `lock_after_tp1` / `lock_after_tp2` | `True` / `False` |
 | `trailing_open_distance` / `trailing_close_distance` | `0.0` / `0.0` (disabled) |
+| `shared_sl` | `False` (per-entry stops) |
+| `per_entry_targets` | `()` (single `final_target` for every leg) |
+| `bep_after_move` | `0.0` (disabled) |
+| `runner_trail_from` | `TP3` |
 
-Trailing-open, trailing-close, and trend-runner are **off by default** and
-are enabled explicitly per run via CLI flags — they are deliberately not
-read from the environment, so backtests are reproducible regardless of shell
-state.
+Trailing-open, trailing-close, trend-runner, shared-SL, per-entry-targets,
+and break-even-after-move are **off by default** and are enabled explicitly
+per run via CLI flags — they are deliberately not read from the environment,
+so backtests are reproducible regardless of shell state.
 
 ## Live trading
 
