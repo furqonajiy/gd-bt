@@ -1531,6 +1531,9 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--positions-json", default=None)
     pa.add_argument("--watch-interval", type=float, default=5.0)
     pa.add_argument("--no-clear", action="store_true")
+    pa.add_argument("--replace-missing-entries", action="store_true",
+                    help="Each cycle, re-place still-pending LIMIT entries that vanished from MT5 "
+                         "(e.g. cancelled by hand) for a signal that still has an MT5 footprint.")
     _add_strategy_overrides(pa)
     _add_mt5_flags(pa)
     _add_notification_flags(pa)

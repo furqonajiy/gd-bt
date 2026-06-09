@@ -439,6 +439,86 @@ class Mt5Executor:
 
         return log
 
+    # ---- self-heal -----------------------------------------------------
+
+    def replace_missing_pending_entries(
+            self, engine_pos: Position, config: StrategyConfig, now: datetime,
+    ) -> ExecutionLog:
+        """Re-place pending entries that vanished from MT5 but should still be live.
+
+        Self-heals a tracked signal (e.g. its LIMITs were cancelled by hand): for
+        each entry still PENDING in the replay -- price hasn't reached it and its
+        window is open -- whose per-entry comment has no MT5 order/position, send a
+        fresh LIMIT. Guards:
+          - only when the magic already has >= 1 footprint on MT5 (proves the
+            signal is genuinely live and the query succeeded -- so a finished
+            signal is never resurrected and a transient empty query can't trigger
+            a duplicate placement);
+          - never chases an entry price has already passed (those aren't PENDING);
+          - LIMIT entries only -- skips when trailing-open is on (those are STOPs).
+        """
+        log = ExecutionLog()
+        if float(getattr(config, "trailing_open_distance", 0.0) or 0.0) > 0:
+            return log
+        signal_key = engine_pos.signal.signal_key
+        magic = signal_to_magic(signal_key)
+        orders = self.find_orders(magic)
+        positions = self.find_positions(magic)
+        if not orders and not positions:
+            return log
+        occupied = {getattr(o, "comment", "") for o in orders}
+        occupied |= {getattr(p, "comment", "") for p in positions}
+
+        missing = [
+            e for e in engine_pos.entries
+            if e.status == "PENDING"
+            and mt5_entry_comment(signal_key, e.entry_index) not in occupied
+        ]
+        if not missing:
+            return log
+
+        order_type = (self.mt5.ORDER_TYPE_BUY_LIMIT if engine_pos.signal.side == "BUY"
+                      else self.mt5.ORDER_TYPE_SELL_LIMIT)
+        sym = self._sym_info if self._sym_info is not None else self.mt5.symbol_info(self.symbol)
+        digits = sym.digits
+        target = engine_pos.target_level
+
+        for e in missing:
+            lot = round_lot(e.lot, self.min_lot, self.lot_step)
+            if lot <= 0:
+                continue
+            comment = mt5_entry_comment(signal_key, e.entry_index)
+            request = {
+                "action":       self.mt5.TRADE_ACTION_PENDING,
+                "symbol":       self.symbol,
+                "volume":       lot,
+                "type":         order_type,
+                "price":        round(e.entry_price, digits),
+                "sl":           round(e.initial_sl, digits),
+                "tp":           round(target, digits),
+                "magic":        magic,
+                "comment":      comment,
+                "type_time":    self.mt5.ORDER_TIME_GTC,
+                "type_filling": self._market_fill_mode(),
+            }
+            res = self.mt5.order_send(request)
+            success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+            self._log_order_send(signal_key, "replace_missing_pending",
+                                 request, res, success=success)
+            if success:
+                log.placed += 1
+                log.actions.append(
+                    f"  {signal_entry_key(signal_key, e.entry_index)}: re-placed missing "
+                    f"pending entry ticket={getattr(res, 'order', '?')} "
+                    f"@ {request['price']:g} lot={lot} SL={request['sl']:g}"
+                )
+            else:
+                rc = getattr(res, "retcode", None) if res is not None else None
+                log.warnings.append(
+                    f"{signal_key}.{e.entry_index + 1}: re-place FAILED (retcode={rc})"
+                )
+        return log
+
     # ---- placement -----------------------------------------------------
 
     def place_signal(self, signal: Signal, plan: NewSignalPlan) -> ExecutionLog:

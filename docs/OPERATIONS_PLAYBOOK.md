@@ -238,6 +238,19 @@ stale — run any `--execute` (or any `auto` cycle) and the cleanup happens.
 To force a clean-up without a new signal, the simplest path is to delete
 `positions.json` — the next session rebuilds it from new signals.
 
+### Accidentally cancelled a signal's pending limit orders
+
+If a signal has filled at least one entry and you delete its remaining pending
+LIMITs by hand, the engine will **not** re-place them by default: once the
+signal's magic has any MT5 footprint, placement is skipped (it manages instead).
+
+Run `auto` with `--replace-missing-entries true` (or `--replace-missing-entries`
+on `python -m xauusd_trading.cli auto`) to self-heal: each cycle it re-places any
+entry still **PENDING** in the replay (price hasn't reached it, window still
+open) whose per-entry comment is missing from MT5. It only acts when the signal
+still has ≥1 footprint on MT5, never re-places an entry price has already passed
+(no chasing), and is LIMIT-only (skips when trailing-open is enabled).
+
 ### Listener says "matched existing entry by content"
 
 Layer 2 (content-based) dedup fired because Layer 1 (state-based) had no

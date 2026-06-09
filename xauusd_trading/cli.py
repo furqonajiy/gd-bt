@@ -367,6 +367,14 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         mlog = executor.manage_position(actual, config, replay_end)
         log.merge(mlog)
 
+    # Optional self-heal: re-place pending entries whose LIMITs vanished from MT5
+    # (e.g. cancelled by hand) while the signal is still live. Accepts the flag as
+    # a bool (main CLI store_true) or a "true"/"false" string (auto_explicit).
+    _rme = getattr(args, "replace_missing_entries", False)
+    if _rme is True or str(_rme).lower() == "true":
+        for _ideal, actual, _exec_at in tracked:
+            log.merge(executor.replace_missing_pending_entries(actual, config, replay_end))
+
     try:
         all_signals = parse_signals_file(signals_path)
     except Exception as e:

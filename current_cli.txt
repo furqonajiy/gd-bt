@@ -74,7 +74,8 @@ python tools/auto_explicit.py `
   --tp3-lock-target TP2 `
   --trailing-open-distance 0 `
   --trailing-close-distance 0 `
-  --trailing-close-after-stage 0
+  --trailing-close-after-stage 0 `
+  --replace-missing-entries true
 
 # =========================================================================
 # Parity backtest (reference; same strategy parameters as the auto runner).

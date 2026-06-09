@@ -46,6 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
     runtime.add_argument("--positions-json", required=True)
     runtime.add_argument("--watch-interval", type=float, required=True)
     runtime.add_argument("--no-clear", action="store_true")
+    runtime.add_argument("--replace-missing-entries", choices=["true", "false"], default="false",
+                         help="Each cycle, re-place pending LIMIT entries that vanished from MT5 "
+                              "(e.g. cancelled by hand) while the signal is still live. Only entries "
+                              "still PENDING (price hasn't reached them, window open) are restored; "
+                              "no chasing. Requires >=1 existing MT5 footprint for the signal.")
 
     mt5 = p.add_argument_group("MT5")
     mt5.add_argument("--mt5-symbol", required=True)
