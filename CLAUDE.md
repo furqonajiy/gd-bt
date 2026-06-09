@@ -26,7 +26,11 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   full-parameter runners `auto_explicit.py` / `backtest_explicit.py`,
   `dump_forensic.py`, tick tooling).
 - `listener/telegram_listener.py` — ingests Victor's Telegram channel into
-  `signals.txt`.
+  `signals.txt` (override the output feed with `--signals-file`, e.g.
+  `victor_signals.txt`).
+- `reporting/excel_report.py` — three-sheet backtest workbook (Summary /
+  Daily Breakdown / Per-Entry Detail; the Per-Entry sheet splits ORIGINAL
+  signal vs EXECUTED result, realized risk:reward rendered as `1:N`).
 - `tests/` — `pytest` suite, heavy on live/backtest parity.
 - `docs/` — `MT5_SETUP.md`, `OPERATIONS_PLAYBOOK.md`,
   `demo_runbook_trailing_open.md`.
@@ -48,10 +52,16 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   trailing distances are 0 and adds trailing behavior when enabled.
 - **Config.** `core/config.py` `DEFAULT_CONFIG` is the validated
   DD40-compatible provider contract. Trailing-open / trailing-close /
-  trend-runner default to **disabled** and are enabled **explicitly per run
-  via CLI flags** — they are deliberately NOT read from environment vars, so
-  `DEFAULT_CONFIG` is always reproducible regardless of shell state. Don't
-  add env-var config reads.
+  trend-runner and the newer research modes — `shared_sl` (one stop level
+  for all entries, anchored on entry #1, with per-leg risk sizing),
+  `per_entry_targets` (a per-entry tuple from `{TP1,TP2,TP3,RUN}`; `RUN`
+  legs trail past `runner_trail_from` by `trailing_close_distance`), and
+  `bep_after_move` (per-leg break-even+ once a leg is N price units in
+  favour) — all default to **disabled** and are enabled **explicitly per run
+  via CLI flags** (the full surface lives in `tools/backtest_explicit.py` /
+  `tools/auto_explicit.py`). They are deliberately NOT read from environment
+  vars, so `DEFAULT_CONFIG` is always reproducible regardless of shell
+  state. Don't add env-var config reads.
 - **Chart timezone is GMT+3** (`CHART_TIMEZONE_OFFSET = 3`). CSV charts and
   MT5 server time are GMT+3; signal times come in some source tz
   (`--signal-tz`, Victor uses GMT+7) and are converted internally. Don't
@@ -60,7 +70,11 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   `execution/mt5_executor.py`). Entry shape:
   `{"signal_key", "signal", "date", "tz", "equity_at_open", "executed_at"?}`.
   It is auto-pruned by `--execute` / `auto` when a signal's MT5 magic has no
-  footprint. Keep examples in docs consistent with this shape.
+  footprint. Keep examples in docs consistent with this shape. `auto
+  --replace-missing-entries` self-heals: each cycle it re-places only the
+  entries still **PENDING** in the replay whose per-entry comment vanished
+  from MT5 (e.g. limits cancelled by hand), gated on the signal still having
+  ≥1 footprint — no chasing of passed prices, LIMIT-only.
 
 ## Invariants to respect
 
