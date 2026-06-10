@@ -27,7 +27,12 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   `dump_forensic.py`, tick tooling).
 - `listener/telegram_listener.py` — ingests Victor's Telegram channel into
   `signals.txt` (override the output feed with `--signals-file`, e.g.
-  `victor_signals.txt`).
+  `victor_signals.txt`). The feed follows the channel's latest state: edits
+  amend the line in place (same `N.`/signal_key) and deletions remove it,
+  each queueing the matching MT5 amend/revoke; startup catch-up reconciles
+  the 24 h lookback so downtime edits/deletions are applied too. For longer
+  outages, `tools/telegram_export_to_signals.py --merge-into` syncs the feed
+  from a Telegram Desktop HTML export through the same parse pipeline.
 - `reporting/excel_report.py` — three-sheet backtest workbook (Summary /
   Daily Breakdown / Per-Entry Detail; the Per-Entry sheet splits ORIGINAL
   signal vs EXECUTED result, realized risk:reward rendered as `1:N`).
@@ -179,4 +184,8 @@ the real file extension — render parameter values without the dot:
 `sl-multiplier 2.1` → `slm21`, `entry-sl-gap 0.5` → `gap05`. So
 `reports/BEST_slm21_gap05_tp1delay24_risk005_2025` and
 `positions_best_slm21_tp1delay24.json`, never `BEST_slm2.1_gap0.5_…`.
+The engine enforces this where it generates files: `_backtest_output_path`
+(`strategy/backtest.py`) renders the workbook stem dot-free, so even a dotted
+run name can't be truncated at its last "extension" again — keep any new
+file-writing code on the same convention.
 </content>

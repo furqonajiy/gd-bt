@@ -895,6 +895,36 @@ def state_get(state: dict, message_id: int) -> Optional[dict]:
     return state["messages"].get(str(message_id))
 
 
+def plan_catchup_deletions(
+        state: dict, seen_ids: set[int], window_min_id: Optional[int], last_id: int,
+) -> list[int]:
+    """Tracked 'written' message ids that vanished from the catch-up window.
+
+    Telegram never replays delete events that fired while the listener was
+    down, so deletions are inferred: a message we wrote a signal for, whose id
+    falls inside the id range the catch-up scan actually covered, but which the
+    channel no longer returned, was deleted. Only ids in
+    ``[window_min_id, last_id]`` are judged — above ``last_id`` is new
+    territory still being processed, and below ``window_min_id`` the scan
+    didn't reach, so absence there proves nothing.
+    """
+    if window_min_id is None:
+        return []
+    deleted: list[int] = []
+    for mid_str, record in (state.get("messages") or {}).items():
+        try:
+            mid = int(mid_str)
+        except (TypeError, ValueError):
+            continue
+        if record.get("status") != "written":
+            continue
+        if mid < window_min_id or mid > last_id:
+            continue
+        if mid not in seen_ids:
+            deleted.append(mid)
+    return sorted(deleted)
+
+
 def state_set(state: dict, message_id: int, record: dict) -> None:
     state["messages"][str(message_id)] = record
     if message_id > state.get("last_processed_message_id", 0):
@@ -1045,20 +1075,48 @@ class Listener:
         self.client.add_event_handler(self._on_saved, events.NewMessage(chats=self.saved_id, from_users=self.saved_id))
 
     async def catch_up(self, lookback_hours: int = 24) -> None:
-        """Process channel messages that arrived while the listener was down."""
+        """Process channel messages that arrived while the listener was down.
+
+        Also reconciles the lookback window against the channel's *current*
+        state, because Telegram does not replay edit/delete events from the
+        downtime: every already-tracked message in the window is re-processed
+        as an edit (a no-op when the values are unchanged), and a tracked
+        message id the channel no longer returns is treated as deleted — same
+        amend/revoke paths as the live events, so signals.txt and MT5 follow
+        VICTOR's latest state even across restarts.
+        """
         last_id = self.state.get("last_processed_message_id", 0)
         cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
-        log.info(f"Catch-up: looking for channel messages with id > {last_id} (or up to {lookback_hours}h ago)")
+        log.info(f"Catch-up: scanning the last {lookback_hours}h (new ids > {last_id}, plus edit/delete reconcile)")
         new_msgs = []
+        tracked_msgs = []
+        seen_ids: set[int] = set()
+        window_min_id: Optional[int] = None
         async for msg in self.client.iter_messages(self.channel_id, limit=500):
-            if msg.id <= last_id:
-                break
             if msg.date < cutoff_dt:
                 break
-            new_msgs.append(msg)
+            seen_ids.add(msg.id)
+            window_min_id = msg.id if window_min_id is None else min(window_min_id, msg.id)
+            if msg.id > last_id:
+                new_msgs.append(msg)
+            else:
+                existing = state_get(self.state, msg.id)
+                if existing and existing.get("status") == "written":
+                    tracked_msgs.append(msg)
         for msg in reversed(new_msgs):
             await self._process_message(msg, is_edit=False)
-        log.info(f"Catch-up done ({len(new_msgs)} messages scanned)")
+        # Downtime edits: _process_message(is_edit=True) leaves state and feed
+        # untouched when the re-parsed values match the written line, so
+        # re-checking every tracked message each restart is idempotent.
+        for msg in reversed(tracked_msgs):
+            await self._process_message(msg, is_edit=True)
+        deleted_ids = plan_catchup_deletions(self.state, seen_ids, window_min_id, last_id)
+        for mid in deleted_ids:
+            await self._revoke_tracked_message(mid)
+        log.info(
+            f"Catch-up done ({len(new_msgs)} new, {len(tracked_msgs)} tracked re-checked, "
+            f"{len(deleted_ids)} deletion(s) reconciled)"
+        )
 
     async def _on_channel_new(self, event) -> None:
         await self._process_message(event.message, is_edit=False)
@@ -1074,28 +1132,37 @@ class Listener:
         ignored. Removes the feed line and queues an MT5 revoke (decision B:
         cancel the pending order / close the open position, no debounce).
         """
+        for mid in list(getattr(event, "deleted_ids", []) or []):
+            await self._revoke_tracked_message(mid)
+
+    async def _revoke_tracked_message(self, mid: int) -> None:
+        """Revoke the signal written for message `mid` (live delete or catch-up).
+
+        Shared by the live delete handler and the catch-up deletion reconcile so
+        both paths stay behavior-identical: drop the feed line, mark the state
+        record deleted_by_source, queue the MT5 revoke, notify.
+        """
         async with self._lock:
-            for mid in list(getattr(event, "deleted_ids", []) or []):
-                existing = state_get(self.state, mid)
-                if not existing or existing.get("status") != "written":
-                    continue
-                signal_key = existing["signal_key"]
-                if self.dry_run:
-                    log.info(f"[dry-run] would revoke {signal_key} (deleted message {mid})")
-                    continue
-                removed = remove_signal_from_file(signal_key)
-                record = dict(existing)
-                record.update(status="deleted_by_source", line=removed or existing.get("line", ""))
-                state_set(self.state, mid, record)
-                save_state(self.state)
-                emit_override({
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                    "message_id": mid,
-                    "signal_key": signal_key,
-                    "action": "revoke",
-                })
-                log.info(f"Revoked {signal_key} (deleted message {mid}): {removed}")
-                await self._notify_revoke(signal_key, removed or existing.get("line", ""))
+            existing = state_get(self.state, mid)
+            if not existing or existing.get("status") != "written":
+                return
+            signal_key = existing["signal_key"]
+            if self.dry_run:
+                log.info(f"[dry-run] would revoke {signal_key} (deleted message {mid})")
+                return
+            removed = remove_signal_from_file(signal_key)
+            record = dict(existing)
+            record.update(status="deleted_by_source", line=removed or existing.get("line", ""))
+            state_set(self.state, mid, record)
+            save_state(self.state)
+            emit_override({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "message_id": mid,
+                "signal_key": signal_key,
+                "action": "revoke",
+            })
+            log.info(f"Revoked {signal_key} (deleted message {mid}): {removed}")
+            await self._notify_revoke(signal_key, removed or existing.get("line", ""))
 
     async def _on_saved(self, event) -> None:
         text = (event.message.message or "").strip()
@@ -1168,12 +1235,18 @@ class Listener:
                     # An edit turned a signal we already wrote into something
                     # unparseable: keep the written line and the live order as-is
                     # and let a human judge it -- never silently drop a position.
+                    # The review flag keeps a still-broken message from
+                    # re-notifying on every catch-up re-check.
                     sk = existing.get("signal_key")
-                    if not self.dry_run:
+                    if not self.dry_run and not existing.get("review_edit_unparseable"):
                         await self._reply_saved(
                             f"⚠️ VICTOR edited {sk} into something I can't parse ({e}). "
                             f"Left signals.txt and any live order unchanged -- review manually."
                         )
+                        record = dict(existing)
+                        record["review_edit_unparseable"] = True
+                        state_set(self.state, message_id, record)
+                        save_state(self.state)
                     return
                 state_set(self.state, message_id, {"status": "quarantined", "reason": str(e), "raw": raw[:500]})
                 save_state(self.state)
@@ -1183,6 +1256,23 @@ class Listener:
                 return
 
             if parsed_raw is None:
+                if existing and existing.get("status") == "written":
+                    # An edit stripped the 🥇 marker from a signal we already
+                    # wrote. That may be VICTOR retracting it, or just a
+                    # reword -- never guess with a live order at stake: keep
+                    # the line and the order, flag it for a human, once.
+                    sk = existing.get("signal_key")
+                    log.warning(f"Edit removed the signal marker on {sk} (message {message_id}); left unchanged.")
+                    if not self.dry_run and not existing.get("review_marker_removed"):
+                        await self._reply_saved(
+                            f"⚠️ VICTOR edited {sk} into a message without the 🥇 signal marker. "
+                            f"Left signals.txt and any live order unchanged -- review manually "
+                            f"(if he retracted it, delete the line and close/cancel on MT5)."
+                        )
+                        record = dict(existing)
+                        record["review_marker_removed"] = True
+                        state_set(self.state, message_id, record)
+                        save_state(self.state)
                 return
 
             # Correct only impossible SL/TP mistakes. RR is only classified.
@@ -1211,16 +1301,22 @@ class Listener:
                     )
                     return
                 old_line, new_line = result
+                if old_line == new_line:
+                    # Nothing changed (e.g. catch-up re-checking a tracked
+                    # message): leave state untouched so the re-check is
+                    # idempotent across restarts, and emit no amend.
+                    log.debug(f"Edit on {signal_key}: no value change; nothing to amend.")
+                    return
                 record = dict(existing)
+                # A valid amend supersedes any earlier "review this edit" flag.
+                record.pop("review_edit_unparseable", None)
+                record.pop("review_marker_removed", None)
                 record.update(
                     status="written", line=new_line, edited=True,
                     rr_bucket=fix.rr_bucket, tp1_rr_best_entry=fix.tp1_rr_best_entry,
                 )
                 state_set(self.state, message_id, record)
                 save_state(self.state)
-                if old_line == new_line:
-                    log.info(f"Edit on {signal_key}: no value change; nothing to amend.")
-                    return
                 emit_override({
                     "ts": msg_dt_utc.isoformat(),
                     "message_id": message_id,

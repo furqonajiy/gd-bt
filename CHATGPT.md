@@ -20,6 +20,10 @@ and the code — this file is the required rules.
 - `tools/` — research/ops scripts, incl. `auto_explicit.py` /
   `backtest_explicit.py` (the full strategy-flag surface).
 - `listener/telegram_listener.py`, `tests/` (pytest, parity-heavy), `docs/`.
+  The listener keeps the feed at the channel's latest state (edits amend in
+  place, deletions remove + MT5 amend/revoke; startup catch-up reconciles the
+  24 h lookback). `tools/telegram_export_to_signals.py --merge-into` does the
+  same from a Telegram HTML export for longer outages.
 
 ## Architecture — must follow
 
@@ -92,5 +96,7 @@ and `docs/*` in the same change.
 Artifact names are dot-free: report dirs, positions registries, and other
 parameter-derived output names carry no `.` outside the real file extension —
 `slm21`/`gap05`, e.g. `reports/BEST_slm21_gap05_tp1delay24_risk005_2025`,
-never `BEST_slm2.1_gap0.5_…`.
+never `BEST_slm2.1_gap0.5_…`. Enforced where files are generated
+(`_backtest_output_path` sanitizes the workbook stem); keep new writers on
+the same convention.
 </content>

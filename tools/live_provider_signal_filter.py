@@ -86,8 +86,12 @@ def _signal_key(sig: ProviderSignal) -> tuple:
 
 
 def _describe_signal(sig: ProviderSignal) -> str:
+    # Lead with the engine-style signal key — chart date + the provider day-id
+    # that is emitted as `N.` in the filtered feed — so the operator can tell
+    # at a glance which signal this is (#10 vs #11) and match it to
+    # positions.json / MT5 order comments, which use the same key.
     return (
-        f"{sig.chart_time:%Y-%m-%d} GMT+3 {sig.side} XAUUSD "
+        f"{sig.chart_time:%Y-%m-%d}#{sig.source_id:02d} GMT+3 {sig.side} XAUUSD "
         f"{sig.r1}-{sig.r2} SL {sig.sl} TP1 {sig.tp1} TP2 {sig.tp2} TP3 {sig.tp3} "
         f"at {_time_ampm(sig.chart_time)} | {sig.filter_reason}"
     )
