@@ -272,22 +272,23 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
     # Monthly breakdown table.
     ws.cell(row=row, column=1, value="Monthly Breakdown").font = SUBHEADER_FONT
     ws.cell(row=row, column=1).fill = SUBHEADER_FILL
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=11)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=12)
     row += 1
     headers = ["Month", "Signals", "Wins", "Losses", "No-fills",
                "Win rate", "Trading P&L", "Bonus", "Closed lots",
-               "Net P&L", "P&L %"]
+               "Net P&L", "P&L %", "Equity EoM"]
     _write_header(ws, row, headers)
     row += 1
     for m in result.get("monthly", []) or []:
         pnl = m.get("pnl", 0.0) or 0.0
         pnl_pct = m.get("pnl_pct", 0.0) or 0.0
         signals = m.get("signals", 0) or 0
+        equity_end = m.get("equity_end", 0.0) or 0.0
         cells = [
             m.get("month"), signals, m.get("wins"), m.get("losses"), m.get("no_fills"),
             f"{m.get('win_rate_pct', 0):.1f}%",
             m.get("trading_pnl", 0.0), m.get("bonus", 0.0), m.get("closed_lots", 0.0),
-            pnl, f"{pnl_pct:+.2f}%",
+            pnl, f"{pnl_pct:+.2f}%", equity_end,
         ]
         if signals == 0:
             _apply_row_fill(ws, row, len(headers), QUIET_DAY_FILL)
@@ -304,6 +305,10 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
                 cell.number_format = LOT_FMT
             elif c == 11:
                 _style_pct_cell(cell, pnl_pct)
+            elif c == 12:
+                # Equity at end of month, mirroring the Daily sheet's
+                # Equity EoD column; no red-negative semantics, it's a level.
+                cell.number_format = MONEY_FMT
         row += 1
 
     ws.freeze_panes = "A2"
@@ -367,6 +372,7 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
         money_cols = {entries_col + 3, entries_col + 4, entries_col + 6}  # Trading P&L, Bonus, Net P&L
         lots_col = entries_col + 5
         pnlpct_col = entries_col + 7
+        eq_col = entries_col + 8
         dd_col = entries_col + 9
         for c_idx, v in enumerate(cells, start=1):
             cell = ws.cell(row=r_idx, column=c_idx, value=v)
@@ -379,6 +385,8 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
                 _style_money_cell(cell, float(v or 0.0) if isinstance(v, (int, float)) else None)
             elif c_idx == lots_col:
                 cell.number_format = LOT_FMT
+            elif c_idx == eq_col:
+                cell.number_format = MONEY_FMT
             elif c_idx in (pnlpct_col, dd_col):
                 _style_pct_cell(cell, pnl_pct if c_idx == pnlpct_col else drawdown_pct)
 
