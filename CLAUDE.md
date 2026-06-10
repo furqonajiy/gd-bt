@@ -121,11 +121,14 @@ contract, not afterthoughts.
 Every change ships through the same flow — apply it even to docs-only changes
 (including edits to this file):
 
-1. **Branch off `main` with a descriptive name.** The name says *what you are
-   updating*, not who is doing it: `feature/<what-changed>` (e.g.
-   `feature/sync-docs-with-code`, `feature/document-git-workflow`). Use
-   hyphens, never spaces — Git rejects spaces in ref names. Do not name a
-   branch after a person.
+1. **Branch off `main` with a descriptive name — always `feature/...`.** The
+   name says *what you are updating*, not who is doing it:
+   `feature/<what-changed>` (e.g. `feature/sync-docs-with-code`,
+   `feature/document-git-workflow`). Use hyphens, never spaces — Git rejects
+   spaces in ref names. Do not name a branch after a person, and never ship
+   work on agent/session-generated branches like `claude/...` — if a tool or
+   harness pre-creates one, migrate the commits to a `feature/...` branch
+   before opening the PR and delete the agent branch.
 2. **Author commits as the project owner.** Set
    `git config user.name "C - Furqon Aji Yudhistira"` and
    `git config user.email "furqonajiy@gmail.com"` so both author and committer
