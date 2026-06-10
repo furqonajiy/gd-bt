@@ -128,3 +128,30 @@ def test_daily_breakdown_trims_pre_and_post_signal_days(tmp_path):
     assert day["entry_total"] == 1
     assert day["entry_status_counts"].get("TP1") == 1
     assert day["entry_rr_avg"] == 2.0
+
+
+def test_summary_monthly_breakdown_shows_equity_end_of_month(tmp_path):
+    # The Monthly Breakdown table must show the equity level at month end
+    # (mirroring the Daily sheet's Equity EoD), not just the month's P&L.
+    from openpyxl import load_workbook
+
+    from xauusd_trading import write_backtest_outputs
+
+    sig = parse_one_signal(
+        "1. BUY XAUUSD 100 - 100 SL 95 TP1 110 TP2 115 TP3 120 11:00 AM",
+        source_date="2026-06-02", source_offset=3,
+    )
+    result = run_backtest([sig], _chart(tmp_path), _config())
+    monthly = result["monthly"]
+    assert monthly and monthly[0]["equity_end"] == result["final_equity"]
+
+    path = write_backtest_outputs(result, tmp_path / "reports" / "eom_check")
+    ws = load_workbook(path)["Summary"]
+    header_row = next(
+        r for r in range(1, ws.max_row + 1) if ws.cell(row=r, column=1).value == "Month"
+    )
+    headers = [ws.cell(row=header_row, column=c).value for c in range(1, 13)]
+    assert headers[10:] == ["P&L %", "Equity EoM"]
+    month_cells = [ws.cell(row=header_row + 1, column=c).value for c in range(1, 13)]
+    assert month_cells[0] == "2026-06"
+    assert month_cells[11] == monthly[0]["equity_end"]
