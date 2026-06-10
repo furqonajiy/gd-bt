@@ -89,4 +89,8 @@ Live MT5 paths need the Windows-only `MetaTrader5` package; validate engine
 changes via the backtest and pytest (CSV data + a stub MT5 layer). When you
 change CLI flags, config, the lifecycle, or `positions.json`, update `README.md`
 and `docs/*` in the same change.
+Artifact names are dot-free: report dirs, positions registries, and other
+parameter-derived output names carry no `.` outside the real file extension —
+`slm21`/`gap05`, e.g. `reports/BEST_slm21_gap05_tp1delay24_risk005_2025`,
+never `BEST_slm2.1_gap0.5_…`.
 </content>

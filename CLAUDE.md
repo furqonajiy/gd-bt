@@ -172,4 +172,11 @@ unions (`X | None`), dataclasses for config/state, and the existing comment
 density (these files explain *why*, often at length — keep that where it adds
 signal). No new runtime dependencies beyond `pandas` / `openpyxl` without a
 strong reason.
+
+**Artifact names are dot-free.** Backtest report dirs, positions registries,
+and other parameter-derived output names must not contain `.` anywhere except
+the real file extension — render parameter values without the dot:
+`sl-multiplier 2.1` → `slm21`, `entry-sl-gap 0.5` → `gap05`. So
+`reports/BEST_slm21_gap05_tp1delay24_risk005_2025` and
+`positions_best_slm21_tp1delay24.json`, never `BEST_slm2.1_gap0.5_…`.
 </content>
