@@ -22,7 +22,7 @@ A signal looks like:
 | `xauusd_trading/` | The engine. Signal parsing, position lifecycle, backtest, MT5 adapter, executor, CLI. |
 | `xauusd_trading/cli.py` | CLI entry point: `python -m xauusd_trading.cli <subcommand>`. |
 | `btcusd_trading/` | BTC self-rejection backtest runner that reuses the XAUUSD engine path. |
-| `tools/` | Research/ops scripts: parameter sweeps, signal generators, explicit-config live/backtest runners, forensic dumper, tick tooling. |
+| `tools/` | Research/ops scripts: parameter sweeps, signal generators, explicit-config live/backtest runners, forensic dumper, tick tooling, Telegram-export backfill converter. |
 | `listener/` | `telegram_listener.py` — ingests Victor's Telegram channel into `signals.txt` (override with `--signals-file`, e.g. `victor_signals.txt`). |
 | `tests/` | `pytest` suite (live/backtest parity, reconcile, sizing, listener, etc.). |
 | `docs/` | Setup and operations guides (see below). |
