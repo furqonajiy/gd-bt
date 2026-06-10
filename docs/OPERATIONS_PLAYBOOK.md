@@ -176,6 +176,13 @@ and appends each new Victor signal. Parse failures get quarantined to
 Messages with a pre-filled correction template — edit + send back, and
 the listener injects the correction.
 
+The feed follows the channel's latest state: when VICTOR edits a signal
+the line is amended in place (same `N.`, same signal_key/magic) and an
+MT5 amend is queued; when he deletes one the line is removed and an MT5
+revoke is queued. Startup catch-up applies the same reconciliation to
+the last 24 h, so edits/deletions made while the listener was down are
+not lost (see "Listener was down" below for longer gaps).
+
 ### Step 2 — start auto
 
 In window 2:
@@ -267,20 +274,30 @@ next free index in today's section. Engine never sees malformed lines.
 
 ### Listener was down — backfill days from a Telegram export
 
-If the listener missed whole days, export the channel from Telegram
-Desktop (HTML format) and convert the export into canonical day sections:
+Short outages need no manual work: on startup the listener's catch-up
+not only ingests messages that arrived while it was down, it also
+reconciles the lookback window (24 h) against the channel's current
+state — a tracked signal VICTOR edited is amended in the feed (and an
+MT5 amend queued), and a tracked signal he deleted is removed (and an
+MT5 revoke queued), exactly like the live edit/delete events.
+
+For longer gaps, export the channel from Telegram Desktop (HTML format)
+and sync the feed from the export:
 
 ```bash
-python tools/telegram_export_to_signals.py "ChatExport_*/messages*.html" --out backfill.txt
+python tools/telegram_export_to_signals.py "ChatExport_*/messages*.html" --merge-into victor_signals.txt
 ```
 
 It runs the listener's own parse → typo-correction → dedup → rendering
 pipeline over every 🥇 message in the export, so a backfilled section is
-exactly what the listener would have appended live. Merge the produced
-sections into the feed file (`signals.txt` / `victor_signals.txt`) by
-date. Edits Victor made appear in their final form automatically;
-messages he deleted are absent. Any 🥇 message that still fails to parse
-is reported on stderr — handle those like a quarantine entry, by hand.
+exactly what the listener would have appended live. `--merge-into`
+brings the feed to the channel's latest state for the exported days:
+each covered date section is replaced wholesale (VICTOR's edits applied
+in their final form, signals he deleted dropped), other days stay
+untouched, and re-running with the same export is a no-op. Use `--out
+backfill.txt` instead to inspect the sections before touching the feed.
+Any 🥇 message that still fails to parse is reported on stderr — handle
+those like a quarantine entry, by hand.
 
 ## Rules I stick to
 

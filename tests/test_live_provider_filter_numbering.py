@@ -51,3 +51,14 @@ def test_write_filtered_single_kept_keeps_its_number(tmp_path):
     assert "\n1. BUY XAUUSD" not in body
     keys = [s.signal_key for s in parse_signals_file(out)]
     assert keys == ["2026-06-04#04"]
+
+def test_watch_log_line_leads_with_signal_key():
+    # The [NEW KEPT] console line must say WHICH signal was added (#10 vs #11):
+    # it leads with the engine-style key (chart date + the provider day-id that
+    # is emitted as `N.` in the filtered feed), matching positions.json / MT5
+    # order comments.
+    from tools.live_provider_signal_filter import _describe_signal
+
+    line = _describe_signal(_sig(11, 17))
+    assert line.startswith("2026-06-04#11 GMT+3 BUY XAUUSD ")
+    assert " at 5:00 PM" in line

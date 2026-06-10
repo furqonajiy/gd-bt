@@ -415,6 +415,18 @@ def run_backtest(
     }
 
 
+def _dot_free_stem(stem: str) -> str:
+    """Generated artifact names carry no dots outside the file extension.
+
+    A run name like ``BEST_slm2.1_gap0.5_2025`` would otherwise make
+    ``Path.with_suffix()`` treat ``.5_2025`` as the extension and silently
+    truncate the workbook to ``BEST_slm2.1_gap0.xlsx``. Parameter values are
+    rendered dot-free instead (``slm21``, ``gap05``) — see the naming
+    convention in CLAUDE.md.
+    """
+    return stem.replace(".", "")
+
+
 def _backtest_output_path(output_dir: Path, filename: str = "backtest_results.xlsx") -> Path:
     """Resolve backtest output to a single Excel file path.
 
@@ -431,17 +443,21 @@ def _backtest_output_path(output_dir: Path, filename: str = "backtest_results.xl
 
     Important: only the exact reports directory is treated as a directory. Any
     deeper path is treated as a run-name stem even if an old folder exists there,
-    preventing repeated reports/<run>/backtest_results.xlsx files.
+    preventing repeated reports/<run>/backtest_results.xlsx files. The final
+    component is always sanitized dot-free (a dotted run name would otherwise be
+    truncated at its last dot), so a `--output-dir reports/BEST_slm2.1_gap0.5`
+    still writes the canonical `reports/BEST_slm21_gap05.xlsx`.
     """
     output_dir = Path(output_dir)
     default_name = "backtest_results.xlsx"
 
-    if output_dir.suffix.lower() == ".xlsx":
-        base = output_dir
-    elif output_dir.name.lower() == "reports" and output_dir.parent in {Path("."), Path("")}:
+    name = output_dir.name
+    if name.lower().endswith(".xlsx"):
+        base = output_dir.with_name(_dot_free_stem(name[: -len(".xlsx")]) + ".xlsx")
+    elif name.lower() == "reports" and output_dir.parent in {Path("."), Path("")}:
         base = output_dir / default_name
     else:
-        base = output_dir.with_suffix(".xlsx")
+        base = output_dir.with_name(_dot_free_stem(name) + ".xlsx")
 
     if filename == default_name:
         return base
@@ -449,7 +465,7 @@ def _backtest_output_path(output_dir: Path, filename: str = "backtest_results.xl
     suffix = Path(filename).stem
     if suffix.startswith("backtest_results_"):
         suffix = suffix[len("backtest_results_"):]
-    return base.with_name(f"{base.stem}_{suffix}.xlsx")
+    return base.with_name(f"{base.stem}_{_dot_free_stem(suffix)}.xlsx")
 
 
 def write_backtest_outputs(

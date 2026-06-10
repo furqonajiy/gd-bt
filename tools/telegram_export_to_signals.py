@@ -23,6 +23,12 @@ picked up automatically; messages he deleted are absent entirely.
 Usage (from repo root):
     python tools/telegram_export_to_signals.py "ChatExport_2026-06-10/messages*.html"
     python tools/telegram_export_to_signals.py export/messages.html --out victor_june.txt
+    python tools/telegram_export_to_signals.py export/messages.html --merge-into victor_signals.txt
+
+`--merge-into` brings the feed to the channel's latest state for the exported
+days: each covered date section is replaced wholesale (VICTOR's edits applied,
+signals he deleted dropped), other dates stay untouched, new dates insert in
+order. Re-running with the same export is a no-op.
 
 Output goes to stdout unless --out is given. 🥇-marked messages that fail to
 parse are reported on stderr (the live listener would have quarantined them);
@@ -32,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -42,6 +49,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "listener"))
 
 from telegram_listener import (  # noqa: E402
+    DATE_HEADER_RE,
     SIGNAL_SOURCE_TZ,
     SIGNAL_SOURCE_TZ_OFFSET,
     ParsedSignal,
@@ -210,14 +218,95 @@ def build_sections(
     return sections, corrections, failures
 
 
-def render(sections: dict[str, list[str]]) -> str:
-    tz_label = f"GMT+{SIGNAL_SOURCE_TZ_OFFSET}" if SIGNAL_SOURCE_TZ_OFFSET >= 0 \
+def _tz_label() -> str:
+    return f"GMT+{SIGNAL_SOURCE_TZ_OFFSET}" if SIGNAL_SOURCE_TZ_OFFSET >= 0 \
         else f"GMT{SIGNAL_SOURCE_TZ_OFFSET}"
+
+
+def render(sections: dict[str, list[str]]) -> str:
+    tz_label = _tz_label()
     blocks = [
         "\n".join([f"{date} {tz_label}"] + sections[date])
         for date in sorted(sections)
     ]
     return "\n\n".join(blocks) + "\n"
+
+
+def _split_feed_blocks(lines: list[str]) -> tuple[list[str], list[tuple[str, list[str]]]]:
+    """Split a feed into (preamble lines, [(date, section lines incl. header)]).
+
+    Trailing blank lines are stripped from each section; rendering re-inserts a
+    single blank line between sections, so untouched days survive a merge
+    byte-identical in content.
+    """
+    preamble: list[str] = []
+    blocks: list[tuple[str, list[str]]] = []
+    current_date: str | None = None
+    current: list[str] = []
+
+    def flush() -> None:
+        while current and not current[-1].strip():
+            current.pop()
+        if current_date is not None:
+            blocks.append((current_date, list(current)))
+
+    for line in lines:
+        m = DATE_HEADER_RE.match(line)
+        if m:
+            flush()
+            current_date = m.group("date")
+            current = [line.rstrip()]
+        elif current_date is None:
+            preamble.append(line)
+        else:
+            current.append(line.rstrip())
+    flush()
+    while preamble and not preamble[-1].strip():
+        preamble.pop()
+    return preamble, blocks
+
+
+def merge_sections_into_feed(feed_path: Path, sections: dict[str, list[str]]) -> dict[str, str]:
+    """Bring `feed_path` to the channel's latest state for the exported days.
+
+    The export reflects the channel as it is *now* — edits in their final form,
+    deleted messages absent — so each date the export covers replaces that
+    date's section wholesale: changed signals are corrected, signals VICTOR
+    removed disappear. Days the export doesn't cover are preserved untouched,
+    and new days are inserted in date order. The write is atomic (tmp +
+    os.replace), matching the live listener. Returns {date: 'replaced' |
+    'unchanged' | 'added'}.
+    """
+    old_lines = (
+        feed_path.read_text(encoding="utf-8").splitlines() if feed_path.exists() else []
+    )
+    preamble, blocks = _split_feed_blocks(old_lines)
+    tz_label = _tz_label()
+    remaining = dict(sections)
+    summary: dict[str, str] = {}
+
+    merged: list[tuple[str, list[str]]] = []
+    for date_str, section in blocks:
+        if date_str in remaining:
+            new_section = [f"{date_str} {tz_label}"] + remaining.pop(date_str)
+            summary[date_str] = "unchanged" if new_section == section else "replaced"
+            merged.append((date_str, new_section))
+        else:
+            merged.append((date_str, section))
+    for date_str in sorted(remaining):
+        new_section = [f"{date_str} {tz_label}"] + remaining[date_str]
+        at = next((i for i, (d, _) in enumerate(merged) if d > date_str), len(merged))
+        merged.insert(at, (date_str, new_section))
+        summary[date_str] = "added"
+
+    parts = ["\n".join(preamble)] if preamble else []
+    parts.extend("\n".join(section) for _, section in merged)
+    content = "\n\n".join(parts) + "\n"
+
+    tmp = feed_path.with_suffix(feed_path.suffix + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, feed_path)
+    return summary
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -227,6 +316,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Telegram Desktop export HTML file or glob, e.g. 'ChatExport_*/messages*.html'",
     )
     ap.add_argument("--out", help="Write sections here instead of stdout.")
+    ap.add_argument(
+        "--merge-into",
+        help="Feed file (e.g. victor_signals.txt) to bring up to the channel's "
+             "latest state: every date the export covers is replaced wholesale "
+             "(edits applied, deleted signals dropped), other dates untouched, "
+             "new dates inserted in order.",
+    )
     args = ap.parse_args(argv)
 
     paths = sorted(Path(p) for p in glob.glob(args.export_html))
@@ -245,12 +341,23 @@ def main(argv: list[str] | None = None) -> int:
     for note in failures:
         print(f"PARSE FAILURE (would be quarantined) {note}", file=sys.stderr)
 
+    if args.merge_into:
+        summary = merge_sections_into_feed(Path(args.merge_into), sections)
+        for date_str in sorted(summary):
+            print(f"{summary[date_str].upper():9s} {date_str} "
+                  f"({len(sections[date_str])} signal(s))", file=sys.stderr)
+        changed = sum(1 for v in summary.values() if v != "unchanged")
+        print(f"Merged into {args.merge_into}: {changed} day(s) updated, "
+              f"{len(summary) - changed} already at latest state", file=sys.stderr)
+        if not args.out:
+            return 0
+
     text = render(sections)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
         n = sum(len(v) for v in sections.values())
         print(f"Wrote {n} signals across {len(sections)} day(s) to {args.out}", file=sys.stderr)
-    else:
+    elif not args.merge_into:
         sys.stdout.write(text)
     return 0
 
