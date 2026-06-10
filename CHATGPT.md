@@ -57,7 +57,9 @@ and the code — this file is the required rules.
 Ship every change (including docs-only) this way:
 
 1. Branch off `main`, descriptive `feature/<what-changed>` (hyphens, never
-   spaces, never named after a person).
+   spaces, never named after a person). Always `feature/...`, never an
+   agent/session-generated name like `claude/...` — migrate such work to a
+   `feature/...` branch before the PR and delete the agent branch.
 2. Author as `git config user.name "C - Furqon Aji Yudhistira"` and
    `user.email "furqonajiy@gmail.com"` — both author and committer, not a bot.
 3. Representative commit subject, no placeholder.

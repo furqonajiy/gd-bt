@@ -265,6 +265,23 @@ Messages for the ⚠️ post with the correction template. Edit the template
 into a canonical line, send it back, and the listener injects it as the
 next free index in today's section. Engine never sees malformed lines.
 
+### Listener was down — backfill days from a Telegram export
+
+If the listener missed whole days, export the channel from Telegram
+Desktop (HTML format) and convert the export into canonical day sections:
+
+```bash
+python tools/telegram_export_to_signals.py "ChatExport_*/messages*.html" --out backfill.txt
+```
+
+It runs the listener's own parse → typo-correction → dedup → rendering
+pipeline over every 🥇 message in the export, so a backfilled section is
+exactly what the listener would have appended live. Merge the produced
+sections into the feed file (`signals.txt` / `victor_signals.txt`) by
+date. Edits Victor made appear in their final form automatically;
+messages he deleted are absent. Any 🥇 message that still fails to parse
+is reported on stderr — handle those like a quarantine entry, by hand.
+
 ## Rules I stick to
 
 1. **Always preview before execute** in Mode A. A 5-second preview run
