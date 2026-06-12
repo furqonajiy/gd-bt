@@ -53,6 +53,22 @@ RISKS = [0.05, 0.045, 0.035, 0.0275, 0.02, 0.015, 0.01]
 TOP_PER_SWEEP = 6
 _git_lock = threading.Lock()
 
+# The no-trailing reference (user's revised CLI) the sweep must beat. Mirrors
+# _sweep_trail.REFERENCE_NO_TRAIL; kept here so the orchestrator's deployable
+# risk walk needs no cross-module import.
+REFERENCE_NO_TRAIL = {
+    "entry_count": 6, "entry_ladder": "range_to_sl", "entry_sl_gap": 0.5,
+    "activation_delay_minutes": 2, "pending_expiry_minutes": 180,
+    "max_hold_minutes": 240, "sl_multiplier": 2.1, "final_target": "TP3",
+    "lock_after_tp1": True, "lock_after_tp2": True,
+    "tp1_lock_delay_minutes": 24, "tp2_lock_delay_minutes": 2,
+    "profit_lock_mode": "tp_levels", "bep_trigger_distance": 3.0,
+    "tp1_lock_fraction": 0.5, "tp2_lock_target": "TP1",
+    "runner_after_tp3": False, "tp3_lock_target": "TP2",
+    "trailing_open_distance": 0.0, "trailing_close_distance": 0.0,
+    "bonus_per_closed_lot": 3.0,
+}
+
 
 def log(msg: str) -> None:
     # Print only: the orchestrator is always launched with stdout redirected to
@@ -137,7 +153,8 @@ def ensure_baseline() -> dict | None:
     signals = parse_signals_file(ROOT / "generated/self_scalper24.txt")
     dep_risk, dep_net, dep_dd = None, 0.0, None
     for risk in [0.01, 0.0075, 0.005, 0.0035, 0.0025, 0.002, 0.0015, 0.001]:
-        cfg = dict(REFERENCE_NO_TRAIL)
+        cfg = dict(sw.base_config_dict())   # full base so config_from_dict has every key
+        cfg.update(REFERENCE_NO_TRAIL)
         cfg["sizing_mode"] = "risk"
         cfg["risk_per_signal"] = risk
         bt = sw.run_concurrent_backtest(
