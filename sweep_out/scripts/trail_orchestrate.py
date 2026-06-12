@@ -105,7 +105,10 @@ def ensure_feeds() -> None:
 def ensure_baseline() -> dict | None:
     bj = OUT / "BASELINE.json"
     if bj.exists():
-        return json.loads(bj.read_text())
+        data = json.loads(bj.read_text())
+        if "deployable_net" in data:   # already the fair (DD<=50) baseline
+            return data
+        log("baseline: upgrading old BASELINE.json to deployable (risk walk)")
     d = OUT / "trail2_baseline"
     log("baseline: running reference no-trailing config (scalper24 @1%)")
     cmd = [sys.executable, str(SCRIPTS / "_sweep_trail.py"), "--mode", "baseline",
