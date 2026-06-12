@@ -166,6 +166,8 @@ If you just want to pull data without running a decision:
 
 ```powershell
 python -m xauusd_trading.cli fetch --mt5-symbol XAUUSD
+# --months N limits how far back to refresh (default 2); live feed loops
+# use --months 1 since rolled-over months are immutable.
 ```
 
 Useful for filling the archive on a schedule (e.g. a daily Task Scheduler
