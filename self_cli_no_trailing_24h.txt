@@ -31,6 +31,9 @@ while ($true) {
 # ===== 3. AUTO EXECUTOR (reads the live feed, places + manages orders) =====
 # --replace-missing-entries false: self feeds are two-sided (hedge close-by
 # re-entry risk). Window B, runs beside the generator loop above.
+# --reopen-missing-positions true: MT5 mirrors the replay — an entry the
+# backtest engine still holds OPEN is re-opened at market if it goes missing
+# from MT5 (e.g. closed by hand), per the 2026-06-12 reconciliation decision.
 python tools/auto_explicit.py `
   --signals generated/self_scalper24_live.txt `
   --positions-json positions_self_no_trailing_24h.json `
@@ -39,6 +42,7 @@ python tools/auto_explicit.py `
   --mt5-server-offset 3 `
   --mt5-history-bars 5000 `
   --replace-missing-entries false `
+  --reopen-missing-positions true `
   --sizing-mode risk `
   --lot 0.01 `
   --risk 0.01 `

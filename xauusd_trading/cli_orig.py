@@ -1534,6 +1534,10 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--replace-missing-entries", action="store_true",
                     help="Each cycle, re-place still-pending LIMIT entries that vanished from MT5 "
                          "(e.g. cancelled by hand) for a signal that still has an MT5 footprint.")
+    pa.add_argument("--reopen-missing-positions", action="store_true",
+                    help="Each cycle, re-open at market any entry the replay still holds OPEN "
+                         "but that is missing from MT5 (e.g. closed by hand), so live execution "
+                         "keeps mirroring the backtest.")
     _add_strategy_overrides(pa)
     _add_mt5_flags(pa)
     _add_notification_flags(pa)

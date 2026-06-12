@@ -79,7 +79,14 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   --replace-missing-entries` self-heals: each cycle it re-places only the
   entries still **PENDING** in the replay whose per-entry comment vanished
   from MT5 (e.g. limits cancelled by hand), gated on the signal still having
-  ≥1 footprint — no chasing of passed prices, LIMIT-only.
+  ≥1 footprint — no chasing of passed prices, LIMIT-only. `auto
+  --reopen-missing-positions` mirrors the replay the rest of the way: entries
+  the replay still holds **OPEN** but missing from MT5 (closed by hand) are
+  re-opened at market, and replay-open signals survive the prune. Fresh
+  placement is history-gated: a magic with closed deals is never re-placed,
+  so a finished signal can't trade twice. The late TP1/TP2 catch-up protects
+  legs with a stop at the lock level (ratcheted toward it on recovery) and
+  closes at market only as a last resort.
 
 ## Invariants to respect
 

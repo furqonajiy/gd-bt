@@ -36,12 +36,25 @@ from .mt5_executor import (
     signal_entry_key,
     signal_to_magic,
 )
+from .sl_safety import clamp_sltp_sl
 
 
 _REPLAY_CLOSED_STATUSES = {
     "SL", "BEP", "LOCK_HALF_TP1", "LOCK_TP1", "LOCK_TP2",
     "TP1", "TP2", "TP3", "TIME_EXIT",
 }
+
+# Late-lock fallback: when the replay already lock-exited a leg but the live SL
+# never reached the lock level (the 2026-06-12 reconciliation lost $468 to the
+# old close-at-market catch-up), the leg is protected instead of flattened. If
+# price has already moved back through the lock level, the stop goes this far
+# from the live bid/ask (or the broker minimum if larger) and later cycles
+# ratchet it toward the true level as price recovers.
+LATE_LOCK_FALLBACK_BUFFER = 0.5
+# A fallback stop is only re-tightened when it improves by at least this much,
+# so a slow price recovery doesn't spam an SLTP modify every watch cycle.
+# Reaching the exact lock level is always allowed regardless of step size.
+LATE_LOCK_MIN_STEP = 0.25
 
 
 def _wall_clock_chart_now() -> datetime:
@@ -76,6 +89,7 @@ class Mt5Executor(_BaseMt5Executor):
     _session_skipped_stale_entries: set[str] = set()
     _session_skipped_expired_signal_keys: set[str] = set()
     _session_failed_signal_keys: set[str] = set()
+    _session_skipped_traded_signal_keys: set[str] = set()
     # Each cycle re-replays the signal from scratch, so a live position whose
     # replay status is non-terminal (e.g. TRAILING_STOP, which is absent from
     # _REPLAY_CLOSED_STATUSES) gets re-patched to OPEN and would re-announce the
@@ -211,6 +225,15 @@ class Mt5Executor(_BaseMt5Executor):
                 f"Signal {signal.signal_key} already has MT5 orders/positions; "
                 f"skipping placement (will manage instead)."
             )
+            return log
+        if self._magic_already_traded(magic, signal.signal_time_chart):
+            if signal.signal_key not in self._session_skipped_traded_signal_keys:
+                log.actions.append(
+                    f"Signal {signal.signal_key} already traded this session "
+                    f"(closed deals in MT5 history for its magic); skipping "
+                    f"re-placement so a finished signal is never run twice."
+                )
+                self._session_skipped_traded_signal_keys.add(signal.signal_key)
             return log
 
         order_type = (self.mt5.ORDER_TYPE_BUY_LIMIT if signal.side == "BUY"
@@ -567,6 +590,210 @@ class Mt5Executor(_BaseMt5Executor):
             failed.append((p.ticket, reason))
             log.actions.append(f"  FAILED {label} SL-lock on #{p.ticket}: {reason}")
 
+    def _late_lock_or_close(self, p, magic: int, signal_key: str, side: str,
+                            target_level: float, label: str, log: ExecutionLog,
+                            locked: list[int],
+                            closed: list[tuple[int, float]],
+                            failed: list[tuple[int, str]]) -> None:
+        """Protect a leg the replay already lock-exited; close only as last resort.
+
+        The replay says this leg's lifecycle ended at `target_level` (LOCK_TP1 /
+        LOCK_TP2), but the live SL never made it there in time. Behavior:
+
+        * price still on the profitable side of the level -> SL moves to the
+          exact level; the broker then exits at model parity (or the leg keeps
+          running and beats the model — accepted, profit is never given up);
+        * price already back through the level -> SL locks at the closest legal
+          level (`LATE_LOCK_FALLBACK_BUFFER` off the live bid/ask) and later
+          cycles ratchet it toward the true level as price recovers, in steps of
+          at least `LATE_LOCK_MIN_STEP`, never backwards (`_lock_improves`);
+        * no legal protective stop exists, or the modify is rejected -> close at
+          market (the old catch-up behavior), because an unprotected leg riding
+          to its original SL is the one outcome that must never happen.
+        """
+        sym = self._sym_info if self._sym_info is not None else self.mt5.symbol_info(self.symbol)
+        digits = sym.digits
+        tolerance = 10 ** (-digits)
+        tick = self.mt5.symbol_info_tick(self.symbol)
+        if tick is None or getattr(tick, "bid", 0) <= 0 or getattr(tick, "ask", 0) <= 0:
+            log.actions.append(
+                f"  Late {label} lock on #{p.ticket}: no tick available, skipping"
+            )
+            failed.append((p.ticket, "no tick available"))
+            return
+
+        target = round(float(target_level), digits)
+        if side == "BUY":
+            desired = min(target, float(tick.bid) - LATE_LOCK_FALLBACK_BUFFER)
+        else:
+            desired = max(target, float(tick.ask) + LATE_LOCK_FALLBACK_BUFFER)
+        legal = clamp_sltp_sl(self, p, desired)
+        if legal is None:
+            log.actions.append(
+                f"  Late {label} lock on #{p.ticket}: no broker-legal stop near "
+                f"{desired:g}; closing at market instead ({signal_key})"
+            )
+            self._close_position(
+                p, magic, signal_key, f"late-{label.lower()}",
+                f"Late {label} catch-up", log, closed, failed,
+            )
+            return
+
+        current_sl = float(getattr(p, "sl", 0.0) or 0.0)
+        if not self._lock_improves(side, current_sl, legal, tolerance):
+            return  # already protected at or beyond this level
+        at_target = abs(legal - target) <= tolerance
+        if not at_target and abs(legal - current_sl) < LATE_LOCK_MIN_STEP:
+            return  # fallback ratchet too small this cycle; retry later
+
+        modify_failed: list[tuple[int, str]] = []
+        self._modify_stop(
+            p, legal, signal_key, f"late_lock_{label.lower()}",
+            f"late {label} lock" if at_target else f"late {label} fallback lock",
+            log, locked, modify_failed,
+        )
+        if modify_failed:
+            # Could not protect the leg broker-side: fall back to the old
+            # catch-up close rather than leave it exposed to the original SL.
+            self._close_position(
+                p, magic, signal_key, f"late-{label.lower()}",
+                f"Late {label} catch-up", log, closed, failed,
+            )
+
+    def _magic_already_traded(self, magic: int, since_chart: datetime) -> bool:
+        """True when MT5 deal history already shows fills for this magic.
+
+        Guards the fresh-placement path against re-trading a signal whose live
+        lifecycle has fully closed (registry pruned, no live footprint left):
+        the replay considers it finished, so placing the ladder again would
+        double the exposure — signal 2026-06-12#10 was traded twice this way.
+        Best-effort: a stub/old MT5 build without history_deals_get, or a
+        history call failure, means no block (same behavior as before).
+        """
+        getter = getattr(self.mt5, "history_deals_get", None)
+        if getter is None:
+            return False
+        try:
+            deals = getter(
+                since_chart - timedelta(hours=1),
+                _wall_clock_chart_now() + timedelta(days=1),
+            )
+        except Exception:
+            return False
+        return any(int(getattr(d, "magic", -1) or -1) == magic for d in (deals or []))
+
+    def reopen_missing_open_positions(self, engine_pos: Position,
+                                      config: StrategyConfig) -> ExecutionLog:
+        """Re-open live positions for entries the replay still holds OPEN.
+
+        MT5 mirrors the replay (operator decision, 2026-06-12 reconciliation):
+        when a leg the model still holds is missing from MT5 — typically closed
+        by hand to thin out exposure — it is re-opened at market with the
+        replay's lot, its current effective stop, and the leg's target, under
+        the same per-entry comment so reconciliation re-attaches to the slot.
+        Runs every cycle while the replay keeps the leg open, so a hand-closed
+        leg comes back within one watch interval; once the replay exits the
+        leg, re-opening stops on its own.
+        """
+        log = ExecutionLog()
+        open_entries = [e for e in engine_pos.entries if e.status == "OPEN"]
+        if not open_entries:
+            return log
+        wall_clock_now = _wall_clock_chart_now()
+        if (engine_pos.time_exit_deadline is not None
+                and wall_clock_now >= engine_pos.time_exit_deadline):
+            return log  # time-exit cycle owns these legs; don't race it
+
+        magic = signal_to_magic(engine_pos.signal.signal_key)
+        signal_key = engine_pos.signal.signal_key
+        side = engine_pos.signal.side
+        paired_idx = {entry.entry_index for _p, entry in self._position_entry_pairs(engine_pos, magic)}
+        order_comments = {str(getattr(o, "comment", "") or "") for o in self.find_orders(magic)}
+
+        missing = [
+            e for e in open_entries
+            if e.entry_index not in paired_idx
+            and mt5_entry_comment(signal_key, e.entry_index) not in order_comments
+        ]
+        if not missing:
+            return log
+
+        tick = self.mt5.symbol_info_tick(self.symbol)
+        if tick is None or getattr(tick, "bid", 0) <= 0 or getattr(tick, "ask", 0) <= 0:
+            log.actions.append(
+                f"Signal {signal_key}: cannot re-open missing entries, no live tick."
+            )
+            return log
+        sym = self._sym_info if self._sym_info is not None else self.mt5.symbol_info(self.symbol)
+        digits = sym.digits
+
+        reopened: list[dict] = []
+        failed: list[tuple[int, float, str]] = []
+        for entry in missing:
+            lot = round_lot(entry.lot, self.min_lot, self.lot_step)
+            if lot <= 0:
+                log.actions.append(
+                    f"  #{entry.entry_index}: replay lot {entry.lot:.4f} below broker "
+                    f"minimum {self.min_lot}; cannot re-open"
+                )
+                continue
+            if side == "BUY":
+                order_type, price = self.mt5.ORDER_TYPE_BUY, float(tick.ask)
+                sl = min(float(engine_pos.effective_stop_for(entry, config)),
+                         float(tick.bid) - LATE_LOCK_FALLBACK_BUFFER)
+            else:
+                order_type, price = self.mt5.ORDER_TYPE_SELL, float(tick.bid)
+                sl = max(float(engine_pos.effective_stop_for(entry, config)),
+                         float(tick.ask) + LATE_LOCK_FALLBACK_BUFFER)
+            tp = entry.target_price if entry.target_price is not None else engine_pos.target_level
+            comment = mt5_entry_comment(signal_key, entry.entry_index)
+            request = {
+                "action":       self.mt5.TRADE_ACTION_DEAL,
+                "symbol":       self.symbol,
+                "volume":       lot,
+                "type":         order_type,
+                "price":        price,
+                "sl":           round(sl, digits),
+                "tp":           round(float(tp), digits),
+                "magic":        magic,
+                "comment":      comment,
+                "deviation":    self.CLOSE_DEVIATION_POINTS,
+                "type_filling": self._market_fill_mode(),
+            }
+            res = self.mt5.order_send(request)
+            success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+            self._log_order_send(signal_key, "reopen_missing_position", request, res, success=success)
+            if success:
+                ticket = int(getattr(res, "order", 0) or 0)
+                log.placed += 1
+                log.actions.append(
+                    f"  Re-opened #{entry.entry_index} ({signal_key}) @ {price:g} "
+                    f"lot={lot} SL={request['sl']:g} TP={request['tp']:g} "
+                    f"(replay holds it OPEN; live position was missing)"
+                )
+                reopened.append({
+                    "entry_index": entry.entry_index, "ticket": ticket,
+                    "price": price, "lot": lot,
+                    "sl": request["sl"], "tp": request["tp"],
+                })
+            else:
+                reason = str(res.comment if res else self.mt5.last_error())
+                log.actions.append(
+                    f"  FAILED re-open of #{entry.entry_index} ({signal_key}): {reason}"
+                )
+                failed.append((entry.entry_index, price, reason))
+
+        if self.notifier is not None and reopened:
+            self.notifier.order_placed(
+                signal_key=signal_key, side=side,
+                order_kind=f"{side} MARKET (re-open)", placed=reopened,
+            )
+        if self.notifier is not None and failed:
+            self.notifier.place_failed(
+                signal_key=signal_key, side=side, failures=failed,
+            )
+        return log
+
     def manage_position(self, engine_pos: Position, config: StrategyConfig, chart_now):
         """Manage one tracked signal with per-entry stop-lock parity.
 
@@ -602,20 +829,27 @@ class Mt5Executor(_BaseMt5Executor):
         tp1_catchup_failed: list[tuple[int, str]] = []
         tp2_catchup_closed: list[tuple[int, float]] = []
         tp2_catchup_failed: list[tuple[int, str]] = []
+        tp1_late_locked: list[int] = []
+        tp2_late_locked: list[int] = []
         active_pairs = []
         for p, entry in pairs:
             if entry.status not in _REPLAY_CLOSED_STATUSES:
                 active_pairs.append((p, entry))
                 continue
+            # The replay already lock-exited these legs. Don't flatten at
+            # whatever price the catch-up cycle happens to see (the 2026-06-12
+            # reconciliation lost $468 to that): protect the leg with a stop at
+            # the lock level — or the closest legal level, ratcheted toward it
+            # later — and let the broker realize the model's exit (or better).
             if entry.status == "LOCK_TP1":
-                self._close_position(
-                    p, magic, signal_key, "late-tp1", "Late TP1 catch-up",
-                    log, tp1_catchup_closed, tp1_catchup_failed,
+                self._late_lock_or_close(
+                    p, magic, signal_key, side, engine_pos.signal.tp1, "TP1",
+                    log, tp1_late_locked, tp1_catchup_closed, tp1_catchup_failed,
                 )
             elif entry.status == "LOCK_TP2":
-                self._close_position(
-                    p, magic, signal_key, "late-tp2", "Late TP2 catch-up",
-                    log, tp2_catchup_closed, tp2_catchup_failed,
+                self._late_lock_or_close(
+                    p, magic, signal_key, side, engine_pos.signal.tp2, "TP2",
+                    log, tp2_late_locked, tp2_catchup_closed, tp2_catchup_failed,
                 )
             else:
                 action_name = f"catchup-{entry.status.lower().replace('_', '-')}"
@@ -635,6 +869,20 @@ class Mt5Executor(_BaseMt5Executor):
                 closed=tp1_catchup_closed, failed=tp1_catchup_failed,
                 backtest_pnl=backtest_lock_pnl,
             )
+        if self.notifier is not None and tp1_late_locked:
+            self.notifier.tp1_lock(
+                signal_key=signal_key, side=side,
+                locked=tp1_late_locked, failed=[],
+                sl=round(engine_pos.signal.tp1, digits),
+            )
+        if self.notifier is not None and tp2_late_locked:
+            notify_tp2 = getattr(self.notifier, "tp2_lock", None)
+            if callable(notify_tp2):
+                notify_tp2(
+                    signal_key=signal_key, side=side,
+                    locked=tp2_late_locked, failed=[],
+                    sl=round(engine_pos.signal.tp2, digits),
+                )
 
         # TP1 SL-lock only for entries whose replay says TP1 applies and that are
         # still open in both replay and MT5.

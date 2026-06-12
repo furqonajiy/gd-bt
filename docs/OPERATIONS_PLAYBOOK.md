@@ -130,9 +130,10 @@ This:
 2. Reconciles each tracked signal with MT5 (patches PENDING entries the
    bar-replay missed)
 3. Manages every existing tracked signal: cancels expired pendings, runs
-   Late TP1 catch-up where needed, locks SL to TP1 on stage-1 positions,
-   time-closes positions past the 90-min deadline, and applies executor-owned
-   trailing-close/trend-runner SL moves when enabled
+   the Late TP1/TP2 lock catch-up where needed (protective stop at the lock
+   level, market close only as last resort), locks SL to TP1 on stage-1
+   positions, time-closes positions past the 90-min deadline, and applies
+   executor-owned trailing-close/trend-runner SL moves when enabled
 4. Places orders for the new signal — LIMITs only when trailing-open is off;
    STOP orders when trailing-open is enabled
 5. Stamps `executed_at` on the registry entry and prunes any signals
@@ -156,9 +157,15 @@ Set-Location 'C:\path\to\your\repo'
     *>> manage.log
 ```
 
-If you forget and a `LOCK_TP1` is missed, the Late TP1 catch-up closes
-the position at the next cycle's market price. Better than nothing, but
-worse than a clean broker-side trigger at TP1.
+If you forget and a `LOCK_TP1` is missed, the Late TP1 catch-up now
+**protects the leg instead of flattening it**: the SL is moved to TP1 when
+price is still beyond it (the broker then exits at the modeled level, or the
+leg keeps running and beats the model); if price has already come back
+through TP1, the stop locks 0.5 below/above the live price and later cycles
+ratchet it toward TP1 as price recovers. The leg is only closed at current
+market as a last resort, when no broker-legal stop exists or the modify is
+rejected. (Before 2026-06: the catch-up always closed at market — the
+2026-06-12 reconciliation measured −$468 vs model from that on one session.)
 
 ## Mode B — continuous `auto` flow
 
@@ -258,6 +265,24 @@ open) whose per-entry comment is missing from MT5. It only acts when the signal
 still has ≥1 footprint on MT5, never re-places an entry price has already passed
 (no chasing), and is LIMIT-only (skips when trailing-open is enabled).
 
+### Manually closed a position the strategy still holds
+
+With `--reopen-missing-positions true`, MT5 mirrors the replay: any entry the
+backtest engine still considers **OPEN** that has no live position (e.g. you
+closed it by hand to thin out exposure) is re-opened at market on the next
+cycle — same per-entry comment, the replay's lot, its current effective stop
+(clamped to a broker-legal level), and the leg's target. Re-opening stops on
+its own once the replay exits the leg. While this flag is on, a signal whose
+replay still holds OPEN legs also survives the registry prune even with zero
+MT5 footprint, so a hand-closed signal can't vanish before it is restored.
+If you truly want out of a position early, close it AND remove the feed line
+(or stop the runner) — otherwise the engine will put it back.
+
+Separately from this flag, `auto` never re-places a signal whose magic
+already has **deal history** in MT5: a finished signal can't be accidentally
+traded twice (the 2026-06-12 `#10` double-trade), even if its registry entry
+was pruned.
+
 ### Listener says "matched existing entry by content"
 
 Layer 2 (content-based) dedup fired because Layer 1 (state-based) had no
@@ -328,8 +353,11 @@ those like a quarantine entry, by hand.
   different fills. Treat the headline figures as upper bounds, not predictions.
 - **MT5 only retains ~103 days of M1 history.** Run `fetch` daily (or
   let `decide --mt5` / `manage` / `auto` do it) to accumulate the archive.
-- **Late TP1 catch-up exits at current market, not at TP1.** Backtest
-  models the lock SL triggering exactly at TP1; the catch-up closes at
-  whatever the bid/ask is right now.
+- **Late TP1/TP2 catch-up locks, it no longer flattens.** Backtest models
+  the lock SL triggering exactly at the lock level; when live is late, the
+  catch-up now places/ratchets a protective stop toward that level (market
+  close only as a last resort), so the realized exit can differ from the
+  model by the recovery path — but a missed lock can no longer turn a
+  modeled profit into a stop-loss.
 - **Executor trailing stop is interval-based.** SL can lag the backtest by up
   to one closed M1 bar plus the Auto/manage watch interval, plus slippage.

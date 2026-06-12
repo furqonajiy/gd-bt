@@ -41,6 +41,12 @@ and the code — this file is the required rules.
   and convert internally. Do not hardcode tz conversions.
 - `positions.json` registry entry shape: `{"signal_key", "signal", "date",
   "tz", "equity_at_open", "executed_at"?}`; auto-pruned by `--execute` / `auto`.
+- Live self-heal flags on `auto`: `--replace-missing-entries` (re-place
+  hand-cancelled PENDING limits), `--reopen-missing-positions` (re-open
+  hand-closed positions the replay still holds OPEN; such signals survive the
+  prune). Fresh placement is history-gated (a magic with closed deals never
+  re-places), and the late TP1/TP2 catch-up locks a protective stop instead of
+  flattening at market (close only as last resort).
 
 ## Invariants — must respect
 
