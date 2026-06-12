@@ -91,7 +91,7 @@ implies `--mt5` and live equity — no confirmation prompt).
 | `manage`   | Manage tracked signals: lock SL to TP1, cancel expired pendings, time-close. `--watch` loops. |
 | `auto`     | Continuous live trading: read `signals.txt`, place orders, manage positions, append-only event log. `--replace-missing-entries` self-heals limit orders cancelled by hand; `--reopen-missing-positions` re-opens positions closed by hand while the replay still holds them OPEN. |
 | `mt5-info` | Diagnostic: latest bar, account equity, open MT5 positions/orders for the symbol. |
-| `fetch`    | Pull the last ~2 months of M1 history into `data/` (per-month CSV archive). |
+| `fetch`    | Pull the last N months of M1 history into `data/` (per-month CSV archive; `--months`, default 2 — live feed loops use 1). |
 
 Common flag groups (added to most subcommands):
 

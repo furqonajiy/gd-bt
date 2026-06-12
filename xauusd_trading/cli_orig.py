@@ -1356,7 +1356,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     ) as conn:
         summary = archive_m1_by_month(
             conn, args.mt5_symbol, ARCHIVE_DIR,
-            months_back=ARCHIVE_MONTHS,
+            months_back=getattr(args, "months", ARCHIVE_MONTHS),
             server_offset_hours=args.mt5_server_offset,
             overwrite=False,
         )
@@ -1548,7 +1548,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_mt5_flags(pm)
     pm.set_defaults(func=cmd_mt5_info)
 
-    pf = sub.add_parser("fetch", help="Pull last 2 months of M1 to data/")
+    pf = sub.add_parser("fetch", help="Pull last N months of M1 to data/ (default 2)")
+    pf.add_argument("--months", type=int, default=ARCHIVE_MONTHS,
+                    help="How many months back to refresh (default 2). Live feed "
+                         "loops use 1: prior months' CSVs are immutable once the "
+                         "month has rolled over, so only the current month needs "
+                         "refreshing.")
     _add_mt5_flags(pf)
     pf.set_defaults(func=cmd_fetch)
 
