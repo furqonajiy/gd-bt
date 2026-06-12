@@ -78,9 +78,23 @@ def _read_xlsx_rows(path: Path) -> list[list[Any]]:
     return rows
 
 
+def _read_export_text(path: Path) -> str:
+    """Decode an MT5 export, sniffing the encoding from the BOM.
+
+    The terminal's "Report History" HTML export is UTF-16-LE with a BOM; older
+    exports and CSVs are UTF-8. Decoding UTF-16 bytes as UTF-8 yields NUL-laced
+    garbage that the HTML parser walks without finding a single tag, so the
+    parse used to fail silently with zero rows — sniff instead of assuming.
+    """
+    raw = Path(path).read_bytes()
+    if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
+        return raw.decode("utf-16", errors="replace")
+    return raw.decode("utf-8-sig", errors="replace")
+
+
 def _read_csv_rows(path: Path) -> list[list[Any]]:
     # MT5 CSV exports are often tab- or semicolon-delimited; sniff, default comma.
-    text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+    text = _read_export_text(path)
     sample = text[:4096]
     delim = ","
     for cand in ("\t", ";", ","):
@@ -118,7 +132,7 @@ class _TableParser(HTMLParser):
 
 def _read_html_rows(path: Path) -> list[list[Any]]:
     parser = _TableParser()
-    parser.feed(Path(path).read_text(encoding="utf-8", errors="replace"))
+    parser.feed(_read_export_text(path))
     return parser.rows
 
 

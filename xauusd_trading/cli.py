@@ -375,6 +375,15 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         for _ideal, actual, _exec_at in tracked:
             log.merge(executor.replace_missing_pending_entries(actual, config, replay_end))
 
+    # Optional mirror-the-replay: re-open positions for entries the replay still
+    # holds OPEN but that are missing from MT5 (typically closed by hand). Same
+    # bool / "true"/"false" flag handling as above.
+    _rmp = getattr(args, "reopen_missing_positions", False)
+    reopen_enabled = _rmp is True or str(_rmp).lower() == "true"
+    if reopen_enabled:
+        for _ideal, actual, _exec_at in tracked:
+            log.merge(executor.reopen_missing_open_positions(actual, config))
+
     try:
         all_signals = parse_signals_file(signals_path)
     except Exception as e:
@@ -489,6 +498,16 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     log.warnings.extend(executor.warn_on_unknown(known_magics))
 
     alive = executor.all_alive_magics()
+    if reopen_enabled:
+        # Mirror-the-replay mode: a signal whose replay still holds OPEN legs
+        # must survive the prune even with zero MT5 footprint (e.g. every leg
+        # closed by hand and this cycle's re-open failed on a missing tick),
+        # otherwise it disappears from the registry before it can be restored.
+        alive = alive | {
+            signal_to_magic(actual.signal.signal_key)
+            for _ideal, actual, _exec_at in tracked
+            if any(e.status == "OPEN" for e in actual.entries)
+        }
     report_entry_closures(
         executor, notifier, tracked,
         ledger_path=registry_path.with_name("closed_deals.json"),

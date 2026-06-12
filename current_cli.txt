@@ -75,7 +75,8 @@ python tools/auto_explicit.py `
   --trailing-open-distance 0 `
   --trailing-close-distance 0 `
   --trailing-close-after-stage 0 `
-  --replace-missing-entries true
+  --replace-missing-entries true `
+  --reopen-missing-positions true
 
 # =========================================================================
 # Parity backtest (reference; same strategy parameters as the auto runner).
