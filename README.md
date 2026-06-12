@@ -89,7 +89,7 @@ implies `--mt5` and live equity — no confirmation prompt).
 | `backtest` | Run a historical backtest over signals + M1 charts; writes an Excel report. |
 | `decide`   | Evaluate one signal. With `--execute`, place and manage orders on MT5. |
 | `manage`   | Manage tracked signals: lock SL to TP1, cancel expired pendings, time-close. `--watch` loops. |
-| `auto`     | Continuous live trading: read `signals.txt`, place orders, manage positions, append-only event log. `--replace-missing-entries` self-heals limit orders cancelled by hand; `--reopen-missing-positions` re-opens positions closed by hand while the replay still holds them OPEN. |
+| `auto`     | Continuous live trading: read `signals.txt`, place orders, manage positions, append-only event log. `--replace-missing-entries` self-heals limit orders cancelled by hand; `--reopen-missing-positions` restores positions closed by hand while the replay still holds them OPEN (price-aware: market only at-or-better than the entry, else a LIMIT at the original entry — never chases). |
 | `mt5-info` | Diagnostic: latest bar, account equity, open MT5 positions/orders for the symbol. |
 | `fetch`    | Pull the last N months of M1 history into `data/` (per-month CSV archive; `--months`, default 2 — live feed loops use 1). |
 

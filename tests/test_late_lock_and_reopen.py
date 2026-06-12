@@ -263,10 +263,12 @@ def _pos_with_open_leg():
 
 
 def test_reopen_restores_hand_closed_leg_at_market(monkeypatch):
+    # Favorable price (ask 4210.30 <= entry 4211): market re-open captures a
+    # better basis than the model, with the original stop and target.
     _reset_executor_guards()
     pos = _pos_with_open_leg()
     _freeze_wall_clock(monkeypatch, pos.activation_time + timedelta(minutes=10))
-    mt5 = _FakeMt5(bid=4212.00, ask=4212.30)  # no positions: leg closed by hand
+    mt5 = _FakeMt5(bid=4210.00, ask=4210.30)  # no positions: leg closed by hand
 
     log = _executor(mt5).reopen_missing_open_positions(pos, _CFG)
 
@@ -274,11 +276,88 @@ def test_reopen_restores_hand_closed_leg_at_market(monkeypatch):
     (req,) = mt5.requests
     assert req["action"] == mt5.TRADE_ACTION_DEAL
     assert req["type"] == mt5.ORDER_TYPE_BUY
-    assert req["price"] == 4212.30  # ask
+    assert req["price"] == 4210.30  # ask
     assert req["comment"] == mt5_entry_comment(pos.signal.signal_key, 0)
     assert req["volume"] == pos.entries[0].lot
     assert req["sl"] == round(pos.entries[0].initial_sl, 2)  # stage 0 -> original SL
     assert req["tp"] == round(pos.target_level, 2)
+
+
+def test_reopen_unfavorable_price_places_limit_at_entry(monkeypatch):
+    # Price above a BUY entry: never chase. Re-place a LIMIT at the original
+    # entry (inside the pending window) so a fill can only happen at the
+    # modeled basis -- original SL and target attached.
+    _reset_executor_guards()
+    pos = _pos_with_open_leg()
+    _freeze_wall_clock(monkeypatch, pos.activation_time + timedelta(minutes=10))
+    mt5 = _FakeMt5(bid=4212.00, ask=4212.30)  # ask > entry 4211
+
+    log = _executor(mt5).reopen_missing_open_positions(pos, _CFG)
+
+    assert log.placed == 1
+    (req,) = mt5.requests
+    assert req["action"] == mt5.TRADE_ACTION_PENDING
+    assert req["type"] == mt5.ORDER_TYPE_BUY_LIMIT
+    assert req["price"] == round(pos.entries[0].entry_price, 2)
+    assert req["sl"] == round(pos.entries[0].initial_sl, 2)
+    assert req["tp"] == round(pos.target_level, 2)
+    assert req["comment"] == mt5_entry_comment(pos.signal.signal_key, 0)
+
+
+def test_reopen_unfavorable_past_window_does_not_chase(monkeypatch):
+    # Past expiry_time the manage pass cancels every pending each cycle; a
+    # re-placed limit would ping-pong forever. Accept the miss instead.
+    _reset_executor_guards()
+    pos = _pos_with_open_leg()
+    _freeze_wall_clock(monkeypatch, pos.expiry_time + timedelta(minutes=1))
+    mt5 = _FakeMt5(bid=4212.00, ask=4212.30)
+
+    log = _executor(mt5).reopen_missing_open_positions(pos, _CFG)
+    assert log.placed == 0
+    assert mt5.requests == []
+
+
+def test_reopen_locked_leg_stays_market_even_at_unfavorable_price(monkeypatch):
+    # TP1-locked replay stop sits above the entry: the no-chase rule does NOT
+    # apply (a limit at the entry would fill into its own stop). The leg keeps
+    # the #69 market re-open; with price beyond the lock the stop rides as-is.
+    _reset_executor_guards()
+    pos = _pos_with_open_leg()
+    pos.stage = 1
+    pos.stage1_time = pos.activation_time + timedelta(minutes=1)
+    _freeze_wall_clock(monkeypatch, pos.activation_time + timedelta(minutes=10))
+    mt5 = _FakeMt5(bid=4216.40, ask=4216.70)  # ask > entry 4211, bid > TP1 lock
+
+    log = _executor(mt5).reopen_missing_open_positions(pos, _CFG)
+    assert log.placed == 1
+    (req,) = mt5.requests
+    assert req["action"] == mt5.TRADE_ACTION_DEAL
+    assert req["type"] == mt5.ORDER_TYPE_BUY
+    assert req["sl"] == 4215.50  # the TP1 lock, legal since bid 4216.40 above it
+
+
+def test_reopen_sell_sides_mirror_the_price_rule(monkeypatch):
+    # SELL favorable = bid >= entry (market); unfavorable = bid < entry (limit).
+    _reset_executor_guards()
+    sell = parse_one_signal(
+        "2. SELL XAUUSD 4211 - 4213 SL 4217.50 TP1 4206 TP2 4203 TP3 4200 1:00 PM",
+        "2026-06-12", 3)
+    pos = open_position(sell, 5000.0, _CFG)
+    pos.entries[0].status = "OPEN"
+    pos.entries[0].fill_time = pos.activation_time
+    entry = pos.entries[0].entry_price  # 4211 (top of band toward SL ladder)
+    _freeze_wall_clock(monkeypatch, pos.activation_time + timedelta(minutes=10))
+
+    mt5_fav = _FakeMt5(bid=entry + 1.0, ask=entry + 1.3)   # bid above entry
+    _executor(mt5_fav).reopen_missing_open_positions(pos, _CFG)
+    assert mt5_fav.requests[0]["action"] == _FakeMt5.TRADE_ACTION_DEAL
+    assert mt5_fav.requests[0]["type"] == _FakeMt5.ORDER_TYPE_SELL
+
+    mt5_unf = _FakeMt5(bid=entry - 1.0, ask=entry - 0.7)   # bid below entry
+    _executor(mt5_unf).reopen_missing_open_positions(pos, _CFG)
+    assert mt5_unf.requests[0]["action"] == _FakeMt5.TRADE_ACTION_PENDING
+    assert mt5_unf.requests[0]["type"] == _FakeMt5.ORDER_TYPE_SELL_LIMIT
+    assert mt5_unf.requests[0]["price"] == round(entry, 2)
 
 
 def test_reopen_leaves_present_and_terminal_legs_alone(monkeypatch):

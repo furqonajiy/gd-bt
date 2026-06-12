@@ -82,7 +82,10 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   ≥1 footprint — no chasing of passed prices, LIMIT-only. `auto
   --reopen-missing-positions` mirrors the replay the rest of the way: entries
   the replay still holds **OPEN** but missing from MT5 (closed by hand) are
-  re-opened at market, and replay-open signals survive the prune. Fresh
+  restored price-aware — at market when the price is at-or-better than the
+  leg's entry or its stop is already locked at/beyond entry, otherwise via a
+  LIMIT at the original entry inside the pending window (never chases) — and
+  replay-open signals survive the prune. Fresh
   placement is history-gated: a magic with closed deals is never re-placed,
   so a finished signal can't trade twice. The late TP1/TP2 catch-up protects
   legs with a stop at the lock level (ratcheted toward it on recovery) and

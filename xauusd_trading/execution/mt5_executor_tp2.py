@@ -737,29 +737,72 @@ class Mt5Executor(_BaseMt5Executor):
                     f"minimum {self.min_lot}; cannot re-open"
                 )
                 continue
-            if side == "BUY":
-                order_type, price = self.mt5.ORDER_TYPE_BUY, float(tick.ask)
-                sl = min(float(engine_pos.effective_stop_for(entry, config)),
-                         float(tick.bid) - LATE_LOCK_FALLBACK_BUFFER)
-            else:
-                order_type, price = self.mt5.ORDER_TYPE_SELL, float(tick.bid)
-                sl = max(float(engine_pos.effective_stop_for(entry, config)),
-                         float(tick.ask) + LATE_LOCK_FALLBACK_BUFFER)
+            # Price rule (operator decision, 2026-06-12): re-open at MARKET only
+            # when the current price is at-or-better than the leg's entry (BUY:
+            # ask <= entry, SELL: bid >= entry) -- a better basis than the
+            # backtest's, with the original stop and target. When price is on
+            # the unfavorable side, never chase: re-place a LIMIT at the
+            # original entry instead, so a fill can only happen at the modeled
+            # basis. The limit is only placed inside the signal's pending
+            # window -- past expiry_time the manage pass cancels every pending
+            # each cycle and a re-placed limit would ping-pong forever.
+            entry_price = float(entry.entry_price)
+            raw_stop = float(engine_pos.effective_stop_for(entry, config))
+            favorable = (float(tick.ask) <= entry_price if side == "BUY"
+                         else float(tick.bid) >= entry_price)
+            # In-profit locked legs (stop at/beyond entry) keep the market
+            # re-open regardless of price side: the clamped stop bounds the
+            # risk to the fallback buffer, and a LIMIT at the entry would fill
+            # straight into its own stop. The no-chase rule below only governs
+            # legs whose stop is still on the risk side of the entry.
+            stop_beyond_entry = (raw_stop >= entry_price if side == "BUY"
+                                 else raw_stop <= entry_price)
             tp = entry.target_price if entry.target_price is not None else engine_pos.target_level
             comment = mt5_entry_comment(signal_key, entry.entry_index)
-            request = {
-                "action":       self.mt5.TRADE_ACTION_DEAL,
-                "symbol":       self.symbol,
-                "volume":       lot,
-                "type":         order_type,
-                "price":        price,
-                "sl":           round(sl, digits),
-                "tp":           round(float(tp), digits),
-                "magic":        magic,
-                "comment":      comment,
-                "deviation":    self.CLOSE_DEVIATION_POINTS,
-                "type_filling": self._market_fill_mode(),
-            }
+            if favorable or stop_beyond_entry:
+                if side == "BUY":
+                    order_type, price = self.mt5.ORDER_TYPE_BUY, float(tick.ask)
+                    sl = min(raw_stop, float(tick.bid) - LATE_LOCK_FALLBACK_BUFFER)
+                else:
+                    order_type, price = self.mt5.ORDER_TYPE_SELL, float(tick.bid)
+                    sl = max(raw_stop, float(tick.ask) + LATE_LOCK_FALLBACK_BUFFER)
+                request = {
+                    "action":       self.mt5.TRADE_ACTION_DEAL,
+                    "symbol":       self.symbol,
+                    "volume":       lot,
+                    "type":         order_type,
+                    "price":        price,
+                    "sl":           round(sl, digits),
+                    "tp":           round(float(tp), digits),
+                    "magic":        magic,
+                    "comment":      comment,
+                    "deviation":    self.CLOSE_DEVIATION_POINTS,
+                    "type_filling": self._market_fill_mode(),
+                }
+            else:
+                if wall_clock_now > engine_pos.expiry_time:
+                    log.actions.append(
+                        f"  #{entry.entry_index}: price moved past entry "
+                        f"{entry_price:g} and the pending window is closed; "
+                        f"not chasing"
+                    )
+                    continue
+                order_type = (self.mt5.ORDER_TYPE_BUY_LIMIT if side == "BUY"
+                              else self.mt5.ORDER_TYPE_SELL_LIMIT)
+                price = entry_price
+                request = {
+                    "action":       self.mt5.TRADE_ACTION_PENDING,
+                    "symbol":       self.symbol,
+                    "volume":       lot,
+                    "type":         order_type,
+                    "price":        round(price, digits),
+                    "sl":           round(raw_stop, digits),
+                    "tp":           round(float(tp), digits),
+                    "magic":        magic,
+                    "comment":      comment,
+                    "type_time":    self.mt5.ORDER_TIME_GTC,
+                    "type_filling": self._market_fill_mode(),
+                }
             res = self.mt5.order_send(request)
             success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
             self._log_order_send(signal_key, "reopen_missing_position", request, res, success=success)
