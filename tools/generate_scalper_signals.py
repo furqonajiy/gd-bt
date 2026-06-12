@@ -30,7 +30,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
@@ -381,16 +381,27 @@ def generate_signals(df: pd.DataFrame, args: argparse.Namespace) -> list[Generat
     return signals
 
 
-def _write_signal_file(signals: list[GeneratedSignal], output: Path) -> None:
+def _write_signal_file(signals: list[GeneratedSignal], output: Path,
+                       signal_tz: int = 3) -> None:
+    """Write the feed in `signal_tz` display time (header ``GMT+{signal_tz}``).
+
+    Bars/times are generated in chart time (GMT+3); shifting by (signal_tz-3)
+    before grouping moves near-midnight signals into the correct shifted day
+    section. The engine parses the GMT+N header and converts back, so the
+    chart-time semantics are identical regardless of display tz -- this is
+    presentation only (e.g. GMT+7 to match Victor's feed).
+    """
     output.parent.mkdir(parents=True, exist_ok=True)
-    grouped: dict[str, list[GeneratedSignal]] = {}
+    shift = timedelta(hours=signal_tz - 3)
+    grouped: dict[str, list[tuple[datetime, GeneratedSignal]]] = {}
     for sig in signals:
-        grouped.setdefault(sig.time.strftime("%Y-%m-%d"), []).append(sig)
+        disp = sig.time + shift
+        grouped.setdefault(disp.strftime("%Y-%m-%d"), []).append((disp, sig))
 
     lines: list[str] = []
     for day in sorted(grouped):
-        lines.append(f"{day} GMT+3")
-        for idx, sig in enumerate(sorted(grouped[day], key=lambda s: s.time), start=1):
+        lines.append(f"{day} GMT+{signal_tz}")
+        for idx, (disp, sig) in enumerate(sorted(grouped[day], key=lambda x: x[0]), start=1):
             lines.append(
                 f"{idx}. {sig.side} XAUUSD "
                 f"{_price(sig.r1)} - {_price(sig.r2)} "
@@ -398,7 +409,7 @@ def _write_signal_file(signals: list[GeneratedSignal], output: Path) -> None:
                 f"TP1 {_price(sig.tp1)} "
                 f"TP2 {_price(sig.tp2)} "
                 f"TP3 {_price(sig.tp3)} "
-                f"{_time_ampm(sig.time)}"
+                f"{_time_ampm(disp)}"
             )
         lines.append("")
     output.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
@@ -434,6 +445,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p.add_argument("--cooldown-minutes", type=float, default=3.0)
     p.add_argument("--max-signals-per-day", type=int, default=0, help="0 = unlimited.")
+    p.add_argument("--signal-tz", type=int, default=3,
+                   help="Display timezone for the feed (header GMT+N and times). Default 3 = chart time; 7 matches the Victor feed. Presentation only -- the engine converts back via the header.")
     p.add_argument("--session-start", type=int, default=7, help="Chart-time hour, GMT+3. Default 07:00.")
     p.add_argument("--session-end", type=int, default=23, help="Chart-time hour, GMT+3. Default 23:00.")
     p.add_argument("--weekdays-only", action=argparse.BooleanOptionalAction, default=True)
@@ -489,7 +502,7 @@ def main(argv: list[str] | None = None) -> int:
 
     output = Path(args.output)
     print(f"Writing signals to {output}", file=sys.stderr, flush=True)
-    _write_signal_file(signals, output)
+    _write_signal_file(signals, output, signal_tz=args.signal_tz)
     if args.diagnostics:
         print(f"Writing diagnostics to {args.diagnostics}", file=sys.stderr, flush=True)
         _write_diagnostics(signals, Path(args.diagnostics))
