@@ -122,17 +122,47 @@ def ensure_baseline() -> dict | None:
         log("baseline: FAILED to produce a row -- see trail2_baseline.runlog")
         return None
     r = rows[0]
+    # The reference at 1% can sit far above the 50% DD limit (dense feed, many
+    # concurrent legs), so its net@1% is NOT a deployable target. Walk the SAME
+    # config's risk DOWN until concurrent DD <= 50%, giving a fair deployable
+    # net/risk that trailing candidates' deployable net is compared against.
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT / "tools"))
+    import sweep as sw
+    from xauusd_trading import CsvChartSource, parse_signals_file
+    chart = CsvChartSource(sw._expand_chart_paths([str(p) for p in CHARTS]))
+    signals = parse_signals_file(ROOT / "generated/self_scalper24.txt")
+    dep_risk, dep_net, dep_dd = None, 0.0, None
+    for risk in [0.01, 0.0075, 0.005, 0.0035, 0.0025, 0.002, 0.0015, 0.001]:
+        cfg = dict(REFERENCE_NO_TRAIL)
+        cfg["sizing_mode"] = "risk"
+        cfg["risk_per_signal"] = risk
+        bt = sw.run_concurrent_backtest(
+            signals, chart, sw.config_from_dict(cfg, bonus=0.0),
+            exclude_structural_anomalies=False, label="baseline_walk")
+        dd = abs(float(bt.get("max_drawdown_pct") or 0.0))
+        net = float(bt.get("net_profit") or 0.0)
+        log(f"baseline walk risk={risk:g} net=${net:,.0f} dd={dd:.1f}% "
+            f"{'PASS' if dd <= 50 else 'fail'}")
+        if dd <= 50.0:
+            dep_risk, dep_net, dep_dd = risk, net, dd
+            break
     base = {
-        "label": "reference scalper24 no-trailing e6 slm2.1 TP3 @1%",
+        "label": "reference scalper24 no-trailing e6 slm2.1 TP3",
         "edge": r["fixed_no_bonus_profit"],
         "oos": r.get("oos_fixed_no_bonus_profit"),
         "dd_at_1pct": r["concurrent_risk_max_dd_pct"],
         "net_at_1pct_with_bonus": r["risk_net_profit_with_bonus"],
+        # Fair, deployable comparison basis (no bonus, DD<=50%):
+        "deployable_risk": dep_risk,
+        "deployable_net": dep_net,
+        "deployable_dd": dep_dd,
     }
     bj.write_text(json.dumps(base, indent=2) + "\n")
     log(f"baseline: edge=${base['edge']:,.0f} oos=${(base['oos'] or 0):,.0f} "
-        f"dd@1%={base['dd_at_1pct']:.1f}% net@1%(bonus)=${base['net_at_1pct_with_bonus']:,.0f}")
-    git_push("trail2: baseline recorded")
+        f"dd@1%={base['dd_at_1pct']:.1f}% | DEPLOYABLE risk={dep_risk} "
+        f"net=${dep_net:,.0f} dd={(dep_dd or 0):.1f}%")
+    git_push("trail2: baseline recorded (with deployable risk walk)")
     return base
 
 
@@ -190,9 +220,11 @@ def write_snapshot(baseline: dict | None) -> None:
                 f"sh{'T' if c.get('shared_sl') else 'F'}")
 
     base_line = ("baseline (BEAT THIS): edge ${edge:,.0f} | OOS ${oos:,.0f} | "
-                 "net@1% ${net:,.0f} | DD {dd:.1f}%").format(
+                 "DEPLOYABLE net ${net:,.0f} @ risk {risk} (DD {dd:.1f}%<=50)").format(
         edge=baseline["edge"], oos=baseline["oos"] or 0,
-        net=baseline["net_at_1pct_with_bonus"], dd=baseline["dd_at_1pct"]) \
+        net=baseline.get("deployable_net", 0.0),
+        risk=baseline.get("deployable_risk"),
+        dd=baseline.get("deployable_dd") or 0.0) \
         if baseline else "baseline: (not computed yet)"
     lines = [
         "TRAILING RE-SWEEP v2 (post-#77 honest engine) — LIVE",
@@ -212,8 +244,11 @@ def write_snapshot(baseline: dict | None) -> None:
         cfg = dict(b["config"])
         if dep:
             cfg["risk_per_signal"] = dep["risk"]
-        beats = (dep and baseline
-                 and dep["net"] > baseline["net_at_1pct_with_bonus"])
+        base_dep_net = baseline.get("deployable_net", 0.0) if baseline else 0.0
+        # Sizing-neutral edge is the primary quality signal; deployable net is
+        # the secondary, both vs the deployable reference.
+        beats = bool(dep and baseline and dep["net"] > base_dep_net
+                     and b["fixed_no_bonus_profit"] > baseline["edge"])
         hdr = [
             "# =========================================================================",
             "# BEST TRAILING CONFIG — v2 re-sweep on the HONEST engine (PR #77 fix)",
@@ -226,8 +261,9 @@ def write_snapshot(baseline: dict | None) -> None:
             (f"# DEPLOYABLE: risk {dep['risk']*100:g}% -> net ${dep['net']:,.0f} "
              f"(no-bonus) | DD {dep['dd']:.1f}% (<=50%)" if dep else
              "# DEPLOYABLE risk pending post-pass; risk shown is the 5% sweep cap."),
-            (f"# vs REFERENCE net@1% ${baseline['net_at_1pct_with_bonus']:,.0f}: "
-             + ("BEATS REFERENCE" if beats else "does NOT beat reference yet"))
+            (f"# vs REFERENCE deployable net ${base_dep_net:,.0f} "
+             f"(edge ${baseline['edge']:,.0f}): "
+             + ("BEATS REFERENCE (net + edge)" if beats else "does NOT beat reference yet"))
             if baseline else "# reference baseline pending",
             "# =========================================================================", "",
         ]
@@ -330,19 +366,23 @@ def final_verdict(baseline: dict | None) -> None:
             cands.append((d["net"], d, r))
     cands.sort(key=lambda x: -x[0])
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    base_net = baseline["net_at_1pct_with_bonus"] if baseline else 0.0
+    base_net = baseline.get("deployable_net", 0.0) if baseline else 0.0
+    base_edge = baseline["edge"] if baseline else 0.0
     md = [f"# TRAILING RE-SWEEP v2 — FINAL VERDICT ({stamp} UTC)",
-          "", f"Reference to beat (no-trailing scalper24 @1%): "
-          f"edge ${baseline['edge']:,.0f} | OOS ${(baseline['oos'] or 0):,.0f} | "
-          f"**net ${base_net:,.0f}** | DD {baseline['dd_at_1pct']:.1f}%" if baseline
+          "", f"Reference to beat (no-trailing scalper24, deployable to DD<=50%): "
+          f"edge ${base_edge:,.0f} | OOS ${(baseline['oos'] or 0):,.0f} | "
+          f"**deployable net ${base_net:,.0f}** @ risk {baseline.get('deployable_risk')} "
+          f"(DD {(baseline.get('deployable_dd') or 0):.1f}%)" if baseline
           else "Reference baseline missing!",
+          "", "_Beats ref = higher deployable net AND higher fixed-lot edge._",
           "", "| rank | feed | risk | net (no-bonus) | DD | edge | OOS | beats ref |",
           "|---|---|---|---|---|---|---|---|"]
     for i, (net, d, r) in enumerate(cands[:15], 1):
+        beat = net > base_net and r["fixed_no_bonus_profit"] > base_edge
         md.append(f"| {i} | {r['_archive']} | {d['risk']*100:g}% | ${net:,.0f} | "
                   f"{d['dd']:.1f}% | ${r['fixed_no_bonus_profit']:,.0f} | "
                   f"${(r.get('oos_fixed_no_bonus_profit') or 0):,.0f} | "
-                  f"{'**YES**' if net > base_net else 'no'} |")
+                  f"{'**YES**' if beat else 'no'} |")
     if not cands:
         md.append("| (no deployable trailing candidate passed) | | | | | | | |")
     (OUT / "FINAL_VERDICT_TRAIL2.md").write_text("\n".join(md) + "\n")
