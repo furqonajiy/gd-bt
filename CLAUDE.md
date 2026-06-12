@@ -33,6 +33,15 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   the 24 h lookback so downtime edits/deletions are applied too. For longer
   outages, `tools/telegram_export_to_signals.py --merge-into` syncs the feed
   from a Telegram Desktop HTML export through the same parse pipeline.
+- `tools/live_feed_loop.py` — the **live self-signal feed loop**: one process
+  that refetches the current month (`fetch --months 1`) and regenerates a
+  generator's feed **only when a new CLOSED M1 bar exists** (idle otherwise),
+  with `--gen-start-days`/`--gen-recent-months` rolling the start + narrowing
+  charts in-process for speed. It imports the generator module unmodified, so
+  the live feed stays byte-identical to the backtest archive; logs like `auto`
+  (header, then `[ts] Add Signal …` per new signal). `--family` picks the
+  generator; args after `--` pass through. `fetch` gained `--months N` (default
+  2; live loops use 1 since rolled-over months are immutable).
 - `reporting/excel_report.py` — three-sheet backtest workbook (Summary /
   Daily Breakdown / Per-Entry Detail; the Per-Entry sheet splits ORIGINAL
   signal vs EXECUTED result, realized risk:reward rendered as `1:N`).

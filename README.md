@@ -22,7 +22,7 @@ A signal looks like:
 | `xauusd_trading/` | The engine. Signal parsing, position lifecycle, backtest, MT5 adapter, executor, CLI. |
 | `xauusd_trading/cli.py` | CLI entry point: `python -m xauusd_trading.cli <subcommand>`. |
 | `btcusd_trading/` | BTC self-rejection backtest runner that reuses the XAUUSD engine path. |
-| `tools/` | Research/ops scripts: parameter sweeps, signal generators, explicit-config live/backtest runners, forensic dumper, tick tooling, Telegram-export backfill converter. |
+| `tools/` | Research/ops scripts: parameter sweeps, signal generators, explicit-config live/backtest runners, `live_feed_loop.py` (live self-signal feed loop), forensic dumper, tick tooling, Telegram-export backfill converter. |
 | `listener/` | `telegram_listener.py` — ingests Victor's Telegram channel into `signals.txt` (override with `--signals-file`, e.g. `victor_signals.txt`). The feed tracks the channel's latest state: edits amend the line in place, deletions remove it (each queueing an MT5 amend/revoke), and startup catch-up reconciles changes made while the listener was down. |
 | `tests/` | `pytest` suite (live/backtest parity, reconcile, sizing, listener, etc.). |
 | `docs/` | Setup and operations guides (see below). |
@@ -161,6 +161,26 @@ Two live modes:
 - **Mode A — one-shot `decide --execute`:** manual, signal-by-signal.
 - **Mode B — continuous `auto`:** run the Telegram listener + `auto`
   side-by-side, hands-off.
+
+For **self-generated signals** (no Telegram), `tools/live_feed_loop.py` is the
+live feed side: one process that refetches the current month and regenerates
+the signal feed **only when a new closed M1 bar exists** (idle on weekends /
+daily breaks), narrows to the most recent months and a rolling start window for
+speed, and logs like `auto` — a header, then one `[ts] Add Signal N. ...` line
+per new signal. Point `auto`'s `--signals` at its `*_live.txt` output:
+
+```powershell
+# window 1 — generate (rolls start + narrows charts internally; logs each new signal)
+python tools/live_feed_loop.py --family scalper --interval 30 `
+  --gen-start-days 3 --gen-recent-months 2 --mt5-symbol XAUUSD --mt5-server-offset 3 `
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper_live.txt --session-start 0 --session-end 0
+
+# window 2 — execute that feed (auto_explicit.py with the strategy flags)
+```
+
+`--family` selects the generator (`scalper`/`risk02`/`canonical`/`better`/`zones`);
+everything after `--` is passed verbatim to that generator, so the live feed is
+byte-identical to the backtest archive for the same bars.
 
 Full procedures, sanity checks, and failure recovery are in
 [`docs/OPERATIONS_PLAYBOOK.md`](docs/OPERATIONS_PLAYBOOK.md). MT5 connection
