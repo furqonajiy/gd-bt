@@ -12,21 +12,19 @@
 # MT5 price action (section 2), not ingested from Victor's Telegram channel.
 # (Only run a listener if you also want to mirror Victor's feed in parallel.)
 
-# ===== 2. LIVE SIGNAL GENERATOR (fast: recent window, every 30s) =====
-# Self-signals are not pushed by Telegram; regenerate from the latest CLOSED
-# M1 bars. FAST: only the current+previous month of charts and the last 2
-# days of signals are computed each pass (seconds, not minutes), so it keeps
-# up with the scalper's many signals/day. Window A — run this loop:
-while ($true) {
-  python -m xauusd_trading.cli fetch
-  $m0 = Get-Date -Format yyyyMM
-  $m1 = (Get-Date).AddMonths(-1).ToString('yyyyMM')
-  $start = (Get-Date).AddDays(-2).ToString('yyyy-MM-dd')
-  python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_${m1}_ELEV8.csv data/XAUUSD_M1_${m0}_ELEV8.csv --output generated/self_scalper24_live.txt --start $start --session-start 0 --session-end 0
-  Start-Sleep -Seconds 30
-}
-# (M15 'canonical'/'better' families can instead use tools/auto_self.py, which
-#  regenerates AND executes in one runner.)
+# ===== 2. LIVE SIGNAL GENERATOR (single command; logs each new signal) =====
+# One process, no shell loop. It refetches the current month + regenerates
+# ONLY when a new closed M1 bar exists, narrows to the 2 most recent months
+# and a rolling 3-day window (fast), and prints like `auto`: a header, then
+# one line per NEW signal -- e.g. [ts] Add Signal 75. BUY XAUUSD ...
+python tools/live_feed_loop.py `
+  --family scalper `
+  --interval 30 `
+  --gen-start-days 3 `
+  --gen-recent-months 2 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24_live.txt --session-start 0 --session-end 0
 
 # ===== 3. AUTO EXECUTOR (reads the live feed, places + manages orders) =====
 # --replace-missing-entries false: self feeds are two-sided (hedge close-by
