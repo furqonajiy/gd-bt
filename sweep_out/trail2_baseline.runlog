@@ -1,0 +1,6 @@
+[self-limit] candidates=1 signals=30041 train=20443 validate=9598 (trailing_open pinned 0; DD<= 50.0% concurrent; consistency>= 0.6)
+[self-limit] 1/1
+[self-limit] checkpoint=/home/user/xauusd-backtest/sweep_out/trail2_baseline/results.jsonl
+[self-limit] leaderboard_csv=/home/user/xauusd-backtest/sweep_out/trail2_baseline/leaderboard.csv
+[self-limit] leaderboard_xlsx=/home/user/xauusd-backtest/sweep_out/trail2_baseline/leaderboard.xlsx
+[self-limit] NOTE: deploy a winning config with `--signals /home/user/xauusd-backtest/generated/self_scalper24.txt` (the config dict in top_configs is authoritative).

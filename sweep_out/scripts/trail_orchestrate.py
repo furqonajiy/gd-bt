@@ -55,17 +55,19 @@ _git_lock = threading.Lock()
 
 
 def log(msg: str) -> None:
-    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
-    print(line, flush=True)
-    OUT.mkdir(exist_ok=True)
-    with LOG.open("a") as f:
-        f.write(line + "\n")
+    # Print only: the orchestrator is always launched with stdout redirected to
+    # orchestrator.log, so a direct file write here would double every line.
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
 
 
 def git_push(msg: str) -> None:
     with _git_lock:
-        subprocess.run(["git", "add", "sweep_out", "generated", "data",
-                        "self_cli_trailing.txt"], cwd=ROOT, timeout=120)
+        # Only stage paths that exist -- `git add` aborts and stages NOTHING if
+        # any pathspec is missing (e.g. self_cli_trailing.txt before the first
+        # snapshot), which would silently break every checkpoint push.
+        paths = [p for p in ("sweep_out", "generated", "data", "self_cli_trailing.txt")
+                 if (ROOT / p).exists()]
+        subprocess.run(["git", "add", *paths], cwd=ROOT, timeout=120)
         r = subprocess.run(["git", "commit", "-q", "-m", msg], cwd=ROOT, timeout=120)
         if r.returncode == 0:
             for i in range(4):
