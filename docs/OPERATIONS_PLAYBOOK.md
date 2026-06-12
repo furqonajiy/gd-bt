@@ -269,9 +269,14 @@ still has ≥1 footprint on MT5, never re-places an entry price has already pass
 
 With `--reopen-missing-positions true`, MT5 mirrors the replay: any entry the
 backtest engine still considers **OPEN** that has no live position (e.g. you
-closed it by hand to thin out exposure) is re-opened at market on the next
-cycle — same per-entry comment, the replay's lot, its current effective stop
-(clamped to a broker-legal level), and the leg's target. Re-opening stops on
+closed it by hand to thin out exposure) is restored on the next cycle — same
+per-entry comment, the replay's lot, its current effective stop (clamped to a
+broker-legal level), and the leg's target. Restoration is **price-aware, per
+leg**: at market when the current price is at-or-better than that leg's entry
+(BUY: ask ≤ entry; SELL: bid ≥ entry) or when its stop is already locked
+at/beyond the entry (in-profit protection mode); otherwise a LIMIT at the
+leg's original entry inside the pending window — it never chases a price
+that ran away. Re-opening stops on
 its own once the replay exits the leg. While this flag is on, a signal whose
 replay still holds OPEN legs also survives the registry prune even with zero
 MT5 footprint, so a hand-closed signal can't vanish before it is restored.

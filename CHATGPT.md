@@ -19,6 +19,9 @@ and the code — this file is the required rules.
 - `btcusd_trading/` — BTC backtest reusing the engine path.
 - `tools/` — research/ops scripts, incl. `auto_explicit.py` /
   `backtest_explicit.py` (the full strategy-flag surface).
+- `tools/live_feed_loop.py` — live self-signal feed loop: regenerates a
+  generator's feed only on a new CLOSED M1 bar (parity with the backtest
+  archive), logs like `auto` (header, then `[ts] Add Signal …` per new one).
 - `listener/telegram_listener.py`, `tests/` (pytest, parity-heavy), `docs/`.
   The listener keeps the feed at the channel's latest state (edits amend in
   place, deletions remove + MT5 amend/revoke; startup catch-up reconciles the
@@ -42,9 +45,11 @@ and the code — this file is the required rules.
 - `positions.json` registry entry shape: `{"signal_key", "signal", "date",
   "tz", "equity_at_open", "executed_at"?}`; auto-pruned by `--execute` / `auto`.
 - Live self-heal flags on `auto`: `--replace-missing-entries` (re-place
-  hand-cancelled PENDING limits), `--reopen-missing-positions` (re-open
-  hand-closed positions the replay still holds OPEN; such signals survive the
-  prune). Fresh placement is history-gated (a magic with closed deals never
+  hand-cancelled PENDING limits), `--reopen-missing-positions` (restore
+  hand-closed positions the replay still holds OPEN — price-aware per leg:
+  market only at-or-better than the entry or when the stop is locked beyond
+  it, else a LIMIT at the original entry; never chases. Such signals survive
+  the prune). Fresh placement is history-gated (a magic with closed deals never
   re-places), and the late TP1/TP2 catch-up locks a protective stop instead of
   flattening at market (close only as last resort).
 
