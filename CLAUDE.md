@@ -112,7 +112,13 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   only when intentionally changing behavior, and update the prose docs to
   match.
 - **The executor owns protective trailing SL**, not MT5 native trailing.
-  Don't introduce behavior that fights the executor's `TRADE_ACTION_SLTP`.
+  Don't introduce behavior that fights the executor's `TRADE_ACTION_SLTP`
+  (native trailing can't be set from the Python API anyway). The explicit
+  runners' `--trailing-close-min-step` only throttles how often the modify is
+  sent — the engine still trails continuously. A trailing-open STOP the broker
+  rejects after price crossed the trigger falls back to a tick-confirmed
+  market fill (`mt5_executor_trailing.py`); it never market-fills below the
+  trigger.
 - **`--execute` places real orders with no confirmation prompt** and implies
   `--mt5` + live equity. Be careful in any code path that reaches it.
 

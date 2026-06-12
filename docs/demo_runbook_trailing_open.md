@@ -77,6 +77,10 @@ python tools/auto_explicit.py `
 
 (`--lot 0.5` is `lot_per_entry`, ignored under `sizing-mode risk` — kept so the command is byte-identical to the parity backtest config.)
 
+**Live STOP mechanics to know during the demo:**
+- **STOP-reject market fallback.** If the broker rejects the trailing-open STOP because price crossed the trigger inside the placement race (a BUY STOP must sit above Ask), the executor re-reads the tick and — only when it confirms the trigger was genuinely passed — fills the leg **at market**, keeping the planned stop distance anchored on the actual fill. Look for `FILLED AT MARKET` in the log; the small fill-price gap vs the modeled trigger is expected slippage, not a parity break. It never market-fills below the trigger.
+- **`--trailing-close-min-step N` (optional, default 0).** Broker-traffic throttle: the trailing-close SLTP modify is sent only once the stop has improved by ≥ `N` price units on the broker's current SL (first protective set always goes out). The engine still trails continuously; live SL can lag the model by up to `N`. MT5's native right-click Trailing Stop is **not** an alternative — the Python API cannot set it and it would fight the executor.
+
 ---
 
 ## 4. What gets logged + what to watch daily

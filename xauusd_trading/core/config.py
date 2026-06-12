@@ -91,6 +91,17 @@ class StrategyConfig:
     trailing_open_distance: float = 0.0
     trailing_close_distance: float = 0.0
 
+    # Live-execution throttle for the executor-owned trailing-close stop: send
+    # the MT5 SLTP modify only once the recomputed stop improves on the broker's
+    # current SL by at least this many price units (the first protective set
+    # always goes out). 0.0 = legacy, every improvement is sent. Backtests
+    # ignore it -- the engine still trails continuously -- so the live SL can
+    # lag the modeled stop by up to this amount; that lag is the accepted cost
+    # of far fewer order_send calls on dense trailing configs. MT5's own
+    # terminal-side Trailing Stop is NOT an alternative: the Python API cannot
+    # set it, and it would fight the executor's SLTP ownership.
+    trailing_close_min_step: float = 0.0
+
     # Optional trend-following runner. When enabled and a TP3 trade is already
     # profitable, the strategy can keep it open while EMA trend agrees and protect
     # it with an ATR trailing stop. Disabled by default; enable per run with
