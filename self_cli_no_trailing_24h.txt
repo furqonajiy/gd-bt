@@ -1,0 +1,151 @@
+# =========================================================================
+# BEST SELF-GENERATED 24H — WITHOUT TRAILING (LIVE: updated while 24h batch runs)
+# updated 2026-06-12 05:59:18 UTC | feed: scalper24
+# edge $106,023 (18mo) | OOS $56,211 (6mo) | DD@5% 100.9%
+# VICTOR baseline: edge $29,811 | OOS $14,590 | net $718,941,972 @5%
+# DEPLOYABLE: risk 1% -> net $7,376,950,124 from $5k | DD 38.7% (<=50%)
+# compounded $ are model upper bounds - they rank configs, not forecast money.
+# =========================================================================
+
+# ===== 1. TELEGRAM LISTENER =====
+# NOT USED for self-generated signals — these are generated locally from
+# MT5 price action (section 2), not ingested from Victor's Telegram channel.
+# (Only run a listener if you also want to mirror Victor's feed in parallel.)
+
+# ===== 2. LIVE SIGNAL GENERATOR (fast: recent window, every 30s) =====
+# Self-signals are not pushed by Telegram; regenerate from the latest CLOSED
+# M1 bars. FAST: only the current+previous month of charts and the last 2
+# days of signals are computed each pass (seconds, not minutes), so it keeps
+# up with the scalper's many signals/day. Window A — run this loop:
+while ($true) {
+  python -m xauusd_trading.cli fetch
+  $m0 = Get-Date -Format yyyyMM
+  $m1 = (Get-Date).AddMonths(-1).ToString('yyyyMM')
+  $start = (Get-Date).AddDays(-2).ToString('yyyy-MM-dd')
+  python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_${m1}_ELEV8.csv data/XAUUSD_M1_${m0}_ELEV8.csv --output generated/self_scalper24_live.txt --start $start --session-start 0 --session-end 0
+  Start-Sleep -Seconds 30
+}
+# (M15 'canonical'/'better' families can instead use tools/auto_self.py, which
+#  regenerates AND executes in one runner.)
+
+# ===== 3. AUTO EXECUTOR (reads the live feed, places + manages orders) =====
+# --replace-missing-entries false: self feeds are two-sided (hedge close-by
+# re-entry risk). Window B, runs beside the generator loop above.
+python tools/auto_explicit.py `
+  --signals generated/self_scalper24_live.txt `
+  --positions-json positions_self_no_trailing_24h.json `
+  --watch-interval 15 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --replace-missing-entries false `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --trailing-close-after-stage 0 `
+  --initial-capital 5000
+
+# ===== 4. PARITY BACKTEST (regenerate full history, then backtest) =====
+# STEP 4a — (re)generate the FULL static archive generated/self_scalper24.txt
+# from ALL chart history so the backtest reflects the latest data. This is the
+# 18-month feed (slow, ~15s) — DIFFERENT from the live 2-day feed in section 2.
+# Run this whenever you want a fresh backtest:
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24.txt --start 2025-01-01 --session-start 0 --session-end 0
+# STEP 4b — backtest that freshly-regenerated archive (full history):
+python tools/backtest_explicit.py `
+  --signals generated/self_scalper24.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --output-dir reports/SELF_NO_TRAILING_24H `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --trailing-close-after-stage 0 `
+  --initial-capital 5000 `
+  --start-date 2025-01-01
+
+# ===== 5. RECENT BACKTEST (from 2026-06-01 only; quick current-regime check) =====
+python tools/backtest_explicit.py `
+  --signals generated/self_scalper24.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --output-dir reports/SELF_NO_TRAILING_24H_FROM_JUNE `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --trailing-close-after-stage 0 `
+  --initial-capital 5000 `
+  --start-date 2026-06-01
