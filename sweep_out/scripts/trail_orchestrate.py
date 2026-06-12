@@ -76,8 +76,34 @@ def log(msg: str) -> None:
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
 
 
+CHURN_GLOBS = ["sweep_out/trail2_*/results.jsonl", "sweep_out/trail2_*/leaderboard.csv",
+               "sweep_out/*.runlog", "sweep_out/orchestrator.log",
+               "sweep_out/HEARTBEAT.txt", "sweep_out/BEST_TRAILING_V2.txt",
+               "sweep_out/trail2_postpass.jsonl"]
+
+
+def _churn_files() -> list[str]:
+    files = []
+    for g in CHURN_GLOBS:
+        files += [str(p.relative_to(ROOT)) for p in ROOT.glob(g)]
+    return files
+
+
+def _set_skip(files: list[str], skip: bool) -> None:
+    if not files:
+        return
+    flag = "--skip-worktree" if skip else "--no-skip-worktree"
+    subprocess.run(["git", "update-index", flag, *files], cwd=ROOT, timeout=60)
+
+
 def git_push(msg: str) -> None:
+    """Commit + push. The continuously-appended sweep artifacts are kept
+    skip-worktree so the stop-hook sees a clean tree between checkpoints; here we
+    un-skip just long enough to stage+commit, then re-skip. Resume stays intact
+    (the files are still committed every cycle) while the working tree stops
+    churning at turn-end."""
     with _git_lock:
+        _set_skip(_churn_files(), False)
         # Only stage paths that exist -- `git add` aborts and stages NOTHING if
         # any pathspec is missing (e.g. self_cli_trailing.txt before the first
         # snapshot), which would silently break every checkpoint push.
@@ -89,8 +115,9 @@ def git_push(msg: str) -> None:
             for i in range(4):
                 if subprocess.run(["git", "push", "-q", "origin", BRANCH],
                                   cwd=ROOT, timeout=180).returncode == 0:
-                    return
+                    break
                 time.sleep(2 ** (i + 1))
+        _set_skip(_churn_files(), True)  # re-hide (re-glob covers new archives)
 
 
 # ---------------------------------------------------------------- step 0: feeds
