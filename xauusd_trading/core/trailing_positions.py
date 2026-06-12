@@ -61,15 +61,26 @@ def _set_first_fill(position: Position, entry: Entry, bar: Bar, config: Strategy
 
 def _fill_entry_at_market_side(position: Position, entry: Entry, fill_price: float, bar: Bar,
                                config: StrategyConfig) -> None:
+    side = position.signal.side
+    # Capture the leg's planned risk distance BEFORE entry_price is overwritten:
+    # for a shared-SL leg that is the gap from its planned entry to the shared
+    # level (each leg keeps its own distance, the "per-leg risk sizing" shared_sl
+    # promises); otherwise it is the common base_stop_distance.
+    if position.shared_sl_level is not None:
+        leg_stop_distance = abs(entry.entry_price - position.shared_sl_level)
+    else:
+        leg_stop_distance = position.base_stop_distance
     entry.status = "OPEN"
     entry.fill_time = bar.time
     entry.entry_price = fill_price
-    # Shared-SL legs keep the one common level; otherwise re-anchor the stop to
-    # the actual fill price (preserving base_stop_distance through slippage).
-    if position.shared_sl_level is not None:
-        entry.initial_sl = position.shared_sl_level
-    else:
-        entry.initial_sl = initial_stop_for_entry(position.signal.side, fill_price, position.base_stop_distance)
+    # Trailing-open fills land away from the planned entry (a BUY fills on the
+    # rebound, often BELOW its planned price), so the frozen shared level can end
+    # up on the WRONG side of the fill -- above a BUY fill -- which is not a stop
+    # at all. The live executor never sends that: it anchors each leg's stop at
+    # (fill -/+ its planned distance to the shared level). Mirror that here, for
+    # both shared and per-entry stops, so backtest == live and we never book a
+    # phantom exit at a level the position opened already beyond.
+    entry.initial_sl = initial_stop_for_entry(side, fill_price, leg_stop_distance)
     _set_first_fill(position, entry, bar, config)
 
 

@@ -53,6 +53,16 @@ The executor uses broker STOP orders to model the virtual trailing entry:
 - SELL trailing-open: after Bid moves at least the distance above the planned
   entry, the executor places/trails a `SELL_STOP` at `Bid - distance`.
 
+**Trailing-open stop with `--shared-sl`.** The SL on each trailing-open leg is
+anchored at that leg's planned distance to the shared level, measured from the
+**actual trigger/fill** — not the frozen shared price. A deep dive can fill a
+BUY leg below the shared level, where the shared price would sit *above* the
+fill (an illegal stop MT5 rejects, and a phantom instant-exit in the backtest);
+anchoring from the fill keeps the stop correctly below it and makes the
+backtest match what the executor places. The pending-STOP trail uses the same
+rule, so trailing a stop past the shared level no longer floods
+`Invalid stops` rejections.
+
 **STOP-reject market fallback.** Between the cycle tick and `order_send` the
 market can cross the trigger, making the STOP invalid (a BUY STOP must sit
 above Ask) — the broker rejects it. The virtual trailing entry has already

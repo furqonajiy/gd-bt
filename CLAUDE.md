@@ -67,7 +67,11 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
 - **Config.** `core/config.py` `DEFAULT_CONFIG` is the validated
   DD40-compatible provider contract. Trailing-open / trailing-close /
   trend-runner and the newer research modes — `shared_sl` (one stop level
-  for all entries, anchored on entry #1, with per-leg risk sizing),
+  for all entries, anchored on entry #1, with per-leg risk sizing; when a
+  leg is filled by **trailing-open**, its stop is re-anchored to that leg's
+  planned distance to the shared level taken from the actual fill — never the
+  frozen shared price, which a deep trailing fill can leave on the wrong side
+  of the entry — so backtest matches what the executor sends live),
   `per_entry_targets` (a per-entry tuple from `{TP1,TP2,TP3,RUN}`; `RUN`
   legs trail past `runner_trail_from` by `trailing_close_distance`), and
   `bep_after_move` (per-leg break-even+ once a leg is N price units in

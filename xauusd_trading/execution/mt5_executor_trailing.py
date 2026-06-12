@@ -375,11 +375,20 @@ class Mt5Executor(_Tp2Mt5Executor):
             improves = trigger < current_price if engine_pos.signal.side == "BUY" else trigger > current_price
             if not improves:
                 continue
-            dynamic_sl = (
-                engine_pos.shared_sl_level
-                if engine_pos.shared_sl_level is not None
-                else self._sl_from_fill(engine_pos.signal.side, trigger, engine_pos.base_stop_distance)
-            )
+            # Anchor the trailed pending stop at the leg's planned distance BELOW
+            # (BUY) / ABOVE (SELL) the new trigger -- never the frozen shared
+            # level. As the trigger trails past the shared level, pinning the SL
+            # to that level puts it on the wrong side of the trigger and the
+            # broker rejects every modify with "Invalid stops". For shared_sl the
+            # planned distance is (planned entry - shared level); placement uses
+            # exactly this, so trailing now stays consistent with the first send.
+            if engine_pos.shared_sl_level is not None:
+                leg_stop_distance = self._planned_stop_distance(
+                    engine_pos.signal.side, float(entry.entry_price), engine_pos.shared_sl_level
+                )
+            else:
+                leg_stop_distance = engine_pos.base_stop_distance
+            dynamic_sl = self._sl_from_fill(engine_pos.signal.side, trigger, leg_stop_distance)
             req = {
                 "action": modify_action,
                 "order": order.ticket,

@@ -110,7 +110,10 @@ Common flag groups (added to most subcommands):
 - **Research strategy modes (explicit runners only, default OFF):** the full
   flag surface in `tools/backtest_explicit.py` / `tools/auto_explicit.py`
   adds `--shared-sl` (all entries share one stop anchored on entry #1, with
-  per-leg risk sizing), `--entry-targets T1,T2,...` (per-entry targets from
+  per-leg risk sizing; a leg filled by trailing-open re-anchors its stop to
+  the same planned distance taken from the actual fill, so a deep trailing
+  fill never inherits a stop on the wrong side of the entry),
+  `--entry-targets T1,T2,...` (per-entry targets from
   `{TP1,TP2,TP3,RUN}`, one per entry; `RUN` legs trail past
   `--runner-trail-from {TP1,TP2,TP3}` by `--trailing-close-distance`),
   `--bep-after-move` (per-leg break-even+ once a leg is N price units in
