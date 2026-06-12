@@ -4,3 +4,4 @@
 [self-limit] candidates=110 signals=826 train=674 validate=152 (trailing_open pinned 0; DD<= 50.0% concurrent; consistency>= 0.6)
 [self-limit] 40/110
 [self-limit] 60/110
+[self-limit] candidates=110 signals=826 train=674 validate=152 (trailing_open pinned 0; DD<= 50.0% concurrent; consistency>= 0.6)
