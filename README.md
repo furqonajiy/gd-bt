@@ -100,7 +100,13 @@ Common flag groups (added to most subcommands):
 - **Research toggles (default OFF):** `--trailing-open-distance`,
   `--trailing-close-distance`, `--trend-runner` (+ `--trend-runner-ema-fast`,
   `--trend-runner-ema-slow`, `--trend-runner-atr-period`,
-  `--trend-runner-atr-multiplier`).
+  `--trend-runner-atr-multiplier`). Live trailing-open uses broker STOP
+  orders re-checked every cycle; if the broker rejects a STOP because price
+  crossed the trigger in the placement race, the executor confirms with a
+  fresh tick and fills that leg at market (never below the trigger).
+  Trailing-close is executor-owned Python (`TRADE_ACTION_SLTP`), not MT5
+  native trailing (the API can't set it); the explicit runners'
+  `--trailing-close-min-step` throttles how often the SL modify is sent.
 - **Research strategy modes (explicit runners only, default OFF):** the full
   flag surface in `tools/backtest_explicit.py` / `tools/auto_explicit.py`
   adds `--shared-sl` (all entries share one stop anchored on entry #1, with

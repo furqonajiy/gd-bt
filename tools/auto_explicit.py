@@ -96,6 +96,10 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Virtual trailing-open entry distance in price units; 0 disables.")
     strategy.add_argument("--trailing-close-distance", type=_positive_float, required=True,
                           help="Trailing-close (ratcheting) stop distance in price units; 0 disables.")
+    strategy.add_argument("--trailing-close-min-step", type=_positive_float, default=0.0,
+                          help="Live-only broker-traffic throttle: send the trailing-close SL modify "
+                               "to MT5 only when the stop improves by at least this many price units "
+                               "(0 = send every improvement). The engine still trails continuously.")
 
     scale = p.add_argument_group("optional scale-out exit (default off)")
     scale.add_argument("--scale-out-at-tp1", choices=["true", "false"], default="false",
@@ -190,6 +194,7 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         tp3_lock_target=args.tp3_lock_target,
         trailing_open_distance=args.trailing_open_distance,
         trailing_close_distance=args.trailing_close_distance,
+        trailing_close_min_step=args.trailing_close_min_step,
         scale_out_at_tp1=_bool_text(args.scale_out_at_tp1),
         scale_out_at_tp2=_bool_text(args.scale_out_at_tp2),
         bep_after_tp1=_bool_text(args.bep_after_tp1),

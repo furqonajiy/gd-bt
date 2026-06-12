@@ -61,7 +61,10 @@ and the code — this file is the required rules.
   `test_intrabar_*lock*`, `test_live_wall_clock_expiry` green. Change them only
   on an intentional behavior change, and update the prose docs to match.
 - The executor owns protective trailing SL via `TRADE_ACTION_SLTP`; do not add
-  behavior that fights it.
+  behavior that fights it (MT5 native trailing is unsettable from the API
+  anyway). `--trailing-close-min-step` only throttles how often the modify is
+  sent. A trailing-open STOP rejected after price crossed the trigger falls
+  back to a market fill — never below the trigger.
 - `--execute` places real orders with no confirmation and implies `--mt5` plus
   live equity. Be careful in any path that reaches it.
 - Lot sizing floors to `minimum_lot` (0.01), never 0, for a sizeable signal

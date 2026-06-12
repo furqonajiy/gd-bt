@@ -183,6 +183,7 @@ class Mt5Executor(_Tp2Mt5Executor):
         place_failures: list[tuple[int, float, str]] = []
         placed_tickets: list[int] = []
         armed_details: list[dict] = []
+        market_fill_indices: list[int] = []
         for order in plan.orders:
             entry_key = signal_entry_key(signal.signal_key, order.entry_index)
             trigger = trigger_prices[order.entry_index]
@@ -209,13 +210,25 @@ class Mt5Executor(_Tp2Mt5Executor):
             res = self.mt5.order_send(request)
             success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
             self._log_order_send(signal.signal_key, "place_trailing_open_stop", request, res, success=success)
-            if res is None:
-                reason = str(self.mt5.last_error())
-                log.actions.append(f"  #{order.entry_index}: FAILED order_send returned None: {reason}")
-                place_failures.append((order.entry_index, trigger, reason))
-                break
-            if res.retcode != self.mt5.TRADE_RETCODE_DONE:
-                reason = f"retcode={res.retcode} comment={res.comment!r}"
+            if not success:
+                reason = (f"order_send returned None: {self.mt5.last_error()}" if res is None
+                          else f"retcode={res.retcode} comment={res.comment!r}")
+                # Race window: between this cycle's tick and order_send the market
+                # can cross the trigger, making the STOP invalid (a BUY STOP must
+                # sit above Ask). The virtual trailing entry HAS fired in that
+                # case -- the backtest fills it at the trigger -- so dropping the
+                # leg would diverge from the modeled lifecycle. Fall back to a
+                # market DEAL, but only when a fresh tick confirms the trigger
+                # was genuinely passed; an early market fill below the trigger
+                # would open a trade the model never had.
+                if self._market_fill_passed_trailing_open(
+                        signal, order, trigger, rounded_lots[order.entry_index],
+                        stop_distance, float(plan.final_target_price),
+                        magic, comment, digits, log, reason):
+                    market_fill_indices.append(order.entry_index)
+                    log.placed += 1
+                    log.placed_entry_indices.append(order.entry_index)
+                    continue
                 log.actions.append(f"  #{order.entry_index}: FAILED {reason}")
                 place_failures.append((order.entry_index, trigger, reason))
                 break
@@ -243,15 +256,91 @@ class Mt5Executor(_Tp2Mt5Executor):
                 )
 
         if place_failures:
-            if placed_tickets:
-                for ticket in placed_tickets:
-                    if self._cancel_ticket(ticket, signal.signal_key, "rollback_trailing_open_place"):
-                        log.cancelled += 1
-                        log.actions.append(f"  Rolled back partial trailing-open placement ticket={ticket} ({signal.signal_key})")
-                log.placed = 0
-                log.placed_entry_indices = []
-            log.actions.append(f"Signal {signal.signal_key}: trailing-open placement failed; no registry entry should be recorded.")
+            for ticket in placed_tickets:
+                if self._cancel_ticket(ticket, signal.signal_key, "rollback_trailing_open_place"):
+                    log.cancelled += 1
+                    log.actions.append(f"  Rolled back partial trailing-open placement ticket={ticket} ({signal.signal_key})")
+            # A market-fallback fill is a real position -- it cannot be rolled
+            # back like a pending, so it stays counted (the registry must record
+            # the signal or the position would be orphaned and pruned).
+            log.placed = len(market_fill_indices)
+            log.placed_entry_indices = list(market_fill_indices)
+            if market_fill_indices:
+                log.actions.append(
+                    f"Signal {signal.signal_key}: partial trailing-open placement -- "
+                    f"{len(market_fill_indices)} leg(s) already filled at market are kept "
+                    f"and will be managed; un-filled pending STOPs were rolled back."
+                )
+            else:
+                log.actions.append(f"Signal {signal.signal_key}: trailing-open placement failed; no registry entry should be recorded.")
         return log
+
+    def _market_fill_passed_trailing_open(self, signal, order, trigger: float, lot: float,
+                                          stop_distance: float, tp: float, magic: int,
+                                          comment: str, digits: int, log: ExecutionLog,
+                                          reject_reason: str) -> bool:
+        """Open a rejected trailing-open leg at market -- only if the trigger was passed.
+
+        Re-reads the tick: for a BUY the fallback fires only when Ask >= trigger
+        (SELL: Bid <= trigger), i.e. the price the virtual trailing entry models as
+        the fill has already traded through. The market fill price is then at or a
+        few points beyond the modeled trigger -- close to backtest parity -- and the
+        SL keeps the leg's planned stop DISTANCE anchored on the actual fill, the
+        same rule a triggered STOP would have applied.
+        """
+        tick = self.mt5.symbol_info_tick(self.symbol)
+        if tick is None or tick.bid <= 0 or tick.ask <= 0:
+            return False
+        if signal.side == "BUY":
+            if float(tick.ask) < trigger:
+                return False
+            order_type, price = self.mt5.ORDER_TYPE_BUY, float(tick.ask)
+        else:
+            if float(tick.bid) > trigger:
+                return False
+            order_type, price = self.mt5.ORDER_TYPE_SELL, float(tick.bid)
+        entry_key = signal_entry_key(signal.signal_key, order.entry_index)
+        request = {
+            "action":       self.mt5.TRADE_ACTION_DEAL,
+            "symbol":       self.symbol,
+            "volume":       lot,
+            "type":         order_type,
+            "price":        round(price, digits),
+            "sl":           round(self._sl_from_fill(signal.side, price, stop_distance), digits),
+            "tp":           round(tp, digits),
+            "magic":        magic,
+            "comment":      comment,
+            "deviation":    self.CLOSE_DEVIATION_POINTS,
+            "type_filling": self._market_fill_mode(),
+        }
+        res = self.mt5.order_send(request)
+        success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+        self._log_order_send(signal.signal_key, "market_fill_trailing_open", request, res, success=success)
+        if not success:
+            failure = (str(self.mt5.last_error()) if res is None
+                       else f"retcode={res.retcode} comment={res.comment!r}")
+            log.actions.append(
+                f"  {entry_key}: market fallback after STOP reject ({reject_reason}) "
+                f"also FAILED: {failure}"
+            )
+            return False
+        ticket = int(getattr(res, "order", 0) or 0)
+        log.actions.append(
+            f"  {entry_key}: trailing-open STOP rejected ({reject_reason}) after price "
+            f"crossed the trigger {trigger:g}; FILLED AT MARKET ticket={ticket} "
+            f"@ {request['price']:g} lot={request['volume']} "
+            f"SL={request['sl']:g} TP={request['tp']:g}"
+        )
+        # Pre-register the reconcile dedup key: the fill was just announced here,
+        # so the next manage cycle's PENDING->OPEN reconcile must not re-announce it.
+        self._session_announced_triggers.add(f"{signal.signal_key}|{order.entry_index}")
+        if self.notifier is not None:
+            self.notifier.trailing_open_filled(
+                signal_key=signal.signal_key, side=signal.side,
+                entry_index=order.entry_index, ticket=ticket,
+                fill_price=float(request["price"]),
+            )
+        return True
 
     def _trail_pending_open_orders(self, engine_pos, config) -> ExecutionLog:
         distance = float(getattr(config, "trailing_open_distance", 0.0) or 0.0)
@@ -355,6 +444,10 @@ class Mt5Executor(_Tp2Mt5Executor):
         signal_key = engine_pos.signal.signal_key
         digits = self.mt5.symbol_info(self.symbol).digits
         tolerance = 10 ** (-digits)
+        # Broker-traffic throttle: with a min-step the modify is sent only once
+        # the recomputed stop has gained at least that much on the broker's
+        # current SL. The first protective set (current_sl <= 0) always goes out.
+        min_step = max(tolerance, float(getattr(config, "trailing_close_min_step", 0.0) or 0.0))
         locked: list[int] = []
         failed: list[tuple[int, str]] = []
         for p, entry in self._position_entry_pairs(engine_pos, magic):
@@ -364,8 +457,8 @@ class Mt5Executor(_Tp2Mt5Executor):
             current_sl = float(getattr(p, "sl", 0.0) or 0.0)
             improves = (
                     current_sl <= 0
-                    or (engine_pos.signal.side == "BUY" and target_sl > current_sl + tolerance)
-                    or (engine_pos.signal.side == "SELL" and target_sl < current_sl - tolerance)
+                    or (engine_pos.signal.side == "BUY" and target_sl > current_sl + min_step)
+                    or (engine_pos.signal.side == "SELL" and target_sl < current_sl - min_step)
             )
             if not improves:
                 continue

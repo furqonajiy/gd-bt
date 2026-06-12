@@ -53,12 +53,29 @@ The executor uses broker STOP orders to model the virtual trailing entry:
 - SELL trailing-open: after Bid moves at least the distance above the planned
   entry, the executor places/trails a `SELL_STOP` at `Bid - distance`.
 
+**STOP-reject market fallback.** Between the cycle tick and `order_send` the
+market can cross the trigger, making the STOP invalid (a BUY STOP must sit
+above Ask) — the broker rejects it. The virtual trailing entry has already
+fired at that point (the backtest fills it at the trigger), so the executor
+re-reads the tick and, **only when it confirms the trigger was passed**
+(BUY: Ask ≥ trigger / SELL: Bid ≤ trigger), opens the leg **at market** with
+the planned stop distance anchored on the actual fill. Any other rejection
+keeps the all-or-nothing failure path — the executor never market-fills below
+the trigger, because that would open a trade the model never had.
+
 Protective trailing stop is also owned by the executor, not MT5's terminal
 native trailing feature. Each manage/Auto cycle recomputes the engine stop and
 moves MT5 SL with `TRADE_ACTION_SLTP` when needed. Leave MT5's right-click
 **Trailing Stop** option **OFF** for these positions. If native trailing is on,
 the terminal and executor can fight over the SL, and the backtest models only the
-executor trail.
+executor trail. (Native trailing is not an option anyway: it is a
+terminal-client feature the MetaTrader5 Python API cannot set, and it dies the
+moment the terminal disconnects.) To cut broker traffic on dense trailing
+configs, `--trailing-close-min-step N` sends the SLTP modify only once the
+recomputed stop improves on the broker's current SL by at least `N` price
+units (the first protective set always goes out; 0 = send every improvement).
+The engine still trails continuously, so the live SL can lag the modeled stop
+by up to `N`.
 
 Expected live gap: executor SL can lag the backtest by up to one closed M1 bar +
 the watch interval, plus broker slippage/stop-level clamping.
