@@ -1,0 +1,1 @@
+[self-limit] candidates=110 signals=7856 train=5423 validate=2433 (trailing_open pinned 0; DD<= 50.0% concurrent; consistency>= 0.6)
