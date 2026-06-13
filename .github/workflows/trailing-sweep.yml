@@ -12,7 +12,7 @@ name: trailing-sweep-v2
 #     so the sweep advances continuously with zero idle/no-op runs.
 #   * The moment all 16 archives are DONE it `gh workflow disable`s itself, so
 #     it stops consuming Actions minutes completely.
-#   * A sparse 3-hourly schedule is only a safety net: it re-starts a chain that
+#   * A sparse 2-hourly schedule is only a safety net: it re-starts a chain that
 #     died abnormally, and is a near-instant no-op (then self-disable) once done.
 #
 # Activation note: GitHub only fires schedule/workflow_dispatch from the DEFAULT
@@ -22,7 +22,7 @@ name: trailing-sweep-v2
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "0 */3 * * *"   # safety net only; self-disables on completion
+    - cron: "0 */2 * * *"   # safety net only; self-disables on completion
 
 permissions:
   contents: write   # push sweep checkpoints back to the research branch
