@@ -1,6 +1,6 @@
 # =========================================================================
 # BEST TRAILING CONFIG — v2 re-sweep on the HONEST engine (PR #77 fix)
-# updated 2026-06-13 13:31:58 UTC | feed: risk02_tight24 | sweep still running
+# updated 2026-06-13 13:36:59 UTC | feed: risk02_tight24 | sweep still running
 # edge $15,124 (fixed-lot, 18mo) | OOS $9,557 (6mo) | DD@5% 46.6%
 # DEPLOYABLE risk pending post-pass; risk shown is the 5% sweep cap.
 # vs REFERENCE deployable net $0 (edge $107,400): does NOT beat reference yet
