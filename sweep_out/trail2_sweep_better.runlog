@@ -6,3 +6,7 @@
 [self-limit] 60/110
 [self-limit] 80/110
 [self-limit] 100/110
+[self-limit] checkpoint=/home/user/xauusd-backtest/sweep_out/trail2_sweep_better/results.jsonl
+[self-limit] leaderboard_csv=/home/user/xauusd-backtest/sweep_out/trail2_sweep_better/leaderboard.csv
+[self-limit] leaderboard_xlsx=/home/user/xauusd-backtest/sweep_out/trail2_sweep_better/leaderboard.xlsx
+[self-limit] NOTE: deploy a winning config with `--signals /home/user/xauusd-backtest/generated/self_better.txt` (the config dict in top_configs is authoritative).
