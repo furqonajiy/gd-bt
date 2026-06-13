@@ -1,27 +1,27 @@
 TRAILING RE-SWEEP v2 (post-#77 honest engine) — LIVE
-updated 2026-06-12 21:59:31 UTC | archives done 0/16 | configs 129
+updated 2026-06-13 12:01:30 UTC | archives done 4/16 | configs 459
 baseline (BEAT THIS): edge $107,400 | OOS $57,521 | DEPLOYABLE net $0 @ risk None (DD 0.0%<=50)
 
 == TOP 10 GATE-PASSERS (DD<=50 @5%, consistency, OOS>0) by OOS ==
+  zones_dense        edge=$     1,378 oos=$    1,454 dd@5%= 44.6% e4 slm1.45 TP3 to1.0 tc8.0 shF
   zones              edge=$     1,518 oos=$    1,288 dd@5%= 42.8% e3 slm2.3 TP1 to1.0 tc5.0 shT
+  zones_widesl       edge=$     1,511 oos=$    1,275 dd@5%= 39.7% e3 slm2.3 TP1 to1.0 tc5.0 shT
   zones              edge=$     1,712 oos=$    1,244 dd@5%= 18.8% e4 slm1.45 TP3 to1.0 tc8.0 shF
+  zones_widesl       edge=$     1,683 oos=$    1,234 dd@5%= 18.2% e4 slm1.45 TP3 to1.0 tc8.0 shF
+  zones_dense        edge=$     1,499 oos=$    1,231 dd@5%= 36.2% e3 slm1.45 TP1 to1.0 tc2.0 shT
+  zones_dense        edge=$     1,582 oos=$    1,223 dd@5%= 46.2% e3 slm2.3 TP1 to1.0 tc5.0 shT
+  zones_dense        edge=$     1,712 oos=$    1,151 dd@5%= 39.5% e3 slm1.15 TP2 to1.0 tc3.0 shF
   zones              edge=$     1,513 oos=$      962 dd@5%= 22.2% e3 slm1.45 TP1 to1.0 tc2.0 shT
-  zones              edge=$       742 oos=$      905 dd@5%= 48.0% e3 slm2.0 TP3 to1.0 tc8.0 shT
-  zones              edge=$       703 oos=$      532 dd@5%= 22.3% e1 slm2.3 TP2 to1.0 tc2.0 shF
-  zones              edge=$       615 oos=$      443 dd@5%= 16.9% e3 slm1.75 TP3 to1.0 tc3.0 shT
-  zones_strict       edge=$       362 oos=$      418 dd@5%= 24.3% e4 slm2.0 TP3 to2.0 tc8.0 shF
-  zones_strict       edge=$       544 oos=$      371 dd@5%= 11.5% e4 slm1.45 TP3 to1.0 tc8.0 shF
-  zones_strict       edge=$       461 oos=$      284 dd@5%= 11.6% e3 slm1.45 TP1 to1.0 tc2.0 shT
-  zones_strict       edge=$       224 oos=$      134 dd@5%=  7.8% e1 slm2.3 TP2 to1.0 tc2.0 shF
+  zones_widesl       edge=$     1,487 oos=$      953 dd@5%= 20.6% e3 slm1.45 TP1 to1.0 tc2.0 shT
 
 == TOP 10 BY RAW EDGE ==
-  zones              edge=$     1,712 oos=$    1,244 dd@5%= 18.8% e4 slm1.45 TP3 to1.0 tc8.0 shF
-  zones              edge=$     1,518 oos=$    1,288 dd@5%= 42.8% e3 slm2.3 TP1 to1.0 tc5.0 shT
-  zones              edge=$     1,513 oos=$      962 dd@5%= 22.2% e3 slm1.45 TP1 to1.0 tc2.0 shT
-  zones              edge=$     1,148 oos=$    1,652 dd@5%= 97.4% e4 slm1.61 TP1 to3.0 tc5.0 shF
-  zones              edge=$     1,143 oos=$    1,636 dd@5%= 76.0% e4 slm2.0 TP3 to2.0 tc8.0 shF
-  zones              edge=$       917 oos=$    1,172 dd@5%= 72.5% e4 slm1.61 TP2 to2.0 tc3.0 shT
-  zones              edge=$       742 oos=$      905 dd@5%= 48.0% e3 slm2.0 TP3 to1.0 tc8.0 shT
-  zones              edge=$       703 oos=$      532 dd@5%= 22.3% e1 slm2.3 TP2 to1.0 tc2.0 shF
-  zones              edge=$       615 oos=$      443 dd@5%= 16.9% e3 slm1.75 TP3 to1.0 tc3.0 shT
-  zones_strict       edge=$       544 oos=$      371 dd@5%= 11.5% e4 slm1.45 TP3 to1.0 tc8.0 shF
+  better             edge=$    18,194 oos=$    4,231 dd@5%= 85.4% e6 slm2.1 TP3 to0.0 tc8.0 shF
+  better_wide        edge=$    12,520 oos=$   -1,025 dd@5%= 95.6% e6 slm2.1 TP3 to0.0 tc8.0 shF
+  better_wide        edge=$    10,965 oos=$    8,327 dd@5%= 76.6% e3 slm1.45 TP1 to1.0 tc2.0 shT
+  better             edge=$    10,209 oos=$    7,784 dd@5%= 73.8% e3 slm1.45 TP1 to1.0 tc2.0 shT
+  better_wide        edge=$     9,985 oos=$    7,874 dd@5%= 74.5% e3 slm2.3 TP1 to1.0 tc5.0 shT
+  better             edge=$     9,483 oos=$    7,401 dd@5%= 73.0% e3 slm2.3 TP1 to1.0 tc5.0 shT
+  better_wide        edge=$     7,685 oos=$    7,202 dd@5%= 93.1% e4 slm1.15 TP3 to2.0 tc0.0 shF
+  better             edge=$     7,612 oos=$    7,076 dd@5%= 80.8% e4 slm1.15 TP3 to2.0 tc0.0 shF
+  better_wide        edge=$     7,225 oos=$    5,973 dd@5%= 92.3% e3 slm1.3 TP3 to2.0 tc8.0 shF
+  better             edge=$     6,930 oos=$    5,879 dd@5%= 93.9% e3 slm1.3 TP3 to2.0 tc8.0 shF
