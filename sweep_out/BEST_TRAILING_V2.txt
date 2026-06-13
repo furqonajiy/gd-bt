@@ -1,5 +1,5 @@
 TRAILING RE-SWEEP v2 (post-#77 honest engine) — LIVE
-updated 2026-06-13 19:07:39 UTC | archives done 12/16 | configs 1464
+updated 2026-06-13 19:22:44 UTC | archives done 14/16 | configs 1527
 baseline (BEAT THIS): edge $107,400 | OOS $57,521 | DEPLOYABLE net $0 @ risk None (DD 0.0%<=50)
 
 == TOP 10 GATE-PASSERS (DD<=50 @5%, consistency, OOS>0) by OOS ==
