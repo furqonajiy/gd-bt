@@ -1,7 +1,7 @@
 # =========================================================================
 # BEST TRAILING CONFIG — v2 re-sweep on the HONEST engine (PR #77 fix)
-# updated 2026-06-12 21:59:31 UTC | feed: zones | sweep still running
-# edge $1,518 (fixed-lot, 18mo) | OOS $1,288 (6mo) | DD@5% 42.8%
+# updated 2026-06-13 07:37:40 UTC | feed: zones_dense | sweep still running
+# edge $1,378 (fixed-lot, 18mo) | OOS $1,454 (6mo) | DD@5% 44.6%
 # DEPLOYABLE risk pending post-pass; risk shown is the 5% sweep cap.
 # vs REFERENCE deployable net $0 (edge $107,400): does NOT beat reference yet
 # =========================================================================
@@ -23,13 +23,13 @@ python tools/live_feed_loop.py `
   --gen-recent-months 2 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
-  -- --m1-charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_zones_live.txt
+  -- --m1-charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_zones_dense_live.txt --swing-len 3
 
 # ===== 3. AUTO EXECUTOR (reads the live feed, places + manages orders) =====
 # --replace-missing-entries false: self feeds are two-sided (hedge close-by
 # re-entry risk). Window B, runs beside the generator loop above.
 python tools/auto_explicit.py `
-  --signals generated/self_zones_live.txt `
+  --signals generated/self_zones_dense_live.txt `
   --positions-json positions_self_trailing.json `
   --watch-interval 15 `
   --mt5-symbol XAUUSD `
@@ -43,39 +43,38 @@ python tools/auto_explicit.py `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3.0 `
-  --entries 3 `
-  --entry-ladder signal_range_3 `
-  --entry-sl-gap 2.0 `
-  --activation-delay 10 `
-  --pending-expiry 630 `
-  --max-hold 60 `
-  --sl-multiplier 2.3 `
-  --final-target TP1 `
+  --entries 4 `
+  --entry-ladder range_uniform `
+  --entry-sl-gap 3.0 `
+  --activation-delay 3 `
+  --pending-expiry 900 `
+  --max-hold 90 `
+  --sl-multiplier 1.45 `
+  --final-target TP3 `
   --lock-after-tp1 true `
-  --lock-after-tp2 false `
-  --tp1-lock-delay-minutes 5 `
-  --tp2-lock-delay-minutes 0 `
-  --profit-lock-mode tp_levels `
-  --bep-trigger-distance 3.0 `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 3 `
+  --tp2-lock-delay-minutes 3 `
+  --profit-lock-mode bep_plus_half_tp1 `
+  --bep-trigger-distance 1.0 `
   --tp1-lock-fraction 0.5 `
-  --tp2-lock-target TP2 `
+  --tp2-lock-target TP1 `
   --runner-after-tp3 false `
   --tp3-lock-target TP2 `
   --trailing-open-distance 1.0 `
-  --trailing-close-distance 5.0 `
+  --trailing-close-distance 8.0 `
   --trailing-close-after-stage 0 `
-  --shared-sl true `
   --initial-capital 5000
 
 # ===== 4. PARITY BACKTEST (regenerate full history, then backtest) =====
-# STEP 4a — (re)generate the FULL static archive generated/self_zones.txt
+# STEP 4a — (re)generate the FULL static archive generated/self_zones_dense.txt
 # from ALL chart history so the backtest reflects the latest data. This is the
 # 18-month feed (slow, ~15s) — DIFFERENT from the live 2-day feed in section 2.
 # Run this whenever you want a fresh backtest:
-python tools/gen_zone_signals.py --m1-charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_zones.txt
+python tools/gen_zone_signals.py --m1-charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_zones_dense.txt --swing-len 3
 # STEP 4b — backtest that freshly-regenerated archive (full history):
 python tools/backtest_explicit.py `
-  --signals generated/self_zones.txt `
+  --signals generated/self_zones_dense.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
   --output-dir reports/SELF_TRAILING `
   --max-drawdown-limit-pct 50 `
@@ -87,34 +86,33 @@ python tools/backtest_explicit.py `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3.0 `
-  --entries 3 `
-  --entry-ladder signal_range_3 `
-  --entry-sl-gap 2.0 `
-  --activation-delay 10 `
-  --pending-expiry 630 `
-  --max-hold 60 `
-  --sl-multiplier 2.3 `
-  --final-target TP1 `
+  --entries 4 `
+  --entry-ladder range_uniform `
+  --entry-sl-gap 3.0 `
+  --activation-delay 3 `
+  --pending-expiry 900 `
+  --max-hold 90 `
+  --sl-multiplier 1.45 `
+  --final-target TP3 `
   --lock-after-tp1 true `
-  --lock-after-tp2 false `
-  --tp1-lock-delay-minutes 5 `
-  --tp2-lock-delay-minutes 0 `
-  --profit-lock-mode tp_levels `
-  --bep-trigger-distance 3.0 `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 3 `
+  --tp2-lock-delay-minutes 3 `
+  --profit-lock-mode bep_plus_half_tp1 `
+  --bep-trigger-distance 1.0 `
   --tp1-lock-fraction 0.5 `
-  --tp2-lock-target TP2 `
+  --tp2-lock-target TP1 `
   --runner-after-tp3 false `
   --tp3-lock-target TP2 `
   --trailing-open-distance 1.0 `
-  --trailing-close-distance 5.0 `
+  --trailing-close-distance 8.0 `
   --trailing-close-after-stage 0 `
-  --shared-sl true `
   --initial-capital 5000 `
   --start-date 2025-01-01
 
 # ===== 5. RECENT BACKTEST (from 2026-06-01 only; quick current-regime check) =====
 python tools/backtest_explicit.py `
-  --signals generated/self_zones.txt `
+  --signals generated/self_zones_dense.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
   --output-dir reports/SELF_TRAILING_FROM_JUNE `
   --max-drawdown-limit-pct 50 `
@@ -126,27 +124,26 @@ python tools/backtest_explicit.py `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3.0 `
-  --entries 3 `
-  --entry-ladder signal_range_3 `
-  --entry-sl-gap 2.0 `
-  --activation-delay 10 `
-  --pending-expiry 630 `
-  --max-hold 60 `
-  --sl-multiplier 2.3 `
-  --final-target TP1 `
+  --entries 4 `
+  --entry-ladder range_uniform `
+  --entry-sl-gap 3.0 `
+  --activation-delay 3 `
+  --pending-expiry 900 `
+  --max-hold 90 `
+  --sl-multiplier 1.45 `
+  --final-target TP3 `
   --lock-after-tp1 true `
-  --lock-after-tp2 false `
-  --tp1-lock-delay-minutes 5 `
-  --tp2-lock-delay-minutes 0 `
-  --profit-lock-mode tp_levels `
-  --bep-trigger-distance 3.0 `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 3 `
+  --tp2-lock-delay-minutes 3 `
+  --profit-lock-mode bep_plus_half_tp1 `
+  --bep-trigger-distance 1.0 `
   --tp1-lock-fraction 0.5 `
-  --tp2-lock-target TP2 `
+  --tp2-lock-target TP1 `
   --runner-after-tp3 false `
   --tp3-lock-target TP2 `
   --trailing-open-distance 1.0 `
-  --trailing-close-distance 5.0 `
+  --trailing-close-distance 8.0 `
   --trailing-close-after-stage 0 `
-  --shared-sl true `
   --initial-capital 5000 `
   --start-date 2026-06-01
