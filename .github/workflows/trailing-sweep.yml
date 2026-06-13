@@ -1,0 +1,104 @@
+name: trailing-sweep-v2
+
+# Unattended, resumable driver for the trailing re-sweep v2. It runs the exact
+# same orchestrator (sweep_out/scripts/trail_orchestrate.py) a local session
+# would, but on GitHub-hosted runners, so progress no longer depends on a web
+# session staying warm. Each run resumes from the committed results.jsonl / DONE
+# checkpoints on research/trailing-sweep-v2 and pushes its own progress back, so
+# consecutive scheduled runs walk the 16-archive sweep to completion.
+#
+# Activation note: GitHub only fires `schedule` / `workflow_dispatch` from the
+# DEFAULT branch, so this file must live on main. It operates on the research
+# branch by checking it out explicitly below — nothing about the sweep itself
+# lands on main.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Every 30 min. `concurrency` collapses overlaps to a single active run; the
+    # completion guard turns finished cycles into ~no-op runs and disables the
+    # schedule once all 16 archives are DONE, so it stops billing itself.
+    - cron: "*/30 * * * *"
+
+permissions:
+  contents: write   # push sweep checkpoints back to the research branch
+  actions: write    # self-disable the schedule once the sweep completes
+
+concurrency:
+  group: trailing-sweep-v2
+  cancel-in-progress: false   # never interrupt an in-flight sweep run
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350   # under GitHub's 6h hard cap, leaving room for push
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v4
+        with:
+          ref: research/trailing-sweep-v2
+          fetch-depth: 0
+
+      - name: Completion guard (all 16 archives DONE?)
+        id: guard
+        run: |
+          done=$(ls -d sweep_out/trail2_sweep_*/DONE 2>/dev/null | wc -l)
+          echo "archives DONE: ${done}/16"
+          if [ "${done}" -ge 16 ]; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Disable schedule once complete
+        if: steps.guard.outputs.complete == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Sweep complete — disabling the scheduled workflow to stop billing."
+          gh workflow disable trailing-sweep.yml --repo "${{ github.repository }}" || true
+
+      - name: Set up Python
+        if: steps.guard.outputs.complete != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        if: steps.guard.outputs.complete != 'true'
+        run: pip install -r requirements.txt
+
+      - name: Author identity for checkpoint commits
+        if: steps.guard.outputs.complete != 'true'
+        run: |
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+
+      - name: Expose the orchestrator's hardcoded ROOT
+        if: steps.guard.outputs.complete != 'true'
+        run: |
+          # The orchestrator hardcodes ROOT=/home/user/xauusd-backtest; symlink it
+          # to the checkout so the script stays byte-identical to the archive.
+          sudo mkdir -p /home/user
+          sudo ln -sfn "${GITHUB_WORKSPACE}" /home/user/xauusd-backtest
+
+      - name: Run sweep (resumable, time-boxed)
+        if: steps.guard.outputs.complete != 'true'
+        working-directory: /home/user/xauusd-backtest
+        run: |
+          # 5h budget: the orchestrator self-pushes every ~5 min and resumes from
+          # committed checkpoints, so a timeout just hands off to the next
+          # scheduled run. `|| true` keeps a clean timeout from failing the job.
+          timeout 18000 python sweep_out/scripts/trail_orchestrate.py || true
+
+      - name: Flush trailing checkpoint
+        if: steps.guard.outputs.complete != 'true'
+        working-directory: /home/user/xauusd-backtest
+        run: |
+          git add -A sweep_out generated data 2>/dev/null || true
+          if ! git diff --cached --quiet; then
+            git commit -q -m "research: CI checkpoint trailing sweep v2"
+            for i in 1 2 3 4; do
+              git push -q origin HEAD:research/trailing-sweep-v2 && break || sleep $((2 ** i))
+            done
+          fi
