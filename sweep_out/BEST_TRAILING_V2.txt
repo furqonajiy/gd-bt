@@ -1,5 +1,5 @@
 TRAILING RE-SWEEP v2 (post-#77 honest engine) — LIVE
-updated 2026-06-13 15:07:26 UTC | archives done 8/16 | configs 865
+updated 2026-06-13 15:12:28 UTC | archives done 8/16 | configs 876
 baseline (BEAT THIS): edge $107,400 | OOS $57,521 | DEPLOYABLE net $0 @ risk None (DD 0.0%<=50)
 
 == TOP 10 GATE-PASSERS (DD<=50 @5%, consistency, OOS>0) by OOS ==
@@ -9,10 +9,10 @@ baseline (BEAT THIS): edge $107,400 | OOS $57,521 | DEPLOYABLE net $0 @ risk Non
   risk02_allhours    edge=$    13,962 oos=$    9,708 dd@5%= 33.9% e2 slm2.0 TP3 to1.0 tc0.0 shT
   risk02_tight24     edge=$    15,124 oos=$    9,557 dd@5%= 46.6% e3 slm1.45 TP1 to1.0 tc2.0 shT
   risk02_tight24     edge=$    11,322 oos=$    8,088 dd@5%= 43.2% e3 slm1.61 TP3 to1.0 tc3.0 shT
+  risk02_widetp24    edge=$     9,941 oos=$    7,410 dd@5%= 30.9% e3 slm1.75 TP3 to1.0 tc3.0 shT
   risk02_allhours    edge=$     9,776 oos=$    7,250 dd@5%= 30.9% e3 slm1.75 TP3 to1.0 tc3.0 shT
   risk02_tight24     edge=$     8,162 oos=$    6,150 dd@5%= 42.3% e3 slm1.75 TP3 to1.0 tc3.0 shT
   risk02_tight24     edge=$     5,955 oos=$    3,848 dd@5%= 40.1% e1 slm2.3 TP2 to1.0 tc2.0 shF
-  zones_dense        edge=$     1,378 oos=$    1,454 dd@5%= 44.6% e4 slm1.45 TP3 to1.0 tc8.0 shF
 
 == TOP 10 BY RAW EDGE ==
   canonical_h1       edge=$    26,157 oos=$   -1,003 dd@5%= 99.1% e6 slm2.1 TP3 to0.0 tc8.0 shF
