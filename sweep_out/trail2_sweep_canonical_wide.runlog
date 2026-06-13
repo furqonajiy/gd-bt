@@ -5,3 +5,7 @@
 [self-limit] 60/110
 [self-limit] 80/110
 [self-limit] 100/110
+[self-limit] checkpoint=/home/user/xauusd-backtest/sweep_out/trail2_sweep_canonical_wide/results.jsonl
+[self-limit] leaderboard_csv=/home/user/xauusd-backtest/sweep_out/trail2_sweep_canonical_wide/leaderboard.csv
+[self-limit] leaderboard_xlsx=/home/user/xauusd-backtest/sweep_out/trail2_sweep_canonical_wide/leaderboard.xlsx
+[self-limit] NOTE: deploy a winning config with `--signals /home/user/xauusd-backtest/generated/self_canonical_wide.txt` (the config dict in top_configs is authoritative).
