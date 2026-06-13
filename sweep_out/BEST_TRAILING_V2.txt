@@ -1,5 +1,5 @@
 TRAILING RE-SWEEP v2 (post-#77 honest engine) — LIVE
-updated 2026-06-13 16:52:58 UTC | archives done 10/16 | configs 1103
+updated 2026-06-13 17:02:00 UTC | archives done 10/16 | configs 1115
 baseline (BEAT THIS): edge $107,400 | OOS $57,521 | DEPLOYABLE net $0 @ risk None (DD 0.0%<=50)
 
 == TOP 10 GATE-PASSERS (DD<=50 @5%, consistency, OOS>0) by OOS ==
@@ -23,5 +23,5 @@ baseline (BEAT THIS): edge $107,400 | OOS $57,521 | DEPLOYABLE net $0 @ risk Non
   risk02_allhours    edge=$    21,159 oos=$   15,078 dd@5%= 79.1% e4 slm1.3 TP2 to1.0 tc5.0 shF
   canonical_h1       edge=$    20,144 oos=$   12,502 dd@5%=100.5% e4 slm1.3 TP2 to1.0 tc5.0 shF
   risk02_widetp24    edge=$    20,092 oos=$   12,946 dd@5%= 67.7% e3 slm2.3 TP1 to1.0 tc5.0 shT
+  canonical_wide     edge=$    19,631 oos=$   14,122 dd@5%= 78.6% e3 slm1.45 TP1 to1.0 tc2.0 shT
   risk02_allhours    edge=$    19,392 oos=$   12,293 dd@5%= 68.8% e3 slm2.3 TP1 to1.0 tc5.0 shT
-  canonical          edge=$    19,160 oos=$   14,489 dd@5%=100.0% e3 slm2.3 TP1 to1.0 tc5.0 shT
