@@ -1,8 +1,10 @@
 TRAILING RE-SWEEP v2 (post-#77 honest engine) — LIVE
-updated 2026-06-13 13:47:02 UTC | archives done 6/16 | configs 700
+updated 2026-06-13 13:52:03 UTC | archives done 6/16 | configs 709
 baseline (BEAT THIS): edge $107,400 | OOS $57,521 | DEPLOYABLE net $0 @ risk None (DD 0.0%<=50)
 
 == TOP 10 GATE-PASSERS (DD<=50 @5%, consistency, OOS>0) by OOS ==
+  risk02_allhours    edge=$    15,891 oos=$   10,981 dd@5%= 28.7% e3 slm2.0 TP3 to1.0 tc8.0 shT
+  risk02_allhours    edge=$    13,962 oos=$    9,708 dd@5%= 33.9% e2 slm2.0 TP3 to1.0 tc0.0 shT
   risk02_tight24     edge=$    15,124 oos=$    9,557 dd@5%= 46.6% e3 slm1.45 TP1 to1.0 tc2.0 shT
   risk02_allhours    edge=$     9,776 oos=$    7,250 dd@5%= 30.9% e3 slm1.75 TP3 to1.0 tc3.0 shT
   risk02_tight24     edge=$     8,162 oos=$    6,150 dd@5%= 42.3% e3 slm1.75 TP3 to1.0 tc3.0 shT
@@ -11,8 +13,6 @@ baseline (BEAT THIS): edge $107,400 | OOS $57,521 | DEPLOYABLE net $0 @ risk Non
   zones              edge=$     1,518 oos=$    1,288 dd@5%= 42.8% e3 slm2.3 TP1 to1.0 tc5.0 shT
   zones_widesl       edge=$     1,511 oos=$    1,275 dd@5%= 39.7% e3 slm2.3 TP1 to1.0 tc5.0 shT
   zones              edge=$     1,712 oos=$    1,244 dd@5%= 18.8% e4 slm1.45 TP3 to1.0 tc8.0 shF
-  zones_widesl       edge=$     1,683 oos=$    1,234 dd@5%= 18.2% e4 slm1.45 TP3 to1.0 tc8.0 shF
-  zones_dense        edge=$     1,499 oos=$    1,231 dd@5%= 36.2% e3 slm1.45 TP1 to1.0 tc2.0 shT
 
 == TOP 10 BY RAW EDGE ==
   risk02_allhours    edge=$    19,392 oos=$   12,293 dd@5%= 68.8% e3 slm2.3 TP1 to1.0 tc5.0 shT
@@ -20,8 +20,8 @@ baseline (BEAT THIS): edge $107,400 | OOS $57,521 | DEPLOYABLE net $0 @ risk Non
   better             edge=$    18,194 oos=$    4,231 dd@5%= 85.4% e6 slm2.1 TP3 to0.0 tc8.0 shF
   risk02_allhours    edge=$    18,106 oos=$   14,398 dd@5%= 99.9% e4 slm1.45 TP3 to1.0 tc8.0 shF
   risk02_allhours    edge=$    17,147 oos=$   10,953 dd@5%= 60.3% e3 slm1.45 TP1 to1.0 tc2.0 shT
+  risk02_allhours    edge=$    15,891 oos=$   10,981 dd@5%= 28.7% e3 slm2.0 TP3 to1.0 tc8.0 shT
   risk02_tight24     edge=$    15,124 oos=$    9,557 dd@5%= 46.6% e3 slm1.45 TP1 to1.0 tc2.0 shT
+  risk02_allhours    edge=$    13,962 oos=$    9,708 dd@5%= 33.9% e2 slm2.0 TP3 to1.0 tc0.0 shT
   risk02_tight24     edge=$    13,947 oos=$   10,888 dd@5%=100.4% e4 slm2.0 TP3 to2.0 tc8.0 shF
   better             edge=$    13,713 oos=$    9,731 dd@5%= 76.2% e3 slm2.0 TP3 to1.0 tc8.0 shT
-  better_wide        edge=$    13,671 oos=$    9,819 dd@5%= 89.6% e4 slm1.3 TP2 to1.0 tc5.0 shF
-  better             edge=$    13,019 oos=$    9,448 dd@5%= 89.8% e4 slm1.3 TP2 to1.0 tc5.0 shF
