@@ -161,7 +161,8 @@ When you change CLI flags, config defaults, the lifecycle, or the
 `docs/MT5_SETUP.md`, `docs/OPERATIONS_PLAYBOOK.md`,
 `docs/demo_runbook_trailing_open.md`, and — for the parameter-sweep
 methodology — `docs/SWEEP_RUNBOOK.md`. The docs are treated as part of the
-contract, not afterthoughts.
+contract, not afterthoughts. **`CLAUDE.md` and `AGENTS.md` mirror each other —
+change both together.**
 
 ## Git workflow & contribution process
 
