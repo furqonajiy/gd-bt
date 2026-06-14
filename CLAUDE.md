@@ -195,7 +195,7 @@ Every change ships through the same flow — apply it even to docs-only changes
    accept the default `Merge pull request #NN from …` subject.
 7. **Keep docs and project instructions in sync inside this same feature
    branch** (see the section above), and run `pytest` before merging. Never
-   open a separate branch/PR just to update `CLAUDE.md` / `CHATGPT.md` or to
+   open a separate branch/PR just to update `CLAUDE.md` / `AGENTS.md` or to
    bump the marker — fold those into the feature branch that carries the
    change, before merging it. A standalone instructions-only or marker-only PR
    is noise.

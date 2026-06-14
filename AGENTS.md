@@ -1,8 +1,11 @@
-# ChatGPT project instructions — xauusd-backtest
+# AGENTS.md — ChatGPT Codex + ChatGPT Chat instructions (xauusd-backtest)
 
-Paste the body below into the ChatGPT Project "Instructions" box (kept under the
-8,000-character limit). It is the **must-do** summary; the full reference (CLI
-flags, config defaults, command examples) lives in `CLAUDE.md` and the code.
+This is the OpenAI-side instruction file (the Claude side is `CLAUDE.md`).
+**ChatGPT Codex** (CLI) loads this `AGENTS.md` automatically. For **ChatGPT
+Chat**, paste the body below into the Project "Instructions" box — it is kept
+under the 8,000-character limit. It is the **must-do** summary; the full
+reference (CLI flags, config defaults, command examples) lives in `CLAUDE.md`
+and the code.
 
 ---
 
@@ -99,7 +102,7 @@ Ship every change (including docs-only) this way:
    (#47)`. Never the default `Merge pull request #NN from …`.
 7. Keep docs/project instructions in sync inside this same feature branch and
    run `pytest` first (green before merge). Never open a separate branch/PR
-   just to edit `CLAUDE.md` / `CHATGPT.md` or bump the marker — fold them into
+   just to edit `CLAUDE.md` / `AGENTS.md` or bump the marker — fold them into
    the feature branch that carries the change; a standalone instructions/marker
    PR is noise.
 8. Bump the sync-marker in this same branch before merge: the repo root holds
