@@ -74,7 +74,7 @@ jobs:
       max-parallel: 20   # GitHub free public concurrency cap
       matrix:
         feed: [adA_base, adB_tightSL, adC_wideSL, adD_closeTP, adE_farTP, adF_tightSL_closeTP, adG_wideSL_farTP, breakout, meanrev]
-        regime: [R1quiet, R2bull, R3strong, R4parab]
+        regime: [R4parab]
     runs-on: ubuntu-latest
     timeout-minutes: 70
     steps:
