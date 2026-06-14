@@ -1,4 +1,4 @@
-name: self-regime-grid
+name: regime-grid-sweep
 
 # COARSE-STAGE feed x regime adaptive GRID sweep (widened sibling of
 # self-regime-sweep.yml). Where self-regime-sweep fits ONE adaptive feed
@@ -11,7 +11,7 @@ name: self-regime-grid
 # + THREE HIGH-FREQUENCY self-scalper archives (scalper24, scalperwide24,
 # risk02allhours) -- the dense intraday family that earns more $3/lot bonus and
 # compounds faster, the same character as the live incumbent. The grid sweeps
-# ONE regime at a time (R4 -> R3 -> R2 -> R1, since we are currently in R4):
+# ONE regime at a time, in volatility order R4 -> R3 -> R2 -> R1 (R4 done):
 # repoint `matrix.regime` AND the chain step's ACTIVE_REGIME together per phase.
 # Each job runs FOUR tools/sweep_self_limit.py shards (seeds 42..45) in parallel
 # on the runner's 4 cores against that regime's chart month-glob and that feed's
@@ -81,7 +81,7 @@ jobs:
       max-parallel: 20   # GitHub free public concurrency cap
       matrix:
         feed: [adA_base, adB_tightSL, adC_wideSL, adD_closeTP, adE_farTP, adF_tightSL_closeTP, adG_wideSL_farTP, breakout, meanrev, scalper24, scalperwide24, risk02allhours]
-        regime: [R4parab]
+        regime: [R3strong]
     runs-on: ubuntu-latest
     timeout-minutes: 70
     steps:
@@ -643,19 +643,29 @@ jobs:
       - name: Chain the next pass, or disable when finished
         if: always()
         run: |
-          # The grid runs ONE regime at a time (R4 -> R3 -> R2 -> R1). Completion
-          # is measured for the ACTIVE regime only: when all 12 of its feed cells
-          # are DONE, disable the workflow so it stops re-dispatching; the
-          # maintainer then repoints the matrix + ACTIVE_REGIME to the next regime
-          # and re-enables. Keep ACTIVE_REGIME in sync with the matrix `regime:`.
-          ACTIVE_REGIME=R4parab
+          # The grid runs ONE regime at a time (R4 -> R3 -> R2 -> R1). Keep
+          # ACTIVE_REGIME in sync with the matrix `regime:`.
+          #   * If EVERY regime's cells are done (4 regimes x 12 feeds = 48), the
+          #     whole sweep is finished -> disable the workflow.
+          #   * Else if the ACTIVE regime's 12 cells are done, STOP dispatching but
+          #     stay ENABLED, so the maintainer advances to the next regime with
+          #     only a matrix + ACTIVE_REGIME edit and a dispatch -- no re-enable
+          #     dance (a disabled workflow cannot be workflow_dispatch'd).
+          #   * Else re-dispatch the next pass for the ACTIVE regime.
+          # The 3-hourly cron stays a cheap safety net: between regimes it fires a
+          # no-op pass (all active cells guard-skip) and stops at the branch above.
+          ACTIVE_REGIME=R3strong
           FEED_CELLS=12
+          ALL_CELLS=48
           done=$(ls -d sweep_regime_out_grid/*__${ACTIVE_REGIME}/DONE 2>/dev/null | wc -l)
-          echo "${ACTIVE_REGIME} cells DONE after this pass: ${done}/${FEED_CELLS}"
-          if [ "${done}" -ge "${FEED_CELLS}" ]; then
-            echo "All ${FEED_CELLS} ${ACTIVE_REGIME} cells done — disabling this workflow."
-            gh workflow disable self-regime-grid.yml --repo "${{ github.repository }}" || true
+          all_done=$(ls -d sweep_regime_out_grid/*/DONE 2>/dev/null | wc -l)
+          echo "${ACTIVE_REGIME} cells DONE: ${done}/${FEED_CELLS}; all regimes: ${all_done}/${ALL_CELLS}"
+          if [ "${all_done}" -ge "${ALL_CELLS}" ]; then
+            echo "All ${ALL_CELLS} cells done across every regime — disabling this workflow."
+            gh workflow disable regime-grid-sweep.yml --repo "${{ github.repository }}" || true
+          elif [ "${done}" -ge "${FEED_CELLS}" ]; then
+            echo "Active regime ${ACTIVE_REGIME} complete (${done}/${FEED_CELLS}). Stopping dispatch; staying enabled for the next regime."
           else
             echo "Work remains for ${ACTIVE_REGIME} — dispatching the next pass."
-            gh workflow run self-regime-grid.yml --ref main --repo "${{ github.repository }}" || true
+            gh workflow run regime-grid-sweep.yml --ref main --repo "${{ github.repository }}" || true
           fi
