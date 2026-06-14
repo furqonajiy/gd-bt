@@ -66,6 +66,7 @@ concurrency:
 
 env:
   GH_TOKEN: ${{ github.token }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   cell:
@@ -79,7 +80,7 @@ jobs:
     timeout-minutes: 70
     steps:
       - name: Checkout research branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: research/regime-adaptive
           fetch-depth: 0
@@ -98,7 +99,7 @@ jobs:
 
       - name: Set up Python
         if: steps.guard.outputs.done != 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -221,13 +222,13 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout research branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: research/regime-adaptive
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -309,13 +310,13 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout research branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: research/regime-adaptive
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
