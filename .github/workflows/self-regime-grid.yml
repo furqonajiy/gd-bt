@@ -6,13 +6,19 @@ name: self-regime-grid
 # regime at once, so the coarse stage of a coarse-to-fine search can compare
 # stop/target sizings head-to-head within each regime slice.
 #
-# Matrix: feed (7) x regime (4) = 36 independent ubuntu-latest jobs. (pullback
-# was dropped -- its archive is byte-identical to adA_base, so it only ever
-# duplicated a cell.) Each job runs FOUR tools/sweep_self_limit.py shards
-# (seeds 42..45) in parallel on the runner's 4 cores against that regime's chart
-# month-glob and that feed's archive, then a single AGGREGATE job merges every
-# shard's results back and is the SOLE writer to research/regime-adaptive -- so
-# there is no push collision between the parallel jobs.
+# Matrix: feed (12) x regime (1, the ACTIVE regime) independent ubuntu-latest
+# jobs. The 12 feeds are 7 ATR-multiplier adaptive variants + breakout + meanrev
+# + THREE HIGH-FREQUENCY self-scalper archives (scalper24, scalperwide24,
+# risk02allhours) -- the dense intraday family that earns more $3/lot bonus and
+# compounds faster, the same character as the live incumbent. The grid sweeps
+# ONE regime at a time (R4 -> R3 -> R2 -> R1, since we are currently in R4):
+# repoint `matrix.regime` AND the chain step's ACTIVE_REGIME together per phase.
+# Each job runs FOUR tools/sweep_self_limit.py shards (seeds 42..45) in parallel
+# on the runner's 4 cores against that regime's chart month-glob and that feed's
+# archive, then a single AGGREGATE job merges every shard's results back and is
+# the SOLE writer to research/regime-adaptive -- so there is no push collision
+# between the parallel jobs. Champions rank on compounded net + $3/lot bonus at
+# DD<=40% (tools/champions_report.best_challenger), so trade frequency counts.
 #
 # CHAMPION/CHALLENGER deploy. The grid is the CHALLENGER. The user keeps trading
 # their INCUMBENT live config (scalper24: entry_count=6, sl_multiplier=2.1,
@@ -74,8 +80,8 @@ jobs:
       fail-fast: false
       max-parallel: 20   # GitHub free public concurrency cap
       matrix:
-        feed: [adA_base, adB_tightSL, adC_wideSL, adD_closeTP, adE_farTP, adF_tightSL_closeTP, adG_wideSL_farTP, breakout, meanrev]
-        regime: [R2bull]
+        feed: [adA_base, adB_tightSL, adC_wideSL, adD_closeTP, adE_farTP, adF_tightSL_closeTP, adG_wideSL_farTP, breakout, meanrev, scalper24, scalperwide24, risk02allhours]
+        regime: [R4parab]
     runs-on: ubuntu-latest
     timeout-minutes: 70
     steps:
@@ -137,9 +143,17 @@ jobs:
         if: steps.guard.outputs.done != 'true'
         id: feed
         run: |
-          # Every feed is generated/adaptive_<feed>.txt. (pullback was dropped
-          # from the matrix -- it was byte-identical to adA_base.)
-          FEED="generated/adaptive_${{ matrix.feed }}.txt"
+          # Most feeds are generated/adaptive_<feed>.txt (pullback was dropped --
+          # byte-identical to adA_base). The HIGH-FREQUENCY self-scalper feeds use
+          # their own dense archives; map their labels to the real files here. This
+          # mapping mirrors tools/champions_report.py:_FEED_FILE_OVERRIDES so the
+          # swept feed and the published champion CLI point at the same archive.
+          case "${{ matrix.feed }}" in
+            scalper24)      FEED="generated/self_scalper24.txt" ;;
+            scalperwide24)  FEED="generated/self_scalper_widerr24.txt" ;;
+            risk02allhours) FEED="generated/self_risk02_allhours.txt" ;;
+            *)              FEED="generated/adaptive_${{ matrix.feed }}.txt" ;;
+          esac
           if [ ! -f "$FEED" ]; then
             echo "feed file $FEED is missing"; exit 1
           fi
@@ -371,11 +385,23 @@ jobs:
           import json, pathlib
           OUT = pathlib.Path("sweep_regime_out_grid")
           FEEDS = ["adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
-                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP", "breakout", "meanrev"]
+                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP", "breakout", "meanrev",
+                   "scalper24", "scalperwide24", "risk02allhours"]
           REGIMES = ["R1quiet", "R2bull", "R3strong", "R4parab"]
           DD_GATE = 40.0
 
+          # High-frequency feeds map to their own dense archives (mirror of
+          # tools/champions_report.py:_FEED_FILE_OVERRIDES); everything else is an
+          # adaptive_<feed> file.
+          _FEED_FILE_OVERRIDES = {
+              "scalper24": "generated/self_scalper24.txt",
+              "scalperwide24": "generated/self_scalper_widerr24.txt",
+              "risk02allhours": "generated/self_risk02_allhours.txt",
+          }
+
           def feed_signals(feed):
+              if feed in _FEED_FILE_OVERRIDES:
+                  return _FEED_FILE_OVERRIDES[feed]
               return f"generated/adaptive_{feed}.txt"
 
           def load_cell(feed, regime):
@@ -503,7 +529,8 @@ jobs:
 
           OUT = pathlib.Path("sweep_regime_out_grid")
           FEEDS = ["adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
-                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP", "breakout", "meanrev"]
+                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP", "breakout", "meanrev",
+                   "scalper24", "scalperwide24", "risk02allhours"]
           REGIMES = ["R1quiet", "R2bull", "R3strong", "R4parab"]
 
           def load_cell(feed, regime):
@@ -567,7 +594,7 @@ jobs:
 
       - name: Mark cells DONE (all 4 shards have >= 120 lines)
         run: |
-          FEEDS="adA_base adB_tightSL adC_wideSL adD_closeTP adE_farTP adF_tightSL_closeTP adG_wideSL_farTP breakout meanrev"
+          FEEDS="adA_base adB_tightSL adC_wideSL adD_closeTP adE_farTP adF_tightSL_closeTP adG_wideSL_farTP breakout meanrev scalper24 scalperwide24 risk02allhours"
           REGIMES="R1quiet R2bull R3strong R4parab"
           for feed in $FEEDS; do
             for regime in $REGIMES; do
@@ -611,12 +638,19 @@ jobs:
       - name: Chain the next pass, or disable when finished
         if: always()
         run: |
-          done=$(ls -d sweep_regime_out_grid/*/DONE 2>/dev/null | wc -l)
-          echo "cells DONE after this pass: ${done}/36"
-          if [ "${done}" -ge 36 ]; then
-            echo "All 36 cells done — disabling this workflow."
+          # The grid runs ONE regime at a time (R4 -> R3 -> R2 -> R1). Completion
+          # is measured for the ACTIVE regime only: when all 12 of its feed cells
+          # are DONE, disable the workflow so it stops re-dispatching; the
+          # maintainer then repoints the matrix + ACTIVE_REGIME to the next regime
+          # and re-enables. Keep ACTIVE_REGIME in sync with the matrix `regime:`.
+          ACTIVE_REGIME=R4parab
+          FEED_CELLS=12
+          done=$(ls -d sweep_regime_out_grid/*__${ACTIVE_REGIME}/DONE 2>/dev/null | wc -l)
+          echo "${ACTIVE_REGIME} cells DONE after this pass: ${done}/${FEED_CELLS}"
+          if [ "${done}" -ge "${FEED_CELLS}" ]; then
+            echo "All ${FEED_CELLS} ${ACTIVE_REGIME} cells done — disabling this workflow."
             gh workflow disable self-regime-grid.yml --repo "${{ github.repository }}" || true
           else
-            echo "Work remains — dispatching the next pass."
+            echo "Work remains for ${ACTIVE_REGIME} — dispatching the next pass."
             gh workflow run self-regime-grid.yml --ref main --repo "${{ github.repository }}" || true
           fi
