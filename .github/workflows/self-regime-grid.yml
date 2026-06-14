@@ -142,8 +142,30 @@ jobs:
           if [ ! -f "$FEED" ]; then
             echo "feed file $FEED is missing"; exit 1
           fi
-          echo "FEED=${FEED}" >> "$GITHUB_ENV"
-          echo "feed ${{ matrix.feed }} archive: ${FEED} ($(grep -cE '^[0-9]+\. ' "$FEED") signals)"
+          # The archive feed spans the FULL 2021-2026 history, but each regime is
+          # fit on its own chart slice. tools/sweep.py:split_train_validate() picks
+          # the OOS validate set as the last 2 SIGNAL-months of whatever feed it is
+          # handed -- so feeding the full feed with regime-restricted charts puts the
+          # held-out tail (2026-05/06) OUTSIDE every non-R4 regime's charts, yielding
+          # $0 OOS for every candidate. Filter the feed to THIS regime's signal
+          # months first so the OOS tail lands inside the regime window. The regex is
+          # matched against the YYYY-MM at the start of each `... GMT` date header;
+          # a header (and its signal lines) is kept only while its month matches.
+          case "${{ matrix.regime }}" in
+            R1quiet)  SIG_RE='^(2021-1[12]|2022-|2023-0[1-9])' ;;
+            R2bull)   SIG_RE='^(2023-1[012]|2024-)' ;;
+            R3strong) SIG_RE='^2025-' ;;
+            R4parab)  SIG_RE='^2026-' ;;
+            *) echo "unknown regime ${{ matrix.regime }}"; exit 1 ;;
+          esac
+          FILTERED="/tmp/feed_${{ matrix.feed }}_${{ matrix.regime }}.txt"
+          awk -v re="$SIG_RE" '
+            /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] GMT/ { keep = (substr($0,1,7) ~ re); if (keep) print; next }
+            keep
+          ' "$FEED" > "$FILTERED"
+          test -s "$FILTERED" || { echo "ERROR: filtered feed empty for ${{ matrix.regime }}"; exit 1; }
+          echo "FEED=${FILTERED}" >> "$GITHUB_ENV"
+          echo "feed ${{ matrix.feed }} archive: ${FEED} -> regime-filtered ${FILTERED} ($(grep -cE '^[0-9]+\. ' "$FILTERED") signals for ${{ matrix.regime }})"
 
       - name: Run 4 shards in parallel (use all 4 runner cores, resumable, time-boxed)
         if: steps.guard.outputs.done != 'true'
@@ -231,18 +253,32 @@ jobs:
             fi
             case "$regime" in
               R1quiet)
-                CHARTS="data/XAUUSD_M1_2021{11,12}_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_2023{01,02,03,04,05,06,07,08,09}_ELEV8.csv" ;;
+                CHARTS="data/XAUUSD_M1_2021{11,12}_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_2023{01,02,03,04,05,06,07,08,09}_ELEV8.csv"
+                SIG_RE='^(2021-1[12]|2022-|2023-0[1-9])' ;;
               R2bull)
-                CHARTS="data/XAUUSD_M1_2023{10,11,12}_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv" ;;
+                CHARTS="data/XAUUSD_M1_2023{10,11,12}_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv"
+                SIG_RE='^(2023-1[012]|2024-)' ;;
               R3strong)
-                CHARTS="data/XAUUSD_M1_2025*_ELEV8.csv" ;;
+                CHARTS="data/XAUUSD_M1_2025*_ELEV8.csv"
+                SIG_RE='^2025-' ;;
               R4parab)
-                CHARTS="data/XAUUSD_M1_2026*_ELEV8.csv" ;;
+                CHARTS="data/XAUUSD_M1_2026*_ELEV8.csv"
+                SIG_RE='^2026-' ;;
             esac
-            echo "incumbent ${regime}: computing on generated/self_better.txt ..."
+            # Same OOS-window bug as the shard job: incumbent_baseline.py also calls
+            # sweep.split_train_validate(), so the full self_better.txt feed would put
+            # the held-out 2 months (2026-05/06) outside every non-R4 regime's charts.
+            # Filter the incumbent feed to this regime's signal months first.
+            FILTERED="/tmp/feed_self_better_${regime}.txt"
+            awk -v re="$SIG_RE" '
+              /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] GMT/ { keep = (substr($0,1,7) ~ re); if (keep) print; next }
+              keep
+            ' generated/self_better.txt > "$FILTERED"
+            test -s "$FILTERED" || { echo "ERROR: filtered incumbent feed empty for ${regime}"; exit 1; }
+            echo "incumbent ${regime}: computing on regime-filtered ${FILTERED} ($(grep -cE '^[0-9]+\. ' "$FILTERED") signals) ..."
             python tools/incumbent_baseline.py \
               --regime "$regime" \
-              --signals generated/self_better.txt \
+              --signals "$FILTERED" \
               --charts $CHARTS \
               --output-dir sweep_regime_out_grid \
               --validate-months 2 \
