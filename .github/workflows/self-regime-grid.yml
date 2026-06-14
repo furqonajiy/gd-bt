@@ -561,6 +561,8 @@ jobs:
           md = cr.render_champions_md(REGIMES, incumbents, champions)
           pathlib.Path("CHAMPIONS.md").write_text(md)
           print("wrote CHAMPIONS.md")
+          cr.write_deployment_cli_files(pathlib.Path("."), REGIMES, champions)
+          print("wrote per-regime cli/best_<regime>.txt")
           PY
 
       - name: Mark cells DONE (all 4 shards have >= 120 lines)
@@ -591,6 +593,7 @@ jobs:
           git add -f sweep_regime_out_grid 2>/dev/null || true
           git add -f CHAMPIONS.md 2>/dev/null || true
           git add -A generated 2>/dev/null || true
+          git add -f cli 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "Nothing to commit."
           else
