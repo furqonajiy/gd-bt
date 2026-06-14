@@ -237,3 +237,16 @@ The engine enforces this where it generates files: `_backtest_output_path`
 run name can't be truncated at its last "extension" again — keep any new
 file-writing code on the same convention.
 </content>
+
+## GitHub Actions / CI
+
+When creating or editing any workflow under `.github/workflows/`, **pin the
+latest Node-24-native major versions** of the standard actions. GitHub forces
+Node 20 actions to Node 24 from 2026-06-16 and removes Node 20 from runners on
+2026-09-16, so older pins emit a deprecation warning and will eventually fail.
+Current correct pins: `actions/checkout@v5`, `actions/setup-python@v6`, the
+artifact actions on their latest major, plus a top-level
+`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"` env as a catch-all for any action
+still shipping only a Node-20 major. Always check the action's GitHub Releases
+for a newer major before pinning — do not copy an old `@vN` out of an existing
+file. Full convention + new-workflow checklist: `.github/workflows/README.md`.
