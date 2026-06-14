@@ -122,10 +122,10 @@ jobs:
           # This case mapping is identical to self-regime-sweep.yml.
           case "${{ matrix.regime }}" in
             R1quiet)
-              CHARTS="data/XAUUSD_M1_2021{11,12}_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_2023{01,02,03,04,05,06,07,08,09}_ELEV8.csv"
+              CHARTS="data/XAUUSD_M1_20211[12]_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_20230[1-9]_ELEV8.csv"
               ;;
             R2bull)
-              CHARTS="data/XAUUSD_M1_2023{10,11,12}_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv"
+              CHARTS="data/XAUUSD_M1_20231[012]_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv"
               ;;
             R3strong)
               CHARTS="data/XAUUSD_M1_2025*_ELEV8.csv"
@@ -268,10 +268,10 @@ jobs:
             fi
             case "$regime" in
               R1quiet)
-                CHARTS="data/XAUUSD_M1_2021{11,12}_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_2023{01,02,03,04,05,06,07,08,09}_ELEV8.csv"
+                CHARTS="data/XAUUSD_M1_20211[12]_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_20230[1-9]_ELEV8.csv"
                 SIG_RE='^(2021-1[12]|2022-|2023-0[1-9])' ;;
               R2bull)
-                CHARTS="data/XAUUSD_M1_2023{10,11,12}_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv"
+                CHARTS="data/XAUUSD_M1_20231[012]_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv"
                 SIG_RE='^(2023-1[012]|2024-)' ;;
               R3strong)
                 CHARTS="data/XAUUSD_M1_2025*_ELEV8.csv"
@@ -291,13 +291,18 @@ jobs:
             ' generated/self_better.txt > "$FILTERED"
             test -s "$FILTERED" || { echo "ERROR: filtered incumbent feed empty for ${regime}"; exit 1; }
             echo "incumbent ${regime}: computing on regime-filtered ${FILTERED} ($(grep -cE '^[0-9]+\. ' "$FILTERED") signals) ..."
+            # Non-fatal per regime: a single regime's baseline failing must not red
+            # the whole workflow (the aggregate still runs and the active regime's
+            # sweep still progresses). $CHARTS is unquoted so the shell expands the
+            # bracket-expression month globs into the real files.
             python tools/incumbent_baseline.py \
               --regime "$regime" \
               --signals "$FILTERED" \
               --charts $CHARTS \
               --output-dir sweep_regime_out_grid \
               --validate-months 2 \
-              --max-concurrent-dd-pct 40
+              --max-concurrent-dd-pct 40 \
+              || echo "WARN: incumbent baseline for ${regime} failed; continuing."
           done
 
       - name: Commit + push new incumbent baselines (rebase+retry)
