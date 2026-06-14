@@ -6,7 +6,7 @@ name: self-regime-grid
 # regime at once, so the coarse stage of a coarse-to-fine search can compare
 # stop/target sizings head-to-head within each regime slice.
 #
-# Matrix: feed (7) x regime (4) = 28 independent ubuntu-latest jobs. (pullback
+# Matrix: feed (7) x regime (4) = 36 independent ubuntu-latest jobs. (pullback
 # was dropped -- its archive is byte-identical to adA_base, so it only ever
 # duplicated a cell.) Each job runs FOUR tools/sweep_self_limit.py shards
 # (seeds 42..45) in parallel on the runner's 4 cores against that regime's chart
@@ -45,7 +45,7 @@ name: self-regime-grid
 # aggregate can overwrite-copy each one safely.
 #
 # Self-terminating: the aggregate marks a (feed,regime) cell DONE once all 4 of
-# its shards have >= 120 result lines; when all 28 cells are DONE it disables
+# its shards have >= 120 result lines; when all 36 cells are DONE it disables
 # this workflow, otherwise it re-dispatches itself for the next pass. A sparse
 # 3-hourly schedule is only a safety net. schedule/workflow_dispatch fire only
 # from the default branch, so this file lives on main; it operates on the
@@ -54,7 +54,7 @@ name: self-regime-grid
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "0 */3 * * *"   # safety net; self-disables once all 28 cells are DONE
+    - cron: "0 */3 * * *"   # safety net; self-disables once all 36 cells are DONE
 
 permissions:
   contents: write   # aggregate pushes sweep checkpoints to the research branch
@@ -73,7 +73,7 @@ jobs:
       fail-fast: false
       max-parallel: 20   # GitHub free public concurrency cap
       matrix:
-        feed: [adA_base, adB_tightSL, adC_wideSL, adD_closeTP, adE_farTP, adF_tightSL_closeTP, adG_wideSL_farTP]
+        feed: [adA_base, adB_tightSL, adC_wideSL, adD_closeTP, adE_farTP, adF_tightSL_closeTP, adG_wideSL_farTP, breakout, meanrev]
         regime: [R1quiet, R2bull, R3strong, R4parab]
     runs-on: ubuntu-latest
     timeout-minutes: 70
@@ -334,7 +334,7 @@ jobs:
           import json, pathlib
           OUT = pathlib.Path("sweep_regime_out_grid")
           FEEDS = ["adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
-                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP"]
+                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP", "breakout", "meanrev"]
           REGIMES = ["R1quiet", "R2bull", "R3strong", "R4parab"]
           DD_GATE = 40.0
 
@@ -466,7 +466,7 @@ jobs:
 
           OUT = pathlib.Path("sweep_regime_out_grid")
           FEEDS = ["adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
-                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP"]
+                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP", "breakout", "meanrev"]
           REGIMES = ["R1quiet", "R2bull", "R3strong", "R4parab"]
 
           def load_cell(feed, regime):
@@ -528,7 +528,7 @@ jobs:
 
       - name: Mark cells DONE (all 4 shards have >= 120 lines)
         run: |
-          FEEDS="adA_base adB_tightSL adC_wideSL adD_closeTP adE_farTP adF_tightSL_closeTP adG_wideSL_farTP"
+          FEEDS="adA_base adB_tightSL adC_wideSL adD_closeTP adE_farTP adF_tightSL_closeTP adG_wideSL_farTP breakout meanrev"
           REGIMES="R1quiet R2bull R3strong R4parab"
           for feed in $FEEDS; do
             for regime in $REGIMES; do
@@ -572,9 +572,9 @@ jobs:
         if: always()
         run: |
           done=$(ls -d sweep_regime_out_grid/*/DONE 2>/dev/null | wc -l)
-          echo "cells DONE after this pass: ${done}/28"
-          if [ "${done}" -ge 28 ]; then
-            echo "All 28 cells done — disabling this workflow."
+          echo "cells DONE after this pass: ${done}/36"
+          if [ "${done}" -ge 36 ]; then
+            echo "All 36 cells done — disabling this workflow."
             gh workflow disable self-regime-grid.yml --repo "${{ github.repository }}" || true
           else
             echo "Work remains — dispatching the next pass."
