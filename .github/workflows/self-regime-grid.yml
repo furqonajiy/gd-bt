@@ -6,20 +6,38 @@ name: self-regime-grid
 # regime at once, so the coarse stage of a coarse-to-fine search can compare
 # stop/target sizings head-to-head within each regime slice.
 #
-# Matrix: feed (8) x regime (4) = 32 independent ubuntu-latest jobs. Each job
-# runs FOUR tools/sweep_self_limit.py shards (seeds 42..45) in parallel on the
-# runner's 4 cores against that regime's chart month-glob and that feed's
-# archive, then a single AGGREGATE job merges every shard's results back and is
-# the SOLE writer to research/regime-adaptive -- so there is no push collision
-# between the parallel jobs.
+# Matrix: feed (7) x regime (4) = 28 independent ubuntu-latest jobs. (pullback
+# was dropped -- its archive is byte-identical to adA_base, so it only ever
+# duplicated a cell.) Each job runs FOUR tools/sweep_self_limit.py shards
+# (seeds 42..45) in parallel on the runner's 4 cores against that regime's chart
+# month-glob and that feed's archive, then a single AGGREGATE job merges every
+# shard's results back and is the SOLE writer to research/regime-adaptive -- so
+# there is no push collision between the parallel jobs.
+#
+# CHAMPION/CHALLENGER deploy. The grid is the CHALLENGER. The user keeps trading
+# their INCUMBENT live config (scalper24: entry_count=6, sl_multiplier=2.1,
+# tp1_lock_delay_minutes=24 on top of the blessed DEFAULT_CONFIG) and only
+# SWITCHES when a challenger STRICTLY beats it at DD<=40%. Two additions make the
+# grid drive that decision from a single pulled file:
+#   * a one-time, CACHED `incumbent` job scores the incumbent config on the FIXED
+#     feed (generated/self_better.txt) per regime, writing
+#     sweep_regime_out_grid/INCUMBENT_<regime>.json (committed once, then reused);
+#   * the aggregate publishes CHAMPIONS.md at the repo root each checkpoint:
+#     per-regime incumbent | best challenger | VERDICT (SWITCH w/ runnable CLI vs
+#     HOLD), the live regime (R4parab) flagged ">>> RUN THIS NOW <<<". The
+#     published champion is MONOTONIC (CHAMPION_<regime>.json), only replaced when
+#     a challenger strictly beats the STORED champion, so CHAMPIONS.md never
+#     regresses across passes.
 #
 # Why this is collision-free (same contract as self-regime-sweep.yml):
 #   * Each grid job only ever WRITES its own shard*/results.jsonl files and
 #     uploads them as an artifact (res-<feed>__<regime>); it never pushes.
-#   * The aggregate job downloads all 32 artifacts, copies them into the
+#   * The aggregate job downloads all 28 artifacts, copies them into the
 #     sweep_regime_out_grid/<feed>__<regime>/shard<N>/ tree, writes the
-#     per-regime BEST/CLI snapshots + a top-level LEADERBOARD, and is the only
-#     job that commits + pushes.
+#     per-regime BEST/CLI snapshots + LEADERBOARD + CHAMPIONS.md, and is the only
+#     job that commits + pushes. The `incumbent` job is the one exception: it
+#     writes its own INCUMBENT_<regime>.json only when absent and commits with the
+#     same rebase+retry contract (one-time, so it does not race the aggregate).
 #
 # Resume: each job checks out research/regime-adaptive (which already contains
 # any results.jsonl a prior aggregate committed), so --resume continues from it.
@@ -27,7 +45,7 @@ name: self-regime-grid
 # aggregate can overwrite-copy each one safely.
 #
 # Self-terminating: the aggregate marks a (feed,regime) cell DONE once all 4 of
-# its shards have >= 120 result lines; when all 32 cells are DONE it disables
+# its shards have >= 120 result lines; when all 28 cells are DONE it disables
 # this workflow, otherwise it re-dispatches itself for the next pass. A sparse
 # 3-hourly schedule is only a safety net. schedule/workflow_dispatch fire only
 # from the default branch, so this file lives on main; it operates on the
@@ -36,7 +54,7 @@ name: self-regime-grid
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "0 */3 * * *"   # safety net; self-disables once all 32 cells are DONE
+    - cron: "0 */3 * * *"   # safety net; self-disables once all 28 cells are DONE
 
 permissions:
   contents: write   # aggregate pushes sweep checkpoints to the research branch
@@ -55,7 +73,7 @@ jobs:
       fail-fast: false
       max-parallel: 20   # GitHub free public concurrency cap
       matrix:
-        feed: [adA_base, adB_tightSL, adC_wideSL, adD_closeTP, adE_farTP, adF_tightSL_closeTP, adG_wideSL_farTP, pullback]
+        feed: [adA_base, adB_tightSL, adC_wideSL, adD_closeTP, adE_farTP, adF_tightSL_closeTP, adG_wideSL_farTP]
         regime: [R1quiet, R2bull, R3strong, R4parab]
     runs-on: ubuntu-latest
     timeout-minutes: 70
@@ -118,14 +136,9 @@ jobs:
         if: steps.guard.outputs.done != 'true'
         id: feed
         run: |
-          # pullback reuses the already-committed alias feed; every other feed
-          # is generated/adaptive_<feed>.txt.
-          case "${{ matrix.feed }}" in
-            pullback)
-              FEED="generated/adaptive_self_m15_trend_pullback.txt" ;;
-            *)
-              FEED="generated/adaptive_${{ matrix.feed }}.txt" ;;
-          esac
+          # Every feed is generated/adaptive_<feed>.txt. (pullback was dropped
+          # from the matrix -- it was byte-identical to adA_base.)
+          FEED="generated/adaptive_${{ matrix.feed }}.txt"
           if [ ! -f "$FEED" ]; then
             echo "feed file $FEED is missing"; exit 1
           fi
@@ -173,8 +186,88 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
+  incumbent:
+    # One-time, CACHED incumbent baseline per regime. Scores the user's live
+    # config (e6/slm2.1/delay24) on the FIXED feed generated/self_better.txt over
+    # each regime's charts, reusing the sweep's OWN metric definitions
+    # (tools/sweep_self_limit.evaluate_self_limit) so the comparison is
+    # apples-to-apples. Each regime is computed at most once: if its
+    # INCUMBENT_<regime>.json already exists on the research branch, it is skipped.
+    # Runs in parallel with `cell`; the aggregate (needs: [cell, incumbent])
+    # consumes the committed JSONs.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v4
+        with:
+          ref: research/regime-adaptive
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Author identity for the baseline commit
+        run: |
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+
+      - name: Compute missing incumbent baselines (cached per regime)
+        run: |
+          # Resolve each regime's chart glob with the SAME case mapping the shard
+          # job uses, and only compute the baseline if its JSON is absent (cache).
+          # $CHARTS is intentionally unquoted so the shell expands the glob.
+          set -e
+          for regime in R1quiet R2bull R3strong R4parab; do
+            out="sweep_regime_out_grid/INCUMBENT_${regime}.json"
+            if [ -f "$out" ]; then
+              echo "incumbent ${regime}: cached (${out}) — skip"
+              continue
+            fi
+            case "$regime" in
+              R1quiet)
+                CHARTS="data/XAUUSD_M1_2021{11,12}_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_2023{01,02,03,04,05,06,07,08,09}_ELEV8.csv" ;;
+              R2bull)
+                CHARTS="data/XAUUSD_M1_2023{10,11,12}_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv" ;;
+              R3strong)
+                CHARTS="data/XAUUSD_M1_2025*_ELEV8.csv" ;;
+              R4parab)
+                CHARTS="data/XAUUSD_M1_2026*_ELEV8.csv" ;;
+            esac
+            echo "incumbent ${regime}: computing on generated/self_better.txt ..."
+            python tools/incumbent_baseline.py \
+              --regime "$regime" \
+              --signals generated/self_better.txt \
+              --charts $CHARTS \
+              --output-dir sweep_regime_out_grid \
+              --validate-months 2 \
+              --max-concurrent-dd-pct 40
+          done
+
+      - name: Commit + push new incumbent baselines (rebase+retry)
+        run: |
+          git add -f sweep_regime_out_grid/INCUMBENT_*.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No new incumbent baselines to commit."
+          else
+            git commit -q -m "ci: self-regime-grid incumbent baseline checkpoint"
+            for i in 1 2 3 4; do
+              if git push -q origin HEAD:research/regime-adaptive; then
+                echo "push: ok"; break
+              fi
+              echo "push: retry ${i}"
+              git pull --rebase -q origin research/regime-adaptive || true
+              sleep $((2 ** i))
+            done
+          fi
+
   aggregate:
-    needs: cell
+    needs: [cell, incumbent]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -241,13 +334,11 @@ jobs:
           import json, pathlib
           OUT = pathlib.Path("sweep_regime_out_grid")
           FEEDS = ["adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
-                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP", "pullback"]
+                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP"]
           REGIMES = ["R1quiet", "R2bull", "R3strong", "R4parab"]
           DD_GATE = 40.0
 
           def feed_signals(feed):
-              if feed == "pullback":
-                  return "generated/adaptive_self_m15_trend_pullback.txt"
               return f"generated/adaptive_{feed}.txt"
 
           def load_cell(feed, regime):
@@ -359,9 +450,85 @@ jobs:
           print("wrote LEADERBOARD.txt")
           PY
 
+      - name: Publish CHAMPIONS.md + monotonic CHAMPION_<regime>.json + self_cli_best_<regime>.txt
+        run: |
+          # Champion/challenger deploy file. Reads each regime's challenger rows
+          # (the same per-cell results.jsonl the snapshot step ranks) + the cached
+          # INCUMBENT_<regime>.json, advances the MONOTONIC published champion
+          # (CHAMPION_<regime>.json -- only replaced when a challenger strictly
+          # beats the stored champion's OOS, tiebreak edge, at DD<=40%), renders
+          # CHAMPIONS.md at the repo root, and writes a directly-runnable
+          # self_cli_best_<regime>.txt for each published champion.
+          python - <<'PY'
+          import json, pathlib, sys
+          sys.path.insert(0, ".")
+          import tools.champions_report as cr
+
+          OUT = pathlib.Path("sweep_regime_out_grid")
+          FEEDS = ["adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
+                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP"]
+          REGIMES = ["R1quiet", "R2bull", "R3strong", "R4parab"]
+
+          def load_cell(feed, regime):
+              rows = []
+              for shard in range(4):
+                  f = OUT / f"{feed}__{regime}" / f"shard{shard}" / "results.jsonl"
+                  if not f.exists():
+                      continue
+                  for line in f.read_text().splitlines():
+                      line = line.strip()
+                      if not line:
+                          continue
+                      try:
+                          r = json.loads(line)
+                      except json.JSONDecodeError:
+                          continue
+                      r["_feed"] = feed
+                      rows.append(r)
+              return rows
+
+          incumbents, champions = {}, {}
+          for regime in REGIMES:
+              incumbents[regime] = cr.load_json(OUT / f"INCUMBENT_{regime}.json")
+
+              rows = []
+              for feed in FEEDS:
+                  rows.extend(load_cell(feed, regime))
+              best = cr.best_challenger(rows, dd_gate=cr.DD_GATE)
+              # Advance the monotonic published champion (writes CHAMPION_<regime>.json).
+              champ = cr.update_champion(OUT, regime, best)
+              champions[regime] = champ
+
+              # self_cli_best_<regime>.txt = runnable command for the PUBLISHED champion.
+              cli_path = OUT / f"self_cli_best_{regime}.txt"
+              if champ:
+                  header = (
+                      f"# published champion {regime}: feed={champ.get('feed')} "
+                      f"edge={champ.get('edge')} oos={champ.get('oos')} "
+                      f"dd={champ.get('dd')}%\n\n")
+                  cli = cr.render_champion_cli(
+                      champ.get("config") or {}, regime=regime, feed=champ.get("feed") or "")
+                  cli_path.write_text(header + cli)
+              else:
+                  cli_path.write_text(
+                      f"# regime {regime}: no DD<={cr.DD_GATE:.0f}% challenger yet\n")
+              inc = incumbents[regime]
+              verdict = "HOLD"
+              if champ and inc and cr.strictly_beats(champ, inc):
+                  verdict = "SWITCH"
+              elif champ and not inc:
+                  verdict = "SWITCH(no-incumbent)"
+              print(f"{regime}: incumbent={'y' if inc else 'n'} "
+                    f"champion={'y' if champ else 'n'} verdict={verdict}")
+
+          md = cr.render_champions_md(REGIMES, incumbents, champions)
+          pathlib.Path("CHAMPIONS.md").write_text(md)
+          print("wrote CHAMPIONS.md")
+          PY
+
       - name: Mark cells DONE (all 4 shards have >= 120 lines)
         run: |
-          FEEDS="adA_base adB_tightSL adC_wideSL adD_closeTP adE_farTP adF_tightSL_closeTP adG_wideSL_farTP pullback"
+          FEEDS="adA_base adB_tightSL adC_wideSL adD_closeTP adE_farTP adF_tightSL_closeTP adG_wideSL_farTP"
           REGIMES="R1quiet R2bull R3strong R4parab"
           for feed in $FEEDS; do
             for regime in $REGIMES; do
@@ -383,7 +550,9 @@ jobs:
       - name: Commit + push to research branch (sole writer — no collision)
         run: |
           # sweep_regime_out_grid/ is force-added; the snapshots/feeds are tracked.
+          # CHAMPIONS.md (the deploy file) lives at the repo root.
           git add -f sweep_regime_out_grid 2>/dev/null || true
+          git add -f CHAMPIONS.md 2>/dev/null || true
           git add -A generated 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "Nothing to commit."
@@ -403,9 +572,9 @@ jobs:
         if: always()
         run: |
           done=$(ls -d sweep_regime_out_grid/*/DONE 2>/dev/null | wc -l)
-          echo "cells DONE after this pass: ${done}/32"
-          if [ "${done}" -ge 32 ]; then
-            echo "All 32 cells done — disabling this workflow."
+          echo "cells DONE after this pass: ${done}/28"
+          if [ "${done}" -ge 28 ]; then
+            echo "All 28 cells done — disabling this workflow."
             gh workflow disable self-regime-grid.yml --repo "${{ github.repository }}" || true
           else
             echo "Work remains — dispatching the next pass."
