@@ -1,130 +1,239 @@
-# AGENTS.md — ChatGPT Codex + ChatGPT Chat instructions (xauusd-backtest)
+# AGENTS.md
 
-This is the OpenAI-side instruction file (the Claude side is `CLAUDE.md`).
-**ChatGPT Codex** (CLI) loads this `AGENTS.md` automatically. For **ChatGPT
-Chat**, paste the body below into the Project "Instructions" box — it is kept
-under the 8,000-character limit. It is the **must-do** summary; the full
-reference (CLI flags, config defaults, command examples) lives in `CLAUDE.md`
-and the code.
+Full project instructions for **ChatGPT Codex** (and any OpenAI coding agent)
+working in this repository — Codex auto-loads this file, so it is comprehensive
+(no length limit). It **mirrors `CLAUDE.md`** (the Claude side): when you change
+one, change the other (both are listed in "Docs to keep in sync"). For **ChatGPT
+Chat** (Project Instructions, 8,000-character limit) paste a condensed subset,
+not this whole file.
 
----
+## What this project is
 
-You are assisting on **xauusd-backtest**: a Python engine that backtests and
-live-trades Victor-style XAUUSD (gold) text signals through MetaTrader 5. The
-same engine drives both the backtest and live execution, so they must stay in
-parity. Full reference (CLI flags, config defaults, commands) is in `CLAUDE.md`
-and the code — this file is the required rules.
+A Python engine that backtests and live-trades Victor-style XAUUSD (gold)
+text signals through MetaTrader 5. The same engine drives both paths, so a
+backtest and a live run produce the same modeled lifecycle. A signal line:
 
-## Repository layout (essentials)
+```
+1. BUY XAUUSD 4543 - 4541 SL 4536 TP1 4551 TP2 4561 TP3 4576 2:02 PM
+```
 
-- `xauusd_trading/` — the engine: signal parsing, position lifecycle, backtest,
-  MT5 adapter, executor, CLI. Almost all logic lives here.
-- `btcusd_trading/` — BTC backtest reusing the engine path.
-- `tools/` — research/ops scripts, incl. `auto_explicit.py` /
-  `backtest_explicit.py` (the full strategy-flag surface).
-- `tools/live_feed_loop.py` — live self-signal feed loop: regenerates a
-  generator's feed only on a new CLOSED M1 bar (parity with the backtest
-  archive), logs like `auto` (header, then `[ts] Add Signal …` per new one).
-- `listener/telegram_listener.py`, `tests/` (pytest, parity-heavy), `docs/`.
-  The listener keeps the feed at the channel's latest state (edits amend in
-  place, deletions remove + MT5 amend/revoke; startup catch-up reconciles the
-  24 h lookback). `tools/telegram_export_to_signals.py --merge-into` does the
-  same from a Telegram HTML export for longer outages.
+The lifecycle: entry laddering → pending activation/expiry → fill → SL/target
+management → SL-to-TP1 (and optional TP2) lock → time-exit at `max_hold` →
+optional virtual trailing-open entry and trailing-close exit / trend runner.
 
-## Architecture — must follow
+## Layout
 
-- Import from the package root: `from xauusd_trading import X`. Everything is
-  re-exported from `__init__.py` (dependency-ordered); never deep-import
-  `xauusd_trading.core.foo`. When you move a symbol, update `__init__.py`.
-- `cli.py` is a thin wrapper over `cli_orig.py` and overrides only the `auto`
-  console output. Add subcommands/flags in `cli_orig.py`'s `build_parser()`.
-  Entry point: `python -m xauusd_trading.cli`.
-- `decide` lives in `strategy.trailing_engine`.
-- `core/config.py` `DEFAULT_CONFIG` is the validated contract. Trailing-open /
-  trailing-close / trend-runner default OFF and are enabled only via CLI flags,
-  never env vars — keep it reproducible. Do not add env-var config reads.
-- Chart timezone is GMT+3; signal times arrive in `--signal-tz` (Victor GMT+7)
-  and convert internally. Do not hardcode tz conversions.
-- `positions.json` registry entry shape: `{"signal_key", "signal", "date",
-  "tz", "equity_at_open", "executed_at"?}`; auto-pruned by `--execute` / `auto`.
-- Live self-heal flags on `auto`: `--replace-missing-entries` (re-place
-  hand-cancelled PENDING limits), `--reopen-missing-positions` (restore
-  hand-closed positions the replay still holds OPEN — price-aware per leg:
-  market only at-or-better than the entry or when the stop is locked beyond
-  it, else a LIMIT at the original entry; never chases. Such signals survive
-  the prune). Fresh placement is history-gated (a magic with closed deals never
-  re-places), and the late TP1/TP2 catch-up locks a protective stop instead of
-  flattening at market (close only as last resort).
+- `xauusd_trading/` — the engine (parsing, lifecycle, backtest, MT5 adapter,
+  executor, CLI). This is where almost all real logic lives.
+- `btcusd_trading/` — a BTC self-rejection backtest that reuses the XAUUSD
+  engine path; never mutate the blessed strategy config for a research run.
+- `tools/` — research/ops scripts (sweeps, signal generators, the explicit
+  full-parameter runners `auto_explicit.py` / `backtest_explicit.py`,
+  `dump_forensic.py`, tick tooling).
+- `listener/telegram_listener.py` — ingests Victor's Telegram channel into
+  `signals.txt` (override the output feed with `--signals-file`, e.g.
+  `victor_signals.txt`). The feed follows the channel's latest state: edits
+  amend the line in place (same `N.`/signal_key) and deletions remove it,
+  each queueing the matching MT5 amend/revoke; startup catch-up reconciles
+  the 24 h lookback so downtime edits/deletions are applied too. For longer
+  outages, `tools/telegram_export_to_signals.py --merge-into` syncs the feed
+  from a Telegram Desktop HTML export through the same parse pipeline.
+- `tools/live_feed_loop.py` — the **live self-signal feed loop**: one process
+  that refetches the current month (`fetch --months 1`) and regenerates a
+  generator's feed **only when a new CLOSED M1 bar exists** (idle otherwise),
+  with `--gen-start-days`/`--gen-recent-months` rolling the start + narrowing
+  charts in-process for speed. It imports the generator module unmodified, so
+  the live feed stays byte-identical to the backtest archive; logs like `auto`
+  (header, then `[ts] Add Signal …` per new signal). `--family` picks the
+  generator; args after `--` pass through. `fetch` gained `--months N` (default
+  2; live loops use 1 since rolled-over months are immutable).
+- `reporting/excel_report.py` — three-sheet backtest workbook (Summary /
+  Daily Breakdown / Per-Entry Detail; the Per-Entry sheet splits ORIGINAL
+  signal vs EXECUTED result, realized risk:reward rendered as `1:N`).
+- `tests/` — `pytest` suite, heavy on live/backtest parity.
+- `docs/` — `MT5_SETUP.md`, `OPERATIONS_PLAYBOOK.md`,
+  `demo_runbook_trailing_open.md`.
 
-## Invariants — must respect
+## Architecture conventions — follow these
 
-- Do not tune `core/config.py` to chase a bigger backtest number; go through
-  `tools/sweep.py`, lock `tests/test_smoke.py`, then deploy.
-- Live/backtest parity is the contract: keep `test_*parity*`, `test_reconcile`,
-  `test_intrabar_*lock*`, `test_live_wall_clock_expiry` green. Change them only
-  on an intentional behavior change, and update the prose docs to match.
-- The executor owns protective trailing SL via `TRADE_ACTION_SLTP`; do not add
-  behavior that fights it (MT5 native trailing is unsettable from the API
-  anyway). `--trailing-close-min-step` only throttles how often the modify is
-  sent. A trailing-open STOP rejected after price crossed the trigger falls
-  back to a market fill — never below the trigger.
-- `--execute` places real orders with no confirmation and implies `--mt5` plus
-  live equity. Be careful in any path that reaches it.
-- Lot sizing floors to `minimum_lot` (0.01), never 0, for a sizeable signal
-  (both `compute_lot` and the executor's `round_lot`).
+- **Import from the package root.** Everything is re-exported from
+  `xauusd_trading/__init__.py`. Internal modules, CLI, tests, and tools all
+  do `from xauusd_trading import X`, never `from xauusd_trading.core.foo
+  import X`. The re-export block is dependency-ordered — when you move a
+  symbol between files, update `__init__.py` and keep the ordering valid.
+- **CLI structure.** `xauusd_trading/cli.py` is a thin wrapper that
+  `import *`s the historical implementation from `cli_orig.py` and overrides
+  **only** the `auto` console presentation (append-only event log). New
+  subcommands/flags go in `cli_orig.py`'s `build_parser()`; keep `cli.py`
+  delegating. Entry point is `python -m xauusd_trading.cli`.
+- **`decide` lives in `strategy.trailing_engine`** (re-exported as
+  `xauusd_trading.decide`). The wrapper preserves the legacy lifecycle when
+  trailing distances are 0 and adds trailing behavior when enabled.
+- **Config.** `core/config.py` `DEFAULT_CONFIG` is the validated
+  DD40-compatible provider contract. Trailing-open / trailing-close /
+  trend-runner and the newer research modes — `shared_sl` (one stop level
+  for all entries, anchored on entry #1, with per-leg risk sizing; when a
+  leg is filled by **trailing-open**, its stop is re-anchored to that leg's
+  planned distance to the shared level taken from the actual fill — never the
+  frozen shared price, which a deep trailing fill can leave on the wrong side
+  of the entry — so backtest matches what the executor sends live),
+  `per_entry_targets` (a per-entry tuple from `{TP1,TP2,TP3,RUN}`; `RUN`
+  legs trail past `runner_trail_from` by `trailing_close_distance`), and
+  `bep_after_move` (per-leg break-even+ once a leg is N price units in
+  favour) — all default to **disabled** and are enabled **explicitly per run
+  via CLI flags** (the full surface lives in `tools/backtest_explicit.py` /
+  `tools/auto_explicit.py`). They are deliberately NOT read from environment
+  vars, so `DEFAULT_CONFIG` is always reproducible regardless of shell
+  state. Don't add env-var config reads.
+- **Chart timezone is GMT+3** (`CHART_TIMEZONE_OFFSET = 3`). CSV charts and
+  MT5 server time are GMT+3; signal times come in some source tz
+  (`--signal-tz`, Victor uses GMT+7) and are converted internally. Don't
+  hardcode tz conversions outside the existing helpers.
+- **`positions.json`** is the tracked-signal registry (`SignalRegistry` in
+  `execution/mt5_executor.py`). Entry shape:
+  `{"signal_key", "signal", "date", "tz", "equity_at_open", "executed_at"?}`.
+  It is auto-pruned by `--execute` / `auto` when a signal's MT5 magic has no
+  footprint. Keep examples in docs consistent with this shape. `auto
+  --replace-missing-entries` self-heals: each cycle it re-places only the
+  entries still **PENDING** in the replay whose per-entry comment vanished
+  from MT5 (e.g. limits cancelled by hand), gated on the signal still having
+  ≥1 footprint — no chasing of passed prices, LIMIT-only. `auto
+  --reopen-missing-positions` mirrors the replay the rest of the way: entries
+  the replay still holds **OPEN** but missing from MT5 (closed by hand) are
+  restored price-aware — at market when the price is at-or-better than the
+  leg's entry or its stop is already locked at/beyond entry, otherwise via a
+  LIMIT at the original entry inside the pending window (never chases) — and
+  replay-open signals survive the prune. Fresh
+  placement is history-gated: a magic with closed deals is never re-placed,
+  so a finished signal can't trade twice. The late TP1/TP2 catch-up protects
+  legs with a stop at the lock level (ratcheted toward it on recovery) and
+  closes at market only as a last resort.
+
+## Invariants to respect
+
+- **Don't tune `core/config.py` to chase a bigger backtest number.** Strategy
+  changes go through `tools/sweep.py`, then lock the result into
+  `tests/test_smoke.py`, then deploy. See `docs/OPERATIONS_PLAYBOOK.md`.
+- **Live/backtest parity is the contract.** Many tests
+  (`test_*parity*.py`, `test_reconcile.py`, `test_intrabar_*lock*.py`,
+  `test_live_wall_clock_expiry.py`) pin the exact behavior the docs promise.
+  If you change lifecycle logic, run them and keep them green — update them
+  only when intentionally changing behavior, and update the prose docs to
+  match.
+- **The executor owns protective trailing SL**, not MT5 native trailing.
+  Don't introduce behavior that fights the executor's `TRADE_ACTION_SLTP`
+  (native trailing can't be set from the Python API anyway). The explicit
+  runners' `--trailing-close-min-step` only throttles how often the modify is
+  sent — the engine still trails continuously. A trailing-open STOP the broker
+  rejects after price crossed the trigger falls back to a tick-confirmed
+  market fill (`mt5_executor_trailing.py`); it never market-fills below the
+  trigger.
+- **`--execute` places real orders with no confirmation prompt** and implies
+  `--mt5` + live equity. Be careful in any code path that reaches it.
 
 ## Parameter sweeps
 
 When asked to run/redo a parameter sweep (after a strategy change, an engine
-fix, or new chart data), follow **`docs/SWEEP_RUNBOOK.md`** by default — no need
-to be told. Non-negotiables: **verify the M1 data is real 1-minute bars first**
-(daily/hourly get mislabeled as M1); the **baseline is a hand-seeded config, not
-exhaustive search**, so a sweep must both **widen the grid** to include the
-champion's values *and* **re-seed the champion**, or it cannot beat it; **rank
-by OOS / fixed-lot edge, never raw compounded net**; **one writer per sweep
-branch**; run sweeps on a `research/...` branch, never `main`.
+bug fix, or new chart data), follow **`docs/SWEEP_RUNBOOK.md`** by default — no
+need to be told to. Non-negotiables from it: **verify the M1 data is real
+1-minute bars first** (daily/hourly bars get mislabeled as M1); the **baseline
+is a hand-seeded config, not exhaustive search**, so a sweep must both **widen
+the grid** to include the champion's values *and* **re-seed the champion** or it
+can't beat it; **rank by OOS / fixed-lot edge, never raw compounded net** (which
+explodes to a meaningless trillions at 1% over years); keep **one writer per
+sweep branch**; and run sweeps on a `research/...` branch, never on `main`.
 
-## Git workflow — the required flow
+## Commands
 
-Ship every change (including docs-only) this way:
+```bash
+pip install -r requirements.txt        # pandas, openpyxl, pytest
+pytest                                  # full suite
+pytest tests/test_smoke.py             # quick strategy-baseline check
 
-1. Branch off `main`, descriptive `feature/<what-changed>` (hyphens, never
-   spaces, never named after a person). Always `feature/...`, never an
-   agent/session-generated name like `claude/...` — migrate such work to a
-   `feature/...` branch before the PR and delete the agent branch.
-2. Author as `git config user.name "C - Furqon Aji Yudhistira"` and
-   `user.email "furqonajiy@gmail.com"` — both author and committer, not a bot.
-3. Representative commit subject, no placeholder.
-4. Open a PR into `main`.
-5. Merge with **no fast-forward** (a real merge commit; never squash/ff).
-6. The merge-commit title must be representative and end with the PR number —
-   `Description (#NN)`, e.g. `Update Project Instructions to the Latest State
-   (#47)`. Never the default `Merge pull request #NN from …`.
-7. Keep docs/project instructions in sync inside this same feature branch and
-   run `pytest` first (green before merge). Never open a separate branch/PR
-   just to edit `CLAUDE.md` / `AGENTS.md` or bump the marker — fold them into
-   the feature branch that carries the change; a standalone instructions/marker
-   PR is noise.
-8. Bump the sync-marker in this same branch before merge: the repo root holds
-   one empty `YYYY-MM-DD_HHMM.txt` stamp in **Jakarta time (WIB, UTC+7)**.
-   Rename it to now — `git mv <old>.txt "$(TZ='Asia/Jakarta' date
-   +%Y-%m-%d_%H%M).txt"` (pin the zone; this environment is UTC). Keep exactly
-   one such file.
-9. Delete the feature branch after merge (or note if deletion is blocked).
+python -m xauusd_trading.cli backtest --signals victor_signals.txt --charts "data/XAUUSD_M1_*.csv"
+python -m xauusd_trading.cli decide --signal "..." --signal-date 2026-05-07 --signal-tz 7 --charts "data/XAUUSD_M1_*.csv"
+```
 
-## Working style
+Live MT5 (`mt5-info`, `decide --execute`, `manage`, `auto`, `fetch`) requires
+the Windows-only `MetaTrader5` package and a running terminal — it cannot run
+in this Linux/CI environment. Validate engine changes through the backtest
+and `pytest`, which use CSV data and a stub MT5 layer.
+
+## Docs to keep in sync with code
+
+When you change CLI flags, config defaults, the lifecycle, or the
+`positions.json` shape, update the matching prose in `README.md`,
+`docs/MT5_SETUP.md`, `docs/OPERATIONS_PLAYBOOK.md`,
+`docs/demo_runbook_trailing_open.md`, and — for the parameter-sweep
+methodology — `docs/SWEEP_RUNBOOK.md`. The docs are treated as part of the
+contract, not afterthoughts. **`AGENTS.md` and `CLAUDE.md` mirror each other —
+change both together.**
+
+## Git workflow & contribution process
+
+Every change ships through the same flow — apply it even to docs-only changes
+(including edits to this file):
+
+1. **Branch off `main` with a descriptive name — always `feature/...`.** The
+   name says *what you are updating*, not who is doing it:
+   `feature/<what-changed>` (e.g. `feature/sync-docs-with-code`,
+   `feature/document-git-workflow`). Use hyphens, never spaces — Git rejects
+   spaces in ref names. Do not name a branch after a person, and never ship
+   work on agent/session-generated branches like `claude/...` — if a tool or
+   harness pre-creates one, migrate the commits to a `feature/...` branch
+   before opening the PR and delete the agent branch.
+2. **Author commits as the project owner.** Set
+   `git config user.name "C - Furqon Aji Yudhistira"` and
+   `git config user.email "furqonajiy@gmail.com"` so both author and committer
+   carry that identity. Don't leave commits authored as an agent / a bot.
+3. **Write a representative commit subject** that describes the change
+   (`docs: sync markdown with code, add Claude/ChatGPT project instructions`),
+   not a generic placeholder.
+4. **Open a PR into `main`** with a summary of what changed and how it was
+   verified.
+5. **Merge with no fast-forward** so a real merge commit is recorded
+   (`git merge --no-ff`, or the GitHub merge method `merge`). Never squash or
+   fast-forward.
+6. **Give the merge commit a representative message that ends with the PR
+   number.** Set an explicit merge commit title (e.g. via the merge API's
+   `commit_title`) in the form `Representative description (#NN)` — for
+   example `Update Project Instructions to the Latest State (#47)`. Never
+   accept the default `Merge pull request #NN from …` subject.
+7. **Keep docs and project instructions in sync inside this same feature
+   branch** (see the section above), and run `pytest` before merging. Never
+   open a separate branch/PR just to update `CLAUDE.md` / `AGENTS.md` or to
+   bump the marker — fold those into the feature branch that carries the
+   change, before merging it. A standalone instructions-only or marker-only PR
+   is noise.
+8. **Bump the sync-marker file (Jakarta time) in this same branch, before the
+   merge.** The repo root holds a single empty marker file named for a
+   timestamp in **Jakarta time (WIB, UTC+7)**, `YYYY-MM-DD_HHMM.txt` (e.g.
+   `2026-06-08_0120.txt`). On every update, rename it to the current Jakarta
+   time in the same change — always pin the zone, do not rely on the machine
+   clock (this environment is UTC):
+   `git mv <old>.txt "$(TZ='Asia/Jakarta' date +%Y-%m-%d_%H%M).txt"`.
+   Its filename is the "last synced" stamp used to check whether the tree is
+   up to date, so there must always be exactly one such file and it must
+   reflect this change's Jakarta-time moment.
+9. **Delete the feature branch after merge.** (If branch deletion is blocked
+   in the current environment, say so and leave it for the maintainer.)
+
+## Style
 
 Match the surrounding code: `from __future__ import annotations`, PEP 604
-unions (`X | None`), dataclasses for config/state, and the existing why-focused
-comments. Add no new runtime deps beyond pandas/openpyxl without strong reason.
-Live MT5 paths need the Windows-only `MetaTrader5` package; validate engine
-changes via the backtest and pytest (CSV data + a stub MT5 layer). When you
-change CLI flags, config, the lifecycle, or `positions.json`, update `README.md`
-and `docs/*` in the same change.
-Artifact names are dot-free: report dirs, positions registries, and other
-parameter-derived output names carry no `.` outside the real file extension —
-`slm21`/`gap05`, e.g. `reports/BEST_slm21_gap05_tp1delay24_risk005_2025`,
-never `BEST_slm2.1_gap0.5_…`. Enforced where files are generated
-(`_backtest_output_path` sanitizes the workbook stem); keep new writers on
-the same convention.
+unions (`X | None`), dataclasses for config/state, and the existing comment
+density (these files explain *why*, often at length — keep that where it adds
+signal). No new runtime dependencies beyond `pandas` / `openpyxl` without a
+strong reason.
+
+**Artifact names are dot-free.** Backtest report dirs, positions registries,
+and other parameter-derived output names must not contain `.` anywhere except
+the real file extension — render parameter values without the dot:
+`sl-multiplier 2.1` → `slm21`, `entry-sl-gap 0.5` → `gap05`. So
+`reports/BEST_slm21_gap05_tp1delay24_risk005_2025` and
+`positions_best_slm21_tp1delay24.json`, never `BEST_slm2.1_gap0.5_…`.
+The engine enforces this where it generates files: `_backtest_output_path`
+(`strategy/backtest.py`) renders the workbook stem dot-free, so even a dotted
+run name can't be truncated at its last "extension" again — keep any new
+file-writing code on the same convention.
 </content>
