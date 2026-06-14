@@ -70,6 +70,17 @@ and the code — this file is the required rules.
 - Lot sizing floors to `minimum_lot` (0.01), never 0, for a sizeable signal
   (both `compute_lot` and the executor's `round_lot`).
 
+## Parameter sweeps
+
+When asked to run/redo a parameter sweep (after a strategy change, an engine
+fix, or new chart data), follow **`docs/SWEEP_RUNBOOK.md`** by default — no need
+to be told. Non-negotiables: **verify the M1 data is real 1-minute bars first**
+(daily/hourly get mislabeled as M1); the **baseline is a hand-seeded config, not
+exhaustive search**, so a sweep must both **widen the grid** to include the
+champion's values *and* **re-seed the champion**, or it cannot beat it; **rank
+by OOS / fixed-lot edge, never raw compounded net**; **one writer per sweep
+branch**; run sweeps on a `research/...` branch, never `main`.
+
 ## Git workflow — the required flow
 
 Ship every change (including docs-only) this way:

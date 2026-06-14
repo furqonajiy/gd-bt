@@ -126,6 +126,18 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
 - **`--execute` places real orders with no confirmation prompt** and implies
   `--mt5` + live equity. Be careful in any code path that reaches it.
 
+## Parameter sweeps
+
+When asked to run/redo a parameter sweep (after a strategy change, an engine
+bug fix, or new chart data), follow **`docs/SWEEP_RUNBOOK.md`** by default — no
+need to be told to. Non-negotiables from it: **verify the M1 data is real
+1-minute bars first** (daily/hourly bars get mislabeled as M1); the **baseline
+is a hand-seeded config, not exhaustive search**, so a sweep must both **widen
+the grid** to include the champion's values *and* **re-seed the champion** or it
+can't beat it; **rank by OOS / fixed-lot edge, never raw compounded net** (which
+explodes to a meaningless trillions at 1% over years); keep **one writer per
+sweep branch**; and run sweeps on a `research/...` branch, never on `main`.
+
 ## Commands
 
 ```bash
@@ -146,8 +158,9 @@ and `pytest`, which use CSV data and a stub MT5 layer.
 
 When you change CLI flags, config defaults, the lifecycle, or the
 `positions.json` shape, update the matching prose in `README.md`,
-`docs/MT5_SETUP.md`, `docs/OPERATIONS_PLAYBOOK.md`, and
-`docs/demo_runbook_trailing_open.md`. The docs are treated as part of the
+`docs/MT5_SETUP.md`, `docs/OPERATIONS_PLAYBOOK.md`,
+`docs/demo_runbook_trailing_open.md`, and — for the parameter-sweep
+methodology — `docs/SWEEP_RUNBOOK.md`. The docs are treated as part of the
 contract, not afterthoughts.
 
 ## Git workflow & contribution process
