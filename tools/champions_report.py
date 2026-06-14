@@ -293,16 +293,27 @@ def render_champions_md(
         else:
             ch_cell = f"no DD<={dd_gate:.0f}% challenger yet"
 
-        # VERDICT.
+        # VERDICT. The published champion is always DD<=gate (best_challenger
+        # filters it). The incumbent only counts as a valid option if it ALSO
+        # clears the DD gate -- DD<=40% is a hard constraint, so an incumbent that
+        # exceeds it is disqualified and any compliant champion wins regardless of
+        # raw OOS (a 72.5%-DD incumbent is not deployable under the rule).
+        inc_dd = _dd(inc) if inc else None
+        inc_compliant = inc is not None and inc_dd is not None and inc_dd <= dd_gate
         cli = ""
-        if champ and inc and strictly_beats(champ, inc):
+        if champ:
             cli = render_champion_cli(
                 champ.get("config") or {}, regime=regime, feed=champ.get("feed") or "")
-            verdict = "**SWITCH** — see CLI below"
-        elif champ and not inc:
-            cli = render_champion_cli(
-                champ.get("config") or {}, regime=regime, feed=champ.get("feed") or "")
+        if champ and inc is None:
             verdict = "**SWITCH** (no incumbent baseline) — see CLI below"
+        elif champ and not inc_compliant:
+            verdict = (f"**SWITCH** — incumbent DD {_fmt(inc_dd)}% exceeds "
+                       f"{dd_gate:.0f}% gate; champion is compliant — see CLI below")
+        elif champ and strictly_beats(champ, inc):
+            verdict = "**SWITCH** — beats compliant incumbent — see CLI below"
+        elif champ:  # compliant incumbent the champion doesn't beat
+            cli = ""
+            verdict = "HOLD — incumbent better at DD<=40%"
         else:
             verdict = "HOLD (keep incumbent)"
 

@@ -131,3 +131,29 @@ def test_rendered_cli_is_runnable_backtest_explicit():
         # plain CLI line is still runnable and regime-targeted.
         assert "python -m xauusd_trading.cli backtest" in cli
         assert "--entries 4" in cli
+
+
+def test_noncompliant_incumbent_is_disqualified():
+    """An incumbent that exceeds the DD gate cannot HOLD against a compliant
+    champion, even if its raw OOS is higher (DD<=40% is a hard constraint)."""
+    champ = {"feed": "adD_closeTP", "edge": 4740.0, "oos": 1163.0, "dd": 37.4,
+             "config": {"entry_count": 3, "sl_multiplier": 1.3}}
+    inc = {"edge": 7726.0, "oos": 3461.0, "dd": 72.5, "config": {}}
+    md = cr.render_champions_md(
+        regimes=["R4parab"], champions={"R4parab": champ},
+        incumbents={"R4parab": inc}, live_regime="R4parab")
+    row = [ln for ln in md.splitlines() if ln.startswith("| **R4parab**")][0]
+    assert "SWITCH" in row and "exceeds" in row
+    assert "HOLD" not in row
+
+
+def test_compliant_incumbent_beats_weaker_champion():
+    """A DD-compliant incumbent with higher OOS holds against a weaker champion."""
+    champ = {"feed": "adD_closeTP", "edge": 500.0, "oos": 200.0, "dd": 30.0,
+             "config": {"entry_count": 3}}
+    inc = {"edge": 2000.0, "oos": 900.0, "dd": 35.0, "config": {}}
+    md = cr.render_champions_md(
+        regimes=["R4parab"], champions={"R4parab": champ},
+        incumbents={"R4parab": inc}, live_regime="R4parab")
+    row = [ln for ln in md.splitlines() if ln.startswith("| **R4parab**")][0]
+    assert "HOLD" in row
