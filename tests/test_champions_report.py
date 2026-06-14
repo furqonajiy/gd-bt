@@ -133,6 +133,79 @@ def test_rendered_cli_is_runnable_backtest_explicit():
         assert "--entries 4" in cli
 
 
+def test_render_deployment_cli_full_format():
+    """The deployment CLI carries the header, all three sections (generate /
+    backtest / live), the correct feed + regime, and a runnable auto_explicit
+    live command -- the self_cli_R4_only.txt deployment format."""
+    cfg = {"entry_count": 4, "sl_multiplier": 1.61, "tp1_lock_delay_minutes": 24,
+           "final_target": "TP3", "risk_per_signal": 0.05575}
+    text = cr.render_deployment_cli(
+        cfg, regime="R4parab", feed="breakout",
+        edge=6031.2, oos=1742.8, dd=35.95)
+    assert text.strip()  # non-empty
+    # Header block: regime, champion line, detector, risk caveat.
+    assert "R4parab champion" in text
+    assert "feed=breakout" in text
+    assert "edge $6,031" in text and "OOS $1,743" in text and "DD 36.0%" in text
+    assert "python tools/regime_auto.py" in text
+    assert "<=5% cap" in text or "--risk 0.05" in text
+    # Section 1 GENERATE: the breakout generator + its archive output.
+    assert "1. GENERATE" in text
+    assert "tools/generate_breakout_signals.py" in text
+    assert "generated/adaptive_breakout.txt" in text
+    # Section 2 BACKTEST: reuses render_champion_cli (regime slice + charts).
+    assert "2. BACKTEST" in text
+    assert ("tools/backtest_explicit.py" in text
+            or "xauusd_trading.cli backtest" in text)
+    assert "data/XAUUSD_M1_2026*_ELEV8.csv" in text
+    # Section 3 LIVE: auto_explicit with the live tail; backtest-only flags gone.
+    assert "3. LIVE AUTO EXECUTOR" in text
+    assert "tools/auto_explicit.py" in text
+    assert "--positions-json positions_R4parab.json" in text
+    assert "--reopen-missing-positions true" in text
+    assert "--watch-interval 15" in text
+    assert "--charts" not in text.split("3. LIVE")[1]
+    assert "--output-dir" not in text.split("3. LIVE")[1]
+    assert "--max-drawdown-limit-pct" not in text.split("3. LIVE")[1]
+
+
+def test_render_deployment_cli_feed_routes_to_generator():
+    """meanrev and ad* feeds route to their generators; backtest signals match."""
+    mr = cr.render_deployment_cli(
+        {"entry_count": 6}, regime="R3strong", feed="meanrev",
+        edge=100.0, oos=50.0, dd=20.0)
+    assert "tools/generate_meanrev_signals.py" in mr
+    assert "generated/adaptive_meanrev.txt" in mr
+    assert "R3strong" in mr
+
+    adf = cr.render_deployment_cli(
+        {"entry_count": 6}, regime="R3strong", feed="adF_tightSL_closeTP",
+        edge=13331.0, oos=2242.0, dd=29.7)
+    assert "tools/generate_adaptive_self_signals.py" in adf
+    assert "generated/adaptive_adF_tightSL_closeTP.txt" in adf
+
+
+def test_write_deployment_cli_files_champion_and_placeholder(tmp_path):
+    """write_deployment_cli_files emits cli/best_<regime>.txt: full deployment
+    text when a champion exists, the no-champion note otherwise."""
+    out = tmp_path / "sweep_regime_out_grid"
+    out.mkdir()
+    champ = {"feed": "breakout", "edge": 6031.0, "oos": 1742.0, "dd": 35.9,
+             "config": {"entry_count": 4, "sl_multiplier": 1.61}}
+    champions = {"R3strong": None, "R4parab": champ}
+    cli_dir = cr.write_deployment_cli_files(
+        out, ["R3strong", "R4parab"], champions)
+    assert cli_dir == tmp_path / "cli"
+
+    r4 = (cli_dir / "best_R4parab.txt").read_text()
+    assert "tools/auto_explicit.py" in r4
+    assert "feed=breakout" in r4
+
+    r3 = (cli_dir / "best_R3strong.txt").read_text()
+    assert "no DD<=40% champion yet" in r3
+    assert "incumbent" in r3
+
+
 def test_noncompliant_incumbent_is_disqualified():
     """An incumbent that exceeds the DD gate cannot HOLD against a compliant
     champion, even if its raw OOS is higher (DD<=40% is a hard constraint)."""

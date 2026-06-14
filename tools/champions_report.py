@@ -184,6 +184,196 @@ def render_champion_cli(cfg: dict, *, regime: str, feed: str) -> str:
 
 
 # --------------------------------------------------------------------------
+# Full deployment CLI for a published champion (self_cli_R4_only.txt format).
+# --------------------------------------------------------------------------
+def _generate_command(feed: str) -> str:
+    """Render the GENERATE-section command that refreshes ``feed``'s archive.
+
+    Maps a champion feed to the generator that produces its committed archive
+    feed file. ``breakout``/``meanrev`` have dedicated generators; everything
+    else (the ``ad*`` matrix feeds) comes from the adaptive-self generator. A
+    one-line pointer is enough -- the exact ATR-multiplier args live in the
+    generator's defaults / the archive itself.
+    """
+    out = feed_signals(feed)  # generated/adaptive_<feed>.txt
+    cont = " `\n  "
+    if feed == "breakout":
+        return (
+            "# ATR-adaptive breakout signals over ALL chart history (SL/TP scale\n"
+            "# with M15 ATR, so they auto-size to the regime). Refresh before each run.\n"
+            "python tools/generate_breakout_signals.py" + cont
+            + cont.join([
+                "--m1-charts data/XAUUSD_M1_*_ELEV8.csv",
+                f"--output {out}",
+                "--start-date 2021-11-01",
+                "--source-tz-offset 7",
+            ]) + "\n")
+    if feed == "meanrev":
+        return (
+            "# ATR-adaptive mean-reversion signals over ALL chart history (fade back\n"
+            "# to the M15 EMA; SL/TP scale with ATR). Refresh before each run.\n"
+            "python tools/generate_meanrev_signals.py" + cont
+            + cont.join([
+                "--m1-charts data/XAUUSD_M1_*_ELEV8.csv",
+                f"--output {out}",
+                "--start-date 2021-11-01",
+                "--source-tz-offset 7",
+            ]) + "\n")
+    # Any other feed (the adF_tightSL_closeTP-style matrix feeds) is an
+    # adaptive-self variant; the generator's feed knobs are baked into its
+    # defaults for this label, so the pointer command is sufficient.
+    return (
+        f"# ATR-adaptive self signals for feed `{feed}` over ALL chart history.\n"
+        "# (The feed's SL/TP ATR-multiplier knobs are the generator's defaults\n"
+        "#  for this variant; refresh the archive before each run.)\n"
+        "python tools/generate_adaptive_self_signals.py" + cont
+        + cont.join([
+            "--m1-charts data/XAUUSD_M1_*_ELEV8.csv",
+            f"--output {out}",
+            "--start-date 2021-11-01",
+            "--source-tz-offset 7",
+        ]) + "\n")
+
+
+# Backtest-only flags dropped from the LIVE auto_explicit command: they have no
+# meaning for a live executor (no historical charts, no output workbook, no
+# drawdown-abort, no chart sync, no progress timer).
+_LIVE_DROP_FLAGS = frozenset({
+    "--charts", "--output-dir", "--start-date", "--max-drawdown-limit-pct",
+    "--sync-charts", "--progress-interval-seconds",
+})
+
+
+def render_live_cli(cfg: dict, *, regime: str, feed: str) -> str:
+    """A ``tools/auto_explicit.py`` command with the same strategy/sizing flags.
+
+    Reuses the backtest flag mapping (``baseline_explicit_args``) so the live
+    executor sends byte-identical strategy params, then strips the
+    backtest-only flags and swaps in the live-session flags (positions registry
+    per regime, MT5 watch/symbol/offset, self-heal toggles, initial capital).
+    Falls back to a minimal but runnable line when the orchestrator renderer is
+    unavailable.
+    """
+    signals = feed_signals(feed)
+    cont = " \\\n  "
+    live_tail = [
+        f"--positions-json positions_{regime}.json",
+        "--watch-interval 15",
+        "--mt5-symbol XAUUSD",
+        "--mt5-server-offset 3",
+        "--mt5-history-bars 5000",
+        "--replace-missing-entries false",
+        "--reopen-missing-positions true",
+    ]
+    try:
+        from sweep2021 import orchestrate as o  # noqa: E402
+
+        args = list(o.baseline_explicit_args(
+            cfg, signals=signals, output_dir=f"reports/CHAMPION_{regime}"))
+        pairs: list[str] = [f"--signals {signals}"]
+        pairs.extend(live_tail)
+        i = 0
+        while i < len(args):
+            flag = str(args[i])
+            val = str(args[i + 1]) if i + 1 < len(args) else ""
+            if flag in _LIVE_DROP_FLAGS or flag == "--signals":
+                i += 2
+                continue
+            if flag == "--initial-capital":
+                val = "5000"
+            pairs.append(f"{flag} {val}".rstrip())
+            i += 2
+        return "python tools/auto_explicit.py" + cont + cont.join(pairs) + "\n"
+    except Exception:
+        def g(k, d):
+            v = cfg.get(k)
+            return d if v is None else v
+        return (
+            "python tools/auto_explicit.py" + cont
+            + cont.join([f"--signals {signals}", *live_tail,
+                f"--sizing-mode risk",
+                f"--risk {g('risk_per_signal', 0.01)}",
+                f"--entries {int(g('entry_count', 6))}",
+                f"--sl-multiplier {g('sl_multiplier', 2.1)}",
+                f"--tp1-lock-delay-minutes {int(g('tp1_lock_delay_minutes', 24))}",
+                f"--final-target {g('final_target', 'TP3')}",
+                f"--initial-capital 5000",
+            ]) + "\n")
+
+
+def render_deployment_cli(cfg: dict, *, regime: str, feed: str,
+                          edge, oos, dd) -> str:
+    """The full ``self_cli_R4_only.txt``-style deployment file for a champion.
+
+    Three sections -- GENERATE the archive feed, BACKTEST the regime slice, and
+    the LIVE auto executor -- under a header comment block that names the
+    regime, the champion's feed + edge/oos/dd, the live-regime detector, and the
+    <=5% risk caveat. ``render_champion_cli`` supplies the BACKTEST body so the
+    backtest command stays the single source of truth for the flag set.
+    """
+    edge_s = f"${_f(edge):,.0f}"
+    oos_s = f"${_f(oos):,.0f}"
+    dd_s = f"{_dd({'dd': dd}) or 0.0:.1f}%"
+    lines: list[str] = []
+    lines.append("# " + "=" * 73)
+    lines.append(f"# {regime} champion — deployment CLI (GENERATE / BACKTEST / LIVE)")
+    lines.append(f"# regime: {regime}. Detect the live regime with:")
+    lines.append("#   python tools/regime_auto.py   # -> picks the live regime by current M15 ATR")
+    lines.append(f"# champion: feed={feed} | edge {edge_s} | OOS {oos_s} | "
+                 f"DD {dd_s} (<=40% gate)")
+    lines.append("# NOTE: the sweep may pick --risk slightly above 5% to maximize profit.")
+    lines.append("#       Set --risk 0.05 to honor your <=5% cap (slightly lower profit +")
+    lines.append("#       lower DD). risk is your sizing choice; the strategy params define")
+    lines.append("#       the champion. compounded/$ are model upper bounds — they rank")
+    lines.append("#       configs, not forecast money.")
+    lines.append("# " + "=" * 73)
+    lines.append("")
+    lines.append(f"# ===== 1. GENERATE the {regime} archive feed =====")
+    lines.append(_generate_command(feed).rstrip("\n"))
+    lines.append("")
+    lines.append(f"# ===== 2. BACKTEST {regime} (regime slice only) =====")
+    lines.append(render_champion_cli(cfg, regime=regime, feed=feed).rstrip("\n"))
+    lines.append("")
+    lines.append(f"# ===== 3. LIVE AUTO EXECUTOR (places + manages orders for {regime}) =====")
+    lines.append("# Same strategy params as the backtest above. Note: there is no")
+    lines.append("# live_feed_loop --family for this feed yet, so regenerate the archive")
+    lines.append("# (section 1) on a schedule / before each session instead of a rolling")
+    lines.append("# live loop. Set --risk to your live sizing choice (e.g. 0.05).")
+    lines.append(render_live_cli(cfg, regime=regime, feed=feed).rstrip("\n"))
+    return "\n".join(lines) + "\n"
+
+
+# Pretty-printed text for a regime with no published DD<=gate champion yet.
+def no_champion_note(regime: str, dd_gate: float = DD_GATE) -> str:
+    return (f"# {regime}: no DD<={dd_gate:.0f}% champion yet — run your incumbent.\n")
+
+
+def write_deployment_cli_files(out_dir: Path, regimes: list[str],
+                               champions: dict[str, dict | None],
+                               *, dd_gate: float = DD_GATE) -> Path:
+    """Write ``cli/best_<regime>.txt`` deployment files for every regime.
+
+    ``cli/`` lives at the repo root (``out_dir.parent`` == ROOT in CI). Each
+    file is the full deployment CLI when a champion exists, else a one-line
+    no-champion note. Returns the ``cli/`` directory so the caller can ``git
+    add`` it.
+    """
+    cli_dir = out_dir.parent / "cli"
+    cli_dir.mkdir(parents=True, exist_ok=True)
+    for regime in regimes:
+        champ = champions.get(regime)
+        target = cli_dir / f"best_{regime}.txt"
+        if champ:
+            target.write_text(render_deployment_cli(
+                champ.get("config") or {}, regime=regime,
+                feed=champ.get("feed") or "",
+                edge=champ.get("edge"), oos=champ.get("oos"), dd=champ.get("dd")))
+        else:
+            target.write_text(no_champion_note(regime, dd_gate))
+    return cli_dir
+
+
+# --------------------------------------------------------------------------
 # Monotonic champion store.
 # --------------------------------------------------------------------------
 def load_json(path: Path) -> dict | None:
