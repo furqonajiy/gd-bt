@@ -51,7 +51,7 @@ jobs:
         feed: [scalper24, risk02_allhours, scalper_widerr24, better]
         shard: [0, 1, 2, 3]
     runs-on: ubuntu-latest
-    timeout-minutes: 330        # under the 6h job cap, room for upload
+    timeout-minutes: 70         # short rounds -> aggregate checkpoints ~hourly
     steps:
       - name: Checkout research branch
         uses: actions/checkout@v4
@@ -85,8 +85,9 @@ jobs:
         run: |
           # Each shard uses seed 42+shard so it draws different candidates; the
           # champion seeds are auto-prepended in every shard. --resume continues
-          # from the checked-out results.jsonl. 5h box hands off to the next pass.
-          timeout 18000 python tools/sweep_self_limit.py \
+          # from the checked-out results.jsonl. ~55min box -> the aggregate
+          # commits a checkpoint roughly hourly, then the next round resumes.
+          timeout 3300 python tools/sweep_self_limit.py \
             --signals "generated/self_${{ matrix.feed }}.txt" \
             --charts data/XAUUSD_M1_*_ELEV8.csv \
             --seed $((42 + ${{ matrix.shard }})) \
