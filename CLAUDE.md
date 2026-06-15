@@ -227,7 +227,8 @@ sections (Signal Auto Generator live-loop / Backtest CLI / Auto CLI; Telegram
 Listener only for the Victor feed). The current R4 champion is
 `cli_champion_R4_scalper24_no_trailing` — **SC24 with `tp1_lock_delay 15`**
 ("SC24T15"), the regime sweep's R4 winner (beats SC24 on net+bonus/OOS/DD;
-`champions/CHAMPION_R4parab.json`); others: `cli_current_live` (Victor), `cli_R4_scalper24`,
+`champions/CHAMPION_R4parab.json`); others: `cli_champion_victor` (Victor — feed
+`generated/victor_live.txt`, positions `positions_victor.json`, tag VIC), `cli_R4_scalper24`,
 `cli_R4_breakout`, `cli_trailing_risk02allhours`, `cli_resync_m1_from_2020`, and
 `cli_adaptive_regime` (the `auto --adaptive` regime auto-switch — one executor
 that runs each regime's `CHAMPION_<regime>.json` and falls back to SC24).
