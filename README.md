@@ -62,7 +62,8 @@ Writes an Excel report (`backtest_results*.xlsx`) with three sheets:
 - **Per-Entry Detail** — one row per Entry slot, split into **ORIGINAL**
   (the signal as written) vs **EXECUTED** (backtest result) column groups.
 
-Charts are M1 OHLC CSVs in the broker's **GMT+3** chart timezone. To compare
+Charts are M1 OHLC CSVs in the broker's **Eastern European (EET/EEST)** chart
+timezone — UTC+2 winter / UTC+3 summer, EU rule (`core/chart_tz.py`). To compare
 a backtest against what really filled on MT5, overlay a native MT5 history
 export with the explicit runner's `--mt5-history FILE` (see
 [`docs/MT5_SETUP.md`](docs/MT5_SETUP.md)).

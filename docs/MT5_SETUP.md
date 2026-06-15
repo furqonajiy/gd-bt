@@ -45,13 +45,16 @@ string you see there.
 
 ## 4. Confirm your broker server timezone
 
-Most XAUUSD brokers run their server clock at **GMT+3** (year-round, no DST,
-or with the same DST rule as Europe/Athens). This matches the project's
-chart timezone, so no shift is needed and `--mt5-server-offset 3` (the
-default) works.
+XAUUSD brokers typically run their server clock on **Eastern European Time
+(EET/EEST)** — UTC+2 in winter, UTC+3 in summer, switching on the EU rule (last
+Sunday of March / October). The project's chart timezone is exactly this
+(`core/chart_tz.py`), and `fetch`/`decide` store the broker clock **verbatim**,
+so **keep `--mt5-server-offset 3` year-round** (it applies a 0-hour shift =
+store-as-is). Do **not** switch it to 2 in winter — that would add an hour and
+corrupt the timestamps.
 
-If your broker is on a different offset (e.g. some are GMT+2, GMT+0), pass
-the right value:
+Only change it if your broker uses a genuinely different *fixed* offset and you
+want it normalised; e.g.:
 
 ```powershell
 --mt5-server-offset 2
