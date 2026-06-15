@@ -1,17 +1,21 @@
-# Live trading pipeline (PowerShell, conda env `trading`).
+# Live trading pipeline — VICTOR provider feed (PowerShell, conda env `trading`).
+# Executor tag: VIC.
 #
-# Strategy = sweep-optimized BEST (victor_signals, 2025-01-01 -> 2026-06):
-#   entries 8, range_to_sl, entry-sl-gap 0.5, sl-multiplier 2.1, activation-delay 2,
-#   pending-expiry 180, max-hold 240, final-target TP3, locks on, tp1-lock-delay 24,
-#   tp2-lock-delay 2, no trailing, staggered SL, risk 5%, capital 5000.
-#   -> trading P&L ~$710M @ 49.4% max DD  (vs the $220M reference baseline).
-#   The big lever was tp1-lock-delay 12 -> 24 (let TP1 winners run before locking SL).
-#   NOTE: DD sits right at the 50% cap. Safer alternative with ~3% headroom:
-#         sl-multiplier 2.2 (keep tp1-lock-delay 24) -> ~$644M @ 46.9% DD.
-#   Figures are compounded from $5k and are in-sample; validate out-of-sample.
+# Strategy: victor_signals, entries 8 / range_to_sl / entry-sl-gap 0.5 /
+#   sl-multiplier 2.1 / activation-delay 2 / pending-expiry 180 / max-hold 240 /
+#   final-target TP3 / locks on / tp1-lock-delay 24 / tp2-lock-delay 2,
+#   NO trailing, risk 5%, capital $5,000.
 #
-# Run blocks 1-3 each in their own window, in order: listener -> filter -> auto.
-# The auto runner's strategy parameters mirror the parity backtest at the bottom.
+# CURRENT-DATA REALITY (2026 @ $5k, resynced feed):
+#   - at risk 5% the concurrent DD is ~57.6% -> OVER the <=40% gate (not compliant);
+#   - at risk 1% it's compliant (~25% DD) but small (~$16k net+bonus).
+#   The deployable R4 champion is cli_champion_R4_scalper24_no_trailing
+#   (net+bonus $598,318 @ 32.8% DD). Run THIS (Victor) alongside it — distinct
+#   --strategy-tag (VIC vs SC24) keeps them isolated on one MT5 account.
+#   compounded $ are model upper bounds — they rank configs, not forecast money.
+#
+# Run blocks each in their own window, in order: listener -> generator -> backtest -> auto.
+# The auto runner's strategy parameters mirror the backtest below.
 
 cd C:\Git\github.com\furqonajiy\xauusd-backtest
 conda activate trading

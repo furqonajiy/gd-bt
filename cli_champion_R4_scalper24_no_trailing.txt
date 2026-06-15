@@ -1,5 +1,5 @@
 # =========================================================================
-# R4 (2026) CHAMPION — SCALPER24, NO TRAILING   (promoted 2026-06-15)
+# R4 (2026) CHAMPION — SCALPER24, NO TRAILING  (promoted 2026-06-15) | tag SC24
 # Best DD<=40% config on the RESYNCED data: scalper24 feed, e6 / slm2.1 /
 # tp1-lock-delay 24 + TP3 + SL locks, NO trailing, risk 1%.
 #   2026 @ $5k:  net+bonus $598,318  |  concurrent DD 32.8%  (compliant)

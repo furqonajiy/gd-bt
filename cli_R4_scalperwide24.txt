@@ -1,5 +1,5 @@
 # =========================================================================
-# R4 (2026) — SCALPERWIDE24   [SUPERSEDED 2026-06-15]
+# R4 (2026) — SCALPERWIDE24  [SUPERSEDED 2026-06-15] | tag R4SW
 # Was the sweep champion on the PRE-resync feed ($960k). On the RESYNCED data it
 # makes net+bonus $197,959 @ 31.6% DD — BEATEN by cli_champion_R4_scalper24_no_trailing
 # ($598,318 @ 32.8%). Kept for reference; deploy the no-trailing champion instead.

@@ -1,13 +1,11 @@
 # =========================================================================
-# R4 PARABOLIC champion — ADAPTIVE BREAKOUT (run R4 only)
-# regime: R4 parabolic (high volatility, e.g. 2026). Detect live with:
-#   python tools/regime_auto.py   # -> picks R4 vs R3 by current M15 ATR
-# champion: feed=breakout | edge $6,031 | OOS $1,743 | DD 35.9% (<=40% gate)
-# vs your incumbent in R4: OOS $3,461 @ 72.5% DD (disqualified by >40% DD)
-# NOTE: champion was found at --risk 0.05575 (5.575%). Set --risk 0.05 to honor
-#       your <=5% cap (slightly lower profit + lower DD). risk is your sizing
-#       choice; the strategy params below are what define the champion.
-# compounded/$ are model upper bounds - they rank configs, not forecast money.
+# R4 — ADAPTIVE BREAKOUT   [REFERENCE / NOT THE CHAMPION]   Executor tag: BRK
+# An old $1k-era R4 pick (breakout feed, edge $6,031 / OOS $1,743 / DD 35.9%).
+# SUPERSEDED: the deployable R4 champion is cli_champion_R4_scalper24_no_trailing
+#   (net+bonus $598,318 @ 32.8% DD on the resynced data). Kept for reference.
+# NOTE: live_feed_loop has no breakout family, so the generator below is ONE-SHOT
+#   (refresh the archive on a schedule, not a continuous loop). compounded/$ are
+#   model upper bounds — they rank configs, not forecast money.
 # =========================================================================
 
 # ===== 1. SIGNAL AUTO GENERATOR =====
