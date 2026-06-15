@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import Iterable
 
 from xauusd_trading import Bar
+from xauusd_trading.core import chart_tz
 
 
 @dataclass(frozen=True)
@@ -272,8 +273,21 @@ def format_generated_signals(
     source_tz_offset: int = 3,
     price_digits: int = 2,
 ) -> str:
-    """Render generated signals in the existing human signal-file format."""
-    ordered = sorted(list(signals), key=lambda s: (s.signal_time_chart, s.side))
+    """Render generated signals in the existing human signal-file format.
+
+    Signals are generated in CHART time (GMT+3, EET/EEST). The feed is DISPLAYED
+    in ``source_tz_offset`` (header GMT+N + per-line clock), so each chart-local
+    time is converted to the display tz via ``chart_tz.from_chart_tz`` -- which is
+    DST-aware (EET/EEST), so the engine's GMT+N -> chart round-trip lands on the
+    exact bar even in winter (+2). Group/sort by the DISPLAY datetime so a signal
+    shifted across midnight lands in the right block. Offset 3 in summer is a
+    no-op, keeping the output byte-identical to the legacy behavior.
+    """
+    converted = [
+        (chart_tz.from_chart_tz(s.signal_time_chart, source_tz_offset), s)
+        for s in signals
+    ]
+    ordered = sorted(converted, key=lambda ds: (ds[0], ds[1].side))
     if not ordered:
         return ""
 
@@ -282,8 +296,8 @@ def format_generated_signals(
     day_counter = 0
     tz_label = f"GMT+{source_tz_offset}" if source_tz_offset >= 0 else f"GMT{source_tz_offset}"
 
-    for signal in ordered:
-        date_text = signal.signal_time_chart.date().isoformat()
+    for disp, signal in ordered:
+        date_text = disp.date().isoformat()
         if date_text != current_date:
             if lines:
                 lines.append("")
@@ -292,7 +306,7 @@ def format_generated_signals(
             day_counter = 0
 
         day_counter += 1
-        time_text = signal.signal_time_chart.strftime("%I:%M %p")
+        time_text = disp.strftime("%I:%M %p")
         lines.append(
             f"{day_counter}. {signal.side} XAUUSD "
             f"{_price_text(signal.r1, price_digits)} - {_price_text(signal.r2, price_digits)} "
