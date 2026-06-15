@@ -30,10 +30,12 @@ or ask the user to re‑explain.
   among configs that pass the **DD ≤ 40%** gate **and** a positive held‑out
   OOS sanity gate. Trade frequency is now a *feature*, not noise: more trades
   → more closed lots → more bonus + faster compounding, so a dense feed that
-  stays inside the DD cap is exactly what we want. The old worry that
-  compounded net "explodes to trillions" is what the **DD ≤ 40% cap + OOS > 0
-  gate** exist to prevent — a config that only looks huge because it
-  over‑levers blows the DD gate and is rejected before it can be ranked.
+  stays inside the DD cap is exactly what we want. The compounded figure **does**
+  reach billions/quadrillions on a dense feed — that's expected; treat it as a
+  **model upper bound that RANKS configs, not a money forecast** (the live CLIs
+  say the same). It is *not* meaningless for ranking: the **DD ≤ 40% cap** bounds
+  the leverage it can chase and the **OOS > 0 gate** rejects in‑sample‑only
+  blow‑ups, so the ordering tracks genuine compounding power, not over‑levering.
 - **Legacy metrics (still computed, now cross‑checks not the rank):**
   - **EDGE** — fixed‑lot, sizing‑neutral profit. A *quality* cross‑check.
   - **OOS** — profit on the held‑out last 6 months (`--validate-months 6`).
@@ -241,11 +243,17 @@ echo "$(date -u +%H:%M)Z $up <feed>=$n/300"
 1. **Verify M1 data first** — daily/hourly bars get mislabeled as M1.
 2. **Baseline is a seeded config, not exhaustive** — the grid must include its
    values AND it must be re‑seeded, or the sweep can't reach it.
-3. **Rank on compounded net + $3/closed‑lot bonus** (this *supersedes* the old
-   "rank by OOS/edge, never compounded net" guidance). It does not blow up to
-   "trillions" because the **DD ≤ 40% cap + OOS > 0 gate** reject over‑levered
-   configs first; edge/OOS are now cross‑checks, and risk is swept 1–5% up to
-   the DD gate. Sweep one regime at a time, R4 → R3 → R2 → R1.
+3. **Rank on compounded net + $3/closed‑lot bonus** (`risk_net_profit_with_bonus`;
+   this *supersedes* the old "rank by OOS/edge, never compounded net" guidance).
+   The compounded figure **does** reach billions/quadrillions on a dense feed
+   (1% of a growing balance over thousands of signals) — that is expected and it
+   is a **model upper bound that RANKS configs, not a money forecast**. The
+   **DD ≤ 40% cap + OOS > 0 gate** keep the ranking honest: DD bounds the risk it
+   can chase and OOS rejects in‑sample‑only blow‑ups; edge/OOS are cross‑checks,
+   and risk is swept 1–5% (down to 1%) up to the DD gate. A **DD 40–50% "stretch"
+   tier** is also published when a config beats the DD≤40% champion's net+bonus
+   by ≥25% (`champions_report.stretch_challenger`). Sweep one regime at a time,
+   R4 → R3 → R2 → R1.
 4. **In‑container pauses when idle** and costs Claude tokens to keep warm;
    GitHub‑paid is the only true 24/7. State this tradeoff every time.
 5. **Single writer per branch** — local + CI both pushing = lost work.

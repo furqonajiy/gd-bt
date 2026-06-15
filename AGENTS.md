@@ -128,7 +128,16 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   restored price-aware — at market when the price is at-or-better than the
   leg's entry or its stop is already locked at/beyond entry, otherwise via a
   LIMIT at the original entry inside the pending window (never chases) — and
-  replay-open signals survive the prune. Fresh
+  replay-open signals survive the prune. In this **reopen/mirror mode**,
+  `place_signal` also stops skipping **partially played-out** signals: when the
+  executor first meets a signal whose replay already closed some legs, it places
+  the still-PENDING legs as fresh LIMITs and tracks the signal on its replay-OPEN
+  legs, so the reopen pass restores the already-OPEN legs (the `_allow_partial_placement`
+  gate; default OFF keeps the legacy signal-level skip, so backtests are unchanged).
+  Per-entry identity holds end-to-end: the manage/reopen path recovers the
+  strategy tag from the registry `signal_key`, so every managed/reopened leg
+  carries the same tagged magic + `[TAG-]MMDD#DD.N` comment `place_signal` used.
+  Fresh
   placement is history-gated: a magic with closed deals is never re-placed,
   so a finished signal can't trade twice. The late TP1/TP2 catch-up protects
   legs with a stop at the lock level (ratcheted toward it on recovery) and
@@ -164,9 +173,16 @@ need to be told to. Non-negotiables from it: **verify the M1 data is real
 1-minute bars first** (daily/hourly bars get mislabeled as M1); the **baseline
 is a hand-seeded config, not exhaustive search**, so a sweep must both **widen
 the grid** to include the champion's values *and* **re-seed the champion** or it
-can't beat it; **rank by OOS / fixed-lot edge, never raw compounded net** (which
-explodes to a meaningless trillions at 1% over years); keep **one writer per
-sweep branch**; and run sweeps on a `research/...` branch, never on `main`.
+can't beat it — the live champion **SC24** is defined once in
+`tools/sweep.py::sc24_config()`, seeded with `sc24_neighborhood_grid()`, and is
+also the sweep's **incumbent** (`tools/incumbent_baseline.py`); **rank by
+compounded net P&L + the $3/closed-lot bonus** (`risk_net_profit_with_bonus`) at
+**DD ≤ 40% with OOS > 0** (the OOS guard rejects in-sample blow-ups; the
+compounded figure is a *model upper bound* that **ranks** configs, not a money
+forecast — it does reach billions/quadrillions and that is expected), plus a
+**DD 40–50% "stretch" tier** surfaced only when it beats the DD≤40% champion's
+net+bonus by ≥25%; keep **one writer per sweep branch**; and run sweeps on a
+`research/...` branch, never on `main`.
 
 ## Commands
 

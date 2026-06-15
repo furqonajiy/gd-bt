@@ -347,6 +347,14 @@ MT5 footprint, so a hand-closed signal can't vanish before it is restored.
 If you truly want out of a position early, close it AND remove the feed line
 (or stop the runner) — otherwise the engine will put it back.
 
+**Reopen mode also handles partially played-out signals.** If you start the
+executor mid-life and a signal's replay has already closed some legs, `auto`
+no longer skips the whole signal: it places the still-PENDING legs as fresh
+LIMITs now and tracks the signal on its replay-OPEN legs, so those are re-opened
+by the rule above on the next cycle. (Without `--reopen-missing-positions` the
+legacy behaviour stands — a partial signal is skipped wholesale, because the
+registry is signal-level and there is no per-entry healing to mirror it.)
+
 Separately from this flag, `auto` never re-places a signal whose magic
 already has **deal history** in MT5: a finished signal can't be accidentally
 traded twice (the 2026-06-12 `#10` double-trade), even if its registry entry
