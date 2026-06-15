@@ -1215,7 +1215,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
 
     # 12. Re-read signals.txt.
     try:
-        all_signals = parse_signals_file(signals_path)
+        all_signals = parse_signals_file(signals_path, tag=getattr(args, "strategy_tag", "") or "")
     except Exception as e:
         print(f"[signals] failed to parse {signals_path}: {e}")
         forensic.error("auto_pass.parse_signals", str(e), traceback.format_exc())
@@ -1531,6 +1531,11 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--signals", required=True)
     pa.add_argument("--positions-json", default=None)
     pa.add_argument("--watch-interval", type=float, default=5.0)
+    pa.add_argument("--strategy-tag", default="",
+                    help="Per-executor namespace prefix stamped onto each signal's "
+                         "magic + MT5 comment. REQUIRED-distinct when running two "
+                         "auto executors on one account (e.g. VIC vs R4SW) so they "
+                         "never manage each other's orders. Keep it short (<=6 chars).")
     pa.add_argument("--no-clear", action="store_true")
     pa.add_argument("--replace-missing-entries", action="store_true",
                     help="Each cycle, re-place still-pending LIMIT entries that vanished from MT5 "
