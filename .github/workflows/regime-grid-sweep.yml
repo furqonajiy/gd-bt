@@ -26,7 +26,7 @@ name: regime-grid-sweep
 # SWITCHES when a challenger STRICTLY beats it at DD<=40%. Two additions make the
 # grid drive that decision from a single pulled file:
 #   * a one-time, CACHED `incumbent` job scores the incumbent config on the FIXED
-#     feed (generated/self_better.txt) per regime, writing
+#     dense live feed (generated/self_scalper24.txt) per regime, writing
 #     sweep_regime_out_grid/INCUMBENT_<regime>.json (committed once, then reused);
 #   * the aggregate publishes CHAMPIONS.md at the repo root each checkpoint:
 #     per-regime incumbent | best challenger | VERDICT (SWITCH w/ runnable CLI vs
@@ -280,15 +280,18 @@ jobs:
                 CHARTS="data/XAUUSD_M1_2026*_ELEV8.csv"
                 SIG_RE='^2026-' ;;
             esac
-            # Same OOS-window bug as the shard job: incumbent_baseline.py also calls
-            # sweep.split_train_validate(), so the full self_better.txt feed would put
-            # the held-out 2 months (2026-05/06) outside every non-R4 regime's charts.
-            # Filter the incumbent feed to this regime's signal months first.
-            FILTERED="/tmp/feed_self_better_${regime}.txt"
+            # The incumbent is the user's LIVE current CLI: the scalper24 config
+            # (e6/slm2.1/delay24 at live 1% risk, pinned in incumbent_config) on
+            # the DENSE self_scalper24 archive it actually trades -- NOT the
+            # lower-frequency self_better feed, which understates the bonus +
+            # compounding the live CLI earns. Same OOS-window handling as the shard
+            # job: incumbent_baseline.py calls sweep.split_train_validate(), so
+            # filter the feed to THIS regime's signal months first.
+            FILTERED="/tmp/feed_incumbent_${regime}.txt"
             awk -v re="$SIG_RE" '
               /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] GMT/ { keep = (substr($0,1,7) ~ re); if (keep) print; next }
               keep
-            ' generated/self_better.txt > "$FILTERED"
+            ' generated/self_scalper24.txt > "$FILTERED"
             test -s "$FILTERED" || { echo "ERROR: filtered incumbent feed empty for ${regime}"; exit 1; }
             echo "incumbent ${regime}: computing on regime-filtered ${FILTERED} ($(grep -cE '^[0-9]+\. ' "$FILTERED") signals) ..."
             # Non-fatal per regime: a single regime's baseline failing must not red
