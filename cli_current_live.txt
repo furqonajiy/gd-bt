@@ -79,6 +79,7 @@ python tools/backtest_explicit.py `
 python tools/auto_explicit.py `
   --signals generated/live_provider_all.txt `
   --positions-json positions_best_slm21_tp1delay24.json `
+  --strategy-tag VIC `
   --watch-interval 15 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `

@@ -80,6 +80,7 @@ python tools/backtest_explicit.py `
 python tools/auto_explicit.py `
   --signals generated/self_scalper_widerr24_live.txt `
   --positions-json positions_R4parab.json `
+  --strategy-tag R4SW `
   --watch-interval 15 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `

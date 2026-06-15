@@ -65,10 +65,15 @@ class Signal:
     entries: list[float]                 # legacy 3-entry ladder; parse-time validation only
     anomalies: list[str] = field(default_factory=list)
     structural_anomaly: bool = False
+    # Optional per-executor namespace prefix. Empty for backtests (so behavior is
+    # unchanged); set live via `--strategy-tag` so two auto executors on the SAME
+    # MT5 account get DISJOINT magic numbers + order comments and never manage each
+    # other's orders (e.g. Victor "VIC..." vs scalper "R4SW...").
+    tag: str = ""
 
     @property
     def signal_key(self) -> str:
-        return f"{self.source_date}#{self.day_id:02d}"
+        return f"{self.tag}{self.source_date}#{self.day_id:02d}"
 
     @property
     def range_high(self) -> float:
@@ -228,8 +233,14 @@ def parse_signal_line(
     )
 
 
-def parse_signals_file(path: Path) -> list[Signal]:
-    """Parse a multi-day signals file. Returns signals in chart-time order."""
+def parse_signals_file(path: Path, *, tag: str = "") -> list[Signal]:
+    """Parse a multi-day signals file. Returns signals in chart-time order.
+
+    ``tag`` is an optional per-executor namespace stamped onto every signal's
+    ``signal_key`` (and therefore its MT5 magic + order comment), so two live
+    executors on one account stay isolated. Empty (the default) keeps the
+    backtest/legacy behaviour byte-identical.
+    """
     signals: list[Signal] = []
     current_date: Optional[str] = None
     current_offset: Optional[int] = None
@@ -249,6 +260,8 @@ def parse_signals_file(path: Path) -> list[Signal]:
         sig = parse_signal_line(line, current_date, current_offset, next_id)
         if sig is None:
             continue
+        if tag:
+            sig.tag = tag
         signals.append(sig)
         next_id += 1
 

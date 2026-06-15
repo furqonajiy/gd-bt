@@ -95,7 +95,12 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   `execution/mt5_executor.py`). Entry shape:
   `{"signal_key", "signal", "date", "tz", "equity_at_open", "executed_at"?}`.
   It is auto-pruned by `--execute` / `auto` when a signal's MT5 magic has no
-  footprint. Keep examples in docs consistent with this shape. `auto
+  footprint. The MT5 magic + order comment are derived from `signal_key`; to run
+  **two auto executors on one account** (e.g. Victor + a self-feed scalper), give
+  each a distinct **`--strategy-tag`** (e.g. `VIC` vs `R4SW`) — it is stamped onto
+  `signal_key` so the two get disjoint magics/comments and never manage each
+  other's orders. The tag is live-only (empty in backtests, so parity holds);
+  each executor still needs its own `--positions-json`. Keep examples in docs consistent with this shape. `auto
   --replace-missing-entries` self-heals: each cycle it re-places only the
   entries still **PENDING** in the replay whose per-entry comment vanished
   from MT5 (e.g. limits cancelled by hand), gated on the signal still having
