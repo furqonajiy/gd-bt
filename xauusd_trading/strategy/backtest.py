@@ -143,6 +143,30 @@ _STATUS_TO_KEY = {"WIN": "wins", "LOSS": "losses", "BREAKEVEN": "breakevens",
                   "NO_FILL": "no_fills", "OPEN": "open"}
 
 
+def _classify_month_regimes(chart_df: pd.DataFrame,
+                            month_keys: list[str]) -> dict[str, str]:
+    """Volatility regime (R1quiet/R2bull/R3strong/R4parab) for each YYYY-MM month,
+    read from that month's own M1 bars -- so the Summary shows how XAUUSD behaved
+    each month. Empty string when a month has too few bars to classify."""
+    from xauusd_trading.strategy.regime import read_current_regime
+    cols = ["time", "open", "high", "low", "close"]
+    if not all(c in chart_df.columns for c in cols):
+        return {}
+    df = chart_df[cols].set_index("time")
+    period = df.index.to_period("M").astype(str)
+    out: dict[str, str] = {}
+    for mk in month_keys:
+        sub = df[period == mk]
+        if len(sub) < 60:           # < ~1h of M1: not enough to read a regime
+            out[mk] = ""
+            continue
+        try:
+            out[mk] = read_current_regime(sub).regime
+        except Exception:
+            out[mk] = ""
+    return out
+
+
 def _new_bucket(key_name: str, key_value: str, equity_start: float) -> dict:
     return {
         key_name: key_value, "signals": 0, "wins": 0, "losses": 0,
@@ -307,6 +331,11 @@ def run_backtest(
     monthly_rows = sorted(monthly.values(), key=lambda b: b["month"])
     for b in monthly_rows:
         _finalize_bucket(b)
+    # Label each month with the volatility regime read from its own M1 bars.
+    month_regimes = _classify_month_regimes(
+        chart_df, [b["month"] for b in monthly_rows])
+    for b in monthly_rows:
+        b["regime"] = month_regimes.get(b["month"], "")
 
     # Per-entry aggregation (status counts + realized R) keyed by day, used by
     # both the Daily Breakdown and the Summary.
