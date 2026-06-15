@@ -5,6 +5,7 @@ import argparse
 import glob
 import json
 import shutil
+import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,6 +13,10 @@ from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from xauusd_trading.core import chart_tz
 
 
 POINT_VALUE = 0.01
@@ -326,9 +331,15 @@ def generate_signals(args: argparse.Namespace) -> list[SignalRow]:
 
 def write_signal_file(signals: list[SignalRow], output_path: Path, source_tz_offset: int, price_digits: int = 2) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    grouped: dict[str, list[SignalRow]] = defaultdict(list)
+
+    # Signals are detected in CHART time (GMT+3); the feed is DISPLAYED in
+    # source_tz_offset (header GMT+N + per-line clock). from_chart_tz is
+    # DST-aware (EET/EEST), so grouping/formatting on the display time round-trips
+    # back to the exact source bar in both summer (+3) and winter (+2).
+    grouped: dict[str, list[tuple[datetime, SignalRow]]] = defaultdict(list)
     for signal in signals:
-        grouped[signal.signal_time.strftime("%Y-%m-%d")].append(signal)
+        disp = chart_tz.from_chart_tz(signal.signal_time, source_tz_offset)
+        grouped[disp.strftime("%Y-%m-%d")].append((disp, signal))
 
     lines: list[str] = []
     tz_label = f"GMT+{source_tz_offset}" if source_tz_offset >= 0 else f"GMT{source_tz_offset}"
@@ -336,7 +347,7 @@ def write_signal_file(signals: list[SignalRow], output_path: Path, source_tz_off
         if lines:
             lines.append("")
         lines.append(f"{date_key} {tz_label}")
-        for day_id, signal in enumerate(sorted(grouped[date_key], key=lambda s: s.signal_time), start=1):
+        for day_id, (disp, signal) in enumerate(sorted(grouped[date_key], key=lambda ds: ds[0]), start=1):
             lines.append(
                 f"{day_id}. {signal.side} XAUUSD "
                 f"{_fmt_price(signal.r1, price_digits)} - {_fmt_price(signal.r2, price_digits)} "
@@ -344,7 +355,7 @@ def write_signal_file(signals: list[SignalRow], output_path: Path, source_tz_off
                 f"TP1 {_fmt_price(signal.tp1, price_digits)} "
                 f"TP2 {_fmt_price(signal.tp2, price_digits)} "
                 f"TP3 {_fmt_price(signal.tp3, price_digits)} "
-                f"{_fmt_time(signal.signal_time)}"
+                f"{_fmt_time(disp)}"
             )
 
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -85,10 +85,17 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   `tools/auto_explicit.py`). They are deliberately NOT read from environment
   vars, so `DEFAULT_CONFIG` is always reproducible regardless of shell
   state. Don't add env-var config reads.
-- **Chart timezone is GMT+3** (`CHART_TIMEZONE_OFFSET = 3`). CSV charts and
-  MT5 server time are GMT+3; signal times come in some source tz
-  (`--signal-tz`, Victor uses GMT+7) and are converted internally. Don't
-  hardcode tz conversions outside the existing helpers.
+- **Chart timezone is Eastern European (EET/EEST)** — UTC+2 in winter, UTC+3 in
+  summer, switching on the EU rule (last Sunday of March / October). It is **not**
+  a fixed GMT+3 (confirmed empirically from the ELEV8 archive: the weekly close
+  shifts to 22:59 only during the US-vs-EU DST mismatch windows, every year).
+  `core/chart_tz.py` is the single source of truth — `to_chart_tz`/`from_chart_tz`
+  convert a provider signal's source tz (`--signal-tz`, Victor uses fixed GMT+7)
+  to/from chart-local time DST-aware, and `utc_to_chart` gives live "now".
+  `CHART_TIMEZONE_OFFSET = 3` remains only the *summer* reference. CSV charts and
+  the MT5 server clock store this EET/EEST time verbatim — `fetch` with
+  `--mt5-server-offset 3` (shift 0) keeps the broker clock as-is. Don't hardcode
+  tz conversions outside `chart_tz`.
 - **`positions.json`** is the tracked-signal registry (`SignalRegistry` in
   `execution/mt5_executor.py`). Entry shape:
   `{"signal_key", "signal", "date", "tz", "equity_at_open", "executed_at"?}`.

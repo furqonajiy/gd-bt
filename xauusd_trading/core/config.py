@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 CONTRACT_SIZE_OZ = 100.0       # 1.0 lot XAUUSD = 100 oz; 0.5 lot = $50 per $1 move
 POINT_VALUE = 0.01             # 1 spread point = $0.01
-CHART_TIMEZONE_OFFSET = 3      # MT5 CSV is GMT+3
+CHART_TIMEZONE_OFFSET = 3      # SUMMER reference only; chart is EET/EEST (see core/chart_tz.py)
 
 
 @dataclass(frozen=True)

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from xauusd_trading import CHART_TIMEZONE_OFFSET
+from xauusd_trading.core import chart_tz
 
 if TYPE_CHECKING:
     from xauusd_trading import StrategyConfig
@@ -163,7 +164,11 @@ def _gmt_offset(sign: str, offset: str) -> int:
 
 
 def _to_chart_tz(dt: datetime, source_offset: int) -> datetime:
-    return dt + timedelta(hours=CHART_TIMEZONE_OFFSET - source_offset)
+    # Chart time is Eastern European (EET/EEST: +2 winter, +3 summer, EU rule),
+    # not a fixed GMT+3, so a provider signal's source-tz clock must convert with
+    # the offset in effect at THAT instant (1h difference all winter). See
+    # core/chart_tz.py for the empirically-confirmed schedule.
+    return chart_tz.to_chart_tz(dt, source_offset)
 
 
 def _entries_for(side: str, r1: float, r2: float) -> list[float]:

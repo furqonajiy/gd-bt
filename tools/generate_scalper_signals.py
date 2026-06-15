@@ -30,7 +30,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -42,6 +42,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from xauusd_trading import CsvChartSource, parse_signals_file  # noqa: E402
+from xauusd_trading.core import chart_tz  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -392,10 +393,9 @@ def _write_signal_file(signals: list[GeneratedSignal], output: Path,
     presentation only (e.g. GMT+7 to match Victor's feed).
     """
     output.parent.mkdir(parents=True, exist_ok=True)
-    shift = timedelta(hours=signal_tz - 3)
     grouped: dict[str, list[tuple[datetime, GeneratedSignal]]] = {}
     for sig in signals:
-        disp = sig.time + shift
+        disp = chart_tz.from_chart_tz(sig.time, signal_tz)
         grouped.setdefault(disp.strftime("%Y-%m-%d"), []).append((disp, sig))
 
     lines: list[str] = []

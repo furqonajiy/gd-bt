@@ -29,10 +29,16 @@ import glob
 import shutil
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
+import sys
+
 import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from xauusd_trading.core import chart_tz
 
 
 CHART_TZ_OFFSET = 3
@@ -275,11 +281,10 @@ def write_signal_file(signals: list[SignalRow], output_path: Path, source_tz_off
     # source_tz_offset (header GMT+N + per-line clock), so shift by
     # (source_tz_offset - CHART_TZ_OFFSET). The engine parses the GMT+N header and
     # converts back to GMT+3, so the round-trip lands on the exact source bar.
-    shift = timedelta(hours=source_tz_offset - CHART_TZ_OFFSET)
-
+    # DST-aware: from_chart_tz honors EET/EEST so winter (+2) round-trips too.
     grouped: dict[str, list[tuple[datetime, SignalRow]]] = defaultdict(list)
     for signal in signals:
-        disp = signal.signal_time + shift
+        disp = chart_tz.from_chart_tz(signal.signal_time, source_tz_offset)
         grouped[disp.strftime("%Y-%m-%d")].append((disp, signal))
 
     lines: list[str] = []
