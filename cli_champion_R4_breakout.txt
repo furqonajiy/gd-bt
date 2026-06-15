@@ -10,13 +10,7 @@
 # compounded/$ are model upper bounds - they rank configs, not forecast money.
 # =========================================================================
 
-# ===== 1. TELEGRAM LISTENER =====
-# Ingests Victor's Telegram channel into victor_signals.txt. This self-generated
-# feed does NOT use Telegram — its signals come from the Signal Auto Generator
-# (step 2); run the listener only if you also trade the Victor provider feed.
-python listener/telegram_listener.py --signals-file victor_signals.txt
-
-# ===== 2. SIGNAL AUTO GENERATOR =====
+# ===== 1. SIGNAL AUTO GENERATOR =====
 # GENERATE the R4 breakout archive feed.
 # ATR-adaptive breakout signals over ALL chart history (SL/TP scale with M15
 # ATR, so they auto-size to the regime). Refresh before each backtest.
@@ -27,7 +21,7 @@ python tools/generate_breakout_signals.py `
   --start-date 2021-11-01 `
   --source-tz-offset 7
 
-# ===== 3. AUTO EXECUTOR CLI =====
+# ===== 2. AUTO EXECUTOR CLI =====
 # LIVE AUTO EXECUTOR (places + manages orders for R4).
 # Same strategy params as the backtest below. Two caveats vs your scalper doc:
 #  (a) feed: there is no live_feed_loop --family for breakout yet, so regenerate
@@ -74,7 +68,7 @@ python tools/auto_explicit.py `
   --trailing-close-after-stage 0 `
   --initial-capital 5000
 
-# ===== 4. BACKTEST CLI =====
+# ===== 3. BACKTEST CLI =====
 # BACKTEST R4 (parabolic period only — 2026).
 python tools/backtest_explicit.py `
   --signals generated/adaptive_breakout.txt `
