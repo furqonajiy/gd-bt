@@ -1,0 +1,80 @@
+# =========================================================================
+# R4 (2026) #2 / FULLY-REPRODUCIBLE — SCALPER24   Executor tag: R4S2 (4-char cap)
+# Best DD<=40% config on the scalper24 feed at $5k (regime R4 / 2026).
+# net+bonus $527,380 (sweep, pre-resync) | $122,746 on RESYNCED data @ 36.8% DD;
+# beaten by the no-trailing champion ($598,318 @ 32.8%). OOS $4,317 / DD 33.3%.
+# Feed: scalper generator DEFAULTS (rr 1.0/1.5/2.0) -> generated/self_scalper24.txt
+# Same intraday family as your live incumbent; reproducible from the generator
+# with no special knobs. compounded $ are model upper bounds — they RANK configs,
+# not forecast money. Detect the live regime with: python tools/regime_auto.py
+# =========================================================================
+
+# ===== 1. SIGNAL AUTO GENERATOR =====
+# LIVE SIGNAL GENERATOR (single command; logs each new signal).
+# One process, no shell loop. It refetches the current month + regenerates
+# ONLY when a new closed M1 bar exists, narrows to the 2 most recent months
+# and a rolling 3-day window (fast), and prints like `auto`: a header, then
+# one line per NEW signal -- e.g. [ts] Add Signal 75. BUY XAUUSD ...
+# Dense ATR-adaptive scalper, default risk:reward (1.0/1.5/2.0). Times display
+# GMT+7 (--signal-tz 7), DST-aware; the engine converts to chart EET/EEST.
+python tools/live_feed_loop.py `
+  --family scalper `
+  --interval 30 `
+  --gen-start-days 3 `
+  --gen-recent-months 2 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24_live.txt --signal-tz 7
+
+# ===== 2. BACKTEST CLI =====
+# STEP 2a — (re)generate the FULL static archive generated/self_scalper24.txt
+# from ALL chart history so the backtest reflects the latest data. This is the
+# full archive feed — DIFFERENT from the live rolling feed in section 1.
+python tools/generate_scalper_signals.py `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --output generated/self_scalper24.txt `
+  --signal-tz 7
+# STEP 2b — BACKTEST R4 (2026 only, $5k).
+python tools/backtest_explicit.py `
+  --signals generated/self_scalper24.txt `
+  --charts "data/XAUUSD_M1_2026*_ELEV8.csv" `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts false `
+  --sizing-mode risk --lot 0.01 --risk 0.02 --minimum-lot 0.01 --lot-step 0.01 `
+  --bonus-per-closed-lot 3 `
+  --entries 8 --entry-ladder signal_range_3 --entry-sl-gap 0.5 `
+  --activation-delay 0 --pending-expiry 180 --max-hold 90 `
+  --sl-multiplier 2.3 --final-target TP3 `
+  --lock-after-tp1 true --lock-after-tp2 false `
+  --tp1-lock-delay-minutes 24 --tp2-lock-delay-minutes 0 `
+  --profit-lock-mode tp_levels --bep-trigger-distance 4 `
+  --tp1-lock-fraction 1.0 --tp2-lock-target TP2 `
+  --runner-after-tp3 false --tp3-lock-target TP2 `
+  --trailing-open-distance 0 --trailing-close-distance 2.0 `
+  --trailing-close-after-stage 0 `
+  --start-date 2026-01-01 `
+  --output-dir reports/R4_scalper24 `
+  --initial-capital 5000
+
+# ===== 3. AUTO CLI =====
+# LIVE AUTO EXECUTOR (same strategy params). Reads the *_live.txt loop feed.
+python tools/auto_explicit.py `
+  --signals generated/self_scalper24_live.txt `
+  --positions-json positions_R4_scalper24.json `
+  --strategy-tag R4S2 `
+  --watch-interval 15 --mt5-symbol XAUUSD --mt5-server-offset 3 --mt5-history-bars 5000 `
+  --reopen-missing-positions true `
+  --sizing-mode risk --lot 0.01 --risk 0.02 --minimum-lot 0.01 --lot-step 0.01 `
+  --bonus-per-closed-lot 3 `
+  --entries 8 --entry-ladder signal_range_3 --entry-sl-gap 0.5 `
+  --activation-delay 0 --pending-expiry 180 --max-hold 90 `
+  --sl-multiplier 2.3 --final-target TP3 `
+  --lock-after-tp1 true --lock-after-tp2 false `
+  --tp1-lock-delay-minutes 24 --tp2-lock-delay-minutes 0 `
+  --profit-lock-mode tp_levels --bep-trigger-distance 4 `
+  --tp1-lock-fraction 1.0 --tp2-lock-target TP2 `
+  --runner-after-tp3 false --tp3-lock-target TP2 `
+  --trailing-open-distance 0 --trailing-close-distance 2.0 `
+  --trailing-close-after-stage 0 `
+  --initial-capital 5000

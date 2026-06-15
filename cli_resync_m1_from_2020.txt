@@ -1,0 +1,58 @@
+# =========================================================================
+# RESYNC XAUUSD M1 HISTORY FROM 2020 (MT5 -> data/)
+# Windows-only: requires the MetaTrader5 package + a RUNNING MT5 terminal
+# logged into your broker. PowerShell backtick (`) line continuation.
+# =========================================================================
+#
+# What it does:
+#   Pulls M1 bars from MT5 month-by-month (copy_rates_range) and writes/merges
+#   one CSV per month at:
+#       data/XAUUSD_M1_YYYYMM_ELEV8.csv
+#   (same ELEV8 format the backtest/sweep already use). Merge is the default:
+#   new bars are added, matching timestamps refreshed, existing bars preserved.
+#   Times are stored in CHART time = GMT+3 (the MT5 server clock).
+#
+# How far back:
+#   --months N counts N months back from the current month. From 2026-06 to
+#   2020-01 is ~78 months, so 80 covers all of 2020 with margin. Raise it to go
+#   further back, e.g. --months 92 reaches ~2019.
+#
+# IMPORTANT — broker history limit:
+#   MT5 only returns the M1 history YOUR BROKER actually stores. Many brokers
+#   keep far less than 6 years of M1 (often 1-3 years; some only ~3 months).
+#   Months the broker has no data for are simply skipped (nothing overwritten),
+#   so requesting --months 80 is safe: you get everything available and keep
+#   what you already archived. To build deep history you re-run this on a
+#   schedule over time, accumulating months before they fall out of MT5's window.
+#
+# ===== RESYNC (run from the repo root) =====
+python -m xauusd_trading.cli fetch `
+  --months 80 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3
+
+# ----- If MT5 is NOT already running/logged in, pass connection details -----
+# (otherwise the command above attaches to the running terminal):
+# python -m xauusd_trading.cli fetch `
+#   --months 80 `
+#   --mt5-symbol XAUUSD `
+#   --mt5-server-offset 3 `
+#   --mt5-path "C:\Program Files\MetaTrader 5\terminal64.exe" `
+#   --mt5-login 12345678 `
+#   --mt5-password "YOUR_PASSWORD" `
+#   --mt5-server "YourBroker-Server"
+
+# Symbol name varies by broker (XAUUSD, XAUUSD.r, GOLD, XAUUSDm, ...). Check
+# Market Watch in MT5 and match --mt5-symbol exactly. If your broker's server
+# clock is not GMT+3, set --mt5-server-offset accordingly (verify with mt5-info).
+
+# ===== VERIFY what was archived =====
+# List the monthly files and their date span after the resync:
+# PowerShell:
+#   Get-ChildItem data\XAUUSD_M1_*_ELEV8.csv | Select-Object Name, Length
+# Quick sanity (earliest + latest month present):
+#   Get-ChildItem data\XAUUSD_M1_*_ELEV8.csv | Sort-Object Name |
+#     Select-Object -First 1, -Last 1 Name
+
+# ===== Confirm MT5 connection / symbol / server clock first (optional) =====
+# python -m xauusd_trading.cli mt5-info --mt5-symbol XAUUSD

@@ -1,0 +1,156 @@
+# =========================================================================
+# R4 (2026) CHAMPION — SCALPER24, NO TRAILING  (promoted 2026-06-15) | tag SC24
+# Best DD<=40% config on the RESYNCED data: scalper24 feed, e6 / slm2.1 /
+# tp1-lock-delay 24 + TP3 + SL locks, NO trailing, risk 1%.
+#   2026 @ $5k:  net+bonus $598,318  |  concurrent DD 32.8%  (compliant)
+#   vs cli_R4_scalperwide24 ($197,959 @ 31.6%): ~3x better on current data,
+#   ~14x at matched 1% risk. No trailing => clean live/backtest parity.
+# NOTE: the sweep champion (scalperwide24) was found on the PRE-resync feed;
+#   on your resynced data THIS no-trailing config wins. A fresh sweep is running
+#   in the background and may revise this. compounded $ are model upper bounds —
+#   they rank configs, not forecast money.
+# =========================================================================
+
+# ===== 1. SIGNAL AUTO GENERATOR =====
+# LIVE SIGNAL GENERATOR (single command; logs each new signal).
+# One process, no shell loop. It refetches the current month + regenerates
+# ONLY when a new closed M1 bar exists, narrows to the 2 most recent months
+# and a rolling 3-day window (fast), and prints like `auto`: a header, then
+# one line per NEW signal -- e.g. [ts] Add Signal 75. BUY XAUUSD ...
+python tools/live_feed_loop.py `
+  --family scalper `
+  --interval 30 `
+  --gen-start-days 3 `
+  --gen-recent-months 2 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24_live.txt --session-start 0 --session-end 0 --signal-tz 7
+
+# ===== 2. BACKTEST CLI =====
+# --- 2a. PARITY BACKTEST (regenerate full history, then backtest) ---
+# STEP 2a — (re)generate the FULL static archive generated/self_scalper24.txt
+# from ALL chart history so the backtest reflects the latest data. This is the
+# 18-month feed (slow, ~15s) — DIFFERENT from the live 2-day feed in section 1.
+# Run this whenever you want a fresh backtest:
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24.txt --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7
+# STEP 2b — backtest that freshly-regenerated archive (full history):
+python tools/backtest_explicit.py `
+  --signals generated/self_scalper24.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/SELF_NO_TRAILING_24H `
+  --initial-capital 5000 `
+  --start-date 2026-01-01
+
+# --- 2b. RECENT BACKTEST (from 2026-06-12 only; quick current-regime check) ---
+python tools/backtest_explicit.py `
+  --signals generated/self_scalper24.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/SELF_NO_TRAILING_24H_FROM_JUNE `
+  --initial-capital 5000 `
+  --start-date 2026-06-12
+
+# ===== 3. AUTO CLI =====
+# Reads the live feed, places + manages orders.
+# --replace-missing-entries false: self feeds are two-sided (hedge close-by
+# re-entry risk). Window B, runs beside the generator loop above.
+# --reopen-missing-positions true: MT5 mirrors the replay — an entry the
+# backtest engine still holds OPEN is re-opened at market if it goes missing
+# from MT5 (e.g. closed by hand), per the 2026-06-12 reconciliation decision.
+python tools/auto_explicit.py `
+  --signals generated/self_scalper24_live.txt `
+  --positions-json positions_self_no_trailing_24h.json `
+  --strategy-tag SC24 `
+  --watch-interval 15 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --replace-missing-entries false `
+  --reopen-missing-positions true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --trailing-close-after-stage 0 `
+  --initial-capital 5000
