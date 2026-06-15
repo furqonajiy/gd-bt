@@ -232,12 +232,11 @@ def parse_mt5_history(path: str | Path) -> dict[str, dict]:
 # ---------------------------------------------------------------------------
 
 def _mt5_comment(signal_key: str, entry_index: int, max_len: int = 31) -> str:
-    """MT5-safe per-entry comment (mirrors execution.mt5_executor.mt5_entry_comment)."""
-    suffix = f".{entry_index + 1}"
-    prefix_len = max_len - len(suffix)
-    if prefix_len <= 0:
-        return suffix[-max_len:]
-    return f"{signal_key[:prefix_len]}{suffix}"
+    """MT5-safe per-entry comment (delegates to the executor's canonical builder
+    so live-history matching uses the exact compact ``[TAG]#DD.N`` form that the
+    executor stamped on the order)."""
+    from xauusd_trading.execution.mt5_executor import mt5_entry_comment
+    return mt5_entry_comment(signal_key, entry_index, max_len)
 
 
 def attach_live_history(result: dict, live: dict[str, dict]) -> dict:
