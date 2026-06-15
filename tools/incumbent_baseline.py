@@ -109,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         "edge": row.get("fixed_no_bonus_profit"),
         "oos": row.get("oos_fixed_no_bonus_profit"),
         "dd": row.get("concurrent_risk_max_dd_pct"),
+        "net_bonus": row.get("risk_net_profit_with_bonus"),
         "config": cfg,
         "config_json": json.dumps(cfg, sort_keys=True),
     }
@@ -117,8 +118,8 @@ def main(argv: list[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"INCUMBENT_{args.regime}.json"
     out_path.write_text(json.dumps(out, indent=2, sort_keys=True) + "\n")
-    print(f"[incumbent] regime={args.regime} edge={out['edge']} "
-          f"oos={out['oos']} dd={out['dd']}%", flush=True)
+    print(f"[incumbent] regime={args.regime} net_bonus={out['net_bonus']} "
+          f"edge={out['edge']} oos={out['oos']} dd={out['dd']}%", flush=True)
     print(f"[incumbent] wrote {out_path}", flush=True)
     return 0
 
