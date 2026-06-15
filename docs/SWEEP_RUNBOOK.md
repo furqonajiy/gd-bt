@@ -23,16 +23,32 @@ or ask the user to re‑explain.
   each backtest over multi‑year M1 is slow. Exhaustive is physically impossible
   (years of compute). Parallelism is linear (≤ #cores); it cannot beat
   exponential combinatorics.
-- **Two metrics that matter (and one mirage):**
-  - **EDGE** — fixed‑lot, sizing‑neutral profit. The primary *quality* signal.
+- **Ranking metric (current — supersedes the old edge/OOS rule below):**
+  champions are ranked by **compounded net P&L + the $3/closed‑lot bonus**,
+  among configs that pass the **DD ≤ 40%** gate **and** a positive held‑out
+  OOS sanity gate. Trade frequency is now a *feature*, not noise: more trades
+  → more closed lots → more bonus + faster compounding, so a dense feed that
+  stays inside the DD cap is exactly what we want. The old worry that
+  compounded net "explodes to trillions" is what the **DD ≤ 40% cap + OOS > 0
+  gate** exist to prevent — a config that only looks huge because it
+  over‑levers blows the DD gate and is rejected before it can be ranked.
+- **Legacy metrics (still computed, now cross‑checks not the rank):**
+  - **EDGE** — fixed‑lot, sizing‑neutral profit. A *quality* cross‑check.
   - **OOS** — profit on the held‑out last 6 months (`--validate-months 6`).
-    The primary *generalization* signal. **Rank by OOS, cross‑check edge.**
-  - **Compounded net $ (at risk%)** — a *mirage*. At 1% risk compounding over
-    several years on a dense feed it explodes to *trillions*, and its drawdown
-    usually blows past the DD gate. Use it only as a loose ranking aid, never
-    as the deployable truth or the comparison basis.
+    Used as the **OOS > 0 sanity gate**, not as the primary ordering key.
 - **DD gate.** Candidates must keep concurrent drawdown ≤ the limit
-  (`--max-concurrent-dd-pct`). Current target: **40%**.
+  (`--max-concurrent-dd-pct`). Current target: **40%**, and risk is swept up
+  to push each champion against that 40% DD gate.
+- **Sweep one regime at a time, in volatility order R4 → R3 → R2 → R1.**
+  Gold's dollar volatility scaled ~7× over 2021–2026, so no single fixed
+  config spans it (see `sweep2021/REGIME_ANALYSIS.md`). The grid runs each
+  regime window independently and ranks DD‑≤‑40% champions per regime.
+- **Incumbent competes head‑to‑head.** The user's live "current CLI" — the
+  **scalper24 config** (`entry_count 6`, `sl_multiplier 2.1`,
+  `tp1_lock_delay 24`) at live **1% risk** on the dense scalper24 feed — is
+  re‑run under the same DD ≤ 40% gate. Verdict is **HOLD** (keep the current
+  CLI) when the incumbent is compliant and unbeaten on compounded net +
+  bonus, else **SWITCH** to the new champion.
 
 ---
 
@@ -59,13 +75,14 @@ the engine treats each row as one minute, so a daily bar corrupts the backtest.
 
 | Item | Default | Notes |
 |---|---|---|
-| Objective | **max profit** at DD ≤ 40% | rank by OOS, cross‑check edge |
-| DD gate | **40%** | `--max-concurrent-dd-pct 40` |
+| Objective | **max compounded net P&L + $3/closed‑lot bonus** at DD ≤ 40% | OOS > 0 sanity gate; edge as cross‑check |
+| DD gate | **40%** | `--max-concurrent-dd-pct 40`; push risk up to this gate |
+| Regime order | **R4 → R3 → R2 → R1** (volatility order) | sweep one regime at a time |
 | Trailing | **OFF** (pinned 0) | proven to add no deployable edge (16‑feed sweep) |
-| Risk levels | **1/2/3/4/5%** | set in `tools/sweep.py::candidate_config` |
-| Period | full real‑M1 span | candidates **and** baseline over the *same* period |
-| OOS | last **6 months** | `--validate-months 6` |
-| Feeds | scalper24, scalper_widerr24, risk02_allhours, better | "more signals is better" → 24h, loose filters |
+| Risk levels | **1–5%** | swept and pushed to the 40% DD gate |
+| Period | per‑regime window (see `sweep2021/REGIME_ANALYSIS.md`) | candidates **and** incumbent over the *same* window |
+| OOS | last **6 months** | `--validate-months 6` (used as the OOS > 0 gate) |
+| Feeds | scalper24, scalperwide24, risk02allhours (3 HIGH‑FREQ self‑scalpers) + adaptive / breakout / meanrev | high‑frequency, 24h, loose filters → more closed lots |
 | Candidates/feed | 300 (Phase 1) | **(ASK)** bump to 600 for denser coverage |
 | Run model | in‑container (free) OR GitHub‑paid | **(ASK)** — see §6 |
 
@@ -73,8 +90,12 @@ the engine treats each row as one minute, so a daily bar corrupts the backtest.
 
 ## 3. Generate the self‑signal feeds ("more signals is better")
 
-Use 24‑hour, all‑session generators with `--start <data‑start>`. Exact commands
-(`scalper24` is the baseline's feed — always include it):
+Use 24‑hour, all‑session generators with `--start <data‑start>`. The basket now
+leads with **three HIGH‑FREQUENCY self‑scalper feeds** — `scalper24`,
+`scalperwide24`, `risk02allhours` — alongside the adaptive / breakout / meanrev
+feeds; high frequency is the point now (more trades → more closed lots → more
+bonus + faster compounding inside the DD cap). Exact commands (`scalper24` is
+the incumbent's feed — always include it):
 
 ```bash
 python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv \
@@ -131,8 +152,13 @@ python tools/sweep_self_limit.py \
 ```
 - `_sweep_self.py` = the wrapper that injects seeds (use it, or replicate the
   seed injection if calling `sweep_self_limit.py` directly).
-- Baseline: run the champion config once via `tools/backtest_explicit.py` over
-  the same charts/period → record edge / OOS / DD as the "beat this" target.
+- Incumbent: run the live "current CLI" (scalper24 `e6 slm2.1 d24`, 1% risk)
+  once via `tools/backtest_explicit.py` over the same charts/regime window →
+  record compounded net + bonus, OOS, and DD as the "beat this" target.
+- The unattended per‑regime grid runs from the
+  `.github/workflows/regime-grid-sweep.yml` workflow (renamed from
+  `self-regime-grid.yml`): it sweeps one regime at a time (R4 → R3 → R2 → R1),
+  risk 1–5%, and ranks DD‑≤‑40% champions on compounded net + bonus.
 
 ---
 
@@ -190,10 +216,15 @@ echo "$(date -u +%H:%M)Z $up <feed>=$n/300"
 
 ## 9. Pick the winner & call it
 
-- Among **DD ≤ gate** gate‑passers, take the **highest OOS**; cross‑check edge.
-- "**Beats baseline**" = higher **OOS** *and* **edge** than the baseline at
-  DD ≤ gate. (Not raw compounded net.)
-- Write the winner to `self_cli_best.txt` as the new champion CLI command.
+- Among **DD ≤ gate** gate‑passers with **OOS > 0**, take the **highest
+  compounded net P&L + $3/closed‑lot bonus**; cross‑check edge.
+- "**Beats incumbent**" = higher compounded‑net‑plus‑bonus than the
+  incumbent (scalper24 `e6 slm2.1 d24` at 1% risk) at DD ≤ gate with OOS > 0.
+  The DD ≤ 40% cap + OOS > 0 gate are what keep this honest — they reject the
+  over‑levered "trillions" configs before they can rank.
+- **Verdict:** **HOLD** the current CLI when the incumbent is compliant and
+  unbeaten; **SWITCH** otherwise, writing the winner to `self_cli_best.txt`
+  (or `self_cli_best_<regime>.txt`) as the new champion CLI command.
 
 ---
 
@@ -202,7 +233,11 @@ echo "$(date -u +%H:%M)Z $up <feed>=$n/300"
 1. **Verify M1 data first** — daily/hourly bars get mislabeled as M1.
 2. **Baseline is a seeded config, not exhaustive** — the grid must include its
    values AND it must be re‑seeded, or the sweep can't reach it.
-3. **Compounded net is a mirage** — compare on edge/OOS + DD‑gated deployable.
+3. **Rank on compounded net + $3/closed‑lot bonus** (this *supersedes* the old
+   "rank by OOS/edge, never compounded net" guidance). It does not blow up to
+   "trillions" because the **DD ≤ 40% cap + OOS > 0 gate** reject over‑levered
+   configs first; edge/OOS are now cross‑checks, and risk is swept 1–5% up to
+   the DD gate. Sweep one regime at a time, R4 → R3 → R2 → R1.
 4. **In‑container pauses when idle** and costs Claude tokens to keep warm;
    GitHub‑paid is the only true 24/7. State this tradeoff every time.
 5. **Single writer per branch** — local + CI both pushing = lost work.

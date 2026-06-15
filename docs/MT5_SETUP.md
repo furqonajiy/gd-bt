@@ -176,6 +176,36 @@ python -m xauusd_trading.cli fetch --mt5-symbol XAUUSD
 Useful for filling the archive on a schedule (e.g. a daily Task Scheduler
 job that captures the latest day before older data falls off MT5's window).
 
+### Syncing the chart with the correct timezone (read this)
+
+The chart timeline is the **broker server clock = Eastern European Time
+(EET/EEST)**: UTC+2 in winter, UTC+3 in summer, switching on the EU rule (last
+Sunday of March / October). `fetch` stores that clock **verbatim** — it does
+**not** normalise to a fixed offset — so the rule is simple:
+
+- **Keep `--mt5-server-offset 3` (the default) all year.** With offset 3 the
+  store-time shift is `3 − 3 = 0`, i.e. the broker's own EET/EEST timestamps are
+  written as-is, which is exactly what the engine expects.
+- **Never drop it to 2 in winter.** That applies a `+1h` shift and corrupts every
+  stored bar. The offset is *not* "the broker's current UTC offset" — it is the
+  knob that keeps the stored clock equal to the broker clock, and `3` does that
+  in both seasons.
+- **The engine is DST-aware** (`xauusd_trading/core/chart_tz.py`). Because the
+  CSV is EET/EEST and the engine knows the EU DST schedule, a provider signal in
+  GMT+7 (Victor, fixed Jakarta time) is matched to the correct chart bar
+  automatically — shifted by −4h in summer and **−5h in winter** — so your
+  backtest aligns with what MT5 actually showed, with no manual adjustment.
+
+To **rebuild the whole M1 archive back to 2020**, use the standalone
+`cli_resync_m1_from_2020.txt` at the repo root (`fetch --months 80`); it
+documents the broker-history limit and the connection flags.
+
+**Verify** a sync is timezone-correct two ways: (1) `mt5-info`'s "Latest bar"
+time must equal the time you see in MT5's own chart window; (2) the archive's
+weekly close sits at `23:59` server-time most of the year but at `22:59` during
+the US-vs-EU DST-mismatch windows (mid/late March, late Oct / early Nov) — the
+fingerprint of a correct EET/EEST feed.
+
 ### Using the archive for backtests
 
 ```powershell

@@ -136,7 +136,7 @@ def test_rendered_cli_is_runnable_backtest_explicit():
 def test_render_deployment_cli_full_format():
     """The deployment CLI carries the header, all three sections (generate /
     backtest / live), the correct feed + regime, and a runnable auto_explicit
-    live command -- the self_cli_R4_only.txt deployment format."""
+    live command -- the cli_champion_R4_breakout.txt deployment format."""
     cfg = {"entry_count": 4, "sl_multiplier": 1.61, "tp1_lock_delay_minutes": 24,
            "final_target": "TP3", "risk_per_signal": 0.05575}
     text = cr.render_deployment_cli(

@@ -161,10 +161,19 @@ python -m xauusd_trading.cli backtest --signals victor_signals.txt --charts "dat
 python -m xauusd_trading.cli decide --signal "..." --signal-date 2026-05-07 --signal-tz 7 --charts "data/XAUUSD_M1_*.csv"
 ```
 
+`backtest`/`decide` default to **`DEFAULT_CONFIG.initial_capital = $5,000`** (was
+$1,000). Drawdown is computed from that base, so it is the figure the DD≤40% gate
+and the live executor size against.
+
 Live MT5 (`mt5-info`, `decide --execute`, `manage`, `auto`, `fetch`) requires
 the Windows-only `MetaTrader5` package and a running terminal — it cannot run
 in this Linux/CI environment. Validate engine changes through the backtest
-and `pytest`, which use CSV data and a stub MT5 layer.
+and `pytest`, which use CSV data and a stub MT5 layer. To resync the M1 archive
+from 2020, see the standalone `cli_resync_m1_from_2020.txt` (`fetch --months 80`,
+`--mt5-server-offset 3` keeps the broker EET/EEST clock verbatim). The repo-root
+`cli_*.txt` files are runnable deployment-command snapshots (`cli_current_live`,
+`cli_champion_R4_breakout`, `cli_scalper24_no_trailing`,
+`cli_trailing_risk02allhours`, `cli_resync_m1_from_2020`).
 
 ## Docs to keep in sync with code
 

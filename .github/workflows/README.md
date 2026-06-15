@@ -40,4 +40,11 @@ of their pinned version — a safe catch-all.
 - [ ] `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/<file>.yml'))"` parses
 - [ ] First run's logs show **no** Node-20 deprecation warnings
 
+## Workflows in this folder
+- `regime-grid-sweep.yml` (renamed from `self-regime-grid.yml`) — the
+  unattended parameter sweep. It sweeps **one regime at a time** (R4 → R3 → R2
+  → R1), risk 1–5%, and ranks DD‑≤‑40% champions on **compounded net P&L +
+  the $3/closed‑lot bonus** (with a positive held‑out OOS gate). See
+  `../../docs/SWEEP_RUNBOOK.md` for the methodology.
+
 _Reference: <https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/>_
