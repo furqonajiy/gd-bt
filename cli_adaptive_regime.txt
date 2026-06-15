@@ -9,11 +9,12 @@
 # Feed: scalper24 (the dense intraday feed SC24 is the R4 champion of). --adaptive
 #   swaps the STRATEGY CONFIG by regime; it does NOT switch the signal feed, so
 #   run it on this one feed. (Per-feed switching is a future enhancement.)
-# Champions source: ./champions/CHAMPION_<regime>.json (committed on main, seeded
-#   with SC24 for every regime). As the regime sweep (research/regime-adaptive)
-#   publishes a validated winner, drop its CHAMPION_<regime>.json into champions/
-#   and both the backtest (--adaptive) and this live executor pick it up. Until
-#   then adaptive == SC24 everywhere (safe).
+# Champions source: ./champions/CHAMPION_<regime>.json (committed on main). R4parab
+#   is the **promoted sweep champion** (SC24 + tp1-lock-delay 24->15, beats SC24 on
+#   net+bonus, OOS, AND drawdown); R1quiet / R2bull / R3strong are still SC24
+#   placeholders until the sweep advances to them. As each regime gets a validated
+#   winner, drop its CHAMPION_<regime>.json into champions/ and both the backtest
+#   (--adaptive) and this live executor pick it up.
 # compounded $ are model upper bounds — they rank configs, not forecast money.
 # =========================================================================
 
