@@ -150,8 +150,10 @@ def test_summary_monthly_breakdown_shows_equity_end_of_month(tmp_path):
     header_row = next(
         r for r in range(1, ws.max_row + 1) if ws.cell(row=r, column=1).value == "Month"
     )
-    headers = [ws.cell(row=header_row, column=c).value for c in range(1, 13)]
-    assert headers[10:] == ["P&L %", "Equity EoM"]
-    month_cells = [ws.cell(row=header_row + 1, column=c).value for c in range(1, 13)]
+    headers = [ws.cell(row=header_row, column=c).value for c in range(1, 14)]
+    assert headers[1] == "Regime"                       # inserted after Month
+    assert headers[11:] == ["P&L %", "Equity EoM"]
+    month_cells = [ws.cell(row=header_row + 1, column=c).value for c in range(1, 14)]
     assert month_cells[0] == "2026-06"
-    assert month_cells[11] == monthly[0]["equity_end"]
+    assert month_cells[1] == (monthly[0].get("regime") or "-")   # regime label cell
+    assert month_cells[12] == monthly[0]["equity_end"]

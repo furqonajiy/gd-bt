@@ -213,6 +213,17 @@ from .strategy.engine import (
 )
 from .strategy.trailing_engine import decide
 
+# 7b. strategy.regime (volatility-regime detector; pandas-only, used by the
+# report, the live --adaptive router, and the regime_auto CLI)
+from .strategy.regime import (
+    DEFAULT_LIVE_REGIME,
+    RegimeReading,
+    detect_regime,
+    m15_atr,
+    read_current_regime,
+    trend_score,
+)
+
 # 8. strategy.backtest
 from .strategy.backtest import (
     position_status,
@@ -281,6 +292,8 @@ __all__ = [
     "ChartSource", "CsvChartSource", "ManualPositionSource", "PositionSource",
     "EntryStatus", "NewSignalPlan", "PlannedOrder", "PositionStatus", "Recommendation",
     "decide", "format_replay_outcome", "render_report",
+    "DEFAULT_LIVE_REGIME", "RegimeReading", "detect_regime", "m15_atr",
+    "read_current_regime", "trend_score",
     "position_status", "replay_signal", "run_backtest", "write_backtest_outputs",
     "GeneratedSignal", "RejectionSignalConfig", "format_generated_signals", "generate_rejection_signals",
     "MomentumSignalConfig", "generate_momentum_signals",
