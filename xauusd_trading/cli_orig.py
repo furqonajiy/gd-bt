@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import re
 import sys
 import time
 import traceback
@@ -178,6 +179,22 @@ def _parse_executed_at(raw) -> datetime | None:
         return None
 
 
+_SIGNAL_KEY_TAG_RE = re.compile(r"^([A-Za-z0-9]+)-\d{4}-\d{2}-\d{2}#\d+$")
+
+
+def _tag_from_signal_key(signal_key: str) -> str:
+    """Recover the per-executor strategy tag from a registry ``signal_key``.
+
+    The key is ``[TAG-]YYYY-MM-DD#DD``. Re-parsing the raw signal text alone
+    drops the tag, which would make the replayed Position compute the UNTAGGED
+    magic + comment -- so the manage/reopen path would place orders under a
+    different identity than ``place_signal`` did (orphaning them and losing the
+    tag in the MT5 comment). Returns "" for untagged/legacy keys.
+    """
+    m = _SIGNAL_KEY_TAG_RE.match(signal_key or "")
+    return m.group(1) if m else ""
+
+
 def _replay_tracked_signal(item: dict, chart, replay_end: datetime,
                            config: StrategyConfig
                            ) -> tuple[Position, Position, datetime | None]:
@@ -187,6 +204,10 @@ def _replay_tracked_signal(item: dict, chart, replay_end: datetime,
     AND it's later than activation_time; otherwise pos_actual is pos_ideal.
     """
     psig = parse_one_signal(item["signal"], item["date"], int(item["tz"]))
+    # Restore the strategy tag from the stored signal_key so the replayed
+    # Position's magic + per-entry comment match what place_signal used (and the
+    # MT5 comment keeps its [TAG-] prefix on every managed/reopened entry).
+    psig.tag = _tag_from_signal_key(item.get("signal_key", ""))
     equity_at_open = float(item.get("equity_at_open", 0.0))
     executed_at = _parse_executed_at(item.get("executed_at"))
 
