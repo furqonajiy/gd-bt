@@ -37,12 +37,9 @@ python tools/generate_scalper_signals.py `
 python tools/backtest_explicit.py `
   --signals generated/self_scalper24.txt `
   --charts "data/XAUUSD_M1_2026*_ELEV8.csv" `
-  --start-date 2026-01-01 `
-  --output-dir reports/R4_scalper24 `
   --max-drawdown-limit-pct 50 `
   --progress-interval-seconds 30 `
   --sync-charts false `
-  --initial-capital 5000 `
   --sizing-mode risk --lot 0.01 --risk 0.02 --minimum-lot 0.01 --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
   --entries 8 --entry-ladder signal_range_3 --entry-sl-gap 0.5 `
@@ -54,7 +51,10 @@ python tools/backtest_explicit.py `
   --tp1-lock-fraction 1.0 --tp2-lock-target TP2 `
   --runner-after-tp3 false --tp3-lock-target TP2 `
   --trailing-open-distance 0 --trailing-close-distance 2.0 `
-  --trailing-close-after-stage 0
+  --trailing-close-after-stage 0 `
+  --start-date 2026-01-01 `
+  --output-dir reports/R4_scalper24 `
+  --initial-capital 5000
 
 # ===== 3. AUTO CLI =====
 # LIVE AUTO EXECUTOR (same strategy params). Reads the *_live.txt loop feed.
@@ -63,7 +63,6 @@ python tools/auto_explicit.py `
   --positions-json positions_R4_scalper24.json `
   --watch-interval 15 --mt5-symbol XAUUSD --mt5-server-offset 3 --mt5-history-bars 5000 `
   --reopen-missing-positions true `
-  --initial-capital 5000 `
   --sizing-mode risk --lot 0.01 --risk 0.02 --minimum-lot 0.01 --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
   --entries 8 --entry-ladder signal_range_3 --entry-sl-gap 0.5 `
@@ -75,4 +74,5 @@ python tools/auto_explicit.py `
   --tp1-lock-fraction 1.0 --tp2-lock-target TP2 `
   --runner-after-tp3 false --tp3-lock-target TP2 `
   --trailing-open-distance 0 --trailing-close-distance 2.0 `
-  --trailing-close-after-stage 0
+  --trailing-close-after-stage 0 `
+  --initial-capital 5000

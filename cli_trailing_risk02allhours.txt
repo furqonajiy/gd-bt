@@ -32,7 +32,6 @@ python tools/generate_aggressive_limit_risk02.py --charts data/XAUUSD_M1_*_ELEV8
 python tools/backtest_explicit.py `
   --signals generated/self_risk02_allhours.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
-  --output-dir reports/SELF_TRAILING `
   --max-drawdown-limit-pct 50 `
   --progress-interval-seconds 30 `
   --sync-charts true `
@@ -64,6 +63,7 @@ python tools/backtest_explicit.py `
   --trailing-close-distance 8.0 `
   --trailing-close-after-stage 0 `
   --shared-sl true `
+  --output-dir reports/SELF_TRAILING `
   --initial-capital 5000 `
   --start-date 2025-01-01
 
@@ -71,7 +71,6 @@ python tools/backtest_explicit.py `
 python tools/backtest_explicit.py `
   --signals generated/self_risk02_allhours.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
-  --output-dir reports/SELF_TRAILING_FROM_JUNE `
   --max-drawdown-limit-pct 50 `
   --progress-interval-seconds 30 `
   --sync-charts true `
@@ -103,6 +102,7 @@ python tools/backtest_explicit.py `
   --trailing-close-distance 8.0 `
   --trailing-close-after-stage 0 `
   --shared-sl true `
+  --output-dir reports/SELF_TRAILING_FROM_JUNE `
   --initial-capital 5000 `
   --start-date 2026-06-01
 
