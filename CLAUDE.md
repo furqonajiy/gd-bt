@@ -49,11 +49,17 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   classified (R1quiet/R2bull/R3strong/R4parab) from its own M1 bars.
 - `strategy/regime.py` — the **volatility-regime detector** (`detect_regime` /
   `read_current_regime` via smoothed M15 ATR + trend), re-exported from the
-  package root. It labels months in the report and drives **`auto --adaptive`**:
-  each cycle the live loop classifies the current market and runs that regime's
-  published champion (`CHAMPION_<regime>.json` under `--champions-dir`), falling
-  back to the CLI/incumbent config when none exists. `tools/regime_router.py` is
-  a back-compat shim; `tools/regime_auto.py` is the one-shot advisory CLI.
+  package root. It labels months in the report and drives the **regime
+  auto-switch**. `strategy/regime_adaptive.py` is the shared resolver
+  (`champion_config` loads `CHAMPION_<regime>.json` under `--champions-dir`,
+  fallback to the incumbent; `make_regime_config_resolver` maps a signal's time →
+  regime → champion config from a *trailing* window, no lookahead). Both paths use
+  it: **`auto --adaptive`** (live, per cycle) and **`backtest_explicit.py
+  --adaptive`** (the same switch in backtest, via `run_backtest(config_resolver=)`).
+  Champions live in **`champions/CHAMPION_<regime>.json`** (committed on main,
+  seeded with SC24 for every regime; replace one as the sweep publishes a winner).
+  `tools/regime_router.py` is a back-compat shim; `tools/regime_auto.py` is the
+  one-shot advisory CLI.
 - `tests/` — `pytest` suite, heavy on live/backtest parity.
 - `docs/` — `MT5_SETUP.md`, `OPERATIONS_PLAYBOOK.md`,
   `demo_runbook_trailing_open.md`.

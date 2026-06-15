@@ -1575,7 +1575,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "published champion config (CHAMPION_<regime>.json under "
                          "--champions-dir), falling back to the CLI/incumbent config when no "
                          "champion is published yet.")
-    pa.add_argument("--champions-dir", default="sweep_regime_out_grid",
+    pa.add_argument("--champions-dir", default="champions",
                     help="Directory holding CHAMPION_<regime>.json for --adaptive.")
     pa.add_argument("--adaptive-window-days", type=int, default=20,
                     help="Trailing window (days) of M1 used to classify the regime in --adaptive.")
