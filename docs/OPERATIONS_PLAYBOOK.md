@@ -272,6 +272,25 @@ the comment survives the broker's truncation (Elev8 cuts near 16 chars). The
 tag is **capped at 4 chars**; a longer one keeps its first 4. The tag is
 live-only — backtests run untagged, so parity is unaffected.
 
+### Regime auto-switch (`--adaptive`)
+
+Pass `--adaptive` (and `--champions-dir <dir>` if your `CHAMPION_<regime>.json`
+files live somewhere other than `sweep_regime_out_grid/`) to let `auto` pick the
+strategy by **volatility regime**. Each cycle it classifies the current market
+(`xauusd_trading.strategy.regime` — smoothed M15 ATR + trend → R1quiet / R2bull /
+R3strong / R4parab) from a trailing window of M1 (`--adaptive-window-days`,
+default 20) and runs that regime's **published champion** config; when no
+champion exists for the detected regime it **falls back to the CLI/incumbent
+config** you passed, so you're never left without a config. A switch is logged
+once per change (`[adaptive] regime=… → champion …`). The detected regime governs
+the **whole cycle** — both new placements and management of currently-tracked
+positions — so when the regime flips, open positions are managed under the new
+regime's champion. Default off; without the flag `auto` runs the explicit config
+exactly as before. Detection never raises: if the chart can't be read it keeps
+the incumbent and the cycle continues. (`python tools/regime_auto.py` is the
+one-shot advisory version — print the detected regime + its champion CLI without
+running the loop.)
+
 ## When something is wrong
 
 ### Sanity checks failed → orders NOT placed

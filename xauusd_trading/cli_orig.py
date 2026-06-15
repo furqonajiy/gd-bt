@@ -1569,6 +1569,16 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Each cycle, re-open at market any entry the replay still holds OPEN "
                          "but that is missing from MT5 (e.g. closed by hand), so live execution "
                          "keeps mirroring the backtest.")
+    pa.add_argument("--adaptive", action="store_true",
+                    help="Auto-switch by regime: each cycle classify the current market "
+                         "(volatility regime) from recent chart M1 and run that regime's "
+                         "published champion config (CHAMPION_<regime>.json under "
+                         "--champions-dir), falling back to the CLI/incumbent config when no "
+                         "champion is published yet.")
+    pa.add_argument("--champions-dir", default="sweep_regime_out_grid",
+                    help="Directory holding CHAMPION_<regime>.json for --adaptive.")
+    pa.add_argument("--adaptive-window-days", type=int, default=20,
+                    help="Trailing window (days) of M1 used to classify the regime in --adaptive.")
     _add_strategy_overrides(pa)
     _add_mt5_flags(pa)
     _add_notification_flags(pa)

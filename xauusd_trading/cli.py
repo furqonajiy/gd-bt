@@ -259,8 +259,9 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
     notified_keys: dict[str, set] = {"detected": set(), "skipped": set()}
     last_heartbeat = time.monotonic()
     _tag = getattr(args, "strategy_tag", "") or ""
+    _adaptive = " | ADAPTIVE (regime auto-switch)" if _adaptive_enabled(args) else ""
     print(f"[auto] strategy_tag={_tag or '(none)'} | "
-          f"positions={getattr(args, 'positions_json', '?')} | signals: {signals_path}")
+          f"positions={getattr(args, 'positions_json', '?')} | signals: {signals_path}{_adaptive}")
     try:
         while True:
             iteration += 1
@@ -281,6 +282,58 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
         print()
         print("Interrupted; exiting auto mode.")
         return 0
+
+
+def _adaptive_enabled(args: argparse.Namespace) -> bool:
+    """--adaptive accepted as a bool (main CLI) or 'true'/'false' (auto_explicit)."""
+    v = getattr(args, "adaptive", False)
+    return v is True or str(v).lower() == "true"
+
+
+def _maybe_adaptive_config(args: argparse.Namespace, base_config: StrategyConfig,
+                           chart, console_state: dict) -> StrategyConfig:
+    """In --adaptive mode, classify the current volatility regime from recent
+    chart M1 and run that regime's published champion config
+    (CHAMPION_<regime>.json under --champions-dir); fall back to ``base_config``
+    (the CLI/incumbent config) when no champion exists or anything fails. Logs
+    once per regime/source change so a switch is visible in the event log. Never
+    raises -- a detection failure keeps the incumbent and the cycle continues."""
+    import json
+    from dataclasses import fields as _dc_fields
+
+    import pandas as pd
+
+    from xauusd_trading import read_current_regime
+
+    try:
+        m1 = chart.dataframe[["time", "open", "high", "low", "close"]].set_index("time")
+        window = int(getattr(args, "adaptive_window_days", 20) or 20)
+        reading = read_current_regime(m1[m1.index >= m1.index.max() - pd.Timedelta(days=window)])
+    except Exception as e:  # pragma: no cover - defensive, live data shape varies
+        if console_state.get("__regime__") != "ERR":
+            print(f"[adaptive] regime detection failed ({e}); using incumbent config.")
+            console_state["__regime__"] = "ERR"
+        return base_config
+
+    regime = reading.regime
+    champ_path = Path(getattr(args, "champions_dir", "sweep_regime_out_grid") or
+                      "sweep_regime_out_grid") / f"CHAMPION_{regime}.json"
+    config, source = base_config, "no champion yet; using incumbent"
+    if champ_path.exists():
+        try:
+            cfg_dict = json.loads(champ_path.read_text()).get("config") or {}
+            valid = {f.name for f in _dc_fields(StrategyConfig)}
+            config = StrategyConfig(**{k: v for k, v in cfg_dict.items() if k in valid})
+            source = f"champion {champ_path.name}"
+        except Exception as e:
+            source = f"champion load failed ({e}); using incumbent"
+
+    note = f"{regime}|{source}"
+    if console_state.get("__regime__") != note:
+        print(f"[adaptive] regime={regime} (M15 ATR ${reading.m15_atr:.2f}, "
+              f"trend {reading.trend:+.3f}) -> {source}")
+        console_state["__regime__"] = note
+    return config
 
 
 def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
@@ -316,6 +369,11 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     if replay_end is None:
         print("[mt5] no chart data available; skipping iteration")
         return 0
+
+    # Regime auto-switch: classify the current market and swap in that regime's
+    # published champion config before any placement/management this cycle.
+    if _adaptive_enabled(args):
+        config = _maybe_adaptive_config(args, config, chart, candidate_console_state)
 
     tracked = []
     for item in prior_entries:
