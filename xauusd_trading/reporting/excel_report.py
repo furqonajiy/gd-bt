@@ -405,7 +405,7 @@ ENTRY_LAYOUT = [
     ("entry_key", "Entry Key", None, "id"),
     ("signal_date", "Date", None, "id"),
     ("signal_time_source", "Time (src)", None, "id"),     # header set per source tz
-    ("signal_time_chart", "Time (GMT+3)", "datetime", "id"),
+    ("signal_time_chart", "Time (chart EET/EEST)", "datetime", "id"),
     ("side", "Side", None, "id"),
     ("range_low", "Range Low", "price", "orig"),
     ("range_high", "Range High", "price", "orig"),

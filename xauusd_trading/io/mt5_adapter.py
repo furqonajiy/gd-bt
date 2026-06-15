@@ -4,9 +4,12 @@ Drop-in replacement for `CsvChartSource` when running against a live MT5
 terminal. Windows-only at runtime; the module imports cleanly elsewhere
 because `MetaTrader5` is lazy-imported inside Mt5Connection.
 
-Broker timezone: MT5 returns bar timestamps in server local time. Most
-XAUUSD brokers run on GMT+3 (default `server_offset_hours=3`, no shift
-needed). Set explicitly if your broker is different.
+Broker timezone: MT5 returns bar timestamps in server local time, which is
+Eastern European (EET/EEST: +2 winter, +3 summer, EU rule). Keep
+`server_offset_hours=3` (the default): with the shift `3 - server_offset = 0`
+the export stores the broker clock **verbatim**, which is exactly the EET/EEST
+chart time the DST-aware engine (`core/chart_tz`) expects. Do not set it to 2 in
+winter -- that would add an hour and corrupt the stored timestamps.
 
 Symbol name varies by broker ("XAUUSD", "XAUUSD.r", "GOLD", "XAUUSDm",
 ...). Check Market Watch and pass the exact name via `symbol=`.
@@ -19,6 +22,7 @@ from typing import Iterable, Optional
 from xauusd_trading import ChartSource
 from xauusd_trading import Bar
 from xauusd_trading import POINT_VALUE
+from xauusd_trading.core import chart_tz
 
 # MT5 Python interprets naive datetimes as the host's LOCAL time, and even
 # tz-aware datetimes can be re-routed through local time on some versions
@@ -391,7 +395,8 @@ def archive_m1_by_month(
         rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 1)
         if rates is None or len(rates) == 0:
             now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-            until_chart_time = now_utc + timedelta(hours=3)
+            # Chart time is EET/EEST (DST-aware), not a fixed +3.
+            until_chart_time = chart_tz.utc_to_chart(now_utc)
         else:
             broker_naive = datetime.fromtimestamp(int(rates[0]["time"]), timezone.utc).replace(tzinfo=None)
             until_chart_time = broker_naive + timedelta(hours=3 - server_offset_hours)
