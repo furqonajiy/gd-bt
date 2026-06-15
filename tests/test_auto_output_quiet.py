@@ -160,7 +160,7 @@ def _follow_rec():
 def _run_auto_once(tmp_path: Path, monkeypatch, *, signals, place_log=None, config=DEFAULT_CONFIG, state=None):
     signals_path = tmp_path / "signals.txt"
     signals_path.write_text("placeholder", encoding="utf-8")
-    monkeypatch.setattr(cli, "parse_signals_file", lambda path: list(signals))
+    monkeypatch.setattr(cli, "parse_signals_file", lambda path, **kw: list(signals))
     monkeypatch.setattr(cli, "decide", lambda *args, **kwargs: _follow_rec())
     if place_log is not None:
         _FakeExecutor.place_log = place_log
@@ -256,7 +256,7 @@ def test_auto_played_out_status_dedupes_despite_flapping_realized(tmp_path, monk
     signal = _signal()
     signals_path = tmp_path / "signals.txt"
     signals_path.write_text("placeholder", encoding="utf-8")
-    monkeypatch.setattr(cli, "parse_signals_file", lambda path: [signal])
+    monkeypatch.setattr(cli, "parse_signals_file", lambda path, **kw: [signal])
 
     realized = {"v": 67.60}
 
@@ -312,7 +312,7 @@ def test_auto_expired_skip_dedupes_across_minute_change(tmp_path, monkeypatch, c
     signal = _signal()
     signals_path = tmp_path / "signals.txt"
     signals_path.write_text("placeholder", encoding="utf-8")
-    monkeypatch.setattr(cli, "parse_signals_file", lambda path: [signal])
+    monkeypatch.setattr(cli, "parse_signals_file", lambda path, **kw: [signal])
 
     def fake_decide(*args, **kwargs):
         plan = SimpleNamespace(
