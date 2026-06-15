@@ -1,0 +1,99 @@
+name: Apply entry numbering patch
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feature/improve
+
+      - name: Apply patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if old not in text:
+                  print(f"SKIP {label}: pattern not found")
+                  return text
+              return text.replace(old, new, 1)
+
+          # 1) Base executor: number MT5 comments per generated entry.
+          p = Path("xauusd_trading/execution/mt5_executor.py")
+          s = p.read_text(encoding="utf-8")
+
+          s = replace_once(
+              s,
+              '''def signal_to_magic(signal_key: str) -> int:\n    """Stable 31-bit positive int derived from signal_key."""\n    h = hashlib.md5(signal_key.encode("utf-8")).digest()\n    return int.from_bytes(h[:4], "big") & 0x7FFFFFFF\n''',
+              '''def signal_to_magic(signal_key: str) -> int:\n    """Stable 31-bit positive int derived from signal_key."""\n    h = hashlib.md5(signal_key.encode("utf-8")).digest()\n    return int.from_bytes(h[:4], "big") & 0x7FFFFFFF\n\n\ndef signal_entry_key(signal_key: str, entry_index: int) -> str:\n    """Human-readable one-based key for a generated entry."""\n    return f"{signal_key}.{entry_index + 1}"\n\n\ndef mt5_entry_comment(signal_key: str, entry_index: int, max_len: int = 31) -> str:\n    """MT5-safe per-entry comment preserving the one-based entry suffix."""\n    suffix = f".{entry_index + 1}"\n    prefix_len = max_len - len(suffix)\n    if prefix_len <= 0:\n        return suffix[-max_len:]\n    return f"{signal_key[:prefix_len]}{suffix}"\n''',
+              "executor helpers",
+          )
+
+          s = replace_once(
+              s,
+              '''        log = ExecutionLog()\n        magic = signal_to_magic(signal.signal_key)\n        comment = signal.signal_key[:31]\n''',
+              '''        log = ExecutionLog()\n        magic = signal_to_magic(signal.signal_key)\n''',
+              "remove shared comment",
+          )
+
+          s = replace_once(
+              s,
+              '''            request = {\n                "action":       self.mt5.TRADE_ACTION_PENDING,\n''',
+              '''            comment = mt5_entry_comment(signal.signal_key, o.entry_index)\n            entry_key = signal_entry_key(signal.signal_key, o.entry_index)\n            request = {\n                "action":       self.mt5.TRADE_ACTION_PENDING,\n''',
+              "entry comment inside place_signal",
+          )
+
+          s = replace_once(
+              s,
+              '''                log.actions.append(\n                    f"  #{o.entry_index}: placed ticket={res.order} "\n                    f"@ {request['price']:g} lot={lot} "\n                    f"SL={request['sl']:g} TP={request['tp']:g}"\n                )\n''',
+              '''                log.actions.append(\n                    f"  {entry_key}: placed ticket={res.order} comment={comment} "\n                    f"@ {request['price']:g} lot={lot} "\n                    f"SL={request['sl']:g} TP={request['tp']:g}"\n                )\n''',
+              "placement log line",
+          )
+
+          p.write_text(s, encoding="utf-8")
+
+          # 2) Backtest output: add entry_key + one-based entry_number.
+          p = Path("xauusd_trading/strategy/backtest.py")
+          s = p.read_text(encoding="utf-8")
+          s = replace_once(
+              s,
+              '''                "global_id": sig.global_id,\n                "signal_key": sig.signal_key,\n                "signal_date": sig.source_date,\n''',
+              '''                "global_id": sig.global_id,\n                "signal_key": sig.signal_key,\n                "entry_key": f"{sig.signal_key}.{e.entry_index + 1}",\n                "entry_number": e.entry_index + 1,\n                "signal_date": sig.source_date,\n''',
+              "backtest entry identifiers",
+          )
+          p.write_text(s, encoding="utf-8")
+
+          # 3) Excel report: show entry_key and one-based entry_number.
+          p = Path("xauusd_trading/reporting/excel_report.py")
+          s = p.read_text(encoding="utf-8")
+          s = replace_once(
+              s,
+              '''ENTRY_COLUMNS = [\n    ("global_id", "Sig ID", None),\n    ("signal_key", "Sig Key", None),\n    ("signal_date", "Date", None),\n''',
+              '''ENTRY_COLUMNS = [\n    ("global_id", "Sig ID", None),\n    ("signal_key", "Sig Key", None),\n    ("entry_key", "Entry Key", None),\n    ("entry_number", "Entry #", None),\n    ("signal_date", "Date", None),\n''',
+              "excel entry columns",
+          )
+          s = s.replace('''    ("entry_index", "Entry #", None),\n''', '')
+          p.write_text(s, encoding="utf-8")
+          PY
+
+      - name: Validate syntax
+        run: python -m compileall xauusd_trading
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add xauusd_trading/execution/mt5_executor.py xauusd_trading/strategy/backtest.py xauusd_trading/reporting/excel_report.py
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Number generated entry comments and backtest keys"
+            git push origin HEAD:feature/improve
+          fi

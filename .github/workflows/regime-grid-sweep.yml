@@ -1,0 +1,677 @@
+name: regime-grid-sweep
+
+# COARSE-STAGE feed x regime adaptive GRID sweep (widened sibling of
+# self-regime-sweep.yml). Where self-regime-sweep fits ONE adaptive feed
+# (self_adaptive) per regime, this grid fans out MANY ATR-multiplier feeds per
+# regime at once, so the coarse stage of a coarse-to-fine search can compare
+# stop/target sizings head-to-head within each regime slice.
+#
+# Matrix: feed (12) x regime (1, the ACTIVE regime) independent ubuntu-latest
+# jobs. The 12 feeds are 7 ATR-multiplier adaptive variants + breakout + meanrev
+# + THREE HIGH-FREQUENCY self-scalper archives (scalper24, scalperwide24,
+# risk02allhours) -- the dense intraday family that earns more $3/lot bonus and
+# compounds faster, the same character as the live incumbent. The grid sweeps
+# ONE regime at a time, in volatility order R4 -> R3 -> R2 -> R1 (re-sweep at $5k capital):
+# repoint `matrix.regime` AND the chain step's ACTIVE_REGIME together per phase.
+# Each job runs FOUR tools/sweep_self_limit.py shards (seeds 42..45) in parallel
+# on the runner's 4 cores against that regime's chart month-glob and that feed's
+# archive, then a single AGGREGATE job merges every shard's results back and is
+# the SOLE writer to research/regime-adaptive -- so there is no push collision
+# between the parallel jobs. Champions rank on compounded net + $3/lot bonus at
+# DD<=40% (tools/champions_report.best_challenger), so trade frequency counts.
+#
+# CHAMPION/CHALLENGER deploy. The grid is the CHALLENGER. The user keeps trading
+# their INCUMBENT live config = SC24 (cli_champion_R4_scalper24_no_trailing:
+# DEFAULT_CONFIG + entries 6 / slm 2.1 / max_hold 240 / locks tp1-delay 24,
+# tp2-delay 2 / no trailing / 1% risk; defined once in sweep.sc24_config) and only
+# SWITCHES when a challenger STRICTLY beats it at DD<=40%. The grid seeds SC24 +
+# its coordinate neighborhood (sweep.sc24_neighborhood_grid) so it can actually
+# reproduce/beat the champion. Two additions make the grid drive that decision
+# from a single pulled file:
+#   * a one-time, CACHED `incumbent` job scores the incumbent config on the FIXED
+#     dense live feed (generated/self_scalper24.txt) per regime, writing
+#     sweep_regime_out_grid/INCUMBENT_<regime>.json (committed once, then reused);
+#   * the aggregate publishes CHAMPIONS.md at the repo root each checkpoint:
+#     per-regime incumbent | best challenger | VERDICT (SWITCH w/ runnable CLI vs
+#     HOLD), the live regime (R4parab) flagged ">>> RUN THIS NOW <<<". The
+#     published champion is MONOTONIC (CHAMPION_<regime>.json), only replaced when
+#     a challenger strictly beats the STORED champion, so CHAMPIONS.md never
+#     regresses across passes.
+#
+# Why this is collision-free (same contract as self-regime-sweep.yml):
+#   * Each grid job only ever WRITES its own shard*/results.jsonl files and
+#     uploads them as an artifact (res-<feed>__<regime>); it never pushes.
+#   * The aggregate job downloads all 28 artifacts, copies them into the
+#     sweep_regime_out_grid/<feed>__<regime>/shard<N>/ tree, writes the
+#     per-regime BEST/CLI snapshots + LEADERBOARD + CHAMPIONS.md, and is the only
+#     job that commits + pushes. The `incumbent` job is the one exception: it
+#     writes its own INCUMBENT_<regime>.json only when absent and commits with the
+#     same rebase+retry contract (one-time, so it does not race the aggregate).
+#
+# Resume: each job checks out research/regime-adaptive (which already contains
+# any results.jsonl a prior aggregate committed), so --resume continues from it.
+# The job's artifact carries the FULL cumulative shard*/results.jsonl, so the
+# aggregate can overwrite-copy each one safely.
+#
+# Self-terminating: the aggregate marks a (feed,regime) cell DONE once all 4 of
+# its shards have >= 120 result lines; when all 36 cells are DONE it disables
+# this workflow, otherwise it re-dispatches itself for the next pass. A sparse
+# 3-hourly schedule is only a safety net. schedule/workflow_dispatch fire only
+# from the default branch, so this file lives on main; it operates on the
+# research branch and nothing about the sweep lands on main.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 */3 * * *"   # safety net; self-disables once all 36 cells are DONE
+
+permissions:
+  contents: write   # aggregate pushes sweep checkpoints to the research branch
+  actions: write    # self-chain the next pass / self-disable when finished
+
+concurrency:
+  group: self-regime-grid
+  cancel-in-progress: false   # never interrupt an in-flight sweep pass
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  cell:
+    strategy:
+      fail-fast: false
+      max-parallel: 20   # GitHub free public concurrency cap
+      matrix:
+        feed: [adA_base, adB_tightSL, adC_wideSL, adD_closeTP, adE_farTP, adF_tightSL_closeTP, adG_wideSL_farTP, breakout, meanrev, scalper24, scalperwide24, risk02allhours]
+        regime: [R4parab]
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v5
+        with:
+          ref: research/regime-adaptive
+          fetch-depth: 0
+
+      - name: Completion guard (cell already DONE?)
+        id: guard
+        run: |
+          # If a previous aggregate marked this (feed,regime) cell DONE, skip the
+          # heavy sweep.
+          if [ -f "sweep_regime_out_grid/${{ matrix.feed }}__${{ matrix.regime }}/DONE" ]; then
+            echo "cell ${{ matrix.feed }}__${{ matrix.regime }} is DONE — skipping."
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "done=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.guard.outputs.done != 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        if: steps.guard.outputs.done != 'true'
+        run: pip install -r requirements.txt
+
+      - name: Resolve this regime's chart month-glob
+        if: steps.guard.outputs.done != 'true'
+        id: charts
+        run: |
+          # Each regime is fit on a distinct slice of XAUUSD history. The globs
+          # are expanded by the shell into the actual ELEV8 chart files below.
+          # This case mapping is identical to self-regime-sweep.yml.
+          case "${{ matrix.regime }}" in
+            R1quiet)
+              CHARTS="data/XAUUSD_M1_20211[12]_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_20230[1-9]_ELEV8.csv"
+              ;;
+            R2bull)
+              CHARTS="data/XAUUSD_M1_20231[012]_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv"
+              ;;
+            R3strong)
+              CHARTS="data/XAUUSD_M1_2025*_ELEV8.csv"
+              ;;
+            R4parab)
+              CHARTS="data/XAUUSD_M1_2026*_ELEV8.csv"
+              ;;
+            *)
+              echo "unknown regime ${{ matrix.regime }}"; exit 1 ;;
+          esac
+          echo "CHARTS=${CHARTS}" >> "$GITHUB_ENV"
+          echo "regime ${{ matrix.regime }} charts: ${CHARTS}"
+
+      - name: Resolve this feed's signal archive
+        if: steps.guard.outputs.done != 'true'
+        id: feed
+        run: |
+          # Most feeds are generated/adaptive_<feed>.txt (pullback was dropped --
+          # byte-identical to adA_base). The HIGH-FREQUENCY self-scalper feeds use
+          # their own dense archives; map their labels to the real files here. This
+          # mapping mirrors tools/champions_report.py:_FEED_FILE_OVERRIDES so the
+          # swept feed and the published champion CLI point at the same archive.
+          case "${{ matrix.feed }}" in
+            scalper24)      FEED="generated/self_scalper24.txt" ;;
+            scalperwide24)  FEED="generated/self_scalper_widerr24.txt" ;;
+            risk02allhours) FEED="generated/self_risk02_allhours.txt" ;;
+            *)              FEED="generated/adaptive_${{ matrix.feed }}.txt" ;;
+          esac
+          if [ ! -f "$FEED" ]; then
+            echo "feed file $FEED is missing"; exit 1
+          fi
+          # The archive feed spans the FULL 2021-2026 history, but each regime is
+          # fit on its own chart slice. tools/sweep.py:split_train_validate() picks
+          # the OOS validate set as the last 2 SIGNAL-months of whatever feed it is
+          # handed -- so feeding the full feed with regime-restricted charts puts the
+          # held-out tail (2026-05/06) OUTSIDE every non-R4 regime's charts, yielding
+          # $0 OOS for every candidate. Filter the feed to THIS regime's signal
+          # months first so the OOS tail lands inside the regime window. The regex is
+          # matched against the YYYY-MM at the start of each `... GMT` date header;
+          # a header (and its signal lines) is kept only while its month matches.
+          case "${{ matrix.regime }}" in
+            R1quiet)  SIG_RE='^(2021-1[12]|2022-|2023-0[1-9])' ;;
+            R2bull)   SIG_RE='^(2023-1[012]|2024-)' ;;
+            R3strong) SIG_RE='^2025-' ;;
+            R4parab)  SIG_RE='^2026-' ;;
+            *) echo "unknown regime ${{ matrix.regime }}"; exit 1 ;;
+          esac
+          FILTERED="/tmp/feed_${{ matrix.feed }}_${{ matrix.regime }}.txt"
+          awk -v re="$SIG_RE" '
+            /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] GMT/ { keep = (substr($0,1,7) ~ re); if (keep) print; next }
+            keep
+          ' "$FEED" > "$FILTERED"
+          test -s "$FILTERED" || { echo "ERROR: filtered feed empty for ${{ matrix.regime }}"; exit 1; }
+          echo "FEED=${FILTERED}" >> "$GITHUB_ENV"
+          echo "feed ${{ matrix.feed }} archive: ${FEED} -> regime-filtered ${FILTERED} ($(grep -cE '^[0-9]+\. ' "$FILTERED") signals for ${{ matrix.regime }})"
+
+      - name: Run 4 shards in parallel (use all 4 runner cores, resumable, time-boxed)
+        if: steps.guard.outputs.done != 'true'
+        run: |
+          # Launch FOUR sweep shards (seeds 42..45) into shard0..shard3/ on the
+          # runner's 4 cores, then wait. Each shard uses --resume to continue
+          # from the checked-out results.jsonl, and a 55-minute box (timeout
+          # 3300) hands off to the next pass under the 70-min job cap. $CHARTS is
+          # intentionally unquoted so the shell expands the glob.
+          # 120 candidates/shard x 4 shards = ~480 candidates/cell accumulated
+          # over chained rounds.
+          CELL="sweep_regime_out_grid/${{ matrix.feed }}__${{ matrix.regime }}"
+          for N in 0 1 2 3; do
+            timeout 3300 python tools/sweep_self_limit.py \
+              --signals "$FEED" \
+              --charts $CHARTS \
+              --seed $((42 + N)) \
+              --max-candidates 120 \
+              --output-dir "${CELL}/shard${N}" \
+              --max-concurrent-dd-pct 40 \
+              --validate-months 2 \
+              --top-n 20 \
+              --progress-every 20 \
+              --resume &
+          done
+          wait
+          echo "shards complete for ${CELL}:"
+          for N in 0 1 2 3; do
+            f="${CELL}/shard${N}/results.jsonl"
+            n=0; [ -f "$f" ] && n=$(wc -l < "$f")
+            echo "  shard${N}: ${n} lines"
+          done
+
+      - name: Upload cell results (all 4 shards)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: res-${{ matrix.feed }}__${{ matrix.regime }}
+          path: sweep_regime_out_grid/${{ matrix.feed }}__${{ matrix.regime }}/**/results.jsonl
+          if-no-files-found: ignore
+          retention-days: 1
+
+  incumbent:
+    # One-time, CACHED incumbent baseline per regime. Scores the user's live
+    # config = SC24 (sweep.sc24_config) on the FIXED dense scalper24 feed over
+    # each regime's charts, reusing the sweep's OWN metric definitions
+    # (tools/sweep_self_limit.evaluate_self_limit) so the comparison is
+    # apples-to-apples. Each regime is computed at most once: if its
+    # INCUMBENT_<regime>.json already exists on the research branch, it is skipped.
+    # Runs in parallel with `cell`; the aggregate (needs: [cell, incumbent])
+    # consumes the committed JSONs.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v5
+        with:
+          ref: research/regime-adaptive
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Author identity for the baseline commit
+        run: |
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+
+      - name: Compute missing incumbent baselines (cached per regime)
+        run: |
+          # Resolve each regime's chart glob with the SAME case mapping the shard
+          # job uses, and only compute the baseline if its JSON is absent (cache).
+          # $CHARTS is intentionally unquoted so the shell expands the glob.
+          set -e
+          for regime in R1quiet R2bull R3strong R4parab; do
+            out="sweep_regime_out_grid/INCUMBENT_${regime}.json"
+            if [ -f "$out" ]; then
+              echo "incumbent ${regime}: cached (${out}) — skip"
+              continue
+            fi
+            case "$regime" in
+              R1quiet)
+                CHARTS="data/XAUUSD_M1_20211[12]_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_20230[1-9]_ELEV8.csv"
+                SIG_RE='^(2021-1[12]|2022-|2023-0[1-9])' ;;
+              R2bull)
+                CHARTS="data/XAUUSD_M1_20231[012]_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv"
+                SIG_RE='^(2023-1[012]|2024-)' ;;
+              R3strong)
+                CHARTS="data/XAUUSD_M1_2025*_ELEV8.csv"
+                SIG_RE='^2025-' ;;
+              R4parab)
+                CHARTS="data/XAUUSD_M1_2026*_ELEV8.csv"
+                SIG_RE='^2026-' ;;
+            esac
+            # The incumbent is the user's LIVE current CLI = SC24 (the full
+            # no-trailing champion config at 1% risk, pinned in incumbent_config
+            # -> sweep.sc24_config) on the DENSE self_scalper24 archive it actually
+            # trades -- NOT the lower-frequency self_better feed, which understates
+            # the bonus + compounding. Same OOS-window handling as the shard
+            # job: incumbent_baseline.py calls sweep.split_train_validate(), so
+            # filter the feed to THIS regime's signal months first.
+            FILTERED="/tmp/feed_incumbent_${regime}.txt"
+            awk -v re="$SIG_RE" '
+              /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] GMT/ { keep = (substr($0,1,7) ~ re); if (keep) print; next }
+              keep
+            ' generated/self_scalper24.txt > "$FILTERED"
+            test -s "$FILTERED" || { echo "ERROR: filtered incumbent feed empty for ${regime}"; exit 1; }
+            echo "incumbent ${regime}: computing on regime-filtered ${FILTERED} ($(grep -cE '^[0-9]+\. ' "$FILTERED") signals) ..."
+            # Non-fatal per regime: a single regime's baseline failing must not red
+            # the whole workflow (the aggregate still runs and the active regime's
+            # sweep still progresses). $CHARTS is unquoted so the shell expands the
+            # bracket-expression month globs into the real files.
+            python tools/incumbent_baseline.py \
+              --regime "$regime" \
+              --signals "$FILTERED" \
+              --charts $CHARTS \
+              --output-dir sweep_regime_out_grid \
+              --validate-months 2 \
+              --max-concurrent-dd-pct 40 \
+              || echo "WARN: incumbent baseline for ${regime} failed; continuing."
+          done
+
+      - name: Commit + push new incumbent baselines (rebase+retry)
+        run: |
+          git add -f sweep_regime_out_grid/INCUMBENT_*.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No new incumbent baselines to commit."
+          else
+            git commit -q -m "ci: self-regime-grid incumbent baseline checkpoint"
+            for i in 1 2 3 4; do
+              if git push -q origin HEAD:research/regime-adaptive; then
+                echo "push: ok"; break
+              fi
+              echo "push: retry ${i}"
+              git pull --rebase -q origin research/regime-adaptive || true
+              sleep $((2 ** i))
+            done
+          fi
+
+  aggregate:
+    needs: [cell, incumbent]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v5
+        with:
+          ref: research/regime-adaptive
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download all cell artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: _artifacts
+          pattern: res-*
+          merge-multiple: false
+
+      - name: Copy artifacts into the cell shard tree
+        run: |
+          # download-artifact@v4 lays each artifact down at _artifacts/res-<cell>/.
+          # upload-artifact@v4 roots the artifact at the LEAST-COMMON-ANCESTOR of
+          # the matched files, so with 4 shards the artifact's internal layout is
+          #   shard<N>/results.jsonl
+          # (NOT prefixed with sweep_regime_out_grid/<cell>/). To be robust to
+          # either rooting, find every results.jsonl under the artifact and derive
+          # the shardN from its immediate parent dir name; the cell comes from the
+          # artifact dir name (res-<feed>__<regime>). Each file is the FULL
+          # cumulative result, so overwrite-copy it back into the working tree at
+          # sweep_regime_out_grid/<cell>/shard<N>/.
+          shopt -s nullglob globstar
+          for art in _artifacts/res-*/; do
+            base=$(basename "$art")          # res-<feed>__<regime>
+            cell=${base#res-}                # <feed>__<regime>
+            for src in "$art"**/results.jsonl; do
+              [ -f "$src" ] || continue
+              shard=$(basename "$(dirname "$src")")   # shardN
+              case "$shard" in
+                shard[0-9]*) : ;;                     # expected shard dir
+                *) echo "skip unexpected ${src} (parent=${shard})"; continue ;;
+              esac
+              dst="sweep_regime_out_grid/${cell}/${shard}"
+              mkdir -p "$dst"
+              cp -f "$src" "${dst}/results.jsonl"
+              echo "copied ${src} -> ${dst}/results.jsonl ($(wc -l < "${dst}/results.jsonl") lines)"
+            done
+          done
+
+      - name: Author identity for checkpoint commits
+        run: |
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+
+      - name: Write per-regime BEST + CLI snapshots + LEADERBOARD (ranked across feeds)
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          OUT = pathlib.Path("sweep_regime_out_grid")
+          FEEDS = ["adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
+                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP", "breakout", "meanrev",
+                   "scalper24", "scalperwide24", "risk02allhours"]
+          REGIMES = ["R1quiet", "R2bull", "R3strong", "R4parab"]
+          DD_GATE = 40.0
+
+          # High-frequency feeds map to their own dense archives (mirror of
+          # tools/champions_report.py:_FEED_FILE_OVERRIDES); everything else is an
+          # adaptive_<feed> file.
+          _FEED_FILE_OVERRIDES = {
+              "scalper24": "generated/self_scalper24.txt",
+              "scalperwide24": "generated/self_scalper_widerr24.txt",
+              "risk02allhours": "generated/self_risk02_allhours.txt",
+          }
+
+          def feed_signals(feed):
+              if feed in _FEED_FILE_OVERRIDES:
+                  return _FEED_FILE_OVERRIDES[feed]
+              return f"generated/adaptive_{feed}.txt"
+
+          def load_cell(feed, regime):
+              """All result rows for one (feed,regime) cell, tagged with feed."""
+              rows = []
+              for shard in range(4):
+                  f = OUT / f"{feed}__{regime}" / f"shard{shard}" / "results.jsonl"
+                  if not f.exists():
+                      continue
+                  for line in f.read_text().splitlines():
+                      line = line.strip()
+                      if not line:
+                          continue
+                      try:
+                          r = json.loads(line)
+                      except json.JSONDecodeError:
+                          continue
+                      r["_feed"] = feed
+                      rows.append(r)
+              return rows
+
+          def load_regime(regime):
+              """Every feed's rows for one regime, each tagged with its feed."""
+              rows = []
+              for feed in FEEDS:
+                  rows.extend(load_cell(feed, regime))
+              return rows
+
+          def dd(r):
+              return r.get("concurrent_risk_max_dd_pct")
+
+          def keyfn(r):
+              # Rank by OOS (held-out tail) then edge, both higher-is-better.
+              return (
+                  r.get("oos_fixed_no_bonus_profit") or 0.0,
+                  r.get("fixed_no_bonus_profit") or 0.0,
+              )
+
+          def render_cli(cfg, *, regime, feed):
+              # Mirror the 2021 orchestrator's renderer when importable so the
+              # winning CLI is a runnable backtest_explicit command; otherwise
+              # fall back to dumping the config dict (per the workflow contract).
+              signals = feed_signals(feed)
+              try:
+                  import sys
+                  sys.path.insert(0, ".")
+                  from sweep2021 import orchestrate as o  # noqa
+                  args = o.baseline_explicit_args(
+                      cfg, signals=signals,
+                      output_dir=f"reports/BEST_{regime}_{feed}")
+                  cont = " \\\n  "
+                  return "python tools/backtest_explicit.py" + cont + cont.join(str(a) for a in args) + "\n"
+              except Exception as exc:  # pragma: no cover - renderer is optional
+                  return ("# CLI renderer unavailable (%s); best config dict:\n"
+                          "# feed=%s signals=%s\n%s\n"
+                          % (exc, feed, signals, json.dumps(cfg, indent=2, sort_keys=True)))
+
+          leaderboard = ["# feed x regime adaptive grid — best (feed,config) per regime",
+                         f"# DD gate <= {DD_GATE:.0f}%, ranked by OOS then edge", ""]
+
+          for regime in REGIMES:
+              rows = load_regime(regime)
+              survivors = [r for r in rows
+                           if dd(r) is not None and dd(r) <= DD_GATE]
+              survivors.sort(key=keyfn, reverse=True)
+
+              best_path = OUT / f"BEST_{regime}.txt"
+              lines = [
+                  f"# regime {regime}: top DD<={DD_GATE:.0f}% candidates across "
+                  f"ALL feeds, by OOS then edge "
+                  f"({len(survivors)}/{len(rows)} pass DD gate)",
+                  "",
+              ]
+              for i, r in enumerate(survivors[:15], 1):
+                  lines.append(
+                      f"{i:>2}. feed={r.get('_feed')} "
+                      f"oos={r.get('oos_fixed_no_bonus_profit')} "
+                      f"edge={r.get('fixed_no_bonus_profit')} "
+                      f"dd={r.get('concurrent_risk_max_dd_pct')}% "
+                      f"stable={r.get('stable_fraction')} "
+                      f"cfg={r.get('config_json')}")
+              best_path.write_text("\n".join(lines) + "\n")
+              print(f"{regime}: wrote {best_path} ({len(survivors)} survivors)")
+
+              cli_path = OUT / f"self_cli_best_{regime}.txt"
+              if survivors:
+                  top = survivors[0]
+                  best_cfg = top.get("config") or {}
+                  best_feed = top.get("_feed")
+                  header = (
+                      f"# best {regime} config: feed={best_feed} "
+                      f"oos={top.get('oos_fixed_no_bonus_profit')} "
+                      f"edge={top.get('fixed_no_bonus_profit')} "
+                      f"dd={top.get('concurrent_risk_max_dd_pct')}%\n\n")
+                  cli_path.write_text(header + render_cli(best_cfg, regime=regime, feed=best_feed))
+                  leaderboard.append(
+                      f"{regime}: feed={best_feed} "
+                      f"edge={top.get('fixed_no_bonus_profit')} "
+                      f"oos={top.get('oos_fixed_no_bonus_profit')} "
+                      f"dd={top.get('concurrent_risk_max_dd_pct')}% "
+                      f"cfg={top.get('config_json')}")
+              else:
+                  cli_path.write_text(
+                      f"# regime {regime}: no DD<={DD_GATE:.0f}% survivor yet\n")
+                  leaderboard.append(f"{regime}: no DD<={DD_GATE:.0f}% survivor yet")
+              print(f"{regime}: wrote {cli_path}")
+
+          (OUT / "LEADERBOARD.txt").write_text("\n".join(leaderboard) + "\n")
+          print("wrote LEADERBOARD.txt")
+          PY
+
+      - name: Publish CHAMPIONS.md + monotonic CHAMPION_<regime>.json + self_cli_best_<regime>.txt
+        run: |
+          # Champion/challenger deploy file. Reads each regime's challenger rows
+          # (the same per-cell results.jsonl the snapshot step ranks) + the cached
+          # INCUMBENT_<regime>.json, advances the MONOTONIC published champion
+          # (CHAMPION_<regime>.json -- only replaced when a challenger strictly
+          # beats the stored champion's OOS, tiebreak edge, at DD<=40%), renders
+          # CHAMPIONS.md at the repo root, and writes a directly-runnable
+          # self_cli_best_<regime>.txt for each published champion.
+          python - <<'PY'
+          import json, pathlib, sys
+          sys.path.insert(0, ".")
+          import tools.champions_report as cr
+
+          OUT = pathlib.Path("sweep_regime_out_grid")
+          FEEDS = ["adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
+                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP", "breakout", "meanrev",
+                   "scalper24", "scalperwide24", "risk02allhours"]
+          REGIMES = ["R1quiet", "R2bull", "R3strong", "R4parab"]
+
+          def load_cell(feed, regime):
+              rows = []
+              for shard in range(4):
+                  f = OUT / f"{feed}__{regime}" / f"shard{shard}" / "results.jsonl"
+                  if not f.exists():
+                      continue
+                  for line in f.read_text().splitlines():
+                      line = line.strip()
+                      if not line:
+                          continue
+                      try:
+                          r = json.loads(line)
+                      except json.JSONDecodeError:
+                          continue
+                      r["_feed"] = feed
+                      rows.append(r)
+              return rows
+
+          incumbents, champions = {}, {}
+          for regime in REGIMES:
+              incumbents[regime] = cr.load_json(OUT / f"INCUMBENT_{regime}.json")
+
+              rows = []
+              for feed in FEEDS:
+                  rows.extend(load_cell(feed, regime))
+              best = cr.best_challenger(rows, dd_gate=cr.DD_GATE)
+              # Advance the monotonic published champion (writes CHAMPION_<regime>.json).
+              champ = cr.update_champion(OUT, regime, best)
+              champions[regime] = champ
+
+              # self_cli_best_<regime>.txt = runnable command for the PUBLISHED champion.
+              cli_path = OUT / f"self_cli_best_{regime}.txt"
+              if champ:
+                  header = (
+                      f"# published champion {regime}: feed={champ.get('feed')} "
+                      f"edge={champ.get('edge')} oos={champ.get('oos')} "
+                      f"dd={champ.get('dd')}%\n\n")
+                  cli = cr.render_champion_cli(
+                      champ.get("config") or {}, regime=regime, feed=champ.get("feed") or "")
+                  cli_path.write_text(header + cli)
+              else:
+                  cli_path.write_text(
+                      f"# regime {regime}: no DD<={cr.DD_GATE:.0f}% challenger yet\n")
+              inc = incumbents[regime]
+              verdict = "HOLD"
+              if champ and inc and cr.strictly_beats(champ, inc):
+                  verdict = "SWITCH"
+              elif champ and not inc:
+                  verdict = "SWITCH(no-incumbent)"
+              print(f"{regime}: incumbent={'y' if inc else 'n'} "
+                    f"champion={'y' if champ else 'n'} verdict={verdict}")
+
+          md = cr.render_champions_md(REGIMES, incumbents, champions)
+          pathlib.Path("CHAMPIONS.md").write_text(md)
+          print("wrote CHAMPIONS.md")
+          cr.write_deployment_cli_files(pathlib.Path("."), REGIMES, champions)
+          print("wrote per-regime cli/best_<regime>.txt")
+          PY
+
+      - name: Mark cells DONE (all 4 shards have >= 120 lines)
+        run: |
+          FEEDS="adA_base adB_tightSL adC_wideSL adD_closeTP adE_farTP adF_tightSL_closeTP adG_wideSL_farTP breakout meanrev scalper24 scalperwide24 risk02allhours"
+          REGIMES="R1quiet R2bull R3strong R4parab"
+          for feed in $FEEDS; do
+            for regime in $REGIMES; do
+              cell="sweep_regime_out_grid/${feed}__${regime}"
+              ok=1
+              for shard in 0 1 2 3; do
+                f="${cell}/shard${shard}/results.jsonl"
+                n=0
+                [ -f "$f" ] && n=$(wc -l < "$f")
+                if [ "$n" -lt 120 ]; then ok=0; fi
+              done
+              if [ "$ok" -eq 1 ]; then
+                touch "${cell}/DONE"
+                echo "cell ${feed}__${regime}: all 4 shards >= 120 lines — marked DONE"
+              fi
+            done
+          done
+
+      - name: Commit + push to research branch (sole writer — no collision)
+        run: |
+          # sweep_regime_out_grid/ is force-added; the snapshots/feeds are tracked.
+          # CHAMPIONS.md (the deploy file) lives at the repo root.
+          git add -f sweep_regime_out_grid 2>/dev/null || true
+          git add -f CHAMPIONS.md 2>/dev/null || true
+          git add -A generated 2>/dev/null || true
+          git add -f cli 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -q -m "ci: self-regime-grid aggregate checkpoint"
+            for i in 1 2 3 4; do
+              if git push -q origin HEAD:research/regime-adaptive; then
+                echo "push: ok"; break
+              fi
+              echo "push: retry ${i}"
+              git pull --rebase -q origin research/regime-adaptive || true
+              sleep $((2 ** i))
+            done
+          fi
+
+      - name: Chain the next pass, or disable when finished
+        if: always()
+        run: |
+          # The grid runs ONE regime at a time (R4 -> R3 -> R2 -> R1). Keep
+          # ACTIVE_REGIME in sync with the matrix `regime:`.
+          #   * If EVERY regime's cells are done (4 regimes x 12 feeds = 48), the
+          #     whole sweep is finished -> disable the workflow.
+          #   * Else if the ACTIVE regime's 12 cells are done, STOP dispatching but
+          #     stay ENABLED, so the maintainer advances to the next regime with
+          #     only a matrix + ACTIVE_REGIME edit and a dispatch -- no re-enable
+          #     dance (a disabled workflow cannot be workflow_dispatch'd).
+          #   * Else re-dispatch the next pass for the ACTIVE regime.
+          # The 3-hourly cron stays a cheap safety net: between regimes it fires a
+          # no-op pass (all active cells guard-skip) and stops at the branch above.
+          ACTIVE_REGIME=R4parab
+          FEED_CELLS=12
+          ALL_CELLS=48
+          done=$(ls -d sweep_regime_out_grid/*__${ACTIVE_REGIME}/DONE 2>/dev/null | wc -l)
+          all_done=$(ls -d sweep_regime_out_grid/*/DONE 2>/dev/null | wc -l)
+          echo "${ACTIVE_REGIME} cells DONE: ${done}/${FEED_CELLS}; all regimes: ${all_done}/${ALL_CELLS}"
+          if [ "${all_done}" -ge "${ALL_CELLS}" ]; then
+            echo "All ${ALL_CELLS} cells done across every regime — disabling this workflow."
+            gh workflow disable regime-grid-sweep.yml --repo "${{ github.repository }}" || true
+          elif [ "${done}" -ge "${FEED_CELLS}" ]; then
+            echo "Active regime ${ACTIVE_REGIME} complete (${done}/${FEED_CELLS}). Stopping dispatch; staying enabled for the next regime."
+          else
+            echo "Work remains for ${ACTIVE_REGIME} — dispatching the next pass."
+            gh workflow run regime-grid-sweep.yml --ref main --repo "${{ github.repository }}" || true
+          fi
