@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+"""Configurable local backtest runner for generated XAUUSD signals.
+
+This is intentionally separate from ``xauusd_trading.cli`` so signal-generation
+experiments can vary every StrategyConfig field without touching live MT5
+execution commands.
+
+Example:
+
+    python tools/backtest_configurable.py \
+      --signals generated_scalper_pullback_v1.txt \
+      --charts data/XAUUSD_M1_*.csv \
+      --output-dir reports/scalper_pullback_v1 \
+      --entry-ladder signal_range_3 \
+      --activation-delay 2 \
+      --pending-expiry 5 \
+      --max-hold 90 \
+      --sl-multiplier 1.5 \
+      --final-target TP3 \
+      --bonus-per-closed-lot 3 \
+      --tp1-lock-delay-minutes 2 \
+      --tp2-lock-delay-minutes 2 \
+      --profit-lock-mode bep_plus_half_tp1 \
+      --bep-trigger-distance 3 \
+      --tp1-lock-fraction 0.5 \
+      --tp2-lock-target TP1 \
+      --runner-after-tp3 \
+      --max-drawdown-limit-pct 40
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import sys
+import threading
+import time
+from pathlib import Path
+
+# Allow running as ``python tools/backtest_configurable.py`` from repo root.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from xauusd_trading import (  # noqa: E402
+    CsvChartSource,
+    DEFAULT_CONFIG,
+    StrategyConfig,
+    parse_signals_file,
+    run_backtest,
+    write_backtest_outputs,
+)
+
+
+def _expand_chart_paths(patterns: list[str]) -> list[Path]:
+    out: list[Path] = []
+    for pat in patterns:
+        if any(ch in pat for ch in "*?["):
+            matches = sorted(glob.glob(pat))
+            if not matches:
+                raise SystemExit(f"No files match pattern: {pat}")
+            out.extend(Path(m) for m in matches)
+        else:
+            path = Path(pat)
+            if not path.exists():
+                raise SystemExit(f"Chart file not found: {pat}")
+            out.append(path)
+    if not out:
+        raise SystemExit("No chart files provided")
+    return out
+
+
+def _config_from_args(args: argparse.Namespace) -> StrategyConfig:
+    return StrategyConfig(
+        initial_capital=args.initial_capital,
+        sizing_mode=args.sizing_mode,
+        lot_per_entry=args.lot,
+        risk_per_signal=args.risk,
+        minimum_lot=args.minimum_lot,
+        lot_step=args.lot_step,
+        bonus_per_closed_lot=args.bonus_per_closed_lot,
+        entry_count=args.entries,
+        entry_ladder=args.entry_ladder,
+        entry_sl_gap=args.entry_sl_gap,
+        activation_delay_minutes=args.activation_delay,
+        pending_expiry_minutes=args.pending_expiry,
+        max_hold_minutes=args.max_hold,
+        sl_multiplier=args.sl_multiplier,
+        final_target=args.final_target,
+        lock_after_tp1=not args.no_lock_after_tp1,
+        lock_after_tp2=not args.no_lock_after_tp2,
+        tp1_lock_delay_minutes=args.tp1_lock_delay_minutes,
+        tp2_lock_delay_minutes=args.tp2_lock_delay_minutes,
+        profit_lock_mode=args.profit_lock_mode,
+        bep_trigger_distance=args.bep_trigger_distance,
+        tp1_lock_fraction=args.tp1_lock_fraction,
+        tp2_lock_target=args.tp2_lock_target,
+        runner_after_tp3=args.runner_after_tp3,
+        tp3_lock_target=args.tp3_lock_target,
+    )
+
+
+def _summary_without_rows(result: dict) -> dict:
+    return {k: v for k, v in result.items() if k not in {"rows", "entry_rows"}}
+
+
+def _fmt_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h:d}h {m:02d}m {s:02d}s"
+    if m:
+        return f"{m:d}m {s:02d}s"
+    return f"{s:d}s"
+
+
+class _Heartbeat:
+    """Periodic stderr progress message while a blocking step is running."""
+
+    def __init__(self, label: str, interval_seconds: float, *, enabled: bool = True):
+        self.label = label
+        self.interval_seconds = max(1.0, float(interval_seconds))
+        self.enabled = enabled
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._start = 0.0
+
+    def __enter__(self):
+        if not self.enabled:
+            return self
+        self._start = time.time()
+        print(f"[{self.label}] started", file=sys.stderr, flush=True)
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if not self.enabled:
+            return False
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        elapsed = time.time() - self._start
+        print(f"[{self.label}] finished after {_fmt_duration(elapsed)}", file=sys.stderr, flush=True)
+        return False
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_seconds):
+            elapsed = time.time() - self._start
+            print(f"[{self.label}] still running... elapsed {_fmt_duration(elapsed)}", file=sys.stderr, flush=True)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="backtest_configurable",
+        description="Run a local backtest with full StrategyConfig control.",
+    )
+    p.add_argument("--signals", required=True, help="Signal text file.")
+    p.add_argument("--charts", required=True, nargs="+", help="One or more MT5 M1 chart CSV files/globs.")
+    p.add_argument("--output-dir", default=None, help="Optional directory for Excel output.")
+    p.add_argument("--exclude-structural-anomalies", action="store_true")
+
+    p.add_argument("--initial-capital", type=float, default=DEFAULT_CONFIG.initial_capital)
+    p.add_argument("--sizing-mode", default=DEFAULT_CONFIG.sizing_mode, choices=["fixed", "risk"])
+    p.add_argument("--lot", type=float, default=DEFAULT_CONFIG.lot_per_entry)
+    p.add_argument("--risk", type=float, default=DEFAULT_CONFIG.risk_per_signal)
+    p.add_argument("--minimum-lot", type=float, default=DEFAULT_CONFIG.minimum_lot)
+    p.add_argument("--lot-step", type=float, default=DEFAULT_CONFIG.lot_step)
+    p.add_argument(
+        "--bonus-per-closed-lot",
+        type=float,
+        default=DEFAULT_CONFIG.bonus_per_closed_lot,
+        help="Cash bonus/rebate per closed lot. Use 3 for $3/lot, or 0 for pure trading P&L.",
+    )
+
+    p.add_argument("--entries", type=int, default=DEFAULT_CONFIG.entry_count)
+    p.add_argument(
+        "--entry-ladder",
+        default=DEFAULT_CONFIG.entry_ladder,
+        choices=["signal_range_3", "range_uniform", "range_to_sl"],
+        help="Entry spacing rule. signal_range_3 is the provider-native H/H-1/L or L/L+1/H ladder.",
+    )
+    p.add_argument("--entry-sl-gap", type=float, default=DEFAULT_CONFIG.entry_sl_gap)
+
+    p.add_argument("--activation-delay", type=int, default=DEFAULT_CONFIG.activation_delay_minutes)
+    p.add_argument("--pending-expiry", type=int, default=DEFAULT_CONFIG.pending_expiry_minutes)
+    p.add_argument("--max-hold", type=int, default=DEFAULT_CONFIG.max_hold_minutes)
+    p.add_argument("--sl-multiplier", type=float, default=DEFAULT_CONFIG.sl_multiplier)
+    p.add_argument("--final-target", default=DEFAULT_CONFIG.final_target, choices=["TP1", "TP2", "TP3"])
+    p.add_argument("--no-lock-after-tp1", action="store_true")
+    p.add_argument("--no-lock-after-tp2", action="store_true")
+    p.add_argument("--tp1-lock-delay-minutes", type=int, default=DEFAULT_CONFIG.tp1_lock_delay_minutes)
+    p.add_argument("--tp2-lock-delay-minutes", type=int, default=DEFAULT_CONFIG.tp2_lock_delay_minutes)
+
+    p.add_argument(
+        "--profit-lock-mode",
+        default=DEFAULT_CONFIG.profit_lock_mode,
+        choices=["tp_levels", "bep_plus_half_tp1"],
+        help="tp_levels = old TP1/TP2 locks. bep_plus_half_tp1 = BEP at +N, half-TP1 lock after TP1, TP1 lock after TP2.",
+    )
+    p.add_argument("--bep-trigger-distance", type=float, default=DEFAULT_CONFIG.bep_trigger_distance)
+    p.add_argument("--tp1-lock-fraction", type=float, default=DEFAULT_CONFIG.tp1_lock_fraction)
+    p.add_argument("--tp2-lock-target", default=DEFAULT_CONFIG.tp2_lock_target, choices=["TP1", "TP2"])
+    p.add_argument("--runner-after-tp3", action="store_true", help="Do not close at TP3; after TP3, lock stop to TP2 and keep running until stop/time exit.")
+    p.add_argument("--tp3-lock-target", default=DEFAULT_CONFIG.tp3_lock_target, choices=["TP2"])
+
+    p.add_argument(
+        "--max-drawdown-limit-pct",
+        type=float,
+        default=40.0,
+        help="Drawdown guardrail for generated strategies. Default: 40%%.",
+    )
+    p.add_argument(
+        "--fail-on-drawdown-limit",
+        action="store_true",
+        help="Return exit code 1 when abs(max_drawdown_pct) exceeds the configured limit.",
+    )
+    p.add_argument(
+        "--progress-interval-seconds",
+        type=float,
+        default=15.0,
+        help="Print heartbeat progress every N seconds while loading/running. Use 0 to disable.",
+    )
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    config = _config_from_args(args)
+    progress_enabled = args.progress_interval_seconds > 0
+
+    print(f"Loading signals: {args.signals}", file=sys.stderr, flush=True)
+    signals = parse_signals_file(Path(args.signals))
+    print(f"Parsed signals: {len(signals):,}", file=sys.stderr, flush=True)
+
+    chart_paths = _expand_chart_paths(args.charts)
+    print(f"Loading chart files: {len(chart_paths):,}", file=sys.stderr, flush=True)
+    with _Heartbeat("chart load", args.progress_interval_seconds, enabled=progress_enabled):
+        chart = CsvChartSource(chart_paths)
+    chart_rows = len(chart.dataframe)
+    print(
+        f"Loaded chart rows: {chart_rows:,} | range: {chart.first_time()} -> {chart.last_time()}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+    print(
+        f"Running backtest for {len(signals):,} signals...",
+        file=sys.stderr,
+        flush=True,
+    )
+    with _Heartbeat("backtest", args.progress_interval_seconds, enabled=progress_enabled):
+        result = run_backtest(
+            signals,
+            chart,
+            config,
+            exclude_structural_anomalies=args.exclude_structural_anomalies,
+        )
+
+    summary = _summary_without_rows(result)
+    max_dd_pct = float(result.get("max_drawdown_pct", 0.0) or 0.0)
+    dd_abs = abs(min(0.0, max_dd_pct))
+    summary["max_drawdown_limit_pct"] = args.max_drawdown_limit_pct
+    summary["passes_drawdown_limit"] = dd_abs <= args.max_drawdown_limit_pct
+
+    print(json.dumps(summary, indent=2, default=str))
+
+    if args.output_dir:
+        with _Heartbeat("Excel write", args.progress_interval_seconds, enabled=progress_enabled):
+            path = write_backtest_outputs(result, Path(args.output_dir))
+        print(f"\nWrote Excel output to {path.resolve()}", file=sys.stderr)
+
+    if args.fail_on_drawdown_limit and not summary["passes_drawdown_limit"]:
+        print(
+            f"Max drawdown {max_dd_pct:.2f}% exceeds limit "
+            f"-{args.max_drawdown_limit_pct:.2f}%.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,102 @@
+# =========================================================================
+# R3strong champion — deployment CLI (GENERATE / BACKTEST / LIVE)
+# regime: R3strong. Detect the live regime with:
+#   python tools/regime_auto.py   # -> picks the live regime by current M15 ATR
+# champion: feed=adF_tightSL_closeTP | edge $13,331 | OOS $2,242 | DD 29.7% (<=40% gate)
+# NOTE: the sweep may pick --risk slightly above 5% to maximize profit.
+#       Set --risk 0.05 to honor your <=5% cap (slightly lower profit +
+#       lower DD). risk is your sizing choice; the strategy params define
+#       the champion. compounded/$ are model upper bounds — they rank
+#       configs, not forecast money.
+# =========================================================================
+
+# ===== 1. GENERATE the R3strong archive feed =====
+# ATR-adaptive self signals for feed `adF_tightSL_closeTP` over ALL chart history.
+# (The feed's SL/TP ATR-multiplier knobs are the generator's defaults
+#  for this variant; refresh the archive before each run.)
+python tools/generate_adaptive_self_signals.py `
+  --m1-charts data/XAUUSD_M1_*_ELEV8.csv `
+  --output generated/adaptive_adF_tightSL_closeTP.txt `
+  --start-date 2021-11-01 `
+  --source-tz-offset 7
+
+# ===== 2. BACKTEST R3strong (regime slice only) =====
+python tools/backtest_explicit.py \
+  --sizing-mode risk \
+  --lot 0.01 \
+  --risk 0.01 \
+  --minimum-lot 0.01 \
+  --lot-step 0.01 \
+  --bonus-per-closed-lot 3.0 \
+  --entries 6 \
+  --entry-ladder signal_range_3 \
+  --entry-sl-gap 0.5 \
+  --activation-delay 0 \
+  --pending-expiry 420 \
+  --max-hold 300 \
+  --sl-multiplier 1.15 \
+  --final-target TP3 \
+  --lock-after-tp1 true \
+  --lock-after-tp2 true \
+  --tp1-lock-delay-minutes 24 \
+  --tp2-lock-delay-minutes 5 \
+  --profit-lock-mode tp_levels \
+  --bep-trigger-distance 2.0 \
+  --tp1-lock-fraction 0.25 \
+  --tp2-lock-target TP1 \
+  --runner-after-tp3 false \
+  --tp3-lock-target TP2 \
+  --trailing-open-distance 0.0 \
+  --trailing-close-distance 8.0 \
+  --trailing-close-after-stage 0 \
+  --signals generated/adaptive_adF_tightSL_closeTP.txt \
+  --charts data/XAUUSD_M1_2025*_ELEV8.csv \
+  --start-date 2025-01-01 \
+  --output-dir reports/CHAMPION_R3strong \
+  --initial-capital 1000.0 \
+  --max-drawdown-limit-pct 50 \
+  --sync-charts false \
+  --progress-interval-seconds 30
+
+# ===== 3. LIVE AUTO EXECUTOR (places + manages orders for R3strong) =====
+# Same strategy params as the backtest above. Note: there is no
+# live_feed_loop --family for this feed yet, so regenerate the archive
+# (section 1) on a schedule / before each session instead of a rolling
+# live loop. Set --risk to your live sizing choice (e.g. 0.05).
+python tools/auto_explicit.py \
+  --signals generated/adaptive_adF_tightSL_closeTP.txt \
+  --positions-json positions_R3strong.json \
+  --watch-interval 15 \
+  --mt5-symbol XAUUSD \
+  --mt5-server-offset 3 \
+  --mt5-history-bars 5000 \
+  --replace-missing-entries false \
+  --reopen-missing-positions true \
+  --sizing-mode risk \
+  --lot 0.01 \
+  --risk 0.01 \
+  --minimum-lot 0.01 \
+  --lot-step 0.01 \
+  --bonus-per-closed-lot 3.0 \
+  --entries 6 \
+  --entry-ladder signal_range_3 \
+  --entry-sl-gap 0.5 \
+  --activation-delay 0 \
+  --pending-expiry 420 \
+  --max-hold 300 \
+  --sl-multiplier 1.15 \
+  --final-target TP3 \
+  --lock-after-tp1 true \
+  --lock-after-tp2 true \
+  --tp1-lock-delay-minutes 24 \
+  --tp2-lock-delay-minutes 5 \
+  --profit-lock-mode tp_levels \
+  --bep-trigger-distance 2.0 \
+  --tp1-lock-fraction 0.25 \
+  --tp2-lock-target TP1 \
+  --runner-after-tp3 false \
+  --tp3-lock-target TP2 \
+  --trailing-open-distance 0.0 \
+  --trailing-close-distance 8.0 \
+  --trailing-close-after-stage 0 \
+  --initial-capital 5000
