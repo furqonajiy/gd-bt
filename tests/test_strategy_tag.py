@@ -20,8 +20,8 @@ def test_tag_changes_signal_key_magic_and_comment():
 
     # signal_key carries the tag (and the untagged default is unchanged).
     assert base.signal_key == "2026-06-15#03"
-    assert vic.signal_key == "VIC2026-06-15#03"
-    assert sw.signal_key == "R4SW2026-06-15#03"
+    assert vic.signal_key == "VIC-2026-06-15#03"
+    assert sw.signal_key == "R4SW-2026-06-15#03"
 
     # Distinct magics across the two executors AND vs the untagged default.
     m_base = signal_to_magic(base.signal_key)
@@ -43,6 +43,6 @@ def test_parse_signals_file_applies_tag(tmp_path):
     untagged = parse_signals_file(feed)
     tagged = parse_signals_file(feed, tag="R4SW")
     assert untagged[0].signal_key == "2026-06-15#03"
-    assert tagged[0].signal_key == "R4SW2026-06-15#03"
+    assert tagged[0].signal_key == "R4SW-2026-06-15#03"
     # Same market signal, different magic namespace.
     assert signal_to_magic(untagged[0].signal_key) != signal_to_magic(tagged[0].signal_key)
