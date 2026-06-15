@@ -363,6 +363,16 @@ that ran away. Re-opening stops on
 its own once the replay exits the leg. While this flag is on, a signal whose
 replay still holds OPEN legs also survives the registry prune even with zero
 MT5 footprint, so a hand-closed signal can't vanish before it is restored.
+
+**Churn guard.** A leg whose live position closed in the **last ~3 minutes**
+(its SL / TP1-lock / TP fired intrabar) is **not** re-opened. The replay only
+advances on *closed* M1 bars, so for up to a bar after an intrabar live close it
+still shows the leg OPEN — without this guard `auto` would resurrect a just-locked
+or just-stopped leg, which then immediately closes again (the re-open → close →
+re-open churn). The cooldown lets the replay register the close and stop asking.
+A genuine *early* hand-close that the replay still holds OPEN after the cooldown
+is restored normally — so the only cost is a few minutes' delay before an
+intentionally-closed leg comes back.
 If you truly want out of a position early, close it AND remove the feed line
 (or stop the runner) — otherwise the engine will put it back.
 

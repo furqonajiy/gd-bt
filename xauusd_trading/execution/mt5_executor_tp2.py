@@ -56,6 +56,13 @@ LATE_LOCK_FALLBACK_BUFFER = 0.5
 # so a slow price recovery doesn't spam an SLTP modify every watch cycle.
 # Reaching the exact lock level is always allowed regardless of step size.
 LATE_LOCK_MIN_STEP = 0.25
+# Re-open suppression window. A leg whose live position closed within this many
+# seconds is NOT re-opened: the bar-close replay lags the intrabar live close by
+# up to a bar (+ the watch interval), so it briefly still holds the leg OPEN.
+# Waiting this out lets the replay register the close and stop asking to re-open
+# (killing the churn), while a genuinely hand-closed leg the replay still holds
+# OPEN past the window is restored as before.
+REOPEN_RECENT_CLOSE_COOLDOWN_SECONDS = 180.0
 
 
 def _wall_clock_chart_now() -> datetime:
@@ -91,6 +98,11 @@ class Mt5Executor(_BaseMt5Executor):
     _session_skipped_expired_signal_keys: set[str] = set()
     _session_failed_signal_keys: set[str] = set()
     _session_skipped_traded_signal_keys: set[str] = set()
+    # Legs whose live position closed (SL / lock / TP / hand) very recently: the
+    # bar-close replay lags the intrabar live close by up to a bar and still holds
+    # the leg OPEN, so re-open would resurrect a just-closed leg (which then closes
+    # again immediately -- the observed churn). Logged once per leg.
+    _session_skipped_recently_closed: set[str] = set()
     # Each cycle re-replays the signal from scratch, so a live position whose
     # replay status is non-terminal (e.g. TRAILING_STOP, which is absent from
     # _REPLAY_CLOSED_STATUSES) gets re-patched to OPEN and would re-announce the
@@ -712,6 +724,63 @@ class Mt5Executor(_BaseMt5Executor):
             return False
         return any(int(getattr(d, "magic", -1) or -1) == magic for d in (deals or []))
 
+    def _recently_closed_entry_indices(self, magic: int,
+                                       cooldown_seconds: float) -> set[int]:
+        """Entry indices for ``magic`` whose live position CLOSED within the
+        cooldown. The bar-close replay lags an intrabar live close (SL/lock/TP)
+        by up to a bar, so without this guard re-open resurrects a just-closed
+        leg that then closes again immediately. Best-effort: any missing MT5
+        history attribute yields an empty set (no suppression, old behaviour),
+        so the stub MT5 in tests is unaffected."""
+        getter = getattr(self.mt5, "history_deals_get", None)
+        if getter is None:
+            return set()
+        try:
+            now = _wall_clock_chart_now()
+            deals = getter(now - timedelta(days=1), now + timedelta(days=1)) or []
+        except Exception:
+            return set()
+        def _attr_int(d, name):
+            v = getattr(d, name, None)
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+
+        # position_id -> entry_index from the IN deals (their comment carries .N).
+        pos_entry: dict[object, int] = {}
+        for d in deals:
+            if _attr_int(d, "magic") != magic:
+                continue
+            if _attr_int(d, "entry") != 0:   # 0 == DEAL_ENTRY_IN
+                continue
+            idx = _entry_index_from_comment(getattr(d, "comment", None))
+            pid = getattr(d, "position_id", None)
+            if idx is not None and pid is not None:
+                pos_entry[pid] = idx
+        recent: set[int] = set()
+        for d in deals:
+            if _attr_int(d, "magic") != magic:
+                continue
+            if _attr_int(d, "entry") != 1:    # 1 == DEAL_ENTRY_OUT (a close)
+                continue
+            t = getattr(d, "time", None)
+            if t is None:
+                continue
+            try:
+                # MT5 deal.time is the server wall-clock as an epoch; read as a
+                # naive UTC datetime it equals chart-local time (== _wall_clock).
+                age = (now - datetime.utcfromtimestamp(int(t))).total_seconds()
+            except (ValueError, OSError, OverflowError):
+                continue
+            if 0 <= age <= cooldown_seconds:
+                idx = pos_entry.get(getattr(d, "position_id", None))
+                if idx is None:
+                    idx = _entry_index_from_comment(getattr(d, "comment", None))
+                if idx is not None:
+                    recent.add(idx)
+        return recent
+
     def reopen_missing_open_positions(self, engine_pos: Position,
                                       config: StrategyConfig) -> ExecutionLog:
         """Re-open live positions for entries the replay still holds OPEN.
@@ -745,6 +814,31 @@ class Mt5Executor(_BaseMt5Executor):
             if e.entry_index not in paired_idx
             and mt5_entry_comment(signal_key, e.entry_index) not in order_comments
         ]
+        if not missing:
+            return log
+
+        # Suppress the re-open churn: a leg whose live position closed (SL / lock /
+        # TP) in the last few minutes is still held OPEN by the lagging bar-close
+        # replay. Don't resurrect it -- the replay catches up within ~a bar and
+        # stops asking. A genuinely hand-closed leg the replay still holds OPEN
+        # past the cooldown is restored normally on a later cycle.
+        recently_closed = self._recently_closed_entry_indices(
+            magic, REOPEN_RECENT_CLOSE_COOLDOWN_SECONDS)
+        if recently_closed:
+            kept = []
+            for e in missing:
+                if e.entry_index in recently_closed:
+                    key = signal_entry_key(signal_key, e.entry_index)
+                    if key not in self._session_skipped_recently_closed:
+                        log.actions.append(
+                            f"  {key}: not re-opened — live position closed "
+                            f"<{REOPEN_RECENT_CLOSE_COOLDOWN_SECONDS / 60:.0f}m ago "
+                            f"(replay catching up; avoids churn)."
+                        )
+                        self._session_skipped_recently_closed.add(key)
+                else:
+                    kept.append(e)
+            missing = kept
         if not missing:
             return log
 

@@ -134,6 +134,7 @@ def _reset_executor_guards():
     Mt5Executor._session_skipped_expired_signal_keys.clear()
     Mt5Executor._session_failed_signal_keys.clear()
     Mt5Executor._session_skipped_traded_signal_keys.clear()
+    Mt5Executor._session_skipped_recently_closed.clear()
 
 
 def _freeze_wall_clock(monkeypatch, when):
@@ -281,6 +282,60 @@ def test_reopen_restores_hand_closed_leg_at_market(monkeypatch):
     assert req["volume"] == pos.entries[0].lot
     assert req["sl"] == round(pos.entries[0].initial_sl, 2)  # stage 0 -> original SL
     assert req["tp"] == round(pos.target_level, 2)
+
+
+def _out_deal(magic, comment, *, epoch, pid=999, entry=1):
+    from types import SimpleNamespace
+    return SimpleNamespace(magic=magic, entry=entry, position_id=pid,
+                           comment=comment, time=epoch)
+
+
+def _epoch_chart(dt):
+    # MT5 deal.time is the server wall-clock as an epoch; read back as a naive UTC
+    # datetime it equals chart-local time, so mirror that for the fixture.
+    from datetime import timezone
+    return int(dt.replace(tzinfo=timezone.utc).timestamp())
+
+
+def test_reopen_suppressed_when_leg_closed_recently(monkeypatch):
+    # Leg #0 closed live ~30s ago (SL/lock/TP fired) while the bar-close replay
+    # still holds it OPEN -> reopen must NOT resurrect it (the churn guard).
+    _reset_executor_guards()
+    pos = _pos_with_open_leg()
+    now = pos.activation_time + timedelta(minutes=10)
+    _freeze_wall_clock(monkeypatch, now)
+    key = pos.signal.signal_key
+    magic = signal_to_magic(key)
+    in_d = _out_deal(magic, mt5_entry_comment(key, 0),
+                     epoch=_epoch_chart(now - timedelta(seconds=90)), entry=0)
+    out_d = _out_deal(magic, "sl", epoch=_epoch_chart(now - timedelta(seconds=30)))
+    mt5 = _FakeMt5(bid=4210.00, ask=4210.30, history_deals=[in_d, out_d])
+
+    log = _executor(mt5).reopen_missing_open_positions(pos, _CFG)
+
+    assert log.placed == 0
+    assert mt5.requests == []
+    assert any("not re-opened" in a for a in log.actions)
+
+
+def test_reopen_allowed_when_close_is_old(monkeypatch):
+    # Same leg, but the close was 10 min ago (> cooldown) and the replay STILL
+    # holds it OPEN -> a genuine early hand-close, restored as normal.
+    _reset_executor_guards()
+    pos = _pos_with_open_leg()
+    now = pos.activation_time + timedelta(minutes=20)
+    _freeze_wall_clock(monkeypatch, now)
+    key = pos.signal.signal_key
+    magic = signal_to_magic(key)
+    in_d = _out_deal(magic, mt5_entry_comment(key, 0),
+                     epoch=_epoch_chart(now - timedelta(minutes=15)), entry=0)
+    out_d = _out_deal(magic, "sl", epoch=_epoch_chart(now - timedelta(minutes=10)))
+    mt5 = _FakeMt5(bid=4210.00, ask=4210.30, history_deals=[in_d, out_d])
+
+    log = _executor(mt5).reopen_missing_open_positions(pos, _CFG)
+
+    assert log.placed == 1
+    assert mt5.requests and mt5.requests[0]["action"] == mt5.TRADE_ACTION_DEAL
 
 
 def test_reopen_unfavorable_price_places_limit_at_entry(monkeypatch):
