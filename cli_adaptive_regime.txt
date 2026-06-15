@@ -1,0 +1,127 @@
+# =========================================================================
+# ADAPTIVE REGIME AUTO-SWITCH  (auto --adaptive)            | tag ADPT
+# ONE live executor that classifies the current volatility regime each cycle
+# (R1quiet/R2bull/R3strong/R4parab, from smoothed M15 ATR + trend) and runs that
+# regime's PUBLISHED champion config (CHAMPION_<regime>.json under
+# --champions-dir). When a regime has no champion yet it FALLS BACK to the SC24
+# strategy flags below (the live incumbent), so you are never without a config.
+#
+# Feed: scalper24 (the dense intraday feed SC24 is the R4 champion of). --adaptive
+#   swaps the STRATEGY CONFIG by regime; it does NOT switch the signal feed, so
+#   run it on this one feed. (Per-feed switching is a future enhancement.)
+# Champions source: copy/pull the CHAMPION_<regime>.json files from the
+#   research/regime-adaptive branch into ./sweep_regime_out_grid (or point
+#   --champions-dir elsewhere). Today only R4 has a baseline while the sweep
+#   runs, so adaptive = SC24 now and auto-upgrades as champions publish.
+# compounded $ are model upper bounds — they rank configs, not forecast money.
+# =========================================================================
+
+cd C:\Git\github.com\furqonajiy\xauusd-backtest
+conda activate trading
+git checkout main
+git pull origin main
+
+# ===== 1. SIGNAL AUTO GENERATOR =====
+# LIVE SIGNAL GENERATOR (single command; logs each new signal). One process, no
+# shell loop: refetches the current month + regenerates ONLY when a new closed
+# M1 bar exists, narrows to the 2 most recent months + a rolling 3-day window.
+python tools/live_feed_loop.py `
+  --family scalper `
+  --interval 30 `
+  --gen-start-days 3 `
+  --gen-recent-months 2 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24_live.txt --session-start 0 --session-end 0 --signal-tz 7
+
+# ===== 2. BACKTEST CLI =====
+# The backtest runs ONE config (it does not switch per regime — that is a live
+# auto feature). Backtest the SC24 champion (the current R4 regime) here; the
+# Summary sheet's new **Regime** column labels each month R1/R2/R3/R4, so you can
+# see how XAUUSD behaved and which months each regime covered.
+# STEP 2a — (re)generate the FULL static archive from ALL chart history:
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24.txt --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7
+# STEP 2b — backtest it (regime column appears in the Summary):
+python tools/backtest_explicit.py `
+  --signals generated/self_scalper24.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/ADAPTIVE_SC24_BASE `
+  --initial-capital 5000 `
+  --start-date 2026-01-01
+
+# ===== 3. AUTO CLI =====
+# LIVE ADAPTIVE EXECUTOR. --adaptive true classifies the regime each cycle and
+# runs that regime's CHAMPION_<regime>.json config; the explicit strategy flags
+# below are the SC24 incumbent it falls back to when a regime has no champion.
+# A switch logs once per change: [adaptive] regime=... -> champion ...
+python tools/auto_explicit.py `
+  --signals generated/self_scalper24_live.txt `
+  --positions-json positions_adaptive_regime.json `
+  --strategy-tag ADPT `
+  --adaptive true `
+  --champions-dir sweep_regime_out_grid `
+  --adaptive-window-days 20 `
+  --watch-interval 15 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --replace-missing-entries false `
+  --reopen-missing-positions true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --trailing-close-after-stage 0 `
+  --initial-capital 5000
