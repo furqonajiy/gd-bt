@@ -1,10 +1,14 @@
 # =========================================================================
-# BEST SELF-GENERATED 24H — WITHOUT TRAILING (LIVE: updated while 24h batch runs)
-# updated 2026-06-12 05:59:18 UTC | feed: scalper24
-# edge $106,023 (18mo) | OOS $56,211 (6mo) | DD@5% 100.9%
-# VICTOR baseline: edge $29,811 | OOS $14,590 | net $718,941,972 @5%
-# DEPLOYABLE: risk 1% -> net $7,376,950,124 from $5k | DD 38.7% (<=50%)
-# compounded $ are model upper bounds - they rank configs, not forecast money.
+# R4 (2026) CHAMPION — SCALPER24, NO TRAILING   (promoted 2026-06-15)
+# Best DD<=40% config on the RESYNCED data: scalper24 feed, e6 / slm2.1 /
+# tp1-lock-delay 24 + TP3 + SL locks, NO trailing, risk 1%.
+#   2026 @ $5k:  net+bonus $598,318  |  concurrent DD 32.8%  (compliant)
+#   vs cli_R4_scalperwide24 ($197,959 @ 31.6%): ~3x better on current data,
+#   ~14x at matched 1% risk. No trailing => clean live/backtest parity.
+# NOTE: the sweep champion (scalperwide24) was found on the PRE-resync feed;
+#   on your resynced data THIS no-trailing config wins. A fresh sweep is running
+#   in the background and may revise this. compounded $ are model upper bounds —
+#   they rank configs, not forecast money.
 # =========================================================================
 
 # ===== 1. SIGNAL AUTO GENERATOR =====
@@ -65,7 +69,7 @@ python tools/backtest_explicit.py `
   --trailing-close-after-stage 0 `
   --output-dir reports/SELF_NO_TRAILING_24H `
   --initial-capital 5000 `
-  --start-date 2025-01-01
+  --start-date 2026-01-01
 
 # --- 2b. RECENT BACKTEST (from 2026-06-12 only; quick current-regime check) ---
 python tools/backtest_explicit.py `
