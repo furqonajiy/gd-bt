@@ -62,6 +62,15 @@ def build_parser() -> argparse.ArgumentParser:
                               "but that is missing from MT5 (e.g. closed by hand), with the replay's "
                               "lot, its current effective stop, and the leg's target — live keeps "
                               "mirroring the backtest until the replay itself exits the leg.")
+    runtime.add_argument("--adaptive", choices=["true", "false"], default="false",
+                         help="Auto-switch by regime: each cycle classify the current volatility "
+                              "regime from recent chart M1 and run that regime's published champion "
+                              "(CHAMPION_<regime>.json under --champions-dir); falls back to these "
+                              "explicit strategy flags (the incumbent) when no champion exists yet.")
+    runtime.add_argument("--champions-dir", default="sweep_regime_out_grid",
+                         help="Directory holding CHAMPION_<regime>.json for --adaptive.")
+    runtime.add_argument("--adaptive-window-days", type=int, default=20,
+                         help="Trailing window (days) of M1 used to classify the regime.")
 
     mt5 = p.add_argument_group("MT5")
     mt5.add_argument("--mt5-symbol", required=True)
