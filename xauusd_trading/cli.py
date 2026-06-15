@@ -258,6 +258,9 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
     candidate_console_state: dict[str, str] = {}
     notified_keys: dict[str, set] = {"detected": set(), "skipped": set()}
     last_heartbeat = time.monotonic()
+    _tag = getattr(args, "strategy_tag", "") or ""
+    print(f"[auto] strategy_tag={_tag or '(none)'} | "
+          f"positions={getattr(args, 'positions_json', '?')} | signals: {signals_path}")
     try:
         while True:
             iteration += 1
@@ -385,7 +388,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             log.merge(executor.reopen_missing_open_positions(actual, config))
 
     try:
-        all_signals = parse_signals_file(signals_path)
+        all_signals = parse_signals_file(signals_path, tag=getattr(args, "strategy_tag", "") or "")
     except Exception as e:
         print(f"[signals] failed to parse {signals_path}: {e}")
         forensic.error("auto_pass.parse_signals", str(e), traceback.format_exc())
