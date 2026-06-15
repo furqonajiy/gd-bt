@@ -12,13 +12,7 @@
 #  bounds that RANK configs, not forecast money. DD 31.6% is stable across both.)
 # =========================================================================
 
-# ===== 1. TELEGRAM LISTENER =====
-# Ingests Victor's Telegram channel into victor_signals.txt. This self-generated
-# feed does NOT use Telegram — its signals come from the Signal Auto Generator
-# (step 2); run the listener only if you also trade the Victor provider feed.
-python listener/telegram_listener.py --signals-file victor_signals.txt
-
-# ===== 2. SIGNAL AUTO GENERATOR =====
+# ===== 1. SIGNAL AUTO GENERATOR =====
 # GENERATE the scalperwide24 feed (recipe = scalper gen + wide RR).
 # Dense ATR-adaptive scalper, WIDE risk:reward (rr 1.5/2.5/4.0 vs scalper24's
 # 1.0/1.5/2.0). Times display GMT+7 (--signal-tz 7), DST-aware; the engine
@@ -29,7 +23,7 @@ python tools/generate_scalper_signals.py `
   --signal-tz 7 `
   --rr1 1.5 --rr2 2.5 --rr3 4.0
 
-# ===== 3. AUTO EXECUTOR CLI =====
+# ===== 2. AUTO EXECUTOR CLI =====
 # LIVE AUTO EXECUTOR (places + manages orders for R4parab).
 # Same strategy params as the backtest below. Note: there is no
 # live_feed_loop --family for this feed yet, so regenerate the archive
@@ -73,7 +67,7 @@ python tools/auto_explicit.py `
   --trailing-close-after-stage 0 `
   --initial-capital 5000
 
-# ===== 4. BACKTEST CLI =====
+# ===== 3. BACKTEST CLI =====
 # BACKTEST R4parab (regime slice only).
 python tools/backtest_explicit.py `
   --sizing-mode risk `
