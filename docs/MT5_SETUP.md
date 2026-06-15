@@ -72,7 +72,7 @@ Expected output (your equity will differ):
 Symbol:           XAUUSD
 Server offset:    GMT+3
 Latest bar:       2026-05-07 14:32:00  close=4555.18  spread=27 pts
-Account equity:   $1,000.00
+Account equity:   $5,000.00
 
 Open MT5 positions / pending orders for the symbol:
   (none)
