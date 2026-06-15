@@ -46,6 +46,30 @@ def test_tag_is_capped_at_four_chars():
     assert c == "R4S2-0615#03.10" and len(c) <= 16
 
 
+def test_replay_tracked_signal_recovers_tag_from_registry_key():
+    # The manage/reopen path rebuilds a tracked signal from its registry entry by
+    # re-parsing the raw text -- which drops the tag unless recovered from the
+    # stored signal_key. Without recovery the replayed Position computes the
+    # UNTAGGED magic + comment, orphaning reopened legs (the 0615#48.1 bug).
+    from xauusd_trading.cli_orig import _tag_from_signal_key
+
+    assert _tag_from_signal_key("SC24-2026-06-15#48") == "SC24"
+    assert _tag_from_signal_key("VIC-2026-06-15#04") == "VIC"
+    assert _tag_from_signal_key("R4S2-2026-06-15#01") == "R4S2"
+    assert _tag_from_signal_key("2026-06-15#48") == ""      # untagged/legacy
+    assert _tag_from_signal_key("") == ""
+
+    line = "48. BUY XAUUSD 2030 - 2028 SL 2025 TP1 2035 TP2 2040 TP3 2050 5:47 PM"
+    item = {"signal": line, "date": "2026-06-15", "tz": 7,
+            "signal_key": "SC24-2026-06-15#48"}
+    psig = parse_one_signal(item["signal"], item["date"], int(item["tz"]))
+    psig.tag = _tag_from_signal_key(item["signal_key"])
+    # Replayed identity matches what place_signal stamped: same key, magic, comment.
+    assert psig.signal_key == item["signal_key"]
+    assert signal_to_magic(psig.signal_key) == signal_to_magic(item["signal_key"])
+    assert mt5_entry_comment(psig.signal_key, 0) == "SC24-0615#48.1"
+
+
 def test_parse_signals_file_applies_tag(tmp_path):
     feed = tmp_path / "f.txt"
     feed.write_text("2026-06-15 GMT+7\n" + LINE + "\n", encoding="utf-8")
