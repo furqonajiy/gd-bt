@@ -100,12 +100,24 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   `execution/mt5_executor.py`). Entry shape:
   `{"signal_key", "signal", "date", "tz", "equity_at_open", "executed_at"?}`.
   It is auto-pruned by `--execute` / `auto` when a signal's MT5 magic has no
-  footprint. The MT5 magic + order comment are derived from `signal_key`; to run
-  **two auto executors on one account** (e.g. Victor + a self-feed scalper), give
-  each a distinct **`--strategy-tag`** (e.g. `VIC` vs `R4SW`) — it is stamped onto
-  `signal_key` so the two get disjoint magics/comments and never manage each
-  other's orders. The tag is live-only (empty in backtests, so parity holds);
-  each executor still needs its own `--positions-json`.
+  footprint. The MT5 magic + order comment are derived from `signal_key`. The
+  **magic is the identity**: `signal_to_magic(signal_key)` hashes the FULL key
+  (tag + `YYYY-MM-DD` + `#DD`) to a 31-bit int, and the executor pulls a signal's
+  orders with `find_orders(magic)` / `find_positions(magic)` — so that's how it
+  knows which BUY/SELL LIMIT belongs to which signal, not the comment. The
+  **comment** is the human label + per-entry key: `mt5_entry_comment` renders the
+  compact **`[TAG-]MMDD#DD.N`** form (e.g. `VIC-0615#05.2`, `SC24-0615#05.2`,
+  `0615#05.2` untagged) — tag, month-day, signal-of-day, and one-based entry.
+  Only the **year** is dropped from the date (it lives in the magic + open time)
+  so the whole comment fits brokers that truncate below MT5's 31-char cap (Elev8
+  cuts near 16); the `.N` suffix is never trimmed, and matching is per-magic so
+  dropping the year never confuses two signals. To run **two auto executors on
+  one account** (e.g. Victor + a self-feed scalper), give each a distinct
+  **`--strategy-tag`** (e.g. `VIC` vs `SC24`) — it is stamped onto `signal_key`
+  so the two get disjoint magics/comments and never manage each other's orders.
+  The tag is **capped at 4 chars** (first 4 kept) so the compact comment always
+  fits, and is live-only (empty in backtests, so parity holds); each executor
+  still needs its own `--positions-json`.
   Keep examples in docs consistent with this shape. `auto
   --replace-missing-entries` self-heals: each cycle it re-places only the
   entries still **PENDING** in the replay whose per-entry comment vanished

@@ -242,6 +242,36 @@ Default `--watch-interval` is 5 seconds. Under 2s emits a warning; under
 1s is rejected. 5s gives a 12× safety margin against the worst-case 60s
 TP1-touch-to-reversal window on M1.
 
+### Running two executors on one MT5 account
+
+You can run two `auto` processes against the same account — e.g. the Victor
+feed and a self-feed scalper — without them stepping on each other. Give each a
+distinct **`--strategy-tag`** (e.g. `VIC` and `SC24`) and its own
+**`--positions-json`**:
+
+```powershell
+# window A — Victor
+python tools/auto_explicit.py --signals generated/live_provider_all.txt `
+    --positions-json positions_victor.json --strategy-tag VIC  ... (Victor strategy flags)
+# window B — scalper
+python tools/auto_explicit.py --signals generated/self_scalper24_live.txt `
+    --positions-json positions_scalper.json --strategy-tag SC24 ... (scalper strategy flags)
+```
+
+How isolation works: the tag is stamped onto every `signal_key`, and the
+**magic number** — `signal_to_magic(signal_key)`, the order's true identity — is
+hashed from that key, so the two executors get **disjoint magics**. Each one only
+ever queries/manages its own magics (`find_orders(magic)`), so it physically
+can't touch the other's orders. That is also how either executor knows which
+BUY/SELL LIMIT belongs to which signal — by magic, not by reading the comment.
+
+In the MT5 terminal you tell them apart by the order **comment**, which reads
+`[TAG-]MMDD#DD.N` — tag, month-day, signal-of-day, entry — e.g. `VIC-0615#05.2`
+vs `SC24-0615#05.2`. Only the year is dropped (it's in the magic + open time) so
+the comment survives the broker's truncation (Elev8 cuts near 16 chars). The
+tag is **capped at 4 chars**; a longer one keeps its first 4. The tag is
+live-only — backtests run untagged, so parity is unaffected.
+
 ## When something is wrong
 
 ### Sanity checks failed → orders NOT placed

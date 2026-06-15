@@ -29,11 +29,21 @@ def test_tag_changes_signal_key_magic_and_comment():
     m_sw = signal_to_magic(sw.signal_key)
     assert len({m_base, m_vic, m_sw}) == 3
 
-    # Comments carry the tag and stay within MT5's 31-char limit.
+    # Comments carry the tag and stay within MT5's 31-char limit (and the
+    # tighter ~16-char broker truncation cap the compact format targets).
     c_vic = mt5_entry_comment(vic.signal_key, 7)   # entry #8
     c_sw = mt5_entry_comment(sw.signal_key, 7)
-    assert c_vic.startswith("VIC") and len(c_vic) <= 31
-    assert c_sw.startswith("R4SW") and c_vic != c_sw
+    assert c_vic.startswith("VIC") and len(c_vic) <= 16
+    assert c_sw.startswith("R4SW") and c_vic != c_sw and len(c_sw) <= 16
+
+
+def test_tag_is_capped_at_four_chars():
+    # A tag longer than 4 chars keeps only the first 4 so the compact comment
+    # `[TAG-]MMDD#DD.N` always fits the broker truncation limit (~16 chars).
+    long = parse_one_signal(LINE, "2026-06-15", 7); long.tag = "R4S24"   # 5 chars
+    assert long.signal_key == "R4S2-2026-06-15#03"
+    c = mt5_entry_comment(long.signal_key, 9)      # entry #10 (2-digit)
+    assert c == "R4S2-0615#03.10" and len(c) <= 16
 
 
 def test_parse_signals_file_applies_tag(tmp_path):

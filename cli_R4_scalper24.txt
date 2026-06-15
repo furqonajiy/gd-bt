@@ -1,5 +1,5 @@
 # =========================================================================
-# R4 (2026) #2 / FULLY-REPRODUCIBLE — SCALPER24   Executor tag: R4S24
+# R4 (2026) #2 / FULLY-REPRODUCIBLE — SCALPER24   Executor tag: R4S2 (4-char cap)
 # Best DD<=40% config on the scalper24 feed at $5k (regime R4 / 2026).
 # net+bonus $527,380 (sweep, pre-resync) | $122,746 on RESYNCED data @ 36.8% DD;
 # beaten by the no-trailing champion ($598,318 @ 32.8%). OOS $4,317 / DD 33.3%.
@@ -62,7 +62,7 @@ python tools/backtest_explicit.py `
 python tools/auto_explicit.py `
   --signals generated/self_scalper24_live.txt `
   --positions-json positions_R4_scalper24.json `
-  --strategy-tag R4S24 `
+  --strategy-tag R4S2 `
   --watch-interval 15 --mt5-symbol XAUUSD --mt5-server-offset 3 --mt5-history-bars 5000 `
   --reopen-missing-positions true `
   --sizing-mode risk --lot 0.01 --risk 0.02 --minimum-lot 0.01 --lot-step 0.01 `
