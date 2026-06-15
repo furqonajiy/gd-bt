@@ -92,7 +92,7 @@ implies `--mt5` and live equity — no confirmation prompt).
 | `manage`   | Manage tracked signals: lock SL to TP1, cancel expired pendings, time-close. `--watch` loops. |
 | `auto`     | Continuous live trading: read `signals.txt`, place orders, manage positions, append-only event log. `--replace-missing-entries` self-heals limit orders cancelled by hand; `--reopen-missing-positions` restores positions closed by hand while the replay still holds them OPEN (price-aware: market only at-or-better than the entry, else a LIMIT at the original entry — never chases). |
 | `mt5-info` | Diagnostic: latest bar, account equity, open MT5 positions/orders for the symbol. |
-| `fetch`    | Pull the last N months of M1 history into `data/` (per-month CSV archive; `--months`, default 2 — live feed loops use 1). |
+| `fetch`    | Pull the last N months of M1 history into `data/` (per-month CSV archive; `--months`, default 2 — live feed loops use 1). Keep `--mt5-server-offset 3` year-round so the broker's EET/EEST server clock is stored verbatim (shift 0); do **not** drop to 2 in winter (that adds an hour and corrupts timestamps). To rebuild the M1 archive from 2020, see the standalone `cli_resync_m1_from_2020.txt` at the repo root (`fetch --months 80`). |
 
 Common flag groups (added to most subcommands):
 

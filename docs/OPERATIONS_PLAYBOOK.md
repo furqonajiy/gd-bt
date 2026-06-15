@@ -33,8 +33,12 @@ python -m xauusd_trading.cli mt5-info --mt5-symbol XAUUSD
 What to check in the output:
 
 - **Latest bar time** matches what you see in MT5's chart window. If
-  off by hours, your `--mt5-server-offset` is wrong (default 3, common
-  alternatives 2 or 0).
+  off by hours, your `--mt5-server-offset` is wrong. Keep it at the
+  default **3** year-round: with `--mt5-server-offset 3` the broker's
+  EET/EEST server clock is stored verbatim (shift 0). Do **not** drop it to
+  2 in winter — that adds an hour and corrupts timestamps. (To rebuild the
+  M1 archive from 2020, use the standalone `cli_resync_m1_from_2020.txt`
+  at the repo root: `fetch --months 80`.)
 - **Account equity** matches MT5's terminal equity to the cent. If not,
   MT5 is connected to a different account than you think.
 - **Open positions/orders** match what's in `positions.json`. If MT5
@@ -117,7 +121,10 @@ python -m xauusd_trading.cli decide `
 
 Set `--signal-date` to today's date in the signal's source timezone. Set
 `--signal-tz` to whatever GMT offset the signal time was given in (Victor
-uses GMT+7). The engine converts to GMT+3 internally.
+uses GMT+7, fixed Jakarta, no DST). The engine converts the signal time to
+chart time (EET/EEST: +2 winter / +3 summer, EU DST rule) internally and
+DST-aware via `core/chart_tz.py` — so a GMT+7 signal shifts by −4h in summer
+but −5h in winter.
 
 What you'll see in the report:
 
