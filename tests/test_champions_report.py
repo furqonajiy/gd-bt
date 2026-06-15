@@ -1,7 +1,10 @@
 """Unit tests for the champion/challenger deploy report (tools/champions_report).
 
 These pin the deploy logic the self-regime-grid aggregate relies on:
-  * best_challenger respects the DD<=40% gate and ranks OOS then edge;
+  * best_challenger respects the DD<=40% gate + OOS>0 guard and ranks by
+    net+bonus (the deploy objective), then OOS, then edge;
+  * stretch_challenger surfaces a DD 40-50% config only when it beats the
+    DD<=40% champion's net+bonus by the configured margin;
   * update_champion is MONOTONIC (never regresses across passes);
   * render_champions_md emits HOLD vs SWITCH correctly, flags the live regime,
     and the rendered champion CLI is a runnable backtest command whose flags all
@@ -21,8 +24,8 @@ import tools.champions_report as cr
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _chrow(feed, edge, oos, dd, cfg):
-    return {
+def _chrow(feed, edge, oos, dd, cfg, net=None):
+    row = {
         "_feed": feed,
         "fixed_no_bonus_profit": edge,
         "oos_fixed_no_bonus_profit": oos,
@@ -30,6 +33,49 @@ def _chrow(feed, edge, oos, dd, cfg):
         "config": cfg,
         "config_json": json.dumps(cfg, sort_keys=True),
     }
+    if net is not None:
+        row["risk_net_profit_with_bonus"] = net
+    return row
+
+
+def test_best_challenger_ranks_by_net_bonus_then_oos():
+    # The deploy objective is net+bonus: the highest-net DD<=40 / OOS>0 row wins
+    # even when another compliant row has higher OOS/edge.
+    rows = [
+        _chrow("adA_base", 9000.0, 5000.0, 30.0, {"entry_count": 4}, net=120000.0),
+        _chrow("scalper24", 4000.0, 1500.0, 38.0, {"entry_count": 6}, net=600000.0),
+        _chrow("adC_wideSL", 9000.0, 9000.0, 55.0, {"entry_count": 8}, net=900000.0),
+    ]
+    best = cr.best_challenger(rows, dd_gate=40.0)
+    assert best["_feed"] == "scalper24"      # highest net+bonus among DD<=40
+    # The DD>40 row (900k net) is excluded by the gate.
+
+
+def test_best_challenger_requires_positive_oos():
+    # An in-sample blowup with huge net+bonus but OOS<=0 is rejected (overfit).
+    rows = [_chrow("x", 9000.0, -10.0, 20.0, {}, net=999999.0)]
+    assert cr.best_challenger(rows, dd_gate=40.0) is None
+
+
+def test_strictly_beats_uses_net_bonus():
+    hi = {"net_bonus": 600000.0, "oos": 100.0, "edge": 100.0}
+    lo = {"net_bonus": 400000.0, "oos": 9000.0, "edge": 9000.0}
+    assert cr.strictly_beats(hi, lo)        # higher net wins despite lower oos
+    assert not cr.strictly_beats(lo, hi)
+
+
+def test_stretch_challenger_surfaces_only_with_margin():
+    champ40 = {"net_bonus": 400000.0, "oos": 1000.0, "dd": 35.0}
+    rows = [
+        _chrow("scalper24", 4000.0, 1500.0, 35.0, {}, net=400000.0),   # the 40% champ
+        _chrow("scalperwide24", 8000.0, 2000.0, 47.0, {}, net=560000.0),  # +40% @ DD47
+    ]
+    s = cr.stretch_challenger(rows, champ40)
+    assert s is not None and s["_feed"] == "scalperwide24" and cr._dd(s) == 47.0
+
+    # If the high-DD config only beats the champ by a hair (<25%), no stretch.
+    rows2 = [_chrow("scalperwide24", 8000.0, 2000.0, 47.0, {}, net=440000.0)]
+    assert cr.stretch_challenger(rows2, champ40) is None
 
 
 def test_best_challenger_respects_dd_gate_and_ranks_oos_then_edge():
