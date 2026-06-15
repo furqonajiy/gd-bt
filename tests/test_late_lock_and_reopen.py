@@ -445,3 +445,59 @@ def test_fresh_placement_allowed_without_deal_history(monkeypatch):
 
     assert log.placed == 1
     assert mt5.requests[0]["type"] == mt5.ORDER_TYPE_BUY_LIMIT
+
+
+def _partial_plan(signal):
+    """A partial FOLLOW plan: replay has 6 entries, only the last 2 still
+    placeable as fresh LIMITs (the rest played out in the replay)."""
+    from types import SimpleNamespace
+    activation = signal.signal_time_chart + timedelta(minutes=_CFG.activation_delay_minutes)
+    replay = SimpleNamespace(
+        entries=[SimpleNamespace(entry_index=i, status="CLOSED") for i in range(6)])
+    return NewSignalPlan(
+        signal=signal, action="FOLLOW", rationale="partial",
+        orders=[PlannedOrder(entry_index=4, side=signal.side, entry_price=4209.0,
+                             initial_sl=4201.55, lot=0.01, risk_dollars=7.45),
+                PlannedOrder(entry_index=5, side=signal.side, entry_price=4208.0,
+                             initial_sl=4201.55, lot=0.01, risk_dollars=7.45)],
+        pending_expires_at=activation + timedelta(minutes=_CFG.pending_expiry_minutes),
+        final_target_label="TP3", final_target_price=signal.tp3,
+        total_initial_risk_dollars=14.9,
+        pending_activates_at=activation,
+        replay_position=replay,
+    )
+
+
+def test_partial_placement_skipped_by_default(monkeypatch):
+    # Legacy/backtest parity: without reopen mode a partial signal is skipped.
+    _reset_executor_guards()
+    signal = _sig()
+    _freeze_wall_clock(monkeypatch, signal.signal_time_chart + timedelta(minutes=5))
+    mt5 = _FakeMt5(bid=4212.00, ask=4212.30)
+
+    log = _executor(mt5).place_signal(signal, _partial_plan(signal))
+
+    assert log.placed == 0
+    assert mt5.requests == []
+    assert any("skipped partial placement" in a for a in log.actions)
+
+
+def test_partial_placement_places_fresh_legs_in_reopen_mode(monkeypatch):
+    # With reopen/mirror mode the fresh LIMIT legs ARE placed (the OPEN legs are
+    # left for reopen_missing_open_positions to restore at market).
+    _reset_executor_guards()
+    signal = _sig()
+    _freeze_wall_clock(monkeypatch, signal.signal_time_chart + timedelta(minutes=5))
+    mt5 = _FakeMt5(bid=4212.00, ask=4212.30)
+    ex = _executor(mt5)
+    ex._allow_partial_placement = True
+
+    log = ex.place_signal(signal, _partial_plan(signal))
+
+    assert log.placed == 2
+    assert len(mt5.requests) == 2
+    assert all(r["type"] == mt5.ORDER_TYPE_BUY_LIMIT for r in mt5.requests)
+    assert {r["comment"] for r in mt5.requests} == {
+        mt5_entry_comment(signal.signal_key, 4),
+        mt5_entry_comment(signal.signal_key, 5),
+    }
