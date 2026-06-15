@@ -11,7 +11,8 @@
 # MT5 price action (section 2), not ingested from Victor's Telegram channel.
 # (Only run a listener if you also want to mirror Victor's feed in parallel.)
 
-# ===== 2. LIVE SIGNAL GENERATOR (single command; logs each new signal) =====
+# ===== 2. SIGNAL AUTO GENERATOR =====
+# LIVE SIGNAL GENERATOR (single command; logs each new signal).
 # One process, no shell loop. Refetches the current month + regenerates ONLY
 # when a new closed M1 bar exists, narrows to the 2 most recent months and a
 # rolling 3-day window (fast), and prints like `auto`: a header, then one line
@@ -25,7 +26,8 @@ python tools/live_feed_loop.py `
   --mt5-server-offset 3 `
   -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_risk02_allhours_live.txt --start-date 2025-01-01 --execution-hours "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
 
-# ===== 3. AUTO EXECUTOR (reads the live feed, places + manages orders) =====
+# ===== 3. AUTO EXECUTOR CLI =====
+# Reads the live feed, places + manages orders.
 # --replace-missing-entries false: self feeds are two-sided (hedge close-by
 # re-entry risk). Window B, runs beside the generator loop above.
 python tools/auto_explicit.py `
@@ -67,7 +69,8 @@ python tools/auto_explicit.py `
   --shared-sl true `
   --initial-capital 5000
 
-# ===== 4. PARITY BACKTEST (regenerate full history, then backtest) =====
+# ===== 4. BACKTEST CLI =====
+# --- 4a. PARITY BACKTEST (regenerate full history, then backtest) ---
 # STEP 4a — (re)generate the FULL static archive generated/self_risk02_allhours.txt
 # from ALL chart history so the backtest reflects the latest data. This is the
 # 18-month feed (slow, ~15s) — DIFFERENT from the live 2-day feed in section 2.
@@ -112,7 +115,7 @@ python tools/backtest_explicit.py `
   --initial-capital 5000 `
   --start-date 2025-01-01
 
-# ===== 5. RECENT BACKTEST (from 2026-06-01 only; quick current-regime check) =====
+# --- 4b. RECENT BACKTEST (from 2026-06-01 only; quick current-regime check) ---
 python tools/backtest_explicit.py `
   --signals generated/self_risk02_allhours.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
