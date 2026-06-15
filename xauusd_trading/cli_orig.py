@@ -1074,10 +1074,13 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
                 sys.stdout.flush()
             else:
                 print()
+            _tag = getattr(args, "strategy_tag", "") or ""
             print(
                 f"[auto iter #{iteration} -- "
                 f"{datetime.now():%Y-%m-%d %H:%M:%S} local -- "
-                f"interval {interval:g}s -- signals: {signals_path}]"
+                f"interval {interval:g}s -- "
+                f"strategy_tag={_tag or '(none)'} -- "
+                f"signals: {signals_path}]"
             )
             exit_code = _auto_pass(args, config, conn, chart,
                                    signals_path, iteration=iteration)
