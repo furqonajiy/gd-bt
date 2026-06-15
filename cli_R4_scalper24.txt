@@ -8,7 +8,14 @@
 # not forecast money. Detect the live regime with: python tools/regime_auto.py
 # =========================================================================
 
-# ===== 1. GENERATE the scalper24 feed =====
+# ===== 1. TELEGRAM LISTENER =====
+# Ingests Victor's Telegram channel into victor_signals.txt. This self-generated
+# feed does NOT use Telegram — its signals come from the Signal Auto Generator
+# (step 2); run the listener only if you also trade the Victor provider feed.
+python listener/telegram_listener.py --signals-file victor_signals.txt
+
+# ===== 2. SIGNAL AUTO GENERATOR =====
+# GENERATE the scalper24 feed.
 # Dense ATR-adaptive scalper, default risk:reward (1.0/1.5/2.0). Times display
 # GMT+7 (--signal-tz 7), DST-aware; the engine converts to chart EET/EEST.
 python tools/generate_scalper_signals.py `
@@ -16,15 +23,13 @@ python tools/generate_scalper_signals.py `
   --output generated/self_scalper24.txt `
   --signal-tz 7
 
-# ===== 2. BACKTEST R4 (2026 only, $5k) =====
-python tools/backtest_explicit.py `
+# ===== 3. AUTO EXECUTOR CLI =====
+# LIVE AUTO EXECUTOR (same strategy params).
+python tools/auto_explicit.py `
   --signals generated/self_scalper24.txt `
-  --charts "data/XAUUSD_M1_2026*_ELEV8.csv" `
-  --start-date 2026-01-01 `
-  --output-dir reports/R4_scalper24 `
-  --max-drawdown-limit-pct 50 `
-  --progress-interval-seconds 30 `
-  --sync-charts false `
+  --positions-json positions_R4_scalper24.json `
+  --watch-interval 15 --mt5-symbol XAUUSD --mt5-server-offset 3 --mt5-history-bars 5000 `
+  --reopen-missing-positions true `
   --initial-capital 5000 `
   --sizing-mode risk --lot 0.01 --risk 0.02 --minimum-lot 0.01 --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
@@ -39,12 +44,16 @@ python tools/backtest_explicit.py `
   --trailing-open-distance 0 --trailing-close-distance 2.0 `
   --trailing-close-after-stage 0
 
-# ===== 3. LIVE AUTO EXECUTOR (same strategy params) =====
-python tools/auto_explicit.py `
+# ===== 4. BACKTEST CLI =====
+# BACKTEST R4 (2026 only, $5k).
+python tools/backtest_explicit.py `
   --signals generated/self_scalper24.txt `
-  --positions-json positions_R4_scalper24.json `
-  --watch-interval 15 --mt5-symbol XAUUSD --mt5-server-offset 3 --mt5-history-bars 5000 `
-  --reopen-missing-positions true `
+  --charts "data/XAUUSD_M1_2026*_ELEV8.csv" `
+  --start-date 2026-01-01 `
+  --output-dir reports/R4_scalper24 `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts false `
   --initial-capital 5000 `
   --sizing-mode risk --lot 0.01 --risk 0.02 --minimum-lot 0.01 --lot-step 0.01 `
   --bonus-per-closed-lot 3 `

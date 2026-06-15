@@ -18,17 +18,16 @@ conda activate trading
 git checkout main
 git pull origin main
 
-# =========================================================================
-# 1. Telegram Listener  ->  writes raw victor_signals.txt
+# ===== 1. TELEGRAM LISTENER =====
+# Ingests Victor's Telegram channel into victor_signals.txt. This IS this CLI's
+# live signal source.
 #    First-time setup only: `python listener\telegram_listener.py list-chats`
 #    to find the channel id, then paste it into listener_config.json.
-# =========================================================================
 python listener\telegram_listener.py --signals-file victor_signals.txt
 
-# =========================================================================
-# 2. Signal Filter  ->  reads victor_signals.txt, writes the GMT+3 feed
+# ===== 2. SIGNAL AUTO GENERATOR =====
+# Signal Filter  ->  reads victor_signals.txt, writes the GMT+3 feed
 #    `--preset all` keeps every signal so the live feed matches the backtest.
-# =========================================================================
 python tools/live_provider_signal_filter.py `
   --input victor_signals.txt `
   --output generated/live_provider_all.txt `
@@ -36,10 +35,9 @@ python tools/live_provider_signal_filter.py `
   --watch `
   --interval 2
 
-# =========================================================================
-# 3. Live Auto  ->  reads the filtered feed, places + manages orders on MT5
+# ===== 3. AUTO EXECUTOR CLI =====
+# Live Auto  ->  reads the filtered feed, places + manages orders on MT5
 #    Strategy parameters are byte-identical to the parity backtest below.
-# =========================================================================
 python tools/auto_explicit.py `
   --signals generated/live_provider_all.txt `
   --positions-json positions_best_slm21_tp1delay24.json `
@@ -78,9 +76,8 @@ python tools/auto_explicit.py `
   --replace-missing-entries true `
   --reopen-missing-positions true
 
-# =========================================================================
+# ===== 4. BACKTEST CLI =====
 # Parity backtest (reference; same strategy parameters as the auto runner).
-# =========================================================================
 python tools/backtest_explicit.py `
   --signals victor_signals.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
