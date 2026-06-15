@@ -1,9 +1,11 @@
 # =========================================================================
-# BEST TRAILING CONFIG — v2 re-sweep on the HONEST engine (PR #77 fix)
-# updated 2026-06-13 16:02:43 UTC | feed: risk02_allhours | sweep still running
-# edge $15,891 (fixed-lot, 18mo) | OOS $10,981 (6mo) | DD@5% 28.7%
-# DEPLOYABLE risk pending post-pass; risk shown is the 5% sweep cap.
-# vs REFERENCE deployable net $0 (edge $107,400): does NOT beat reference yet
+# R4 — TRAILING (risk02allhours feed)   [REFERENCE / NOT THE CHAMPION]
+# Executor tag: TR02.  A trailing-close variant on the dense risk02 feed.
+# SUPERSEDED by the no-trailing champion (cli_champion_R4_scalper24_no_trailing,
+#   net+bonus $598,318 @ 32.8% DD on resynced data). Trailing-close is
+#   parity-fragile live (exit-side trailing can diverge from the M1 backtest),
+#   which is one reason the no-trailing champion is preferred. Kept for reference.
+# compounded $ are model upper bounds — they rank configs, not forecast money.
 # =========================================================================
 
 # ===== 1. SIGNAL AUTO GENERATOR =====

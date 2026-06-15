@@ -1,7 +1,8 @@
 # =========================================================================
-# R4 (2026) #2 / FULLY-REPRODUCIBLE — SCALPER24
+# R4 (2026) #2 / FULLY-REPRODUCIBLE — SCALPER24   Executor tag: R4S24
 # Best DD<=40% config on the scalper24 feed at $5k (regime R4 / 2026).
-# net+bonus $527,380 | OOS $4,317 | concurrent DD 33.3%  (sweep, pre-resync feed)
+# net+bonus $527,380 (sweep, pre-resync) | $122,746 on RESYNCED data @ 36.8% DD;
+# beaten by the no-trailing champion ($598,318 @ 32.8%). OOS $4,317 / DD 33.3%.
 # Feed: scalper generator DEFAULTS (rr 1.0/1.5/2.0) -> generated/self_scalper24.txt
 # Same intraday family as your live incumbent; reproducible from the generator
 # with no special knobs. compounded $ are model upper bounds — they RANK configs,
