@@ -36,17 +36,19 @@ python tools/live_feed_loop.py `
   -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24_live.txt --session-start 0 --session-end 0 --signal-tz 7
 
 # ===== 2. BACKTEST CLI =====
-# --adaptive true backtests the SAME regime-switching the live executor does:
-# each signal is replayed under its regime's CHAMPION_<regime>.json config (from
-# --champions-dir champions), classified from a trailing window ending at the
-# signal's time (no lookahead), falling back to the explicit flags below (the
-# SC24 incumbent) when a regime has no champion. Today every regime's champion is
-# seeded with SC24, so this == the SC24 backtest until the sweep publishes a
-# regime winner -- then drop its CHAMPION_<regime>.json into champions/ and re-run.
-# The Summary's **Regime** column labels each month R1/R2/R3/R4.
-# STEP 2a — (re)generate the FULL static archive from ALL chart history:
-python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24.txt --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7
-# STEP 2b — backtest the regime-switching strategy (regime column in the Summary):
+# WHERE PER-REGIME PARAMS LIVE: champions/CHAMPION_<regime>.json -- ONE file per
+# regime (R1quiet / R2bull / R3strong / R4parab); --adaptive reads them. TODAY all
+# four are seeded with SC24 (placeholders), so every regime backtests the SAME
+# until the sweep publishes a winner (or you hand-edit a regime's CHAMPION file).
+# To give a regime DIFFERENT parameters, edit the "config" block in
+# champions/CHAMPION_<regime>.json -- do NOT duplicate params across commands.
+# Regime windows (the sweep's slices): R1quiet 2021-11..2023-09 | R2bull
+#   2023-10..2024-12 | R3strong 2025 | R4parab 2026.
+# STEP 2a — (re)generate the FULL archive once (all history):
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24.txt --start 2021-11-01 --session-start 0 --session-end 0 --signal-tz 7
+# STEP 2b — ADAPTIVE backtest. Run FULL history (every regime switches in turn --
+# the Summary's Regime column shows R1->R4 across the months), OR bound the dates
+# to backtest ONE regime in isolation (only the last 3 flags change -- see below):
 python tools/backtest_explicit.py `
   --signals generated/self_scalper24.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -83,9 +85,22 @@ python tools/backtest_explicit.py `
   --adaptive true `
   --champions-dir champions `
   --adaptive-window-days 20 `
-  --output-dir reports/ADAPTIVE_REGIME `
+  --output-dir reports/ADAPTIVE_ALL `
   --initial-capital 5000 `
-  --start-date 2026-01-01
+  --start-date 2021-11-01
+
+# Per-regime isolation -- rerun the SAME command above, changing ONLY these 3 flags:
+#   R1quiet  : --start-date 2021-11-01 --end-date 2023-09-30 --output-dir reports/REGIME_R1quiet
+#   R2bull   : --start-date 2023-10-01 --end-date 2024-12-31 --output-dir reports/REGIME_R2bull
+#   R3strong : --start-date 2025-01-01 --end-date 2025-12-31 --output-dir reports/REGIME_R3strong
+#   R4parab  : --start-date 2026-01-01                       --output-dir reports/REGIME_R4parab
+
+# STEP 2c — EXPLICIT params for a custom range (NO --adaptive): to test a SPECIFIC
+# config on a SPECIFIC period directly, drop --adaptive/--champions-dir and set the
+# strategy flags yourself + --start-date/--end-date. e.g. "config A for 2021-2022,
+# config B for 2022-2025" = two runs, each with its own flags and date window:
+#   python tools/backtest_explicit.py ...config-A-flags... --start-date 2021-01-01 --end-date 2022-12-31 --output-dir reports/A_2021_2022 --initial-capital 5000
+#   python tools/backtest_explicit.py ...config-B-flags... --start-date 2022-01-01 --end-date 2025-12-31 --output-dir reports/B_2022_2025 --initial-capital 5000
 
 # ===== 3. AUTO CLI =====
 # LIVE ADAPTIVE EXECUTOR. --adaptive true classifies the regime each cycle and
