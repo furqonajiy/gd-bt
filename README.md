@@ -166,6 +166,20 @@ so backtests are reproducible regardless of shell state.
 (the last is optional). `--execute` / `auto` auto-prune entries whose MT5
 footprint is gone.
 
+Each order's **magic number** is the signal identity — `signal_to_magic(signal_key)`
+hashes the full `signal_key` (tag + date + signal-of-day), and the executor
+manages a signal by querying MT5 for that magic, so it always knows which
+BUY/SELL LIMIT belongs to which signal. The order **comment** is the human label
+plus per-entry key, rendered compact as **`[TAG-]MMDD#DD.N`** (e.g. `VIC-0615#05.2`)
+so the tag, month-day, signal-of-day, and entry stay visible even on brokers that
+truncate comments below MT5's 31-char cap.
+
+To run **two auto executors on one MT5 account** (e.g. Victor + a self-feed
+scalper), give each a distinct **`--strategy-tag`** (e.g. `VIC` vs `SC24`, capped
+at 4 chars) and its own `--positions-json`. The tag is stamped onto `signal_key`,
+so the two get disjoint magics + comments and never manage each other's orders.
+It is live-only (empty in backtests, so parity holds).
+
 Two live modes:
 
 - **Mode A — one-shot `decide --execute`:** manual, signal-by-signal.
@@ -212,5 +226,5 @@ expiry, terminal catch-up, sizing, listener overrides).
 - [`docs/OPERATIONS_PLAYBOOK.md`](docs/OPERATIONS_PLAYBOOK.md) — daily live-trading procedures (Modes A and B).
 - [`docs/demo_runbook_trailing_open.md`](docs/demo_runbook_trailing_open.md) — demo parity protocol for the trailing-open candidate config.
 - [`CLAUDE.md`](CLAUDE.md) — project instructions for Claude / Claude Code.
-- [`CHATGPT.md`](CHATGPT.md) — project instructions for ChatGPT.
+- [`AGENTS.md`](AGENTS.md) — project instructions for coding agents (mirrors `CLAUDE.md`).
 </content>

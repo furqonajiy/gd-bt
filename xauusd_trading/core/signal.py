@@ -76,7 +76,10 @@ class Signal:
         # A non-empty tag is separated with "-" so it reads unambiguously in the
         # MT5 comment even when it ends in a digit (e.g. "SC24-2026-06-15#04",
         # not "SC242026-..."). Untagged keys are byte-identical to before.
-        prefix = f"{self.tag}-" if self.tag else ""
+        # The tag is capped at 4 chars (first 4 kept) so the compact MT5 comment
+        # `[TAG-]MMDD#DD.N` always fits the broker's truncation limit (~16 chars).
+        tag = (self.tag or "")[:4]
+        prefix = f"{tag}-" if tag else ""
         return f"{prefix}{self.source_date}#{self.day_id:02d}"
 
     @property
@@ -242,9 +245,11 @@ def parse_signals_file(path: Path, *, tag: str = "") -> list[Signal]:
 
     ``tag`` is an optional per-executor namespace stamped onto every signal's
     ``signal_key`` (and therefore its MT5 magic + order comment), so two live
-    executors on one account stay isolated. Empty (the default) keeps the
-    backtest/legacy behaviour byte-identical.
+    executors on one account stay isolated. It is capped at 4 chars (first 4
+    kept) so the compact MT5 comment fits the broker truncation limit. Empty
+    (the default) keeps the backtest/legacy behaviour byte-identical.
     """
+    tag = (tag or "")[:4]
     signals: list[Signal] = []
     current_date: Optional[str] = None
     current_offset: Optional[int] = None

@@ -48,8 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
     runtime.add_argument("--strategy-tag", default="",
                          help="Per-executor namespace prefix stamped onto each signal's magic + "
                               "MT5 comment. Set DISTINCT values when running two auto executors on "
-                              "one account (e.g. VIC vs R4SW) so they never manage each other's "
-                              "orders. Keep it short (<=6 chars).")
+                              "one account (e.g. VIC vs SC24) so they never manage each other's "
+                              "orders. Capped at 4 chars (first 4 kept) so the compact comment "
+                              "fits the broker limit.")
     runtime.add_argument("--no-clear", action="store_true")
     runtime.add_argument("--replace-missing-entries", choices=["true", "false"], default="false",
                          help="Each cycle, re-place pending LIMIT entries that vanished from MT5 "
