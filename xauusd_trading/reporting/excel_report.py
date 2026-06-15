@@ -272,9 +272,9 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
     # Monthly breakdown table.
     ws.cell(row=row, column=1, value="Monthly Breakdown").font = SUBHEADER_FONT
     ws.cell(row=row, column=1).fill = SUBHEADER_FILL
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=12)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=13)
     row += 1
-    headers = ["Month", "Signals", "Wins", "Losses", "No-fills",
+    headers = ["Month", "Regime", "Signals", "Wins", "Losses", "No-fills",
                "Win rate", "Trading P&L", "Bonus", "Closed lots",
                "Net P&L", "P&L %", "Equity EoM"]
     _write_header(ws, row, headers)
@@ -285,7 +285,8 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
         signals = m.get("signals", 0) or 0
         equity_end = m.get("equity_end", 0.0) or 0.0
         cells = [
-            m.get("month"), signals, m.get("wins"), m.get("losses"), m.get("no_fills"),
+            m.get("month"), m.get("regime", "") or "-",
+            signals, m.get("wins"), m.get("losses"), m.get("no_fills"),
             f"{m.get('win_rate_pct', 0):.1f}%",
             m.get("trading_pnl", 0.0), m.get("bonus", 0.0), m.get("closed_lots", 0.0),
             pnl, f"{pnl_pct:+.2f}%", equity_end,
@@ -299,13 +300,15 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
         for c, v in enumerate(cells, start=1):
             cell = ws.cell(row=row, column=c, value=v)
             cell.border = GRID
-            if c in (7, 8, 10):
+            # Columns shifted +1 by the inserted Regime column (col 2):
+            # Trading P&L=8, Bonus=9, Closed lots=10, Net P&L=11, P&L %=12, Equity=13.
+            if c in (8, 9, 11):
                 _style_money_cell(cell, float(v or 0.0) if isinstance(v, (int, float)) else None)
-            elif c == 9:
+            elif c == 10:
                 cell.number_format = LOT_FMT
-            elif c == 11:
-                _style_pct_cell(cell, pnl_pct)
             elif c == 12:
+                _style_pct_cell(cell, pnl_pct)
+            elif c == 13:
                 # Equity at end of month, mirroring the Daily sheet's
                 # Equity EoD column; no red-negative semantics, it's a level.
                 cell.number_format = MONEY_FMT
