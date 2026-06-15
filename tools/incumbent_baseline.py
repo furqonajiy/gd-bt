@@ -41,21 +41,13 @@ from xauusd_trading import CsvChartSource, parse_signals_file  # noqa: E402
 
 
 def incumbent_config() -> dict:
-    """The user's live config: blessed DEFAULT_CONFIG + the 3 scalper24 overrides.
-
-    Built from ``sweep.base_config_dict()`` (== ``asdict(DEFAULT_CONFIG)``) so
-    every field other than the three the user pins stays at the validated
-    provider contract -- identical baseline-construction to the sweep's own
-    champion seed for ``entry_count==6`` in ``_seed_configs()``, but kept here
-    minimal/explicit so the deploy comparison is auditable.
-    """
-    cfg = sweep.base_config_dict()
-    cfg.update(
-        entry_count=6,
-        sl_multiplier=2.1,
-        tp1_lock_delay_minutes=24,
-    )
-    return cfg
+    """The user's live config = **SC24** (cli_champion_R4_scalper24_no_trailing):
+    the blessed DEFAULT_CONFIG + the SC24 overrides, defined once in
+    ``sweep.sc24_config()`` and shared with the sweep's seeded staged grid so the
+    "did a challenger beat the live champion?" verdict is exactly apples-to-apples
+    with what the user actually trades (entries 6, slm 2.1, max_hold 240, locks
+    with tp1-delay 24 / tp2-delay 2, no trailing, 1% risk)."""
+    return sweep.sc24_config()
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -431,22 +431,88 @@ def base_config_dict() -> dict[str, Any]:
     return asdict(DEFAULT_CONFIG)
 
 
+# --- SC24 incumbent + staged neighborhood --------------------------------
+# "SC24" is the live R4 champion (cli_champion_R4_scalper24_no_trailing): the
+# blessed DEFAULT_CONFIG with the overrides below. Single source of truth so the
+# sweep's incumbent baseline (tools/incumbent_baseline.incumbent_config) AND the
+# seeded staged grid (tools/sweep_self_limit.make_limit_candidates) share ONE
+# definition -- the sweep must score against, and be able to reproduce/beat, the
+# exact config the user trades live.
+SC24_OVERRIDES: dict[str, Any] = {
+    "entry_count": 6,
+    "entry_sl_gap": 0.5,
+    "activation_delay_minutes": 2,
+    "pending_expiry_minutes": 180,
+    "max_hold_minutes": 240,
+    "sl_multiplier": 2.1,
+    "lock_after_tp2": True,
+    "tp1_lock_delay_minutes": 24,
+    "tp2_lock_delay_minutes": 2,
+    "risk_per_signal": 0.01,
+}
+
+
+def sc24_config() -> dict[str, Any]:
+    """The live R4 champion config: DEFAULT_CONFIG + the SC24 overrides, LIMIT
+    (no trailing-open). Everything else stays at the validated provider contract."""
+    cfg = base_config_dict()
+    cfg.update(SC24_OVERRIDES)
+    cfg["trailing_open_distance"] = 0.0
+    cfg["trailing_close_distance"] = 0.0
+    return cfg
+
+
+# Staged coordinate sweep around SC24: SC24 at the center, then ONE axis varied
+# at a time (others held at SC24), each list ordered near->far. This is the "test
+# close to SC24 first, then broaden" stage -- guaranteed-evaluated so the sweep
+# can actually reproduce/beat the champion (the random draw cannot reach
+# entry_count=6 / max_hold=240 / tp1_lock_delay=24 / risk=0.01). The broader,
+# widened random draw in candidate_config() supplies stage-2 breadth.
+_SC24_NEIGHBORHOOD_AXES: dict[str, list[Any]] = {
+    "tp1_lock_delay_minutes": [27, 20, 30, 15],
+    "sl_multiplier": [2.0, 2.2, 1.9, 2.3],
+    "max_hold_minutes": [180, 300, 120],
+    "entry_count": [7, 5, 8],
+    "entry_sl_gap": [0.75, 0.25, 1.0],
+    "tp1_lock_fraction": [1.0, 0.25],
+}
+
+
+def sc24_neighborhood_grid() -> list[dict[str, Any]]:
+    """SC24 (center) + a one-axis-at-a-time coordinate sweep around it."""
+    center = sc24_config()
+    out = [center]
+    seen = {_json_hash(center)}
+    for field, values in _SC24_NEIGHBORHOOD_AXES.items():
+        for v in values:
+            cfg = dict(center)
+            cfg[field] = v
+            h = _json_hash(cfg)
+            if h not in seen:
+                seen.add(h)
+                out.append(cfg)
+    return out
+
+
 def candidate_config(rng: random.Random, *, include_trend_runner: bool) -> dict[str, Any]:
     cfg = base_config_dict()
     cfg.update({
-        "risk_per_signal": rng.choice([0.020, 0.0275, 0.035, 0.045, 0.05575, 0.065, 0.075]),
-        "entry_count": rng.choice([1, 2, 3, 4]),
+        # Ranges WIDENED to include the SC24 champion's values (1% risk,
+        # entry_count 6, max_hold 240, tp1_lock_delay 24, activation_delay 2),
+        # so stage-2 random search can reach + beat the live champion's region.
+        "risk_per_signal": rng.choice([0.010, 0.015, 0.020, 0.0275, 0.035, 0.045, 0.05575, 0.065, 0.075]),
+        "entry_count": rng.choice([1, 2, 3, 4, 5, 6, 7, 8]),
         "entry_ladder": rng.choice(["signal_range_3", "range_uniform", "range_to_sl"]),
-        "entry_sl_gap": rng.choice([0.0, 1.0, 2.0, 3.0, 4.0]),
-        "activation_delay_minutes": rng.choice([0, 1, 3, 5, 10]),
+        "entry_sl_gap": rng.choice([0.0, 0.5, 1.0, 2.0, 3.0, 4.0]),
+        "activation_delay_minutes": rng.choice([0, 1, 2, 3, 5, 10]),
         "pending_expiry_minutes": rng.choice([180, 300, 420, 630, 900]),
-        "max_hold_minutes": rng.choice([30, 45, 60, 90, 120, 180]),
-        "sl_multiplier": rng.choice([1.15, 1.30, 1.45, 1.61, 1.75, 2.00, 2.30]),
+        "max_hold_minutes": rng.choice([30, 45, 60, 90, 120, 180, 240, 300]),
+        "sl_multiplier": rng.choice([1.15, 1.30, 1.45, 1.61, 1.75, 1.90, 2.00, 2.10, 2.20, 2.30]),
         "final_target": rng.choice(["TP1", "TP2", "TP3"]),
         "lock_after_tp1": rng.choice([True, False]),
         "lock_after_tp2": rng.choice([True, False]),
-        "tp1_lock_delay_minutes": rng.choice([0, 3, 5, 10, 15]),
-        "tp2_lock_delay_minutes": rng.choice([0, 3, 5, 10, 15]),
+        "tp1_lock_delay_minutes": rng.choice([0, 3, 5, 10, 15, 20, 24, 30]),
+        "tp2_lock_delay_minutes": rng.choice([0, 2, 3, 5, 10, 15]),
         "profit_lock_mode": rng.choice(["tp_levels", "bep_plus_half_tp1"]),
         "bep_trigger_distance": rng.choice([1.0, 2.0, 3.0, 4.0, 6.0]),
         "tp1_lock_fraction": rng.choice([0.25, 0.5, 0.75, 1.0]),
