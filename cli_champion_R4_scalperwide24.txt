@@ -13,62 +13,29 @@
 # =========================================================================
 
 # ===== 1. SIGNAL AUTO GENERATOR =====
-# GENERATE the scalperwide24 feed (recipe = scalper gen + wide RR).
-# Dense ATR-adaptive scalper, WIDE risk:reward (rr 1.5/2.5/4.0 vs scalper24's
-# 1.0/1.5/2.0). Times display GMT+7 (--signal-tz 7), DST-aware; the engine
-# converts to chart EET/EEST. Refresh before each run.
-python tools/generate_scalper_signals.py `
-  --charts data/XAUUSD_M1_*_ELEV8.csv `
-  --output generated/self_scalper_widerr24.txt `
-  --signal-tz 7 `
-  --rr1 1.5 --rr2 2.5 --rr3 4.0
-
-# ===== 2. AUTO EXECUTOR CLI =====
-# LIVE AUTO EXECUTOR (places + manages orders for R4parab).
-# Same strategy params as the backtest below. Note: there is no
-# live_feed_loop --family for this feed yet, so regenerate the archive
-# (section 2) on a schedule / before each session instead of a rolling
-# live loop. Set --risk to your live sizing choice (e.g. 0.05).
-python tools/auto_explicit.py `
-  --signals generated/self_scalper_widerr24.txt `
-  --positions-json positions_R4parab.json `
-  --watch-interval 15 `
+# LIVE SIGNAL GENERATOR (single command; logs each new signal).
+# One process, no shell loop. It refetches the current month + regenerates
+# ONLY when a new closed M1 bar exists, narrows to the 2 most recent months
+# and a rolling 3-day window (fast), and prints like `auto`: a header, then
+# one line per NEW signal -- e.g. [ts] Add Signal 75. BUY XAUUSD ...
+# Recipe = scalper gen + WIDE risk:reward (rr 1.5/2.5/4.0). Times display
+# GMT+7 (--signal-tz 7), DST-aware; the engine converts to chart EET/EEST.
+python tools/live_feed_loop.py `
+  --family scalper `
+  --interval 30 `
+  --gen-start-days 3 `
+  --gen-recent-months 2 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
-  --mt5-history-bars 5000 `
-  --replace-missing-entries false `
-  --reopen-missing-positions true `
-  --sizing-mode risk `
-  --lot 0.01 `
-  --risk 0.02 `
-  --minimum-lot 0.01 `
-  --lot-step 0.01 `
-  --bonus-per-closed-lot 3.0 `
-  --entries 8 `
-  --entry-ladder signal_range_3 `
-  --entry-sl-gap 0.5 `
-  --activation-delay 0 `
-  --pending-expiry 240 `
-  --max-hold 300 `
-  --sl-multiplier 2.3 `
-  --final-target TP2 `
-  --lock-after-tp1 false `
-  --lock-after-tp2 false `
-  --tp1-lock-delay-minutes 0 `
-  --tp2-lock-delay-minutes 0 `
-  --profit-lock-mode tp_levels `
-  --bep-trigger-distance 6.0 `
-  --tp1-lock-fraction 0.5 `
-  --tp2-lock-target TP2 `
-  --runner-after-tp3 false `
-  --tp3-lock-target TP2 `
-  --trailing-open-distance 0.0 `
-  --trailing-close-distance 2.0 `
-  --trailing-close-after-stage 0 `
-  --initial-capital 5000
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper_widerr24_live.txt --signal-tz 7 --rr1 1.5 --rr2 2.5 --rr3 4.0
 
-# ===== 3. BACKTEST CLI =====
-# BACKTEST R4parab (regime slice only).
+# ===== 2. BACKTEST CLI =====
+# STEP 2a — (re)generate the FULL static archive generated/self_scalper_widerr24.txt
+# from ALL chart history so the backtest reflects the latest data. This is the
+# full archive feed — DIFFERENT from the live rolling feed in section 1.
+# Run this whenever you want a fresh backtest:
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper_widerr24.txt --signal-tz 7 --rr1 1.5 --rr2 2.5 --rr3 4.0
+# STEP 2b — backtest R4parab (regime slice only).
 python tools/backtest_explicit.py `
   --sizing-mode risk `
   --lot 0.01 `
@@ -105,3 +72,45 @@ python tools/backtest_explicit.py `
   --max-drawdown-limit-pct 50 `
   --sync-charts false `
   --progress-interval-seconds 30
+
+# ===== 3. AUTO CLI =====
+# LIVE AUTO EXECUTOR (places + manages orders for R4parab).
+# Reads the *_live.txt loop feed from section 1. Same strategy params as the
+# backtest above. Set --risk to your live sizing choice (e.g. 0.05).
+python tools/auto_explicit.py `
+  --signals generated/self_scalper_widerr24_live.txt `
+  --positions-json positions_R4parab.json `
+  --watch-interval 15 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --replace-missing-entries false `
+  --reopen-missing-positions true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.02 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder signal_range_3 `
+  --entry-sl-gap 0.5 `
+  --activation-delay 0 `
+  --pending-expiry 240 `
+  --max-hold 300 `
+  --sl-multiplier 2.3 `
+  --final-target TP2 `
+  --lock-after-tp1 false `
+  --lock-after-tp2 false `
+  --tp1-lock-delay-minutes 0 `
+  --tp2-lock-delay-minutes 0 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 6.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP2 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 2.0 `
+  --trailing-close-after-stage 0 `
+  --initial-capital 5000

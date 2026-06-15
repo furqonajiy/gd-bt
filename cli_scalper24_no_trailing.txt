@@ -22,7 +22,90 @@ python tools/live_feed_loop.py `
   --mt5-server-offset 3 `
   -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24_live.txt --session-start 0 --session-end 0 --signal-tz 7
 
-# ===== 2. AUTO EXECUTOR CLI =====
+# ===== 2. BACKTEST CLI =====
+# --- 2a. PARITY BACKTEST (regenerate full history, then backtest) ---
+# STEP 2a — (re)generate the FULL static archive generated/self_scalper24.txt
+# from ALL chart history so the backtest reflects the latest data. This is the
+# 18-month feed (slow, ~15s) — DIFFERENT from the live 2-day feed in section 1.
+# Run this whenever you want a fresh backtest:
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24.txt --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7
+# STEP 2b — backtest that freshly-regenerated archive (full history):
+python tools/backtest_explicit.py `
+  --signals generated/self_scalper24.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --output-dir reports/SELF_NO_TRAILING_24H `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --trailing-close-after-stage 0 `
+  --initial-capital 5000 `
+  --start-date 2025-01-01
+
+# --- 2b. RECENT BACKTEST (from 2026-06-12 only; quick current-regime check) ---
+python tools/backtest_explicit.py `
+  --signals generated/self_scalper24.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --output-dir reports/SELF_NO_TRAILING_24H_FROM_JUNE `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --trailing-close-after-stage 0 `
+  --initial-capital 5000 `
+  --start-date 2026-06-12
+
+# ===== 3. AUTO CLI =====
 # Reads the live feed, places + manages orders.
 # --replace-missing-entries false: self feeds are two-sided (hedge close-by
 # re-entry risk). Window B, runs beside the generator loop above.
@@ -66,86 +149,3 @@ python tools/auto_explicit.py `
   --trailing-close-distance 0.0 `
   --trailing-close-after-stage 0 `
   --initial-capital 5000
-
-# ===== 3. BACKTEST CLI =====
-# --- 4a. PARITY BACKTEST (regenerate full history, then backtest) ---
-# STEP 4a — (re)generate the FULL static archive generated/self_scalper24.txt
-# from ALL chart history so the backtest reflects the latest data. This is the
-# 18-month feed (slow, ~15s) — DIFFERENT from the live 2-day feed in section 2.
-# Run this whenever you want a fresh backtest:
-python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24.txt --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7
-# STEP 4b — backtest that freshly-regenerated archive (full history):
-python tools/backtest_explicit.py `
-  --signals generated/self_scalper24.txt `
-  --charts data/XAUUSD_M1_*_ELEV8.csv `
-  --output-dir reports/SELF_NO_TRAILING_24H `
-  --max-drawdown-limit-pct 50 `
-  --progress-interval-seconds 30 `
-  --sync-charts true `
-  --sizing-mode risk `
-  --lot 0.01 `
-  --risk 0.01 `
-  --minimum-lot 0.01 `
-  --lot-step 0.01 `
-  --bonus-per-closed-lot 3.0 `
-  --entries 6 `
-  --entry-ladder range_to_sl `
-  --entry-sl-gap 0.5 `
-  --activation-delay 2 `
-  --pending-expiry 180 `
-  --max-hold 240 `
-  --sl-multiplier 2.1 `
-  --final-target TP3 `
-  --lock-after-tp1 true `
-  --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 24 `
-  --tp2-lock-delay-minutes 2 `
-  --profit-lock-mode tp_levels `
-  --bep-trigger-distance 3.0 `
-  --tp1-lock-fraction 0.5 `
-  --tp2-lock-target TP1 `
-  --runner-after-tp3 false `
-  --tp3-lock-target TP2 `
-  --trailing-open-distance 0.0 `
-  --trailing-close-distance 0.0 `
-  --trailing-close-after-stage 0 `
-  --initial-capital 5000 `
-  --start-date 2025-01-01
-
-# --- 4b. RECENT BACKTEST (from 2026-06-01 only; quick current-regime check) ---
-python tools/backtest_explicit.py `
-  --signals generated/self_scalper24.txt `
-  --charts data/XAUUSD_M1_*_ELEV8.csv `
-  --output-dir reports/SELF_NO_TRAILING_24H_FROM_JUNE `
-  --max-drawdown-limit-pct 50 `
-  --progress-interval-seconds 30 `
-  --sync-charts true `
-  --sizing-mode risk `
-  --lot 0.01 `
-  --risk 0.01 `
-  --minimum-lot 0.01 `
-  --lot-step 0.01 `
-  --bonus-per-closed-lot 3.0 `
-  --entries 6 `
-  --entry-ladder range_to_sl `
-  --entry-sl-gap 0.5 `
-  --activation-delay 2 `
-  --pending-expiry 180 `
-  --max-hold 240 `
-  --sl-multiplier 2.1 `
-  --final-target TP3 `
-  --lock-after-tp1 true `
-  --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 24 `
-  --tp2-lock-delay-minutes 2 `
-  --profit-lock-mode tp_levels `
-  --bep-trigger-distance 3.0 `
-  --tp1-lock-fraction 0.5 `
-  --tp2-lock-target TP1 `
-  --runner-after-tp3 false `
-  --tp3-lock-target TP2 `
-  --trailing-open-distance 0.0 `
-  --trailing-close-distance 0.0 `
-  --trailing-close-after-stage 0 `
-  --initial-capital 5000 `
-  --start-date 2026-06-12
