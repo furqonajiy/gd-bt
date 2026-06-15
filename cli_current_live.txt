@@ -40,11 +40,8 @@ python tools/live_provider_signal_filter.py `
 python tools/backtest_explicit.py `
   --signals victor_signals.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
-  --start-date 2025-01-01 `
-  --output-dir reports/BEST_slm21_gap05_tp1delay24_risk005_2025 `
   --max-drawdown-limit-pct 50 `
   --progress-interval-seconds 30 `
-  --initial-capital 5000 `
   --sizing-mode risk `
   --lot 0.01 `
   --risk 0.05 `
@@ -71,7 +68,10 @@ python tools/backtest_explicit.py `
   --tp3-lock-target TP2 `
   --trailing-open-distance 0 `
   --trailing-close-distance 0 `
-  --trailing-close-after-stage 0
+  --trailing-close-after-stage 0 `
+  --start-date 2025-01-01 `
+  --output-dir reports/BEST_slm21_gap05_tp1delay24_risk005_2025 `
+  --initial-capital 5000
 
 # ===== 4. AUTO CLI =====
 # Live Auto  ->  reads the filtered feed, places + manages orders on MT5
@@ -83,7 +83,6 @@ python tools/auto_explicit.py `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
   --mt5-history-bars 5000 `
-  --initial-capital 5000 `
   --sizing-mode risk `
   --lot 0.01 `
   --risk 0.05 `
@@ -112,4 +111,5 @@ python tools/auto_explicit.py `
   --trailing-close-distance 0 `
   --trailing-close-after-stage 0 `
   --replace-missing-entries true `
-  --reopen-missing-positions true
+  --reopen-missing-positions true `
+  --initial-capital 5000

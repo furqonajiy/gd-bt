@@ -66,12 +66,12 @@ python tools/backtest_explicit.py `
   --trailing-close-after-stage 0 `
   --signals generated/self_scalper_widerr24.txt `
   --charts data/XAUUSD_M1_2026*_ELEV8.csv `
-  --start-date 2026-01-01 `
-  --output-dir reports/CHAMPION_R4parab `
-  --initial-capital 5000.0 `
   --max-drawdown-limit-pct 50 `
   --sync-charts false `
-  --progress-interval-seconds 30
+  --progress-interval-seconds 30 `
+  --start-date 2026-01-01 `
+  --output-dir reports/CHAMPION_R4parab `
+  --initial-capital 5000.0
 
 # ===== 3. AUTO CLI =====
 # LIVE AUTO EXECUTOR (places + manages orders for R4parab).
