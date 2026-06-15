@@ -132,12 +132,23 @@ class Mt5Executor(_BaseMt5Executor):
         now_chart = _wall_clock_chart_now()
 
         replay_pos = getattr(plan, "replay_position", None)
-        if replay_pos is not None and len(plan.orders) < len(replay_pos.entries):
+        # In reopen/mirror mode (--reopen-missing-positions), a partially
+        # played-out signal is NOT skipped: place_signal places its fresh LIMIT
+        # legs and the caller tracks the signal so reopen_missing_open_positions
+        # restores the already-OPEN legs at market with the planned stop -- the
+        # operator's "if the replay still holds the entry, open it" rule. Without
+        # that flag the registry is signal-level, so partial ladders are skipped
+        # to avoid managing unplaced entries (legacy/backtest behaviour).
+        allow_partial = bool(getattr(self, "_allow_partial_placement", False))
+        if (replay_pos is not None
+                and len(plan.orders) < len(replay_pos.entries)
+                and not allow_partial):
             log.actions.append(
                 f"Signal {signal.signal_key}: skipped partial placement "
                 f"({len(plan.orders)} of {len(replay_pos.entries)} entries). "
                 f"Live registry is signal-level, so partial ladders are skipped "
-                f"to avoid managing unplaced entries."
+                f"to avoid managing unplaced entries (enable "
+                f"--reopen-missing-positions to place the live legs instead)."
             )
             return log
 
@@ -185,6 +196,7 @@ class Mt5Executor(_BaseMt5Executor):
         bid = float(tick.bid)
         ask = float(tick.ask)
         stale_entries = []
+        fresh_orders = []
         for order in plan.orders:
             key = signal_entry_key(signal.signal_key, order.entry_index)
             price = float(order.entry_price)
@@ -199,8 +211,10 @@ class Mt5Executor(_BaseMt5Executor):
                 if key not in self._session_skipped_stale_entries:
                     log.actions.append(f"  {key}: skipped {stale_reason}")
                     self._session_skipped_stale_entries.add(key)
+            else:
+                fresh_orders.append(order)
 
-        if stale_entries:
+        if stale_entries and not allow_partial:
             log.actions.append(
                 f"Signal {signal.signal_key}: skipped entire ladder because "
                 f"{len(stale_entries)} entr{'y was' if len(stale_entries) == 1 else 'ies were'} "
@@ -208,8 +222,23 @@ class Mt5Executor(_BaseMt5Executor):
             )
             return log
 
+        # In reopen/mirror mode, a price-passed (stale) leg is an OPEN leg the
+        # replay holds: place only the fresh LIMITs here; reopen_missing_open_positions
+        # restores the passed legs at market with the planned stop (better basis,
+        # never chased). The caller still tracks the signal on its replay-OPEN legs
+        # so re-open runs next cycle even when nothing is placeable as a LIMIT now.
+        orders_to_place = fresh_orders if allow_partial else plan.orders
+        if not orders_to_place:
+            if allow_partial and stale_entries:
+                log.actions.append(
+                    f"Signal {signal.signal_key}: no fresh LIMIT entries to place "
+                    f"now; {len(stale_entries)} price-passed leg(s) will be re-opened "
+                    f"by reopen-missing-positions."
+                )
+            return log
+
         rounded_lots: dict[int, float] = {}
-        for order in plan.orders:
+        for order in orders_to_place:
             lot = round_lot(order.lot, self.min_lot, self.lot_step)
             if lot <= 0:
                 log.actions.append(
@@ -245,7 +274,7 @@ class Mt5Executor(_BaseMt5Executor):
         placed_tickets: list[int] = []
         placed_details: list[dict] = []
 
-        for o in plan.orders:
+        for o in orders_to_place:
             lot = rounded_lots[o.entry_index]
             comment = mt5_entry_comment(signal.signal_key, o.entry_index)
             entry_key = signal_entry_key(signal.signal_key, o.entry_index)

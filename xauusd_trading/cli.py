@@ -383,6 +383,10 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     # bool / "true"/"false" flag handling as above.
     _rmp = getattr(args, "reopen_missing_positions", False)
     reopen_enabled = _rmp is True or str(_rmp).lower() == "true"
+    # In reopen/mirror mode, partially played-out signals are placed per entry
+    # (fresh LIMITs now; already-OPEN legs re-opened by the reopen pass) instead
+    # of being skipped wholesale. place_signal reads this flag.
+    executor._allow_partial_placement = reopen_enabled
     if reopen_enabled:
         for _ideal, actual, _exec_at in tracked:
             log.merge(executor.reopen_missing_open_positions(actual, config))
@@ -489,7 +493,16 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                 _auto_record_candidate_action(log, candidate_console_state, signal.signal_key, action)
             log.warnings.extend(getattr(plog, "warnings", []))
 
-        if getattr(plog, "placed", 0) > 0:
+        # Track the signal when something was placed OR (in reopen/mirror mode)
+        # when the replay still holds OPEN legs to restore -- so a partial signal
+        # whose only live legs are price-passed still gets registered and the
+        # reopen pass mirrors it next cycle.
+        _replay_pos = getattr(rec.new_signal, "replay_position", None)
+        _track_for_reopen = (
+            reopen_enabled and _replay_pos is not None
+            and any(e.status == "OPEN" for e in _replay_pos.entries)
+        )
+        if getattr(plog, "placed", 0) > 0 or _track_for_reopen:
             executed_at = _chart_now()
             registry.add(signal, equity, executed_at=executed_at)
             candidate_console_state[signal.signal_key] = "PLACED"
