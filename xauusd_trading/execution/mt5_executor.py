@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -57,13 +58,48 @@ def signal_entry_key(signal_key: str, entry_index: int) -> str:
     return f"{signal_key}.{entry_index + 1}"
 
 
+# Parse a signal_key `[TAG-]YYYY-MM-DD#DD` into (tag, MM-DD, signal-of-day). The
+# tag never contains a dash; the date is always `YYYY-MM-DD`.
+_KEY_RE = re.compile(
+    r"^(?:(?P<tag>[A-Za-z0-9]+)-)?\d{4}-(?P<md>\d{2}-\d{2})#(?P<sig>\d+)$"
+)
+
+
+def _compact_comment_ref(signal_key: str) -> str:
+    """Reduce a signal_key to ``[TAG-]MMDD#DD`` (tag + date + signal-of-day).
+
+    The full key is ``[TAG-]YYYY-MM-DD#DD``. The order comment must survive
+    brokers that truncate it well below MT5's 31-char cap (Elev8 cuts near 16),
+    and a 5-char strategy tag plus the full ``YYYY-MM-DD`` plus ``#DD`` plus the
+    ``.N`` entry suffix overflows that. We therefore keep the **month-day**
+    (``MMDD``) of the date — the year is virtually always the current one and is
+    recoverable from the order's open time + magic — so the tag, date, signal-of-
+    day, AND entry all fit (worst case ``R4S24-0615#36.8`` = 15 chars). Matching
+    is per-magic (the magic hashes the FULL key, year included), so dropping the
+    year from the comment never confuses two signals.
+    """
+    m = _KEY_RE.match(signal_key)
+    if not m:
+        return signal_key
+    prefix = f"{m.group('tag')}-" if m.group("tag") else ""
+    return f"{prefix}{m.group('md').replace('-', '')}#{m.group('sig')}"
+
+
 def mt5_entry_comment(signal_key: str, entry_index: int, max_len: int = 31) -> str:
-    """MT5-safe per-entry comment preserving the one-based entry suffix."""
+    """MT5-safe per-entry comment preserving the one-based entry suffix.
+
+    Renders the compact ``[TAG-]MMDD#DD.N`` form (e.g. ``VIC-0615#05.2`` /
+    ``SC24-0615#05.2`` / ``0615#05.2`` untagged) so the tag, date, signal-of-day,
+    and entry index all stay visible even when a broker truncates the comment.
+    The ``.N`` suffix is never trimmed — partial fills and reconciliation map back
+    to the engine entry via that suffix.
+    """
+    ref = _compact_comment_ref(signal_key)
     suffix = f".{entry_index + 1}"
     prefix_len = max_len - len(suffix)
     if prefix_len <= 0:
         return suffix[-max_len:]
-    return f"{signal_key[:prefix_len]}{suffix}"
+    return f"{ref[:prefix_len]}{suffix}"
 
 
 def round_lot(lot: float, min_lot: float = 0.01, lot_step: float = 0.01) -> float:

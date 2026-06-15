@@ -312,7 +312,15 @@ execution onto the backtest so you can compare them entry-by-entry.
    ```
 
 Each live position is matched to a backtest entry by the order **Comment**,
-which the executor writes as the entry key (`2026-06-08#02.1`). The Per-Entry
+which the executor writes as a compact entry key (`[TAG-]MMDD#DD.N` — the
+strategy tag, month-day, signal-of-day, and one-based entry, e.g. `VIC-0615#02.1`,
+`SC24-0615#02.1`, or `0615#02.1` untagged). Only the **year** is dropped from the
+date: a 5-char tag plus the full `YYYY-MM-DD` plus `#DD.N` overflows the comment
+length that some brokers truncate to (Elev8 cuts near 16 chars, below MT5's
+31-char cap), which would silently drop the `.N` entry id. The year is virtually
+always the current one and is recoverable from the order's open time + magic, and
+matching is per-magic (the magic hashes the full key, year included), so dropping
+it from the comment never confuses two signals. The Per-Entry
 Detail sheet then gains a **LIVE (MT5 execution)** column group — Live Entry /
 SL / Exit / P&L / R — next to the **EXECUTED (backtest result)** group, and any
 live value that differs from the plan is highlighted, so a parity gap (e.g. a
