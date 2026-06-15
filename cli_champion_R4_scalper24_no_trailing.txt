@@ -67,7 +67,7 @@ python tools/backtest_explicit.py `
   --trailing-open-distance 0.0 `
   --trailing-close-distance 0.0 `
   --trailing-close-after-stage 0 `
-  --output-dir reports/SELF_NO_TRAILING_24H `
+  --output-dir reports/BEST_SC24_NO_TRAILING `
   --initial-capital 5000 `
   --start-date 2026-01-01
 
