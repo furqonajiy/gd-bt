@@ -73,7 +73,11 @@ class Signal:
 
     @property
     def signal_key(self) -> str:
-        return f"{self.tag}{self.source_date}#{self.day_id:02d}"
+        # A non-empty tag is separated with "-" so it reads unambiguously in the
+        # MT5 comment even when it ends in a digit (e.g. "SC24-2026-06-15#04",
+        # not "SC242026-..."). Untagged keys are byte-identical to before.
+        prefix = f"{self.tag}-" if self.tag else ""
+        return f"{prefix}{self.source_date}#{self.day_id:02d}"
 
     @property
     def range_high(self) -> float:
