@@ -1,7 +1,7 @@
 """Smoke test: DD40 command backtest must run end-to-end.
 
 This test mirrors the selected DD40 command contract:
-filtered provider signals, XAUUSD_M1_*.csv charts, $1000 initial capital,
+filtered provider signals, XAUUSD_M1_*.csv charts, $5000 initial capital,
 risk sizing at 0.05575, 3 range_to_sl entries, entry_sl_gap=2, activation delay
 3, pending expiry 630, max hold 90, SL multiplier 1.61, TP3 final target,
 no TP2 lock, and $3 closed-lot bonus.
@@ -25,7 +25,7 @@ CHART_FILES = sorted(DATA_DIR.glob("XAUUSD_M1_*.csv"))
 
 
 DD40_DEFAULT_EXPECTED = {
-    "initial_capital": 1000.0,
+    "initial_capital": 5000.0,
     "sizing_mode": "risk",
     "risk_per_signal": 0.05575,
     "entry_count": 3,

@@ -25,7 +25,7 @@ CHART_TIMEZONE_OFFSET = 3      # MT5 CSV is GMT+3
 
 @dataclass(frozen=True)
 class StrategyConfig:
-    initial_capital: float = 1_000.0
+    initial_capital: float = 5_000.0
 
     sizing_mode: str = "risk"              # "fixed" | "risk"
     lot_per_entry: float = 0.5
