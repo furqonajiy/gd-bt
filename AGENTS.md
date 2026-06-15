@@ -49,7 +49,16 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   2; live loops use 1 since rolled-over months are immutable).
 - `reporting/excel_report.py` — three-sheet backtest workbook (Summary /
   Daily Breakdown / Per-Entry Detail; the Per-Entry sheet splits ORIGINAL
-  signal vs EXECUTED result, realized risk:reward rendered as `1:N`).
+  signal vs EXECUTED result, realized risk:reward rendered as `1:N`). The
+  Summary's Monthly Breakdown carries a **Regime** column — each month is
+  classified (R1quiet/R2bull/R3strong/R4parab) from its own M1 bars.
+- `strategy/regime.py` — the **volatility-regime detector** (`detect_regime` /
+  `read_current_regime` via smoothed M15 ATR + trend), re-exported from the
+  package root. It labels months in the report and drives **`auto --adaptive`**:
+  each cycle the live loop classifies the current market and runs that regime's
+  published champion (`CHAMPION_<regime>.json` under `--champions-dir`), falling
+  back to the CLI/incumbent config when none exists. `tools/regime_router.py` is
+  a back-compat shim; `tools/regime_auto.py` is the one-shot advisory CLI.
 - `tests/` — `pytest` suite, heavy on live/backtest parity.
 - `docs/` — `MT5_SETUP.md`, `OPERATIONS_PLAYBOOK.md`,
   `demo_runbook_trailing_open.md`.
