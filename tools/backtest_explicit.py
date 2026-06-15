@@ -385,6 +385,20 @@ def add_scale_out_args(p: argparse.ArgumentParser) -> None:
                         "by --trailing-close-distance. Never trails from entry. Default TP3.")
 
 
+def _add_adaptive_flags(p: argparse.ArgumentParser) -> None:
+    g = p.add_argument_group("regime-adaptive (mirror auto --adaptive)")
+    g.add_argument("--adaptive", type=_bool_text, default=False,
+                   help="Backtest the REGIME-SWITCHING strategy: each signal is replayed under "
+                        "its regime's champion config (CHAMPION_<regime>.json under --champions-dir) "
+                        "instead of the explicit flags, falling back to the explicit (incumbent) "
+                        "config when a regime has no champion. The regime is read from a trailing "
+                        "window ending at the signal's time (no lookahead) -- mirrors the live loop.")
+    g.add_argument("--champions-dir", default="champions",
+                   help="Directory holding CHAMPION_<regime>.json for --adaptive (default: champions/).")
+    g.add_argument("--adaptive-window-days", type=int, default=20,
+                   help="Trailing window (days) of M1 used to classify each signal's regime.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Run backtest with no hidden strategy defaults.")
     p.add_argument("--signals", required=True, help="Executable/filtered signal file to backtest.")
@@ -409,6 +423,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_required_strategy_args(p)
     add_scale_out_args(p)
     add_chart_sync_args(p)
+    _add_adaptive_flags(p)
     return p
 
 
@@ -521,12 +536,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     with Heartbeat("chart load", args.progress_interval_seconds, enabled=progress_enabled):
         chart = CsvChartSource(_expand_chart_paths(args.charts))
+
+    # Regime-adaptive: replay each signal under its regime's champion config.
+    resolver = None
+    if getattr(args, "adaptive", False):
+        from xauusd_trading import make_regime_config_resolver
+        resolver = make_regime_config_resolver(
+            chart.dataframe, champions_dir=args.champions_dir,
+            base_config=config, window_days=args.adaptive_window_days)
+        print(f"[adaptive] regime-switching backtest | champions-dir={args.champions_dir} "
+              f"| window={args.adaptive_window_days}d | fallback=incumbent config")
+
     with Heartbeat("backtest", args.progress_interval_seconds, enabled=progress_enabled):
         result = run_backtest(
             signals,
             chart,
             config,
             exclude_structural_anomalies=args.exclude_structural_anomalies,
+            config_resolver=resolver,
         )
 
     # Merge real MT5 fills (matched by Comment == entry_key) into the entry rows.

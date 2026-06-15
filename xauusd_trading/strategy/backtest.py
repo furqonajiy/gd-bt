@@ -192,7 +192,15 @@ def run_backtest(
         *,
         exclude_structural_anomalies: bool = False,
         contract_size: float = CONTRACT_SIZE_OZ,
+        config_resolver=None,
 ) -> dict:
+    """Replay every signal and aggregate.
+
+    ``config_resolver``: optional ``callable(signal) -> StrategyConfig``. When
+    given (regime-adaptive backtest), each signal is replayed under the config it
+    returns instead of the fixed ``config`` -- so the backtest mirrors the live
+    ``auto --adaptive`` switch. ``config`` is still the base for capital/reporting.
+    """
     chart_df = chart.dataframe
     chart_start = chart.first_time()
     chart_end = chart.last_time()
@@ -213,10 +221,11 @@ def run_backtest(
             excluded.append({"signal_key": sig.signal_key, "reason": "structural anomaly"})
             continue
 
-        pos = replay_signal(sig, chart_df, equity, config, contract_size)
+        sig_config = config_resolver(sig) if config_resolver is not None else config
+        pos = replay_signal(sig, chart_df, equity, sig_config, contract_size)
         status, trading_pnl = position_status(pos)
         closed_lots = 0.0 if status == "OPEN" else _entry_closed_lots(pos)
-        bonus = 0.0 if status == "OPEN" else _bonus_for_position(pos, config)
+        bonus = 0.0 if status == "OPEN" else _bonus_for_position(pos, sig_config)
         total_pnl = trading_pnl + bonus if status != "OPEN" else None
         equity_after = equity if status == "OPEN" else equity + float(total_pnl or 0.0)
         rows.append({
