@@ -15,8 +15,10 @@ or ask the user to re‑explain.
 
 - **Baseline = one config, run once.** The "beat this" number is a *single*
   champion config backtested once — **not** the result of exhaustive search.
-  The current champion (`scalper24`, `e6 slm2.1 d24`) came from **hand‑seeded
-  configs** in `_sweep_self.py::_seed_configs()`, *not* from the random grid.
+  The current champion is **SC24** (`cli_champion_R4_scalper24_no_trailing`,
+  `e6 slm2.1 max_hold240 d24 tp2d2`, no trailing, 1% risk), defined once in
+  `tools/sweep.py::sc24_config()` and seeded as a guaranteed candidate via
+  `sc24_neighborhood_grid()`, *not* found by the random grid.
 - **Sweep = search for something that beats the baseline.** It samples many
   configs and ranks them.
 - **We always SAMPLE, never exhaust.** The grid is millions of combinations;
@@ -124,13 +126,19 @@ alone beat, the baseline. The champion's `d24` (tp1‑lock‑delay = 24), `e6/e8
 (`{0,3,5,10,15}`, `{1,2,3,4}`, …) — they were seeds.
 
 1. **Widen** `tools/sweep.py::candidate_config` so each value set brackets the
-   champion: entries → up to **6/8**; tp1/tp2‑lock‑delay → include **2, 24**;
-   max_hold → include **240**; sl_multiplier → include **2.1**; entry_sl_gap →
-   include **0.5**; activation_delay → include **2**.
-2. **Re‑seed** the champion + neighbors as guaranteed candidates (mirror
-   `_sweep_self.py::_seed_configs`): base `e8 slm2.1 d24 max_hold240 TP3
-   gap0.5 act2 tp2d2`, plus mutations `{e6}`, `{e4 slm1.61}`, `{slm2.2}`,
-   `{d12}`. The current champion is the `{e6}` mutation.
+   champion (done): entries → up to **8**; tp1‑lock‑delay → include **20, 24,
+   30**; tp2‑lock‑delay → include **2**; max_hold → include **240, 300**;
+   sl_multiplier → include **2.1**; entry_sl_gap → include **0.5**;
+   activation_delay → include **2**; risk → include **0.01** (down to live 1%).
+2. **Re‑seed** the champion + neighbors as guaranteed candidates. The live
+   champion **SC24** is defined once in `tools/sweep.py::sc24_config()`
+   (DEFAULT + `e6 slm2.1 max_hold240 d24 tp2d2 gap0.5 act2 no‑trailing 1% risk`),
+   and `sc24_neighborhood_grid()` is the staged coordinate sweep around it (one
+   axis at a time: tp1‑lock‑delay `{15,20,24,27,30}`, sl_mult `{1.9..2.3}`,
+   max_hold `{120,180,240,300}`, entries `{5,6,7,8}`, …). `sweep_self_limit.make_limit_candidates`
+   seeds that grid on shard 0 so SC24 + neighbors are always evaluated. The SAME
+   `sc24_config()` is the sweep's **incumbent** (`incumbent_baseline.incumbent_config`),
+   so "did a challenger beat the live champion?" is exactly apples‑to‑apples.
 3. Keep **trailing pinned 0** (no‑trailing sweep).
 
 > The previous "best" only beat ~6 seeds + a few hundred random draws — it is

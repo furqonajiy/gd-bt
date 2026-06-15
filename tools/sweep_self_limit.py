@@ -73,6 +73,14 @@ def make_limit_candidates(seed: int, max_candidates: int) -> list[dict]:
             out.append(cfg)
 
     _add(sweep.base_config_dict())  # DD40 base is itself a LIMIT config
+    # STAGE 1 (shard 0 / seed 42 only, so the other shards keep their full random
+    # budget for breadth): SC24 + its coordinate neighborhood, GUARANTEED-evaluated
+    # so the sweep can reproduce/beat the live champion. The widened random draw
+    # below cannot otherwise reach entry_count=6 / max_hold=240 / tp1_delay=24 /
+    # risk=0.01. --resume skips these once scored, so it costs the cell once.
+    if seed == 42:
+        for cfg in sweep.sc24_neighborhood_grid():
+            _add(cfg)
     rng = random.Random(seed)
     attempts = 0
     while len(out) < max_candidates and attempts < max_candidates * 30:
