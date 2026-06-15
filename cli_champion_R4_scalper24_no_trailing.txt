@@ -1,14 +1,21 @@
 # =========================================================================
-# R4 (2026) CHAMPION — SCALPER24, NO TRAILING  (promoted 2026-06-15) | tag SC24
+# R4 (2026) CHAMPION — SCALPER24, NO TRAILING  (current as of 2026-06-15) | tag SC24
 # Best DD<=40% config on the RESYNCED data: scalper24 feed, e6 / slm2.1 /
 # tp1-lock-delay 24 + TP3 + SL locks, NO trailing, risk 1%.
-#   2026 @ $5k:  net+bonus $598,318  |  concurrent DD 32.8%  (compliant)
-#   vs cli_R4_scalperwide24 ($197,959 @ 31.6%): ~3x better on current data,
-#   ~14x at matched 1% risk. No trailing => clean live/backtest parity.
-# NOTE: the sweep champion (scalperwide24) was found on the PRE-resync feed;
-#   on your resynced data THIS no-trailing config wins. A fresh sweep is running
-#   in the background and may revise this. compounded $ are model upper bounds —
-#   they rank configs, not forecast money.
+#   2026 @ $5k:  net+bonus ~$598k  |  concurrent DD ~33% (compliant; the live
+#   sweep's INCUMBENT_R4parab reads 37.08% DD on its committed feed — same config,
+#   slightly different feed vintage; compliant either way).
+#   vs cli_R4_scalperwide24 ($197,959 @ 31.6%): ~3x better on current data.
+#   No trailing => clean live/backtest parity.
+# STATUS: SC24 is the incumbent + the deployable champion. The regime grid sweep
+#   (research/regime-adaptive) is RE-RUNNING after a fix and has not yet scored a
+#   challenger that beats SC24 -- no published CHAMPION_R4parab.json yet, so this
+#   stays the champion. compounded $ are model upper bounds (they rank configs,
+#   not forecast money).
+# LIVE FIXES IN EFFECT (auto, via --reopen-missing-positions true below): tagged
+#   compact comments SC24-0615#NN.N (#120/#121/#123), per-entry partial placement
+#   (#125), and the reopen-churn cooldown (#130). No CLI change needed -- pull
+#   main + restart and they apply.
 # =========================================================================
 
 # ===== 1. SIGNAL AUTO GENERATOR =====
