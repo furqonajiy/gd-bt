@@ -36,6 +36,7 @@ from xauusd_trading import (
     CHART_TIMEZONE_OFFSET, CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig,
 )
 from xauusd_trading import decide, format_replay_outcome, render_report
+from xauusd_trading.core import chart_tz
 from xauusd_trading import Position, advance_bars, open_position
 from xauusd_trading import parse_one_signal, parse_signals_file
 from xauusd_trading import (
@@ -164,8 +165,8 @@ def _handle_closures(notifier: Notifier, forensic: ForensicLog,
 # ---------------------------------------------------------------------------
 
 def _chart_now() -> datetime:
-    """Wall-clock current time in chart timezone (GMT+3), naive."""
-    return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=CHART_TIMEZONE_OFFSET)
+    """Wall-clock current time in chart timezone (EET/EEST), naive."""
+    return chart_tz.utc_to_chart(datetime.now(timezone.utc).replace(tzinfo=None))
 
 
 def _parse_executed_at(raw) -> datetime | None:

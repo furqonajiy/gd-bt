@@ -26,6 +26,7 @@ from xauusd_trading import (
     StrategyConfig,
     advance_bars,
 )
+from xauusd_trading.core import chart_tz
 from xauusd_trading.core.trend_runner import should_skip_time_exit
 
 from .mt5_executor import (
@@ -58,8 +59,8 @@ LATE_LOCK_MIN_STEP = 0.25
 
 
 def _wall_clock_chart_now() -> datetime:
-    """Return real wall-clock time in the chart timezone (GMT+3)."""
-    return datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=CHART_TIMEZONE_OFFSET)
+    """Return real wall-clock time in the chart timezone (EET/EEST)."""
+    return chart_tz.utc_to_chart(datetime.now(UTC).replace(tzinfo=None))
 
 
 def _entry_index_from_comment(comment: str | None) -> int | None:
