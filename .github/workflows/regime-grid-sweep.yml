@@ -11,7 +11,7 @@ name: regime-grid-sweep
 # + THREE HIGH-FREQUENCY self-scalper archives (scalper24, scalperwide24,
 # risk02allhours) -- the dense intraday family that earns more $3/lot bonus and
 # compounds faster, the same character as the live incumbent. The grid sweeps
-# ONE regime at a time, in volatility order R4 -> R3 -> R2 -> R1 (R4 done):
+# ONE regime at a time, in volatility order R4 -> R3 -> R2 -> R1 (R4, R3 done):
 # repoint `matrix.regime` AND the chain step's ACTIVE_REGIME together per phase.
 # Each job runs FOUR tools/sweep_self_limit.py shards (seeds 42..45) in parallel
 # on the runner's 4 cores against that regime's chart month-glob and that feed's
@@ -81,7 +81,7 @@ jobs:
       max-parallel: 20   # GitHub free public concurrency cap
       matrix:
         feed: [adA_base, adB_tightSL, adC_wideSL, adD_closeTP, adE_farTP, adF_tightSL_closeTP, adG_wideSL_farTP, breakout, meanrev, scalper24, scalperwide24, risk02allhours]
-        regime: [R3strong]
+        regime: [R2bull]
     runs-on: ubuntu-latest
     timeout-minutes: 70
     steps:
@@ -654,7 +654,7 @@ jobs:
           #   * Else re-dispatch the next pass for the ACTIVE regime.
           # The 3-hourly cron stays a cheap safety net: between regimes it fires a
           # no-op pass (all active cells guard-skip) and stops at the branch above.
-          ACTIVE_REGIME=R3strong
+          ACTIVE_REGIME=R2bull
           FEED_CELLS=12
           ALL_CELLS=48
           done=$(ls -d sweep_regime_out_grid/*__${ACTIVE_REGIME}/DONE 2>/dev/null | wc -l)
