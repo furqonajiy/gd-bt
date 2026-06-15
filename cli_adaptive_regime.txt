@@ -9,10 +9,11 @@
 # Feed: scalper24 (the dense intraday feed SC24 is the R4 champion of). --adaptive
 #   swaps the STRATEGY CONFIG by regime; it does NOT switch the signal feed, so
 #   run it on this one feed. (Per-feed switching is a future enhancement.)
-# Champions source: copy/pull the CHAMPION_<regime>.json files from the
-#   research/regime-adaptive branch into ./sweep_regime_out_grid (or point
-#   --champions-dir elsewhere). Today only R4 has a baseline while the sweep
-#   runs, so adaptive = SC24 now and auto-upgrades as champions publish.
+# Champions source: ./champions/CHAMPION_<regime>.json (committed on main, seeded
+#   with SC24 for every regime). As the regime sweep (research/regime-adaptive)
+#   publishes a validated winner, drop its CHAMPION_<regime>.json into champions/
+#   and both the backtest (--adaptive) and this live executor pick it up. Until
+#   then adaptive == SC24 everywhere (safe).
 # compounded $ are model upper bounds — they rank configs, not forecast money.
 # =========================================================================
 
@@ -35,13 +36,17 @@ python tools/live_feed_loop.py `
   -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24_live.txt --session-start 0 --session-end 0 --signal-tz 7
 
 # ===== 2. BACKTEST CLI =====
-# The backtest runs ONE config (it does not switch per regime — that is a live
-# auto feature). Backtest the SC24 champion (the current R4 regime) here; the
-# Summary sheet's new **Regime** column labels each month R1/R2/R3/R4, so you can
-# see how XAUUSD behaved and which months each regime covered.
+# --adaptive true backtests the SAME regime-switching the live executor does:
+# each signal is replayed under its regime's CHAMPION_<regime>.json config (from
+# --champions-dir champions), classified from a trailing window ending at the
+# signal's time (no lookahead), falling back to the explicit flags below (the
+# SC24 incumbent) when a regime has no champion. Today every regime's champion is
+# seeded with SC24, so this == the SC24 backtest until the sweep publishes a
+# regime winner -- then drop its CHAMPION_<regime>.json into champions/ and re-run.
+# The Summary's **Regime** column labels each month R1/R2/R3/R4.
 # STEP 2a — (re)generate the FULL static archive from ALL chart history:
 python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24.txt --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7
-# STEP 2b — backtest it (regime column appears in the Summary):
+# STEP 2b — backtest the regime-switching strategy (regime column in the Summary):
 python tools/backtest_explicit.py `
   --signals generated/self_scalper24.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -75,7 +80,10 @@ python tools/backtest_explicit.py `
   --trailing-open-distance 0.0 `
   --trailing-close-distance 0.0 `
   --trailing-close-after-stage 0 `
-  --output-dir reports/ADAPTIVE_SC24_BASE `
+  --adaptive true `
+  --champions-dir champions `
+  --adaptive-window-days 20 `
+  --output-dir reports/ADAPTIVE_REGIME `
   --initial-capital 5000 `
   --start-date 2026-01-01
 
@@ -89,7 +97,7 @@ python tools/auto_explicit.py `
   --positions-json positions_adaptive_regime.json `
   --strategy-tag ADPT `
   --adaptive true `
-  --champions-dir sweep_regime_out_grid `
+  --champions-dir champions `
   --adaptive-window-days 20 `
   --watch-interval 15 `
   --mt5-symbol XAUUSD `

@@ -67,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
                               "regime from recent chart M1 and run that regime's published champion "
                               "(CHAMPION_<regime>.json under --champions-dir); falls back to these "
                               "explicit strategy flags (the incumbent) when no champion exists yet.")
-    runtime.add_argument("--champions-dir", default="sweep_regime_out_grid",
+    runtime.add_argument("--champions-dir", default="champions",
                          help="Directory holding CHAMPION_<regime>.json for --adaptive.")
     runtime.add_argument("--adaptive-window-days", type=int, default=20,
                          help="Trailing window (days) of M1 used to classify the regime.")

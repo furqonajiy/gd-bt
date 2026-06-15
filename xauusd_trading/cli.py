@@ -298,12 +298,9 @@ def _maybe_adaptive_config(args: argparse.Namespace, base_config: StrategyConfig
     (the CLI/incumbent config) when no champion exists or anything fails. Logs
     once per regime/source change so a switch is visible in the event log. Never
     raises -- a detection failure keeps the incumbent and the cycle continues."""
-    import json
-    from dataclasses import fields as _dc_fields
-
     import pandas as pd
 
-    from xauusd_trading import read_current_regime
+    from xauusd_trading import champion_config, read_current_regime
 
     try:
         m1 = chart.dataframe[["time", "open", "high", "low", "close"]].set_index("time")
@@ -316,17 +313,10 @@ def _maybe_adaptive_config(args: argparse.Namespace, base_config: StrategyConfig
         return base_config
 
     regime = reading.regime
-    champ_path = Path(getattr(args, "champions_dir", "sweep_regime_out_grid") or
-                      "sweep_regime_out_grid") / f"CHAMPION_{regime}.json"
-    config, source = base_config, "no champion yet; using incumbent"
-    if champ_path.exists():
-        try:
-            cfg_dict = json.loads(champ_path.read_text()).get("config") or {}
-            valid = {f.name for f in _dc_fields(StrategyConfig)}
-            config = StrategyConfig(**{k: v for k, v in cfg_dict.items() if k in valid})
-            source = f"champion {champ_path.name}"
-        except Exception as e:
-            source = f"champion load failed ({e}); using incumbent"
+    champ_dir = getattr(args, "champions_dir", "champions") or "champions"
+    config = champion_config(regime, champ_dir, base_config)
+    source = (f"champion {champ_dir}/CHAMPION_{regime}.json"
+              if config is not base_config else "no champion yet; using incumbent")
 
     note = f"{regime}|{source}"
     if console_state.get("__regime__") != note:
