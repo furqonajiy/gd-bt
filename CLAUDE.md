@@ -132,7 +132,12 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   restored price-aware — at market when the price is at-or-better than the
   leg's entry or its stop is already locked at/beyond entry, otherwise via a
   LIMIT at the original entry inside the pending window (never chases) — and
-  replay-open signals survive the prune. In this **reopen/mirror mode**,
+  replay-open signals survive the prune. A leg whose live position **closed in
+  the last ~3 min** (SL/lock/TP firing intrabar) is **not** re-opened — the
+  bar-close replay lags the live close by up to a bar and briefly still holds the
+  leg OPEN; the cooldown lets it catch up instead of resurrecting a just-closed
+  leg into immediate re-close (the churn). A genuinely hand-closed leg the replay
+  still holds OPEN past the cooldown is restored as normal. In this **reopen/mirror mode**,
   `place_signal` also stops skipping **partially played-out** signals: when the
   executor first meets a signal whose replay already closed some legs, it places
   the still-PENDING legs as fresh LIMITs and tracks the signal on its replay-OPEN
