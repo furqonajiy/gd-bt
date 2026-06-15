@@ -214,7 +214,9 @@ sections (Signal Auto Generator live-loop / Backtest CLI / Auto CLI; Telegram
 Listener only for the Victor feed). The current R4 champion is
 `cli_champion_R4_scalper24_no_trailing` (promoted on resynced data over
 `cli_R4_scalperwide24`); others: `cli_current_live` (Victor), `cli_R4_scalper24`,
-`cli_R4_breakout`, `cli_trailing_risk02allhours`, `cli_resync_m1_from_2020`.
+`cli_R4_breakout`, `cli_trailing_risk02allhours`, `cli_resync_m1_from_2020`, and
+`cli_adaptive_regime` (the `auto --adaptive` regime auto-switch — one executor
+that runs each regime's `CHAMPION_<regime>.json` and falls back to SC24).
 
 ## Docs to keep in sync with code
 
