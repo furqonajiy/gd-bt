@@ -61,8 +61,10 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   regime → champion config from a *trailing* window, no lookahead). Both paths use
   it: **`auto --adaptive`** (live, per cycle) and **`backtest_explicit.py
   --adaptive`** (the same switch in backtest, via `run_backtest(config_resolver=)`).
-  Champions live in **`champions/CHAMPION_<regime>.json`** (committed on main,
-  seeded with SC24 for every regime; replace one as the sweep publishes a winner).
+  Champions live in **`champions/CHAMPION_<regime>.json`** (committed on main).
+  **R4parab is the promoted sweep winner — SC24 + `tp1_lock_delay 15` ("SC24T15")**,
+  which beat SC24 on net+bonus, OOS, AND drawdown; R1quiet/R2bull/R3strong stay
+  seeded with SC24 until the sweep publishes their winners.
   `tools/regime_router.py` is a back-compat shim; `tools/regime_auto.py` is the
   one-shot advisory CLI.
 - `tests/` — `pytest` suite, heavy on live/backtest parity.
@@ -193,7 +195,7 @@ need to be told to. Non-negotiables from it: **verify the M1 data is real
 1-minute bars first** (daily/hourly bars get mislabeled as M1); the **baseline
 is a hand-seeded config, not exhaustive search**, so a sweep must both **widen
 the grid** to include the champion's values *and* **re-seed the champion** or it
-can't beat it — the live champion **SC24** is defined once in
+can't beat it — the incumbent baseline **SC24** is defined once in
 `tools/sweep.py::sc24_config()`, seeded with `sc24_neighborhood_grid()`, and is
 also the sweep's **incumbent** (`tools/incumbent_baseline.py`); **rank by
 compounded net P&L + the $3/closed-lot bonus** (`risk_net_profit_with_bonus`) at
@@ -228,8 +230,9 @@ from 2020, see the standalone `cli_resync_m1_from_2020.txt` (`fetch --months 80`
 `cli_*.txt` files are runnable deployment-command snapshots, each with the same
 sections (Signal Auto Generator live-loop / Backtest CLI / Auto CLI; Telegram
 Listener only for the Victor feed). The current R4 champion is
-`cli_champion_R4_scalper24_no_trailing` (promoted on resynced data over
-`cli_R4_scalperwide24`); others: `cli_current_live` (Victor), `cli_R4_scalper24`,
+`cli_champion_R4_scalper24_no_trailing` — **SC24 with `tp1_lock_delay 15`**
+("SC24T15"), the regime sweep's R4 winner (beats SC24 on net+bonus/OOS/DD;
+`champions/CHAMPION_R4parab.json`); others: `cli_current_live` (Victor), `cli_R4_scalper24`,
 `cli_R4_breakout`, `cli_trailing_risk02allhours`, `cli_resync_m1_from_2020`, and
 `cli_adaptive_regime` (the `auto --adaptive` regime auto-switch — one executor
 that runs each regime's `CHAMPION_<regime>.json` and falls back to SC24).
