@@ -1,5 +1,8 @@
 # =========================================================================
-# R4 (2026) CHAMPION — SCALPERWIDE24  (best DD<=40% config at $5k, regime R4)
+# R4 (2026) — SCALPERWIDE24   [SUPERSEDED 2026-06-15]
+# Was the sweep champion on the PRE-resync feed ($960k). On the RESYNCED data it
+# makes net+bonus $197,959 @ 31.6% DD — BEATEN by cli_champion_R4_scalper24_no_trailing
+# ($598,318 @ 32.8%). Kept for reference; deploy the no-trailing champion instead.
 # Detect the live regime with: python tools/regime_auto.py
 #
 # 2026 @ $5k, ranked by compounded net + $3/lot bonus at DD<=40%:

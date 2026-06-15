@@ -184,7 +184,7 @@ def render_champion_cli(cfg: dict, *, regime: str, feed: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# Full deployment CLI for a published champion (cli_champion_R4_breakout.txt format).
+# Full deployment CLI for a published champion (GENERATE/BACKTEST/LIVE deployment format).
 # --------------------------------------------------------------------------
 def _generate_command(feed: str) -> str:
     """Render the GENERATE-section command that refreshes ``feed``'s archive.
@@ -303,7 +303,7 @@ def render_live_cli(cfg: dict, *, regime: str, feed: str) -> str:
 
 def render_deployment_cli(cfg: dict, *, regime: str, feed: str,
                           edge, oos, dd) -> str:
-    """The full ``cli_champion_R4_breakout.txt``-style deployment file for a champion.
+    """The full GENERATE/BACKTEST/LIVE-style deployment file for a champion.
 
     Three sections -- GENERATE the archive feed, BACKTEST the regime slice, and
     the LIVE auto executor -- under a header comment block that names the
