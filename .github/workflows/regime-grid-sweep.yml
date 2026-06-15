@@ -445,8 +445,9 @@ jobs:
               return r.get("concurrent_risk_max_dd_pct")
 
           def keyfn(r):
-              # Rank by OOS (held-out tail) then edge, both higher-is-better.
+              # Rank by net+bonus (deploy objective), then OOS, then edge.
               return (
+                  r.get("risk_net_profit_with_bonus") or 0.0,
                   r.get("oos_fixed_no_bonus_profit") or 0.0,
                   r.get("fixed_no_bonus_profit") or 0.0,
               )
@@ -562,7 +563,7 @@ jobs:
                       rows.append(r)
               return rows
 
-          incumbents, champions = {}, {}
+          incumbents, champions, stretch = {}, {}, {}
           for regime in REGIMES:
               incumbents[regime] = cr.load_json(OUT / f"INCUMBENT_{regime}.json")
 
@@ -573,6 +574,8 @@ jobs:
               # Advance the monotonic published champion (writes CHAMPION_<regime>.json).
               champ = cr.update_champion(OUT, regime, best)
               champions[regime] = champ
+              # Stretch tier: best DD<=50% config that beats the champion by margin.
+              stretch[regime] = cr.stretch_challenger(rows, champ)
 
               # self_cli_best_<regime>.txt = runnable command for the PUBLISHED champion.
               cli_path = OUT / f"self_cli_best_{regime}.txt"
@@ -596,7 +599,7 @@ jobs:
               print(f"{regime}: incumbent={'y' if inc else 'n'} "
                     f"champion={'y' if champ else 'n'} verdict={verdict}")
 
-          md = cr.render_champions_md(REGIMES, incumbents, champions)
+          md = cr.render_champions_md(REGIMES, incumbents, champions, stretch=stretch)
           pathlib.Path("CHAMPIONS.md").write_text(md)
           print("wrote CHAMPIONS.md")
           cr.write_deployment_cli_files(pathlib.Path("."), REGIMES, champions)

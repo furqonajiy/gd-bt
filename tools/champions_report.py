@@ -42,6 +42,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 DD_GATE = 40.0
+# "Stretch" tier: a config that runs DD between the 40% deploy gate and 50% is
+# only worth surfacing if it beats the DD<=40% champion's net+bonus by a wide
+# margin (the user's "if DD 50% but a LOT more profit, consider it" rule).
+STRETCH_DD_GATE = 50.0
+STRETCH_MARGIN = 1.25   # >= +25% net+bonus over the DD<=40% champion
 LIVE_REGIME = "R4parab"
 
 # Same regime -> chart month-glob mapping the shard job and incumbent use.
@@ -99,6 +104,15 @@ def _edge(d: dict) -> float:
     return _f(d.get("fixed_no_bonus_profit"))
 
 
+def _net_bonus(d: dict) -> float:
+    # The deploy objective: compounded net P&L + $3/closed-lot bonus. Challenger
+    # rows store it as risk_net_profit_with_bonus; flattened champion/incumbent
+    # records store it as net_bonus.
+    if "net_bonus" in d:
+        return _f(d.get("net_bonus"))
+    return _f(d.get("risk_net_profit_with_bonus"))
+
+
 def _dd(d: dict):
     if "dd" in d:
         v = d.get("dd")
@@ -111,22 +125,42 @@ def _dd(d: dict):
 
 
 def strictly_beats(challenger: dict, incumbent: dict) -> bool:
-    """challenger strictly beats incumbent: higher OOS, tiebreak higher edge."""
+    """challenger strictly beats incumbent on the deploy objective: higher
+    net+bonus profit, tiebreak higher OOS (held-out tail) then edge."""
+    cb, ib = _net_bonus(challenger), _net_bonus(incumbent)
+    if cb != ib:
+        return cb > ib
     co, io = _oos(challenger), _oos(incumbent)
-    if co > io:
-        return True
-    if co == io:
-        return _edge(challenger) > _edge(incumbent)
-    return False
+    if co != io:
+        return co > io
+    return _edge(challenger) > _edge(incumbent)
 
 
 def best_challenger(rows: list[dict], dd_gate: float = DD_GATE) -> dict | None:
-    """Best DD<=gate challenger row, ranked by OOS then edge (both desc)."""
-    survivors = [r for r in rows if (_dd(r) is not None and _dd(r) <= dd_gate)]
+    """Best DD<=gate challenger row, ranked by net+bonus profit (the deploy
+    objective) then OOS then edge. OOS>0 is required as an overfit guard, so an
+    in-sample-only blowup never wins."""
+    survivors = [r for r in rows
+                 if _dd(r) is not None and _dd(r) <= dd_gate and _oos(r) > 0.0]
     if not survivors:
         return None
-    survivors.sort(key=lambda r: (_oos(r), _edge(r)), reverse=True)
+    survivors.sort(key=lambda r: (_net_bonus(r), _oos(r), _edge(r)), reverse=True)
     return survivors[0]
+
+
+def stretch_challenger(rows: list[dict], champ_40: dict | None,
+                       *, dd_gate: float = STRETCH_DD_GATE,
+                       margin: float = STRETCH_MARGIN) -> dict | None:
+    """Best DD<=``dd_gate`` (40<DD<=50) challenger whose net+bonus beats the
+    DD<=40% champion by >= ``margin``. Returns None unless such a config exists
+    AND it actually runs ABOVE the 40% gate (else it's just the 40% champion)."""
+    best = best_challenger(rows, dd_gate=dd_gate)
+    if best is None or _dd(best) is None or _dd(best) <= DD_GATE:
+        return None
+    base = _net_bonus(champ_40) if champ_40 else 0.0
+    if base > 0.0 and _net_bonus(best) < base * margin:
+        return None
+    return best
 
 
 # --------------------------------------------------------------------------
@@ -388,10 +422,11 @@ def load_json(path: Path) -> dict | None:
 def update_champion(out_dir: Path, regime: str, challenger: dict | None) -> dict | None:
     """Maybe replace CHAMPION_<regime>.json; return the published champion (or None).
 
-    The challenger row uses sweep keys (oos_fixed_no_bonus_profit, _feed, config).
-    The stored champion is a flattened record (oos/edge/dd/config/feed). A new
-    challenger only replaces the stored champion when it STRICTLY beats the stored
-    champion's oos (tiebreak edge) -- so the published deploy target is monotonic.
+    The challenger row uses sweep keys (risk_net_profit_with_bonus,
+    oos_fixed_no_bonus_profit, _feed, config). The stored champion is a flattened
+    record (net_bonus/oos/edge/dd/config/feed). A new challenger only replaces the
+    stored champion when it STRICTLY beats the stored champion's net+bonus
+    (tiebreak oos, edge) -- so the published deploy target is monotonic.
     """
     path = out_dir / f"CHAMPION_{regime}.json"
     stored = load_json(path)
@@ -407,6 +442,7 @@ def update_champion(out_dir: Path, regime: str, challenger: dict | None) -> dict
             "edge": _edge(challenger),
             "oos": _oos(challenger),
             "dd": _dd(challenger),
+            "net_bonus": _net_bonus(challenger),
             "config": challenger.get("config") or {},
             "config_json": challenger.get(
                 "config_json",
@@ -440,6 +476,7 @@ def render_champions_md(
         incumbents: dict[str, dict | None],
         champions: dict[str, dict | None],
         *,
+        stretch: dict[str, dict | None] | None = None,
         live_regime: str = LIVE_REGIME,
         dd_gate: float = DD_GATE,
         now: datetime | None = None) -> str:
@@ -453,17 +490,21 @@ def render_champions_md(
     lines.append("")
     lines.append(f"_Last updated {ts}; live regime: **{live_regime}**._")
     lines.append("")
-    lines.append("**Legend.** edge = fixed-lot no-bonus full-period P&L; "
-                 "oos = fixed-lot no-bonus held-out-tail P&L; "
+    lines.append("**Legend.** net+bonus = compounded net P&L + $3/closed-lot "
+                 "bonus (the deploy objective, ranked); oos = fixed-lot no-bonus "
+                 "held-out-tail P&L (overfit guard, must be > 0); "
                  f"dd = concurrent risk-sized max drawdown %. DD gate <= {dd_gate:.0f}%. "
                  "VERDICT is **SWITCH** only when the best DD-passing challenger's "
-                 "**oos** strictly exceeds the incumbent's (tiebreak edge); else "
+                 "**net+bonus** strictly exceeds the incumbent's (tiebreak oos); else "
                  "**HOLD**. The published champion is **monotonic** — it is only "
                  "replaced when a challenger strictly beats the stored champion, so "
-                 "this file never regresses.")
+                 "this file never regresses. A **stretch** row (DD "
+                 f"{dd_gate:.0f}–{STRETCH_DD_GATE:.0f}%) is shown only when a config "
+                 f"beats the DD<={dd_gate:.0f}% champion's net+bonus by "
+                 f"≥{(STRETCH_MARGIN - 1) * 100:.0f}%.")
     lines.append("")
-    lines.append("| regime | incumbent (edge / oos / dd) | best challenger "
-                 "(feed: edge / oos / dd) | VERDICT |")
+    lines.append("| regime | incumbent (net+bonus / oos / dd) | best challenger "
+                 "(feed: net+bonus / oos / dd) | VERDICT |")
     lines.append("|---|---|---|---|")
 
     cli_blocks: list[str] = []
@@ -474,11 +515,11 @@ def render_champions_md(
         is_live = regime == live_regime
         label = f"**{regime}**" + (" `>>> RUN THIS NOW <<<`" if is_live else "")
 
-        inc_cell = (f"{_fmt(_edge(inc))} / {_fmt(_oos(inc))} / {_fmt(_dd(inc))}%"
+        inc_cell = (f"{_fmt(_net_bonus(inc))} / {_fmt(_oos(inc))} / {_fmt(_dd(inc))}%"
                     if inc else "n/a")
 
         if champ:
-            ch_cell = (f"`{champ.get('feed')}`: {_fmt(_edge(champ))} / "
+            ch_cell = (f"`{champ.get('feed')}`: {_fmt(_net_bonus(champ))} / "
                        f"{_fmt(_oos(champ))} / {_fmt(_dd(champ))}%")
         else:
             ch_cell = f"no DD<={dd_gate:.0f}% challenger yet"
@@ -517,8 +558,31 @@ def render_champions_md(
             cli_blocks.append(
                 f"### {regime} published champion{flag}\n\n"
                 f"feed=`{champ.get('feed')}` "
-                f"edge={_fmt(_edge(champ))} oos={_fmt(_oos(champ))} "
-                f"dd={_fmt(_dd(champ))}%\n\n```bash\n" + cli_for_block + "```\n")
+                f"net+bonus={_fmt(_net_bonus(champ))} edge={_fmt(_edge(champ))} "
+                f"oos={_fmt(_oos(champ))} dd={_fmt(_dd(champ))}%\n\n```bash\n"
+                + cli_for_block + "```\n")
+
+    # Stretch tier (DD 40-50%): only the regimes where a higher-DD config beats
+    # the compliant champion's net+bonus by the configured margin.
+    stretch = stretch or {}
+    stretch_rows = [(r, stretch.get(r)) for r in regimes if stretch.get(r)]
+    if stretch_rows:
+        lines.append("")
+        lines.append(f"## Stretch candidates (DD {dd_gate:.0f}–{STRETCH_DD_GATE:.0f}%)")
+        lines.append("")
+        lines.append("_Higher net+bonus than the compliant champion, but ABOVE the "
+                     f"{dd_gate:.0f}% gate — consider only if you accept the extra "
+                     "drawdown._")
+        lines.append("")
+        lines.append("| regime | feed | net+bonus | oos | dd | x champion |")
+        lines.append("|---|---|---|---|---|---|")
+        for regime, s in stretch_rows:
+            champ = champions.get(regime)
+            base = _net_bonus(champ) if champ else 0.0
+            mult_txt = f"{_net_bonus(s) / base:.2f}x" if base > 0 else "n/a"
+            lines.append(
+                f"| {regime} | `{s.get('_feed')}` | {_fmt(_net_bonus(s))} | "
+                f"{_fmt(_oos(s))} | {_fmt(_dd(s))}% | {mult_txt} |")
 
     lines.append("")
     lines.append("## Runnable champion commands")
