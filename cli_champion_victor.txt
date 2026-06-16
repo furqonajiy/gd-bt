@@ -13,7 +13,7 @@
 # CURRENT-DATA REALITY (2026 @ $5k, resynced feed):
 #   - at risk 5% the concurrent DD is ~57.6% -> OVER the <=40% gate (not compliant);
 #   - at risk 1% it's compliant (~25% DD) but small. The deployable R4 champion is
-#   cli_champion_R4_scalper24_no_trailing (SC24T15 = SC24 + tp1-lock-delay 15).
+#   cli_champion_R4_scalper24_no_trailing (SC24T15E6 = SC24 + tp1-lock-delay 15).
 #   Run THIS (Victor) alongside it — distinct --strategy-tag (VIC vs SC24) +
 #   distinct positions json keep them isolated on one MT5 account.
 #   compounded $ are model upper bounds — they rank configs, not forecast money.
