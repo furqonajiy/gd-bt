@@ -172,3 +172,29 @@ matches live on every input that matters — **don't re-litigate this**:
 slippage is modeled. The only unmodeled cost is **swap on overnight holds**
 (~−$0.06/0.01 lot/night) — negligible except for long-`max_hold` configs. The
 sweep's numbers are trustworthy on the execution-realism axis.
+
+---
+
+## 8. The slippage calibration loop (iterate, don't re-derive)
+
+Slippage (`SWEEP_LOCK_TP1/TP2_SLIPPAGE` in `tools/sweep.base_config_dict`, today
+**2.0 / 1.0**) is the one input measured from live, and so far only from the
+clean **2026-06-16** day. Refine it by *trading the winner and remeasuring* -- a
+loop, not a one-off:
+
+1. **Sweep** with the current estimate -> pick the best config per regime (DD<=40%,
+   OOS>0, edge+bonus; see section 2). While we still have only ~1 clean day,
+   treat the estimate as uncertain and prefer winners **robust to slippage**
+   (re-score the top configs at 1.0 / 2.0 / 3.0 and keep the ones that win across
+   the range; drop configs that only win at low slippage as fragile).
+2. **Deploy stably** -- clean config, #130 churn cooldown live, no manual closes.
+   Instability (churn / mid-day config swaps / hand-closes) makes the history
+   unreconcilable, so a *stable* window is the prerequisite for clean data.
+3. **After ~2-4 weeks**, export a clean multi-week `ReportHistory` -> reconcile vs
+   the backtest (the 2026-06-16 method: match per-entry by the `[TAG-]MMDD#DD.N`
+   comment, compare exit prices; locked exits are the only gap) -> **remeasure the
+   per-stage give-back**.
+4. **Update** `SWEEP_LOCK_TP1/TP2_SLIPPAGE` (+ the champion CLI snapshots' explicit
+   `--lock-tp1/tp2-exit-slippage`) to the remeasured values.
+5. **Re-sweep** with the calibrated slippage and redeploy. Repeat -- each pass the
+   slippage (and the chosen champion) gets more trustworthy.
