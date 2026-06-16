@@ -142,6 +142,7 @@ from .core.config import (
     DEFAULT_CONFIG,
     POINT_VALUE,
     StrategyConfig,
+    lock_slippage_points,
 )
 
 # 1b. core.symbol (constants only -> depends on core.config)
@@ -285,6 +286,7 @@ from .execution.mt5_executor_trailing import Mt5Executor
 
 __all__ = [
     "CHART_TIMEZONE_OFFSET", "CONTRACT_SIZE_OZ", "DEFAULT_CONFIG", "POINT_VALUE", "StrategyConfig",
+    "lock_slippage_points",
     "SymbolSpec", "XAU_SPEC",
     "Bar", "iter_bars", "latest_bar", "load_chart", "slice_bars",
     "Signal", "compute_entries", "parse_one_signal", "parse_signal_line", "parse_signals_file",

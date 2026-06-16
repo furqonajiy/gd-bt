@@ -136,7 +136,33 @@ class StrategyConfig:
     # Backtest-only: live already realizes real slippage at the broker, so this
     # never changes live order placement. Reconciliation on 2026-06-16 measured
     # ~1-2.5 pts on LOCK_TP1 and ~1 pt on LOCK_TP2.
+    #
+    # `lock_exit_slippage_points` is the UNIFORM knob (same give-back on every
+    # lock). The two stage fields below model the measured ASYMMETRY (LOCK_TP1
+    # retraces are choppier than LOCK_TP2) and, when EITHER is >0, OVERRIDE the
+    # uniform value per stage; when both are 0 the uniform value applies to all
+    # locks. All three default 0 (idealized fill, parity preserved). These are the
+    # values the SWEEP scores against so parameters are decided on REAL fills
+    # (see tools/sweep.base_config_dict); live/decide/DEFAULT_CONFIG stay at 0.
     lock_exit_slippage_points: float = 0.0
+    lock_tp1_exit_slippage_points: float = 0.0
+    lock_tp2_exit_slippage_points: float = 0.0
 
 
 DEFAULT_CONFIG = StrategyConfig()
+
+
+def lock_slippage_points(status: str, config: "StrategyConfig") -> float:
+    """Per-stage locked-exit slippage (price units) for a triggered stop whose
+    terminal ``status`` is a lock (``LOCK_*``). LOCK_TP2 uses
+    ``lock_tp2_exit_slippage_points``; every other lock (LOCK_TP1, LOCK_HALF_TP1)
+    uses ``lock_tp1_exit_slippage_points``. When BOTH stage fields are 0 the
+    uniform ``lock_exit_slippage_points`` applies to all locks (single-knob /
+    back-compat). 0 everywhere -> 0 (idealized fill, parity). Shared by the real
+    lifecycle (``core.trailing_positions``) and its diagnostic mirror
+    (``strategy.path_analysis``)."""
+    s1 = float(getattr(config, "lock_tp1_exit_slippage_points", 0.0) or 0.0)
+    s2 = float(getattr(config, "lock_tp2_exit_slippage_points", 0.0) or 0.0)
+    if s1 <= 0 and s2 <= 0:
+        return float(getattr(config, "lock_exit_slippage_points", 0.0) or 0.0)
+    return s2 if str(status).startswith("LOCK_TP2") else s1

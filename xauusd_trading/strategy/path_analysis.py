@@ -22,6 +22,7 @@ from xauusd_trading import (
     Signal,
     CsvChartSource,
     compute_entries,
+    lock_slippage_points,
     fill_trigger,
     initial_stop_for_entry,
     iter_bars,
@@ -151,14 +152,17 @@ def _current_stop(signal: Signal, entry: EntryPath, stage: int) -> tuple[float, 
 
 def _stop_exit_fill(side: str, stop_level: float, stop_status: str,
                     bar, config: StrategyConfig) -> float:
-    """Exit price when a stop triggers. A *locked* protective stop (LOCK_TP1/
-    LOCK_TP2) fills at market on the retrace, a touch past the level, so live
-    gives back `config.lock_exit_slippage_points`. Raw SL keeps the level (its
-    fill is tick-confirmed and never market-fills below the trigger). The fill is
-    clamped to the bar's range so it never models more slip than the bar allows.
-    Default slippage 0 -> exact-level fill (preserves parity)."""
-    slip = config.lock_exit_slippage_points
-    if slip <= 0 or not stop_status.startswith("LOCK_"):
+    """Diagnostic mirror of ``core.trailing_positions._locked_exit_fill`` (the
+    real lifecycle's locked-exit pricing). A *locked* protective stop
+    (LOCK_TP1/LOCK_TP2) fills at market on the retrace, a touch past the level;
+    the give-back is per-stage (``_lock_slippage_points``: ~2 pt TP1 / ~1 pt TP2,
+    or the uniform ``lock_exit_slippage_points`` when no stage value is set). Raw
+    SL keeps the level (tick-confirmed, never fills past the trigger). Clamped to
+    the bar. Default 0 -> exact-level fill (parity)."""
+    if not str(stop_status).startswith("LOCK_"):
+        return stop_level
+    slip = lock_slippage_points(stop_status, config)
+    if slip <= 0:
         return stop_level
     if side == "BUY":
         return max(stop_level - slip, bar.low)
