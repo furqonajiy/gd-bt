@@ -102,7 +102,16 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   via CLI flags** (the full surface lives in `tools/backtest_explicit.py` /
   `tools/auto_explicit.py`). They are deliberately NOT read from environment
   vars, so `DEFAULT_CONFIG` is always reproducible regardless of shell
-  state. Don't add env-var config reads.
+  state. Don't add env-var config reads. `lock_exit_slippage_points`
+  (`--lock-exit-slippage`, default 0) is a **backtest-realism** knob: a *locked*
+  protective stop (LOCK_TP1/LOCK_TP2) fills at market on the retrace, so live
+  gives back ~1–2 pts past the lock level; setting it >0 models that in the
+  backtest (`strategy/path_analysis.py:_stop_exit_fill`, clamped to the bar,
+  raw SL/TP3 untouched). It is **backtest-only** — live realizes real broker
+  slippage, so the field never changes live order placement; default 0 keeps the
+  idealized exact-level fill and preserves parity. From the 2026-06-16
+  reconciliation: at equal lot, live tracks the backtest on entries, TP3, and SL
+  to the cent; the only gap is locked exits (~1–2.5 pts), which this knob models.
 - **Chart timezone is Eastern European (EET/EEST)** — UTC+2 in winter, UTC+3 in
   summer, switching on the EU rule (last Sunday of March / October). It is **not**
   a fixed GMT+3 (confirmed empirically from the ELEV8 archive: the weekly close
