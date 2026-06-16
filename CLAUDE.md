@@ -198,14 +198,23 @@ is a hand-seeded config, not exhaustive search**, so a sweep must both **widen
 the grid** to include the champion's values *and* **re-seed the champion** or it
 can't beat it — the incumbent baseline **SC24** is defined once in
 `tools/sweep.py::sc24_config()`, seeded with `sc24_neighborhood_grid()`, and is
-also the sweep's **incumbent** (`tools/incumbent_baseline.py`); **rank by
-compounded net P&L + the $3/closed-lot bonus** (`risk_net_profit_with_bonus`) at
-**DD ≤ 40% with OOS > 0** (the OOS guard rejects in-sample blow-ups; the
-compounded figure is a *model upper bound* that **ranks** configs, not a money
-forecast — it does reach billions/quadrillions and that is expected), plus a
-**DD 40–50% "stretch" tier** surfaced only when it beats the DD≤40% champion's
-net+bonus by ≥25%; keep **one writer per sweep branch**; and run sweeps on a
-`research/...` branch, never on `main`.
+also the sweep's **incumbent** (`tools/incumbent_baseline.py`); the grid's
+automated keyfn **ranks by compounded net P&L + the $3/closed-lot bonus**
+(`risk_net_profit_with_bonus`) at **DD ≤ 40% with OOS > 0** (the OOS guard rejects
+in-sample blow-ups; the compounded figure is a *model upper bound* that **ranks**
+configs, not a money forecast — it does reach billions/quadrillions and that is
+expected), plus a **DD 40–50% "stretch" tier** surfaced only when it beats the
+DD≤40% champion's net+bonus by ≥25%. **But the deploy/PROMOTE decision uses the
+reliable forward-fit metrics — fixed-lot `edge` (`fixed_no_bonus_profit`) and
+`OOS` (`oos_fixed_no_bonus_profit`) — NOT the compounded net+bonus when they
+disagree.** Compounded net+bonus is hypersensitive to leverage/variance and
+in-sample sequencing (a tighter SL or extra leverage inflates it without improving
+the real per-trade edge), so it *ranks* but does not *decide*: a config only wins
+if it leads on edge **and** OOS (the metrics that survive to live + fixed-lot
+trading). This is why **SC24T24E8 (entry 8) was promoted for R2bull/R3strong/R4parab
+over the net+bonus #1** (slm1.9 in R2, SC24T15E6 in R4) — those led only on the
+inflated headline while losing on edge and OOS. Keep **one writer per sweep
+branch**; and run sweeps on a `research/...` branch, never on `main`.
 
 ## Commands
 
