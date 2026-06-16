@@ -427,8 +427,25 @@ def _bucket_rows(rows: list[dict[str, Any]], key_name: str, key_fn, initial_capi
 # ---------------------------------------------------------------------------
 # Candidate generation and evaluation
 # ---------------------------------------------------------------------------
+# Locked-exit slippage the SWEEP scores against. Live can't fill a profit-lock
+# exactly at TP1/TP2 (the broker stops/freeze level rejects a stop too close to
+# price, so sl_safety clamps + ratchets it; the residual + market-fill on the
+# retrace cost a point or two). If the sweep DECIDES parameters on the idealized
+# exact-level fill, it picks an over-optimistic champion that leans too hard on
+# locked exits. The 2026-06-16 live reconciliation measured ~2 pt on LOCK_TP1
+# and ~1 pt on LOCK_TP2, so every config the sweep/incumbent scores carries this
+# overlay. DEFAULT_CONFIG / live / decide / parity tests stay at 0 (the live
+# executor places stops at exact levels; the broker — not the engine — adds the
+# slip, so the live↔backtest-model parity contract is at 0).
+SWEEP_LOCK_TP1_SLIPPAGE = 2.0
+SWEEP_LOCK_TP2_SLIPPAGE = 1.0
+
+
 def base_config_dict() -> dict[str, Any]:
-    return asdict(DEFAULT_CONFIG)
+    cfg = asdict(DEFAULT_CONFIG)
+    cfg["lock_tp1_exit_slippage_points"] = SWEEP_LOCK_TP1_SLIPPAGE
+    cfg["lock_tp2_exit_slippage_points"] = SWEEP_LOCK_TP2_SLIPPAGE
+    return cfg
 
 
 # --- SC24 incumbent + staged neighborhood --------------------------------

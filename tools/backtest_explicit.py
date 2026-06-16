@@ -352,11 +352,18 @@ def add_required_strategy_args(p: argparse.ArgumentParser) -> None:
                                "ignores it; auto_explicit.py sends the SL modify to MT5 only when the "
                                "stop improves by at least this many price units.")
     strategy.add_argument("--lock-exit-slippage", type=_positive_float, default=0.0,
-                          help="Backtest realism (price units): model the give-back when a LOCKED "
+                          help="Backtest realism (price units): UNIFORM give-back when a LOCKED "
                                "protective stop (LOCK_TP1/LOCK_TP2) fills at market on the retrace, "
                                "so the backtest's locked-winner P&L matches live. 0 keeps the "
-                               "idealized exact-level fill. ~1.5-2 matches the 2026-06-16 "
-                               "reconciliation. Backtest-only; never affects live order placement.")
+                               "idealized exact-level fill. Overridden per-stage by the two flags "
+                               "below when either is >0. Backtest-only; never affects live orders.")
+    strategy.add_argument("--lock-tp1-exit-slippage", type=_positive_float, default=0.0,
+                          help="Per-stage locked-exit slippage for LOCK_TP1 (price units). "
+                               "~2.0 per the 2026-06-16 reconciliation. >0 here or on --lock-tp2 "
+                               "overrides --lock-exit-slippage per stage.")
+    strategy.add_argument("--lock-tp2-exit-slippage", type=_positive_float, default=0.0,
+                          help="Per-stage locked-exit slippage for LOCK_TP2 (price units). "
+                               "~1.0 per the 2026-06-16 reconciliation.")
 
 
 def add_scale_out_args(p: argparse.ArgumentParser) -> None:
@@ -490,6 +497,8 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         trailing_close_distance=args.trailing_close_distance,
         trailing_close_min_step=args.trailing_close_min_step,
         lock_exit_slippage_points=args.lock_exit_slippage,
+        lock_tp1_exit_slippage_points=args.lock_tp1_exit_slippage,
+        lock_tp2_exit_slippage_points=args.lock_tp2_exit_slippage,
         scale_out_at_tp1=args.scale_out_at_tp1,
         scale_out_at_tp2=args.scale_out_at_tp2,
         bep_after_tp1=args.bep_after_tp1,

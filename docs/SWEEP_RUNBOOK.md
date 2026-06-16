@@ -69,6 +69,19 @@ or ask the user to re‑explain.
   re‑run under the same DD ≤ 40% gate. Verdict is **HOLD** (keep the current
   CLI) when the incumbent is compliant and unbeaten on compounded net +
   bonus, else **SWITCH** to the new champion.
+- **The sweep models live execution (NON‑NEGOTIABLE).** Every candidate AND the
+  incumbent are scored with **locked‑exit slippage** baked in
+  (`tools/sweep.base_config_dict` carries `lock_tp1_exit_slippage_points = 2.0`,
+  `lock_tp2_exit_slippage_points = 1.0`). Live can't fill a profit‑lock exactly at
+  TP1/TP2 (broker stops/freeze level → the executor clamps + ratchets the stop),
+  so it gives back ~2 pt (TP1) / ~1 pt (TP2) on the retrace, measured in the
+  2026‑06‑16 reconciliation. **Without this overlay the sweep DECIDES on idealized
+  fills and picks an over‑optimistic champion that leans too hard on locked
+  exits.** The slip touches only `LOCK_*` exits — raw SL and TP1/TP2/TP3 targets
+  are untouched — and is **backtest‑only** (DEFAULT_CONFIG / live / parity stay at
+  0; the broker, not the engine, adds the slip live). If you re‑seed or widen the
+  grid, the slippage rides along automatically because it lives in
+  `base_config_dict` — don't strip it to "get a bigger number."
 
 ---
 
