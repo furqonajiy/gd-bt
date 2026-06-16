@@ -1,12 +1,14 @@
 # =========================================================================
-# R4 (2026) CHAMPION — SCALPER24, NO TRAILING  (updated 2026-06-15) | tag SC24
-# scalper24 feed, e6 / slm2.1 / TP3 + SL locks, NO trailing, risk 1%, and
-# **tp1-lock-delay 15** -- the sweep-promoted R4 champion ("SC24T15E6").
-# STATUS: the regime grid sweep promoted SC24 + **tp1-lock-delay 24 -> 15** as the
-#   R4 champion (research/regime-adaptive -> champions/CHAMPION_R4parab.json). It
-#   beats the SC24 incumbent on EVERY metric on the committed feed: net+bonus
-#   $949B vs $625B, OOS 11,623 vs 11,461, and a LOWER drawdown 35.78% vs 37.08%.
-#   The only change from SC24 is the TP1 lock delay; everything else is identical.
+# R4 (2026) CHAMPION — SCALPER24, NO TRAILING  (updated 2026-06-16) | tag SC24
+# scalper24 feed, e8 / slm2.1 / TP3 + SL locks, NO trailing, risk 1%, tp1-lock-delay
+# 24 -- the sweep-promoted R4 champion ("SC24T24E8").
+# STATUS: re-promoted to SC24 + **entry_count 6 -> 8** ("SC24T24E8") on the RELIABLE
+#   forward-fit metrics (research/regime-adaptive -> champions/CHAMPION_R4parab.json).
+#   It is #1 in R4 by OOS (15,032 vs SC24T15E6 11,624) AND fixed-lot edge ($218,244
+#   vs 165,497) -- the same config that wins R2 and R3 on OOS/edge. It SUPERSEDES the
+#   earlier SC24T15E6, which led only on the compounded net+bonus mirage (a
+#   leverage/luck artifact) and a ~1.7pt lower drawdown (37.49% vs 35.78%). The only
+#   change from SC24 is entry_count 6->8; everything else is identical.
 #   compounded $ are model upper bounds (they rank configs, not forecast money).
 # LIVE FIXES IN EFFECT (auto, via --reopen-missing-positions true below): tagged
 #   compact comments SC24-0615#NN.N (#120/#121/#123), per-entry partial placement
@@ -49,7 +51,7 @@ python tools/backtest_explicit.py `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3.0 `
-  --entries 6 `
+  --entries 8 `
   --entry-ladder range_to_sl `
   --entry-sl-gap 0.5 `
   --activation-delay 2 `
@@ -59,7 +61,7 @@ python tools/backtest_explicit.py `
   --final-target TP3 `
   --lock-after-tp1 true `
   --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 15 `
+  --tp1-lock-delay-minutes 24 `
   --tp2-lock-delay-minutes 2 `
   --profit-lock-mode tp_levels `
   --bep-trigger-distance 3.0 `
@@ -70,7 +72,7 @@ python tools/backtest_explicit.py `
   --trailing-open-distance 0.0 `
   --trailing-close-distance 0.0 `
   --trailing-close-after-stage 0 `
-  --output-dir reports/SC24_T15_NO_TRAILING `
+  --output-dir reports/SC24_T24E8_NO_TRAILING `
   --initial-capital 5000 `
   --start-date 2026-01-01
 
@@ -87,7 +89,7 @@ python tools/backtest_explicit.py `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3.0 `
-  --entries 6 `
+  --entries 8 `
   --entry-ladder range_to_sl `
   --entry-sl-gap 0.5 `
   --activation-delay 2 `
@@ -97,7 +99,7 @@ python tools/backtest_explicit.py `
   --final-target TP3 `
   --lock-after-tp1 true `
   --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 15 `
+  --tp1-lock-delay-minutes 24 `
   --tp2-lock-delay-minutes 2 `
   --profit-lock-mode tp_levels `
   --bep-trigger-distance 3.0 `
@@ -108,7 +110,7 @@ python tools/backtest_explicit.py `
   --trailing-open-distance 0.0 `
   --trailing-close-distance 0.0 `
   --trailing-close-after-stage 0 `
-  --output-dir reports/SC24_T15_NO_TRAILING_JUNE `
+  --output-dir reports/SC24_T24E8_NO_TRAILING_JUNE `
   --initial-capital 5000 `
   --start-date 2026-06-01
 
@@ -135,7 +137,7 @@ python tools/auto_explicit.py `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3.0 `
-  --entries 6 `
+  --entries 8 `
   --entry-ladder range_to_sl `
   --entry-sl-gap 0.5 `
   --activation-delay 2 `
@@ -145,7 +147,7 @@ python tools/auto_explicit.py `
   --final-target TP3 `
   --lock-after-tp1 true `
   --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 15 `
+  --tp1-lock-delay-minutes 24 `
   --tp2-lock-delay-minutes 2 `
   --profit-lock-mode tp_levels `
   --bep-trigger-distance 3.0 `
