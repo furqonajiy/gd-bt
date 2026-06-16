@@ -148,6 +148,30 @@ class StrategyConfig:
     lock_tp1_exit_slippage_points: float = 0.0
     lock_tp2_exit_slippage_points: float = 0.0
 
+    # Signal risk:reward POLICY (backtest/sweep signal preprocessing; default OFF
+    # so parity + DEFAULT_CONFIG behavior are unchanged). For provider feeds whose
+    # posted TP/SL vary in quality (e.g. Victor), the sweep can FILTER weak setups
+    # and/or REWRITE the targets to our own R:R geometry, and decide on real fills.
+    # entry_edge = range_high (BUY) / range_low (SELL); base risk = |entry_edge - sl|.
+    # `signal_rr_reference` picks whether R:R is measured against that NOMINAL risk
+    # or the EFFECTIVE stop the engine uses (nominal x sl_multiplier).
+    signal_rr_reference: str = "nominal"   # "nominal" | "effective"
+    # FILTER: skip a signal whose TP1 reward:risk is below this (0 = keep all).
+    signal_min_rr: float = 0.0
+    # REWRITE: when rewrite_tp3_rr > 0, replace TP1/TP2/TP3 with
+    # entry_edge +/- rr_k * risk (0 = keep the signal's own TPs).
+    rewrite_tp1_rr: float = 0.0
+    rewrite_tp2_rr: float = 0.0
+    rewrite_tp3_rr: float = 0.0
+    # SL SOURCE: "signal" uses the provider's posted SL as the raw risk;
+    # "atr" replaces it with OUR generator's geometry -- raw risk = ATR (at the
+    # signal's bar, no lookahead) x atr_sl_mult, SL = entry_edge -/+ that. The
+    # engine still scales the raw risk by sl_multiplier (a swept dim), and any TP
+    # rewrite then uses this ATR risk. Default "signal" -> ATR off (parity).
+    sl_source: str = "signal"              # "signal" | "atr"
+    atr_period: int = 14
+    atr_sl_mult: float = 1.5
+
 
 DEFAULT_CONFIG = StrategyConfig()
 
