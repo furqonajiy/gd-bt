@@ -57,7 +57,7 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   it: **`auto --adaptive`** (live, per cycle) and **`backtest_explicit.py
   --adaptive`** (the same switch in backtest, via `run_backtest(config_resolver=)`).
   Champions live in **`champions/CHAMPION_<regime>.json`** (committed on main).
-  **R4parab is a promoted sweep winner — SC24 + `tp1_lock_delay 15` ("SC24T15")**,
+  **R4parab is a promoted sweep winner — SC24 + `tp1_lock_delay 15` ("SC24T15E6")**,
   the grid's #1 by net+bonus, which beat SC24 on OOS AND drawdown. **R3strong is
   the other promoted winner — SC24 + `entry_count 8` ("SC24T24E8", tp1_lock_delay
   stays 24)**, which tops the R3 grid on net+bonus AND OOS (+31% OOS vs SC24 e6)
@@ -230,7 +230,7 @@ from 2020, see the standalone `cli_resync_m1_from_2020.txt` (`fetch --months 80`
 sections (Signal Auto Generator live-loop / Backtest CLI / Auto CLI; Telegram
 Listener only for the Victor feed). The current R4 champion is
 `cli_champion_R4_scalper24_no_trailing` — **SC24 with `tp1_lock_delay 15`**
-("SC24T15"), the regime sweep's R4 winner (beats SC24 on net+bonus/OOS/DD;
+("SC24T15E6"), the regime sweep's R4 winner (beats SC24 on net+bonus/OOS/DD;
 `champions/CHAMPION_R4parab.json`); others: `cli_champion_victor` (Victor — feed
 `generated/victor_live.txt`, positions `positions_victor.json`, tag VIC), `cli_R4_scalper24`,
 `cli_R4_breakout`, `cli_trailing_risk02allhours`, `cli_resync_m1_from_2020`, and

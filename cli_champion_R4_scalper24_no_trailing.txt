@@ -1,7 +1,7 @@
 # =========================================================================
 # R4 (2026) CHAMPION — SCALPER24, NO TRAILING  (updated 2026-06-15) | tag SC24
 # scalper24 feed, e6 / slm2.1 / TP3 + SL locks, NO trailing, risk 1%, and
-# **tp1-lock-delay 15** -- the sweep-promoted R4 champion.
+# **tp1-lock-delay 15** -- the sweep-promoted R4 champion ("SC24T15E6").
 # STATUS: the regime grid sweep promoted SC24 + **tp1-lock-delay 24 -> 15** as the
 #   R4 champion (research/regime-adaptive -> champions/CHAMPION_R4parab.json). It
 #   beats the SC24 incumbent on EVERY metric on the committed feed: net+bonus

@@ -10,7 +10,7 @@
 #   swaps the STRATEGY CONFIG by regime; it does NOT switch the signal feed, so
 #   run it on this one feed. (Per-feed switching is a future enhancement.)
 # Champions source: ./champions/CHAMPION_<regime>.json (committed on main). Two
-#   regimes carry promoted sweep champions: R4parab = SC24T15 (SC24 + tp1-lock-delay
+#   regimes carry promoted sweep champions: R4parab = SC24T15E6 (SC24 + tp1-lock-delay
 #   24->15, the grid's #1 by net+bonus, beats SC24 on OOS AND drawdown); R3strong =
 #   SC24T24E8 (SC24 + entry_count 6->8, tp1-lock-delay stays 24, tops the R3 grid on
 #   net+bonus AND OOS, +31% OOS vs SC24 e6). R1quiet / R2bull are still SC24
@@ -41,7 +41,7 @@ python tools/live_feed_loop.py `
 # ===== 2. BACKTEST CLI =====
 # WHERE PER-REGIME PARAMS LIVE: champions/CHAMPION_<regime>.json -- ONE file per
 # regime (R1quiet / R2bull / R3strong / R4parab); --adaptive reads them. TODAY
-# R4parab = SC24T15 and R3strong = SC24T24E8 (entry 8) carry promoted sweep
+# R4parab = SC24T15E6 and R3strong = SC24T24E8 (entry 8) carry promoted sweep
 # winners; R1quiet / R2bull are still SC24 placeholders, so those two backtest the
 # SAME until the sweep advances to them (or you hand-edit a regime's CHAMPION file).
 # To give a regime DIFFERENT parameters, edit the "config" block in
