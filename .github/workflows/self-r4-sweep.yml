@@ -104,11 +104,14 @@ jobs:
           set -uo pipefail
           mkdir -p root_R4
           cp -r _artifacts/self-R4parab-* root_R4/ 2>/dev/null || true
+          # Label SC24_R4 (NOT R4parab) so the scalper winner files can never be
+          # confused with the Victor sweep's WINNER_R4parab.md / BEST_R4parab.json
+          # -- the two feed DIFFERENT live executors (SC24 tag vs VIC tag).
           python tools/victor_sweep_aggregate.py \
-            --root root_R4 --regime R4parab \
-            --out-dir self_results/R4parab --dd-gate 40 --top-n 25 || true
-          echo "==================== R4 SELF-SIGNAL WINNER ===================="
-          cat self_results/R4parab/WINNER_R4parab.md 2>/dev/null || echo "(no winner written)"
+            --root root_R4 --regime SC24_R4 \
+            --out-dir self_results/SC24_R4 --dd-gate 40 --top-n 25 || true
+          echo "============== R4 SELF-SIGNAL (SC24) WINNER =============="
+          cat self_results/SC24_R4/WINNER_SC24_R4.md 2>/dev/null || echo "(no winner written)"
       - uses: actions/upload-artifact@v4
         with:
           name: self-r4-sweep-results
