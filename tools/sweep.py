@@ -561,25 +561,36 @@ def candidate_config(rng: random.Random, *, include_trend_runner: bool,
         cfg["trend_runner_enabled"] = False
 
     if signal_policy:
-        # Provider-feed (Victor) signal R:R / SL-source dimensions. Gated so the
-        # scalper sweep is unchanged. "off" is weighted to keep the take-all
-        # baseline well represented (and let signal COUNT trade off against the
-        # $3/lot bonus). SL source: keep Victor's posted SL or derive it from ATR
-        # (our generator's geometry on his entries). Then optionally FILTER weak
-        # R:R and/or REWRITE the TPs, on the nominal or effective risk reference.
-        if rng.random() < 0.4:
+        # Provider-feed (Victor) "sweep EVERYTHING" block. Gated so the scalper
+        # sweep's space is byte-unchanged. First RE-DRAW the highest-impact levers
+        # over a WIDER range than the shared grid -- tighter stops (down to 0.6x)
+        # to lift realized R:R on Victor's tight 2024-25 TPs, and longer holds for
+        # his wide 2026 targets. Then SL source (keep his posted SL or derive it
+        # from ATR -- our generator's geometry on his entries), and FILTER and/or
+        # REWRITE the TPs on the nominal or effective risk reference. "off" stays
+        # represented so take-all (max closed lots -> max $3/lot bonus) competes.
+        cfg["sl_multiplier"] = rng.choice([0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.4,
+                                           1.6, 1.75, 1.9, 2.0, 2.1, 2.3, 2.6, 3.0])
+        cfg["max_hold_minutes"] = rng.choice([15, 30, 45, 60, 90, 120, 180, 240,
+                                              300, 420, 600, 900])
+        cfg["entry_sl_gap"] = rng.choice([0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0])
+        cfg["entry_count"] = rng.choice([1, 2, 3, 4, 5, 6, 7, 8])
+        cfg["final_target"] = rng.choice(["TP1", "TP2", "TP3", "TP3"])
+        if rng.random() < 0.5:
             cfg["sl_source"] = "atr"
-            cfg["atr_period"] = rng.choice([7, 14, 21])
-            cfg["atr_sl_mult"] = rng.choice([0.75, 1.0, 1.5, 2.0, 2.5])
-        rr_mode = rng.choice(["off", "off", "filter", "rewrite", "both"])
+            cfg["atr_period"] = rng.choice([5, 7, 10, 14, 21, 28])
+            cfg["atr_sl_mult"] = rng.choice([0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5])
+        rr_mode = rng.choice(["off", "off", "filter", "rewrite", "rewrite", "both", "both"])
         if rr_mode != "off":
             cfg["signal_rr_reference"] = rng.choice(["nominal", "effective"])
         if rr_mode in ("filter", "both"):
-            cfg["signal_min_rr"] = rng.choice([0.5, 0.7, 0.8, 1.0, 1.2, 1.5])
+            cfg["signal_min_rr"] = rng.choice([0.3, 0.5, 0.7, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5])
         if rr_mode in ("rewrite", "both"):
             cfg["rewrite_tp1_rr"], cfg["rewrite_tp2_rr"], cfg["rewrite_tp3_rr"] = rng.choice([
-                (1.0, 1.5, 2.0), (1.0, 2.0, 3.0), (1.5, 2.5, 3.5),
-                (2.0, 3.0, 4.0), (1.0, 1.8, 2.6), (1.5, 3.0, 4.5), (1.0, 2.5, 4.0),
+                (1.0, 1.5, 2.0), (1.0, 2.0, 3.0), (1.5, 2.5, 3.5), (2.0, 3.0, 4.0),
+                (1.0, 1.8, 2.6), (1.5, 3.0, 4.5), (1.0, 2.5, 4.0), (1.2, 2.0, 3.0),
+                (0.8, 1.5, 2.5), (2.0, 4.0, 6.0), (1.0, 2.0, 4.0), (3.0, 4.5, 6.0),
+                (0.6, 1.2, 2.0), (1.0, 3.0, 5.0),
             ])
 
     return cfg
