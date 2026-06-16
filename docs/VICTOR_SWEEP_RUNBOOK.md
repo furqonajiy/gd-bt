@@ -138,6 +138,8 @@ runner-after-TP3, per-entry targets.
 | `tools/sweep.py::candidate_config(signal_policy=True)` | the grid (gated so the scalper sweep is unchanged) |
 | `tools/victor_sweep_aggregate.py` | merge shards, gate, rank on edge+bonus, per-objective table |
 | `strategy/backtest.apply_signal_rr_policy` | applies filter/rewrite/ATR per signal (all default OFF → parity) |
+| `tools/reconcile_report_html.py` | reconcile an MT5 ReportHistory **HTML** vs a backtest workbook (the slippage-calibration measurement; §8) |
+| `tools/dump_mt5_spec.py` | capture the live broker spec (stops level, swap, real spread) for §7 realism |
 
 ---
 
@@ -190,10 +192,17 @@ loop, not a one-off:
 2. **Deploy stably** -- clean config, #130 churn cooldown live, no manual closes.
    Instability (churn / mid-day config swaps / hand-closes) makes the history
    unreconcilable, so a *stable* window is the prerequisite for clean data.
-3. **After ~2-4 weeks**, export a clean multi-week `ReportHistory` -> reconcile vs
-   the backtest (the 2026-06-16 method: match per-entry by the `[TAG-]MMDD#DD.N`
-   comment, compare exit prices; locked exits are the only gap) -> **remeasure the
-   per-stage give-back**.
+3. **After ~2-4 weeks**, export a clean multi-week `ReportHistory` (MT5 History
+   tab -> Report -> HTML) -> reconcile with
+   ```
+   python tools/reconcile_report_html.py --report <history.html> \
+       --backtest <reports/BEST_VIC_*.xlsx> --tag VIC
+   ```
+   It matches each live leg to its backtest entry by the `[TAG-]MMDD#DD.N`
+   comment and prints per-exit-type live-vs-backtest P&L + **avg LOCK_* slip in
+   points** (= the give-back to calibrate; SL/TP3 should be ~0), plus churn /
+   manual-close flags. Use a STABLE window -- on the churny 2026-06-15 day the
+   tool shows LOCK slip ~3-4 pt (reopen noise), vs the clean 2026-06-16 ~2.0/1.0.
 4. **Update** `SWEEP_LOCK_TP1/TP2_SLIPPAGE` (+ the champion CLI snapshots' explicit
    `--lock-tp1/tp2-exit-slippage`) to the remeasured values.
 5. **Re-sweep** with the calibrated slippage and redeploy. Repeat -- each pass the
