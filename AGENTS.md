@@ -133,6 +133,19 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   These are **backtest-only** and never change live order placement. From the
   2026-06-16 reconciliation: at equal lot, live tracks the backtest on entries,
   TP3, and SL to the cent; the only gap is locked exits, which this models.
+- **Signal R:R / SL-source policy** (`strategy/backtest.apply_signal_rr_policy`,
+  applied per-signal in `run_backtest`; **all default OFF → parity**). For
+  provider feeds whose posted TP/SL vary in quality — Victor's 2024–25 signals
+  have TP1 R:R ~0.5 (≈100% below 1:1), but he **rewrote his generator in 2026**
+  to ~1.0 / TP3 ~4.4 — the backtest/sweep can: **filter** (`signal_min_rr`, skip
+  weak setups), **rewrite** TPs (`rewrite_tp1/2/3_rr` → entry ± rr·risk), source
+  the stop from **ATR** instead of the posted SL (`sl_source="atr"`,
+  `atr_period`, `atr_sl_mult` → entry ∓ ATR·mult, i.e. our generator's geometry
+  on Victor's entries), and measure R:R on the **nominal** or **effective**
+  (×sl_multiplier) risk (`signal_rr_reference`). entry_edge = range_high (BUY) /
+  range_low (SELL). These are the Victor-sweep dimensions; **Victor's 2026 style
+  ≠ 2025, so sweep per regime** (R3=2025, R4=2026 ≈ current). Only `LOCK_*`
+  exits get slippage; this policy is orthogonal and also backtest/sweep-only.
 - **Chart timezone is Eastern European (EET/EEST)** — UTC+2 in winter, UTC+3 in
   summer, switching on the EU rule (last Sunday of March / October). It is **not**
   a fixed GMT+3 (confirmed empirically from the ELEV8 archive: the weekly close
