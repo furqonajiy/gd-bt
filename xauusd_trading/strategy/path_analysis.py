@@ -149,6 +149,22 @@ def _current_stop(signal: Signal, entry: EntryPath, stage: int) -> tuple[float, 
     return entry.initial_sl, "SL"
 
 
+def _stop_exit_fill(side: str, stop_level: float, stop_status: str,
+                    bar, config: StrategyConfig) -> float:
+    """Exit price when a stop triggers. A *locked* protective stop (LOCK_TP1/
+    LOCK_TP2) fills at market on the retrace, a touch past the level, so live
+    gives back `config.lock_exit_slippage_points`. Raw SL keeps the level (its
+    fill is tick-confirmed and never market-fills below the trigger). The fill is
+    clamped to the bar's range so it never models more slip than the bar allows.
+    Default slippage 0 -> exact-level fill (preserves parity)."""
+    slip = config.lock_exit_slippage_points
+    if slip <= 0 or not stop_status.startswith("LOCK_"):
+        return stop_level
+    if side == "BUY":
+        return max(stop_level - slip, bar.low)
+    return min(stop_level + slip, bar.high)
+
+
 def analyze_signal_path(
     signal: Signal,
     chart_df: pd.DataFrame,
@@ -245,7 +261,7 @@ def analyze_signal_path(
             if stop_hit and any_target_hit:
                 e.status = f"{stop_status}_SAME_BAR"
                 e.exit_time = bar.time
-                e.exit_price = stop_level
+                e.exit_price = _stop_exit_fill(signal.side, stop_level, stop_status, bar, config)
                 e.stop_at_exit = stop_level
                 e.events.append(f"{e.status}@{bar.time.isoformat(sep=' ')}")
                 continue
@@ -253,7 +269,7 @@ def analyze_signal_path(
             if stop_hit:
                 e.status = stop_status
                 e.exit_time = bar.time
-                e.exit_price = stop_level
+                e.exit_price = _stop_exit_fill(signal.side, stop_level, stop_status, bar, config)
                 e.stop_at_exit = stop_level
                 e.events.append(f"{stop_status}@{bar.time.isoformat(sep=' ')}")
                 continue
