@@ -18,11 +18,14 @@ or ask the user to re‑explain.
   **incumbent baseline (every regime)** is **SC24** (`e6 slm2.1 max_hold240 d24
   tp2d2`, no trailing, 1% risk), defined once in `tools/sweep.py::sc24_config()`
   and seeded as a guaranteed candidate via `sc24_neighborhood_grid()`, *not* found
-  by the random grid. The **deployable R4 champion** the sweep promoted is **SC24
-  + `tp1_lock_delay 15` ("SC24T15E6")** — it beat the SC24 baseline on R4 (net+bonus,
-  OOS, AND drawdown) and lives in `champions/CHAMPION_R4parab.json` /
-  `cli_champion_R4_scalper24_no_trailing`. SC24 (d24) stays the baseline so the
-  per-regime "did anything beat it?" comparison is stable across R4→R3→R2→R1.
+  by the random grid. The **deployable champion for R2bull, R3strong, AND R4parab**
+  is the SAME config — **SC24 + `entry_count 8` ("SC24T24E8")** — promoted on the
+  **reliable forward-fit metrics (OOS AND fixed-lot edge)**, on which it is #1 in
+  all three (it supersedes the earlier R4 pick SC24T15E6, which led only on the
+  compounded net+bonus mirage). It lives in `champions/CHAMPION_{R2bull,R3strong,
+  R4parab}.json` / `cli_champion_R4_scalper24_no_trailing`. SC24 (e6 d24) stays the
+  baseline so the per-regime "did anything beat it?" comparison is stable across
+  R4→R3→R2→R1.
 - **Sweep = search for something that beats the baseline.** It samples many
   configs and ranks them.
 - **We always SAMPLE, never exhaust.** The grid is millions of combinations;
@@ -145,7 +148,9 @@ alone beat, the baseline. The champion's `d24` (tp1‑lock‑delay = 24), `e6/e8
    seeds that grid on shard 0 so SC24 + neighbors are always evaluated. The SAME
    `sc24_config()` is the sweep's **incumbent** (`incumbent_baseline.incumbent_config`),
    so "did a challenger beat the baseline?" is exactly apples‑to‑apples. (The
-   `tp1_lock_delay 15` neighbor — "SC24T15E6" — is what won R4 and got promoted.)
+   `entry_count 8` neighbor — "SC24T24E8" — is what won R2/R3/R4 on OOS+edge and
+   got promoted; the `tp1_lock_delay 15` neighbor "SC24T15E6" led R4 only on the
+   compounded net+bonus mirage and was superseded.)
 3. Keep **trailing pinned 0** (no‑trailing sweep).
 
 > The previous "best" only beat ~6 seeds + a few hundred random draws — it is
