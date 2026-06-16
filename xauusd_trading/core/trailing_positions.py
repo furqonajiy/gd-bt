@@ -22,7 +22,7 @@ from .positions import (
     _time_exit_price,
 )
 from .triggers import fill_trigger, initial_stop_for_entry, stop_trigger, target_trigger
-from .config import CONTRACT_SIZE_OZ, StrategyConfig
+from .config import CONTRACT_SIZE_OZ, StrategyConfig, lock_slippage_points
 from .trend_runner import (
     runner_can_hold,
     should_skip_time_exit,
@@ -35,16 +35,18 @@ from .trend_runner import (
 def _locked_exit_fill(side: str, stop_level: float, status: str,
                       high: float, low: float, config: StrategyConfig) -> float:
     """Exit price when a stop triggers. A *locked* protective stop
-    (LOCK_TP1/LOCK_TP2) fills at market on the retrace, a touch past the level,
-    so live gives back ``config.lock_exit_slippage_points`` (price units). Raw SL
-    keeps the level — its fill is tick-confirmed and never market-fills past the
-    trigger. The fill is clamped to the bar's range so it never models more slip
-    than the bar allows. Default slippage 0 -> exact-level fill (preserves the
-    parity contract); set >0 only in the backtest to match live's locked-exit
-    give-back. Backtest-only: the live executor's config keeps this at 0, so live
-    order placement is unaffected."""
-    slip = float(getattr(config, "lock_exit_slippage_points", 0.0) or 0.0)
-    if slip <= 0 or not str(status).startswith("LOCK_"):
+    (LOCK_TP1/LOCK_TP2) fills at market on the retrace, a touch past the level, so
+    live gives back the configured slippage (see ``lock_slippage_points``,
+    measured ~2 pt on TP1 / ~1 pt on TP2). Raw SL keeps the level — its fill is
+    tick-confirmed and never market-fills past the trigger. The fill is clamped to
+    the bar's range so it never models more slip than the bar allows. Default
+    slippage 0 -> exact-level fill (preserves parity); set >0 only in the backtest
+    to match live's locked-exit give-back. Backtest-only: the live executor's
+    config keeps this at 0, so live order placement is unaffected."""
+    if not str(status).startswith("LOCK_"):
+        return stop_level
+    slip = lock_slippage_points(status, config)
+    if slip <= 0:
         return stop_level
     if side == "BUY":
         return max(stop_level - slip, low)

@@ -32,13 +32,15 @@ python tools/live_feed_loop.py `
   -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24_live.txt --session-start 0 --session-end 0 --signal-tz 7
 
 # ===== 2. BACKTEST CLI =====
-# --lock-exit-slippage 1.5: model the give-back on LOCKED exits so the backtest
-#   matches live. Live can't always place the protective lock exactly at TP1/TP2
-#   (broker stops/freeze level rejects a stop too close to price), so sl_safety
-#   clamps it to the best legal price and ratchets it toward the true level as
-#   price recovers; the residual window + market-fill on the retrace cost ~1-2 pts.
-#   The 2026-06-16 reconciliation measured ~2.2 pt (LOCK_TP1) / ~1.0 pt (LOCK_TP2),
-#   blended ~1.5 pt over 71 locked legs. Backtest-only; never affects live orders.
+# --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0: model the give-back
+#   on LOCKED exits so the backtest matches live. Live can't always place the
+#   protective lock exactly at TP1/TP2 (broker stops/freeze level rejects a stop
+#   too close to price), so sl_safety clamps it to the best legal price and
+#   ratchets it toward the true level as price recovers; the residual window +
+#   market-fill on the retrace cost a point or two. The 2026-06-16 reconciliation
+#   measured ~2.0 pt (LOCK_TP1, choppier first retrace) and ~1.0 pt (LOCK_TP2).
+#   These are the SAME values the sweep scores against (tools/sweep.base_config_dict)
+#   so the deployed params were DECIDED on real fills. Backtest-only; never live.
 # --- 2a. PARITY BACKTEST (regenerate full history, then backtest) ---
 # STEP 2a — (re)generate the FULL static archive generated/self_scalper24.txt
 # from ALL chart history so the backtest reflects the latest data. This is the
@@ -78,7 +80,8 @@ python tools/backtest_explicit.py `
   --tp3-lock-target TP2 `
   --trailing-open-distance 0.0 `
   --trailing-close-distance 0.0 `
-  --lock-exit-slippage 1.5 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
   --trailing-close-after-stage 0 `
   --output-dir reports/SC24_T24E8_NO_TRAILING `
   --initial-capital 5000 `
@@ -117,7 +120,8 @@ python tools/backtest_explicit.py `
   --tp3-lock-target TP2 `
   --trailing-open-distance 0.0 `
   --trailing-close-distance 0.0 `
-  --lock-exit-slippage 1.5 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
   --trailing-close-after-stage 0 `
   --output-dir reports/SC24_T24E8_NO_TRAILING_JUNE `
   --initial-capital 5000 `
@@ -166,6 +170,5 @@ python tools/auto_explicit.py `
   --tp3-lock-target TP2 `
   --trailing-open-distance 0.0 `
   --trailing-close-distance 0.0 `
-  --lock-exit-slippage 1.5 `
   --trailing-close-after-stage 0 `
   --initial-capital 5000
