@@ -12,7 +12,7 @@ be redundant. Both code paths share the same `core` modules.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -24,6 +24,72 @@ from xauusd_trading import Position, advance_bars, open_position
 from xauusd_trading import Signal
 from xauusd_trading import iter_bars, slice_bars
 from xauusd_trading.core.trend_runner import prewarm_indicators_from_dataframe
+
+
+# ---------------------------------------------------------------------------
+# signal risk:reward policy (filter / rewrite-targets; default no-op)
+# ---------------------------------------------------------------------------
+def _atr_lookup(chart_df, period: int):
+    """Return ``at(time) -> ATR`` (Wilder-style rolling mean of true range) using
+    only the last CLOSED bar at-or-before ``time`` (no lookahead), or None."""
+    import numpy as np
+    h, l, c = chart_df["high"], chart_df["low"], chart_df["close"]
+    pc = c.shift(1)
+    tr = pd.concat([h - l, (h - pc).abs(), (l - pc).abs()], axis=1).max(axis=1)
+    atr = tr.rolling(int(period), min_periods=int(period)).mean().values
+    times = chart_df["time"].values  # datetime64[ns]
+
+    def at(t):
+        idx = int(np.searchsorted(times, np.datetime64(t), side="right")) - 1
+        if idx < 0:
+            return None
+        v = atr[idx]
+        return None if v != v else float(v)  # NaN -> None
+    return at
+
+
+def apply_signal_rr_policy(sig, config: StrategyConfig, atr_value: float | None = None):
+    """Filter / rewrite a signal per the config's R:R + SL-source policy.
+
+    Returns the (possibly SL/TP-rewritten) signal, or ``None`` if filtered out by
+    ``signal_min_rr``. No-op by default (signal SL source, ``signal_min_rr`` 0,
+    ``rewrite_tp3_rr`` 0) so parity / DEFAULT_CONFIG behavior is unchanged.
+
+    entry_edge = range_high (BUY) / range_low (SELL). Raw risk is |entry_edge -
+    sl| ("signal" SL source) or ``atr_value * atr_sl_mult`` ("atr" -- which also
+    REPLACES the signal's SL with entry_edge -/+ that), then scaled by
+    ``sl_multiplier`` for the R:R reference when ``signal_rr_reference`` is
+    "effective".
+    """
+    min_rr = float(getattr(config, "signal_min_rr", 0.0) or 0.0)
+    rw3 = float(getattr(config, "rewrite_tp3_rr", 0.0) or 0.0)
+    use_atr = (getattr(config, "sl_source", "signal") == "atr"
+               and atr_value is not None and atr_value > 0.0)
+    if min_rr <= 0.0 and rw3 <= 0.0 and not use_atr:
+        return sig
+    entry = sig.range_high if sig.side == "BUY" else sig.range_low
+    if use_atr:
+        risk0 = atr_value * float(config.atr_sl_mult)
+        new_sl = entry - risk0 if sig.side == "BUY" else entry + risk0
+        sig = replace(sig, sl=new_sl)
+    else:
+        risk0 = abs(entry - sig.sl)
+    if risk0 <= 0.0:
+        return sig
+    effective = getattr(config, "signal_rr_reference", "nominal") == "effective"
+    risk = risk0 * (config.sl_multiplier if effective else 1.0)
+    if min_rr > 0.0 and abs(sig.tp1 - entry) / risk < min_rr:
+        return None
+    if rw3 > 0.0:
+        r1, r2, r3 = (config.rewrite_tp1_rr, config.rewrite_tp2_rr,
+                      config.rewrite_tp3_rr)
+        if sig.side == "BUY":
+            sig = replace(sig, tp1=entry + r1 * risk, tp2=entry + r2 * risk,
+                          tp3=entry + r3 * risk)
+        else:
+            sig = replace(sig, tp1=entry - r1 * risk, tp2=entry - r2 * risk,
+                          tp3=entry - r3 * risk)
+    return sig
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +276,12 @@ def run_backtest(
     entry_rows: list[dict] = []
     excluded: list[dict] = []
 
+    # ATR lookup only when the base config sources its SL from ATR (cheap; built
+    # once). Per-signal config_resolver SL sources beyond the base are not ATR
+    # here -- the Victor/self sweeps use a single fixed config per run.
+    atr_at = (_atr_lookup(chart_df, config.atr_period)
+              if getattr(config, "sl_source", "signal") == "atr" else None)
+
     for sig in signals:
         if chart_start is None or sig.signal_time_chart < chart_start:
             excluded.append({"signal_key": sig.signal_key, "reason": "before chart start"})
@@ -222,6 +294,13 @@ def run_backtest(
             continue
 
         sig_config = config_resolver(sig) if config_resolver is not None else config
+        transformed = apply_signal_rr_policy(
+            sig, sig_config,
+            atr_value=atr_at(sig.signal_time_chart) if atr_at is not None else None)
+        if transformed is None:
+            excluded.append({"signal_key": sig.signal_key, "reason": "below min R:R"})
+            continue
+        sig = transformed
         pos = replay_signal(sig, chart_df, equity, sig_config, contract_size)
         status, trading_pnl = position_status(pos)
         closed_lots = 0.0 if status == "OPEN" else _entry_closed_lots(pos)
