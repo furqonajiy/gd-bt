@@ -106,8 +106,12 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   (`--lock-exit-slippage`, default 0) is a **backtest-realism** knob: a *locked*
   protective stop (LOCK_TP1/LOCK_TP2) fills at market on the retrace, so live
   gives back ~1–2 pts past the lock level; setting it >0 models that in the
-  backtest (`strategy/path_analysis.py:_stop_exit_fill`, clamped to the bar,
-  raw SL/TP3 untouched). It is **backtest-only** — live realizes real broker
+  backtest — the give-back is applied in the **real lifecycle**
+  (`core/trailing_positions.py:_locked_exit_fill`, where `advance_bars` closes a
+  triggered stop; a diagnostic mirror also lives in
+  `strategy/path_analysis.py:_stop_exit_fill`), clamped to the trigger bar so it
+  never models more slip than the bar allows; **raw SL and TP1/TP2/TP3 targets
+  are untouched** (only `LOCK_*` exits slip). It is **backtest-only** — live realizes real broker
   slippage, so the field never changes live order placement; default 0 keeps the
   idealized exact-level fill and preserves parity. From the 2026-06-16
   reconciliation: at equal lot, live tracks the backtest on entries, TP3, and SL
