@@ -1,0 +1,195 @@
+name: self-scalper-sweep
+
+# Slippage-aware param sweep for the SELF-GENERATED scalper feed, sequentially
+# across regimes R4 -> R3 -> R2 in ONE run. Sequencing is by job `needs:` (rock
+# solid), NOT multi-hop workflow_run (which GitHub won't reliably chain past the
+# first hop). Dispatch it once and it walks the regimes in order:
+#
+#   r4 (8x4 shards) -> r4_agg -> r3 -> r3_agg -> r2 -> r2_agg
+#
+# Each stage generates the scalper24 feed for its window, sweeps OUR core params
+# over it (NO --signal-policy; the generator sets the SL/TP geometry), every
+# candidate carrying the locked-exit slippage overlay (2.0/1.0), and the aggregate
+# picks the winner on fixed-lot edge + $3/closed-lot bonus at DD<=40% & OOS>0.
+# Outputs are labelled SC24_R{4,3,2} -> deploy to the SC24 scalper executor (never
+# the VIC executor). Independent of the Victor sweep; queue both, the runner cap
+# serialises them.
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_candidates:
+        description: "candidates per shard"
+        default: "200"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-scalper-sweep
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  # ---------------- R4 (2026) ----------------
+  r4:
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        batch: [0, 1, 2, 3, 4, 5, 6, 7]
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate scalper24 feed (R4 2026)
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py --charts "data/XAUUSD_M1_2026"*"_ELEV8.csv" \
+            --output feed.txt --start 2026-01-01 --session-start 0 --session-end 0 --signal-tz 7
+      - name: Sweep 4 shards
+        run: |
+          set -uo pipefail
+          BASE=$(( 42 + ${{ matrix.batch }} * 4 )); MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-200}"
+          for N in 0 1 2 3; do
+            timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+              --charts "data/XAUUSD_M1_2026"*"_ELEV8.csv" --seed $((BASE + N)) --max-candidates "$MC" \
+              --output-dir "out/batch_${{ matrix.batch }}_shard${N}" --validate-months 2 \
+              --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume &
+          done; wait
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-R4-${{ matrix.batch }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r4_agg:
+    needs: r4
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "self-R4-*", path: _artifacts }
+      - name: Aggregate R4
+        run: |
+          set -uo pipefail; mkdir -p root
+          cp -r _artifacts/self-R4-* root/ 2>/dev/null || true
+          python tools/victor_sweep_aggregate.py --root root --regime SC24_R4 \
+            --out-dir results/SC24_R4 --dd-gate 40 --top-n 25 || true
+          echo "===== R4 (SC24) WINNER ====="; cat results/SC24_R4/WINNER_SC24_R4.md 2>/dev/null || echo "(none)"
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-r4-results", path: "results/**", if-no-files-found: warn }
+
+  # ---------------- R3 (2025) -- waits for R4 to fully finish ----------------
+  r3:
+    needs: r4_agg
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        batch: [0, 1, 2, 3, 4, 5, 6, 7]
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate scalper24 feed (R3 2025)
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py --charts "data/XAUUSD_M1_2025"*"_ELEV8.csv" \
+            --output feed.txt --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7
+      - name: Sweep 4 shards
+        run: |
+          set -uo pipefail
+          BASE=$(( 42 + ${{ matrix.batch }} * 4 )); MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-200}"
+          for N in 0 1 2 3; do
+            timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+              --charts "data/XAUUSD_M1_2025"*"_ELEV8.csv" --seed $((BASE + N)) --max-candidates "$MC" \
+              --output-dir "out/batch_${{ matrix.batch }}_shard${N}" --validate-months 2 \
+              --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume &
+          done; wait
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-R3-${{ matrix.batch }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r3_agg:
+    needs: r3
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "self-R3-*", path: _artifacts }
+      - name: Aggregate R3
+        run: |
+          set -uo pipefail; mkdir -p root
+          cp -r _artifacts/self-R3-* root/ 2>/dev/null || true
+          python tools/victor_sweep_aggregate.py --root root --regime SC24_R3 \
+            --out-dir results/SC24_R3 --dd-gate 40 --top-n 25 || true
+          echo "===== R3 (SC24) WINNER ====="; cat results/SC24_R3/WINNER_SC24_R3.md 2>/dev/null || echo "(none)"
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-r3-results", path: "results/**", if-no-files-found: warn }
+
+  # ---------------- R2 (2023-10..2024) -- waits for R3 ----------------
+  r2:
+    needs: r3_agg
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        batch: [0, 1, 2, 3, 4, 5, 6, 7]
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate scalper24 feed (R2 2023-10..2024)
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py \
+            --charts data/XAUUSD_M1_202310_ELEV8.csv data/XAUUSD_M1_202311_ELEV8.csv \
+                     data/XAUUSD_M1_202312_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv \
+            --output feed.txt --start 2023-10-01 --session-start 0 --session-end 0 --signal-tz 7
+      - name: Sweep 4 shards
+        run: |
+          set -uo pipefail
+          BASE=$(( 42 + ${{ matrix.batch }} * 4 )); MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-200}"
+          CHARTS="data/XAUUSD_M1_202310_ELEV8.csv data/XAUUSD_M1_202311_ELEV8.csv data/XAUUSD_M1_202312_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv"
+          for N in 0 1 2 3; do
+            timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+              --charts $CHARTS --seed $((BASE + N)) --max-candidates "$MC" \
+              --output-dir "out/batch_${{ matrix.batch }}_shard${N}" --validate-months 2 \
+              --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume &
+          done; wait
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-R2-${{ matrix.batch }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r2_agg:
+    needs: r2
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "self-R2-*", path: _artifacts }
+      - name: Aggregate R2
+        run: |
+          set -uo pipefail; mkdir -p root
+          cp -r _artifacts/self-R2-* root/ 2>/dev/null || true
+          python tools/victor_sweep_aggregate.py --root root --regime SC24_R2 \
+            --out-dir results/SC24_R2 --dd-gate 40 --top-n 25 || true
+          echo "===== R2 (SC24) WINNER ====="; cat results/SC24_R2/WINNER_SC24_R2.md 2>/dev/null || echo "(none)"
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-r2-results", path: "results/**", if-no-files-found: warn }
