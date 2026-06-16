@@ -55,7 +55,8 @@ from xauusd_trading import CsvChartSource, parse_signals_file  # noqa: E402
 FILTER_LABEL = "self_limit"  # stored in the row; not a provider filter
 
 
-def make_limit_candidates(seed: int, max_candidates: int) -> list[dict]:
+def make_limit_candidates(seed: int, max_candidates: int,
+                          *, signal_policy: bool = False) -> list[dict]:
     """sweep.candidate_config draws with trailing-open pinned to 0 (LIMIT).
 
     Pinning collapses configs that differed only in trailing_open, so we draw
@@ -84,7 +85,8 @@ def make_limit_candidates(seed: int, max_candidates: int) -> list[dict]:
     rng = random.Random(seed)
     attempts = 0
     while len(out) < max_candidates and attempts < max_candidates * 30:
-        _add(sweep.candidate_config(rng, include_trend_runner=False))
+        _add(sweep.candidate_config(rng, include_trend_runner=False,
+                                    signal_policy=signal_policy))
         attempts += 1
     return out[:max_candidates]
 
@@ -195,6 +197,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--exclude-structural-anomalies", action="store_true")
     p.add_argument("--top-n", type=int, default=20)
     p.add_argument("--resume", action="store_true")
+    p.add_argument("--signal-policy", action="store_true",
+                   help="Add provider-feed (Victor) signal R:R / SL-source "
+                        "dimensions to the grid: ATR-vs-posted SL, TP rewrite, "
+                        "R:R filter, nominal/effective reference. Off => the "
+                        "scalper sweep's candidate space is unchanged.")
     p.add_argument("--progress-every", type=int, default=10)
     return p
 
@@ -208,7 +215,8 @@ def main(argv: list[str] | None = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = output_dir / "results.jsonl"
 
-    candidates = make_limit_candidates(args.seed, args.max_candidates)
+    candidates = make_limit_candidates(args.seed, args.max_candidates,
+                                       signal_policy=args.signal_policy)
     chart = CsvChartSource(sweep._expand_chart_paths(args.charts))
     signals = parse_signals_file(signals_path)
     train, validate = sweep.split_train_validate(signals, args.validate_months)
