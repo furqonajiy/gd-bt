@@ -32,6 +32,25 @@ from .trend_runner import (
 )
 
 
+def _locked_exit_fill(side: str, stop_level: float, status: str,
+                      high: float, low: float, config: StrategyConfig) -> float:
+    """Exit price when a stop triggers. A *locked* protective stop
+    (LOCK_TP1/LOCK_TP2) fills at market on the retrace, a touch past the level,
+    so live gives back ``config.lock_exit_slippage_points`` (price units). Raw SL
+    keeps the level — its fill is tick-confirmed and never market-fills past the
+    trigger. The fill is clamped to the bar's range so it never models more slip
+    than the bar allows. Default slippage 0 -> exact-level fill (preserves the
+    parity contract); set >0 only in the backtest to match live's locked-exit
+    give-back. Backtest-only: the live executor's config keeps this at 0, so live
+    order placement is unaffected."""
+    slip = float(getattr(config, "lock_exit_slippage_points", 0.0) or 0.0)
+    if slip <= 0 or not str(status).startswith("LOCK_"):
+        return stop_level
+    if side == "BUY":
+        return max(stop_level - slip, low)
+    return min(stop_level + slip, high)
+
+
 def _entry_open_before_bar(entry: Entry, bar: Bar) -> bool:
     return entry.status == "OPEN" and entry.fill_time is not None and entry.fill_time < bar.time
 
@@ -353,7 +372,8 @@ def advance_one_bar(
             if stop_trigger(side, h, l, stop_level, sp):
                 fallback_status = _stop_status(lock_stage, stop_level, e, config)
                 status = stop_status_for(e, stop_level, fallback_status)
-                _close_entry(e, status, bar.time, stop_level, side, contract_size, stop_level)
+                exit_fill = _locked_exit_fill(side, stop_level, status, h, l, config)
+                _close_entry(e, status, bar.time, exit_fill, side, contract_size, stop_level)
             elif (target_hit and not runner_after_tp3 and not trend_runner_holds
                   and not runner_was_active and not pure_trail and _entry_open_before_bar(e, bar)):
                 _close_entry(e, config.final_target.upper(), bar.time, position.target_level,
