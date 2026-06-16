@@ -511,7 +511,8 @@ def sc24_neighborhood_grid() -> list[dict[str, Any]]:
     return out
 
 
-def candidate_config(rng: random.Random, *, include_trend_runner: bool) -> dict[str, Any]:
+def candidate_config(rng: random.Random, *, include_trend_runner: bool,
+                     signal_policy: bool = False) -> dict[str, Any]:
     cfg = base_config_dict()
     cfg.update({
         # Ranges WIDENED to include the SC24 champion's values (1% risk,
@@ -558,6 +559,28 @@ def candidate_config(rng: random.Random, *, include_trend_runner: bool) -> dict[
             cfg["trend_runner_ema_fast"], cfg["trend_runner_ema_slow"] = 21, 55
     else:
         cfg["trend_runner_enabled"] = False
+
+    if signal_policy:
+        # Provider-feed (Victor) signal R:R / SL-source dimensions. Gated so the
+        # scalper sweep is unchanged. "off" is weighted to keep the take-all
+        # baseline well represented (and let signal COUNT trade off against the
+        # $3/lot bonus). SL source: keep Victor's posted SL or derive it from ATR
+        # (our generator's geometry on his entries). Then optionally FILTER weak
+        # R:R and/or REWRITE the TPs, on the nominal or effective risk reference.
+        if rng.random() < 0.4:
+            cfg["sl_source"] = "atr"
+            cfg["atr_period"] = rng.choice([7, 14, 21])
+            cfg["atr_sl_mult"] = rng.choice([0.75, 1.0, 1.5, 2.0, 2.5])
+        rr_mode = rng.choice(["off", "off", "filter", "rewrite", "both"])
+        if rr_mode != "off":
+            cfg["signal_rr_reference"] = rng.choice(["nominal", "effective"])
+        if rr_mode in ("filter", "both"):
+            cfg["signal_min_rr"] = rng.choice([0.5, 0.7, 0.8, 1.0, 1.2, 1.5])
+        if rr_mode in ("rewrite", "both"):
+            cfg["rewrite_tp1_rr"], cfg["rewrite_tp2_rr"], cfg["rewrite_tp3_rr"] = rng.choice([
+                (1.0, 1.5, 2.0), (1.0, 2.0, 3.0), (1.5, 2.5, 3.5),
+                (2.0, 3.0, 4.0), (1.0, 1.8, 2.6), (1.5, 3.0, 4.5), (1.0, 2.5, 4.0),
+            ])
 
     return cfg
 
