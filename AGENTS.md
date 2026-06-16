@@ -75,7 +75,13 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   one-shot advisory CLI.
 - `tests/` — `pytest` suite, heavy on live/backtest parity.
 - `docs/` — `MT5_SETUP.md`, `OPERATIONS_PLAYBOOK.md`,
-  `demo_runbook_trailing_open.md`.
+  `demo_runbook_trailing_open.md`, `SWEEP_RUNBOOK.md`,
+  `VICTOR_SWEEP_RUNBOOK.md`, and **`BACKTEST_REALISM.md`** — the single source of
+  truth for what the backtest must model to match live (LOCK_TP1/TP2 slippage
+  2.0/1.0, spread, commission 0, swap, min-stop) and **what the user provides**
+  to keep it calibrated (broker spec via `tools/dump_mt5_spec.py`, a clean
+  `ReportHistory` HTML to reconcile via `tools/reconcile_report_html.py`). Read
+  it instead of re-asking what we need.
 
 ## Architecture conventions — follow these
 
