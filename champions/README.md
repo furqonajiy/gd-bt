@@ -7,7 +7,7 @@
 **Current state:** two regimes carry promoted sweep winners, two are still SC24
 placeholders:
 
-- **R4parab — `SC24T15`** (SC24 + `tp1_lock_delay 24→15`, entry 6): the grid's #1
+- **R4parab — `SC24T15E6`** (SC24 + `tp1_lock_delay 24→15`, entry 6): the grid's #1
   by net+bonus, and it beats SC24 on OOS *and* drawdown.
 - **R3strong — `SC24T24E8`** (SC24 + `entry_count 6→8`, `tp1_lock_delay 24`): tops
   the R3 grid on net+bonus AND OOS (OOS 110,907 vs SC24 e6's 84,980, +31%) at
