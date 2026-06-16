@@ -2,7 +2,7 @@
 
 **The single source of truth for "what the backtest must model to match live, and
 what the user provides to keep it that way."** Read this instead of re-explaining.
-Verified 2026-06-16 against Elev8 (account 44951024) via the live reconciliation
+Verified 2026-06-16 against the live broker spec via the live reconciliation
 + `tools/dump_mt5_spec.py`.
 
 Bottom line from the reconciliation: at equal lot, live tracks the backtest **to
