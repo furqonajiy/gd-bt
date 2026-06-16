@@ -32,21 +32,30 @@ or ask the user to re‑explain.
   each backtest over multi‑year M1 is slow. Exhaustive is physically impossible
   (years of compute). Parallelism is linear (≤ #cores); it cannot beat
   exponential combinatorics.
-- **Ranking metric (current — supersedes the old edge/OOS rule below):**
-  champions are ranked by **compounded net P&L + the $3/closed‑lot bonus**,
-  among configs that pass the **DD ≤ 40%** gate **and** a positive held‑out
-  OOS sanity gate. Trade frequency is now a *feature*, not noise: more trades
-  → more closed lots → more bonus + faster compounding, so a dense feed that
-  stays inside the DD cap is exactly what we want. The compounded figure **does**
-  reach billions/quadrillions on a dense feed — that's expected; treat it as a
-  **model upper bound that RANKS configs, not a money forecast** (the live CLIs
-  say the same). It is *not* meaningless for ranking: the **DD ≤ 40% cap** bounds
-  the leverage it can chase and the **OOS > 0 gate** rejects in‑sample‑only
-  blow‑ups, so the ordering tracks genuine compounding power, not over‑levering.
-- **Legacy metrics (still computed, now cross‑checks not the rank):**
-  - **EDGE** — fixed‑lot, sizing‑neutral profit. A *quality* cross‑check.
-  - **OOS** — profit on the held‑out last 6 months (`--validate-months 6`).
-    Used as the **OOS > 0 sanity gate**, not as the primary ordering key.
+- **Two‑stage selection — the automated *rank* vs the human *promote* decision:**
+  - **Stage 1 — automated keyfn ranks by compounded net P&L + the $3/closed‑lot
+    bonus** (`risk_net_profit_with_bonus`), among configs that pass **DD ≤ 40%**
+    **and** a positive held‑out **OOS** gate. This produces the leaderboard. The
+    compounded figure **does** reach billions/quadrillions on a dense feed — that's
+    expected; treat it as a **model upper bound that RANKS configs, not a money
+    forecast.**
+  - **Stage 2 — PROMOTE on the reliable forward‑fit metrics, NOT the compounded
+    headline.** Compounded net+bonus is hypersensitive to leverage/variance and
+    in‑sample sequencing: a tighter SL or extra leverage inflates it *without*
+    improving the real per‑trade edge, and it can rank a genuinely worse config
+    first (see the "inflated" worked examples — a 1.5‑pt win‑rate gap → a 2× headline;
+    a higher‑edge config can show a *lower* compounded number). So the champion is
+    only promoted if it leads on **both** of:
+    - **EDGE** (`fixed_no_bonus_profit`) — fixed‑lot, no‑compounding, no‑bonus profit.
+      The grounded, bankable‑proxy $; what the account makes per unit of fixed size.
+    - **OOS** (`oos_fixed_no_bonus_profit`) — fixed‑lot edge on the held‑out tail
+      (`--validate-months 2` in the regime grid). The best proxy for forward/live
+      performance, because live is always out‑of‑sample.
+  - When net+bonus and edge/OOS **disagree, edge+OOS wins.** Real example:
+    **SC24T24E8 (entry 8) was promoted for R2bull/R3strong/R4parab** even though the
+    net+bonus #1 was a different config (slm1.9 in R2, SC24T15E6 in R4) — those led
+    only on the inflated compounded headline while *losing* on edge AND OOS. The
+    universal lever across trending regimes is **more entries** (e8 > e7 > e6 on OOS).
 - **DD gate.** Candidates must keep concurrent drawdown ≤ the limit
   (`--max-concurrent-dd-pct`). Current target: **40%**, and risk is swept up
   to push each champion against that 40% DD gate.
@@ -92,7 +101,7 @@ the engine treats each row as one minute, so a daily bar corrupts the backtest.
 | Trailing | **OFF** (pinned 0) | proven to add no deployable edge (16‑feed sweep) |
 | Risk levels | **1–5%** | swept and pushed to the 40% DD gate |
 | Period | per‑regime window (see `sweep2021/REGIME_ANALYSIS.md`) | candidates **and** incumbent over the *same* window |
-| OOS | last **6 months** | `--validate-months 6` (used as the OOS > 0 gate) |
+| OOS | held‑out tail | `--validate-months 6` for the long full‑history sweep; **`2` for the regime grid** (short regime windows — e.g. R4 is only 2026, so the OOS tail is its last 2 months). Used as the OOS > 0 gate **and** the promote‑decision metric. |
 | Feeds | scalper24, scalperwide24, risk02allhours (3 HIGH‑FREQ self‑scalpers) + adaptive / breakout / meanrev | high‑frequency, 24h, loose filters → more closed lots |
 | Candidates/feed | 300 (Phase 1) | **(ASK)** bump to 600 for denser coverage |
 | Run model | in‑container (free) OR GitHub‑paid | **(ASK)** — see §6 |
@@ -253,15 +262,19 @@ echo "$(date -u +%H:%M)Z $up <feed>=$n/300"
 1. **Verify M1 data first** — daily/hourly bars get mislabeled as M1.
 2. **Baseline is a seeded config, not exhaustive** — the grid must include its
    values AND it must be re‑seeded, or the sweep can't reach it.
-3. **Rank on compounded net + $3/closed‑lot bonus** (`risk_net_profit_with_bonus`;
-   this *supersedes* the old "rank by OOS/edge, never compounded net" guidance).
+3. **Rank on compounded net + $3/closed‑lot bonus** to build the leaderboard
+   (`risk_net_profit_with_bonus`), but **PROMOTE the champion on fixed‑lot edge +
+   OOS** (the reliable forward‑fit metrics) when they disagree with the compounded
+   headline — compounded net+bonus is inflated by leverage/variance and ranks but
+   does not decide (see "Two‑stage selection" above; SC24T24E8 was promoted across
+   R2/R3/R4 over the net+bonus #1 on exactly this rule).
    The compounded figure **does** reach billions/quadrillions on a dense feed
    (1% of a growing balance over thousands of signals) — that is expected and it
    is a **model upper bound that RANKS configs, not a money forecast**. The
    **DD ≤ 40% cap + OOS > 0 gate** keep the ranking honest: DD bounds the risk it
-   can chase and OOS rejects in‑sample‑only blow‑ups; edge/OOS are cross‑checks,
-   and risk is swept 1–5% (down to 1%) up to the DD gate. A **DD 40–50% "stretch"
-   tier** is also published when a config beats the DD≤40% champion's net+bonus
+   can chase and OOS rejects in‑sample‑only blow‑ups; edge/OOS are the deciding
+   metrics, and risk is swept 1–5% (down to 1%) up to the DD gate. A **DD 40–50%
+   "stretch" tier** is also published when a config beats the DD≤40% champion's net+bonus
    by ≥25% (`champions_report.stretch_challenger`). Sweep one regime at a time,
    R4 → R3 → R2 → R1.
 4. **In‑container pauses when idle** and costs Claude tokens to keep warm;
