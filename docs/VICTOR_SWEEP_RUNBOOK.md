@@ -151,3 +151,24 @@ runner-after-TP3, per-entry targets.
 3. `gh workflow run victor-sweep.yml -f max_candidates=<N>`; widen
    `candidate_config` first if you want denser/broader coverage.
 4. Read §2, deploy §3. Done — no rebuild.
+
+---
+
+## 7. Backtest realism vs Elev8 live (verified 2026-06-16)
+
+Captured with `tools/dump_mt5_spec.py` against the live XAUUSD symbol. The backtest
+matches live on every input that matters — **don't re-litigate this**:
+
+| Live spec (Elev8) | Value | Backtest status |
+|---|---|---|
+| **Stops level** (min SL distance) | **0.40** price units (40 pts) | tiny — our tightest configs (sl_mult 0.6 → ~1–2 price-unit stops) sit well above it, so **no tight-stop config is unplaceable**. Floor is effectively non-binding (base stop = `(entry−SL)×sl_mult` is never that small). |
+| **Spread** | median **0.28** (p99 0.34) | **already modeled** — the M1 CSV carries the broker's own per-bar `<SPREAD>` (median 0.25), used as `spread_price`. ≈ live to ~3 cents. ✅ |
+| **Commission** | 0.00 in deal history | commission-free / in-spread → nothing to model. ✅ |
+| Locked-exit slippage | ~2.0 / ~1.0 (TP1/TP2) | modeled via `lock_tp1/tp2_exit_slippage_points` (from the live reconciliation). ✅ |
+| **Swap** long/short | −5.83 / −2.65 per lot/night (~−$0.06 per 0.01 lot) | **NOT modeled.** Second-order; only bites configs whose `max_hold` crosses the 22:00 rollover. Flag long-hold winners; model only if a winner depends on overnight holds. |
+| digits 2 · point 0.01 · contract 100 · tick 0.01=$1/lot · lev 1:1000 · stop-out 15% | — | confirms P&L math; leverage non-binding at 0.01–0.02 lots. |
+
+**Verdict:** entries, TP3, SL, spread, and commission match live; locked-exit
+slippage is modeled. The only unmodeled cost is **swap on overnight holds**
+(~−$0.06/0.01 lot/night) — negligible except for long-`max_hold` configs. The
+sweep's numbers are trustworthy on the execution-realism axis.
