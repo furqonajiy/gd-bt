@@ -78,6 +78,7 @@ python tools/backtest_explicit.py `
   --tp3-lock-target TP2 `
   --trailing-open-distance 0 `
   --trailing-close-distance 0 `
+  --lock-exit-slippage 1.5 `
   --trailing-close-after-stage 0 `
   --start-date 2026-01-01 `
   --output-dir reports/BEST_VIC_2026 `
@@ -120,6 +121,7 @@ python tools/auto_explicit.py `
   --tp3-lock-target TP2 `
   --trailing-open-distance 0 `
   --trailing-close-distance 0 `
+  --lock-exit-slippage 1.5 `
   --trailing-close-after-stage 0 `
   --replace-missing-entries true `
   --reopen-missing-positions true `
