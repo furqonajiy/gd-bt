@@ -128,5 +128,15 @@ class StrategyConfig:
     runner_after_tp3: bool = False
     tp3_lock_target: str = "TP2"
 
+    # Backtest realism: a *locked* protective stop (LOCK_TP1/LOCK_TP2) is a stop
+    # order that fills at market when price retraces through it, so live gives back
+    # a point or two past the lock level. The backtest idealizes the fill AT the
+    # level; set this >0 (price units) to model that give-back so the backtest's
+    # locked-winner P&L matches live. 0 keeps the idealized fill (parity default).
+    # Backtest-only: live already realizes real slippage at the broker, so this
+    # never changes live order placement. Reconciliation on 2026-06-16 measured
+    # ~1-2.5 pts on LOCK_TP1 and ~1 pt on LOCK_TP2.
+    lock_exit_slippage_points: float = 0.0
+
 
 DEFAULT_CONFIG = StrategyConfig()
