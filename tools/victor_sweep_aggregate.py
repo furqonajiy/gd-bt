@@ -64,6 +64,21 @@ def _objective(r: dict) -> float:
     return _f(v) if v is not None else _f(r.get("fixed_no_bonus_profit"))
 
 
+# Headline metrics to surface the per-objective best of, so the winner under
+# EACH lens can be compared ("net profit's not bad -> execute"). All share the
+# same hard gates (DD<=gate & OOS>0); they only differ in what they MAXIMIZE.
+OBJECTIVES = [
+    ("net+bonus (compounded)", lambda r: _f(r.get("risk_net_profit_with_bonus"))),
+    ("edge+bonus (fixed)", _objective),
+    ("edge (fixed)", lambda r: _f(r.get("fixed_no_bonus_profit"))),
+    ("OOS (held-out)", lambda r: _f(r.get("oos_fixed_no_bonus_profit"))),
+]
+
+
+def best_per_objective(surv: list[dict]) -> list[tuple[str, dict]]:
+    return [(name, max(surv, key=fn)) for name, fn in OBJECTIVES] if surv else []
+
+
 def survivors(rows: list[dict], dd_gate: float) -> list[dict]:
     out = []
     for r in rows:
@@ -131,6 +146,29 @@ def main(argv: list[str] | None = None) -> int:
     bc = best.get("config") or {}
     json.dump(bc, open(out / f"BEST_{args.regime}.json", "w"), indent=2, sort_keys=True)
 
+    # Best config under EACH objective, side by side, so the user can compare
+    # (e.g. accept a slightly-lower-edge config because its net profit is great).
+    lines.append("## Best config per objective (all gated DD<=%.0f%% & OOS>0)" % args.dd_gate)
+    lines.append("")
+    lines.append("| MAX of | edge $ | edge+bonus $ | OOS $ | net+bonus $ | DD % | config |")
+    lines.append("|---|---:|---:|---:|---:|---:|---|")
+    seen_obj = {}
+    for name, r in best_per_objective(surv):
+        seen_obj[name] = r
+        lines.append(
+            f"| **{name}** | {_f(r.get('fixed_no_bonus_profit')):,.0f} | "
+            f"{_objective(r):,.0f} | {_f(r.get('oos_fixed_no_bonus_profit')):,.0f} | "
+            f"{_f(r.get('risk_net_profit_with_bonus')):,.0f} | "
+            f"{_f(r.get('concurrent_risk_max_dd_pct')):.1f} | "
+            f"`{_cfg_brief(r.get('config') or {})}` |")
+        # dump each objective's deployable config
+        safe = name.split()[0].replace("+", "_")
+        json.dump(r.get("config") or {},
+                  open(out / f"BEST_{args.regime}_{safe}.json", "w"),
+                  indent=2, sort_keys=True)
+    lines.append("")
+    lines.append("## Full leaderboard (ranked by edge + $3/lot bonus)")
+    lines.append("")
     lines.append("| # | edge+bonus $ | edge $ | bonus $ | OOS $ | DD % | compounded $ | config |")
     lines.append("|---|---:|---:|---:|---:|---:|---:|---|")
     for i, r in enumerate(surv[:args.top_n], 1):
