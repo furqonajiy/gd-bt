@@ -86,10 +86,11 @@ jobs:
         feed: [adA_base, adB_tightSL, adC_wideSL, adD_closeTP, adE_farTP, adF_tightSL_closeTP, adG_wideSL_farTP, breakout, meanrev, scalper24, scalperwide24, risk02allhours]
         regime: [R2bull]
     runs-on: ubuntu-latest
-    timeout-minutes: 350   # near GitHub's 6h job cap: let a cell finish all 120
-                           # candidates/shard in ONE round instead of many 55-min
-                           # hops. A fast cell still exits early; --resume + the
-                           # always-on artifact upload keep a long round crash-safe.
+    timeout-minutes: 70   # ~55-min shard box + headroom: commit progress EVERY
+                          # round so the research branch shows an hourly heartbeat
+                          # (vital for slow 15-22 month regimes like R2/R1). --resume
+                          # chains the next round; a longer single round buys little
+                          # net throughput but blacks out progress for hours.
     steps:
       - name: Checkout research branch
         uses: actions/checkout@v5
@@ -196,15 +197,15 @@ jobs:
         run: |
           # Launch FOUR sweep shards (seeds 42..45) into shard0..shard3/ on the
           # runner's 4 cores, then wait. Each shard uses --resume to continue
-          # from the checked-out results.jsonl, and a ~5.6h box (timeout 20400)
-          # under the 350-min job cap lets even the slow 15-month R2bull window
-          # reach 120 candidates/shard in ONE round (no multi-round chaining
-          # overhead). A shard that finishes its 120 exits immediately. $CHARTS is
-          # intentionally unquoted so the shell expands the glob.
-          # 120 candidates/shard x 4 shards = ~480 candidates/cell.
+          # from the checked-out results.jsonl, and a 55-min box (timeout 3300)
+          # under the 70-min job cap hands off to the next chained pass so the
+          # aggregate commits a progress checkpoint EVERY round (hourly heartbeat).
+          # $CHARTS is intentionally unquoted so the shell expands the glob.
+          # 120 candidates/shard x 4 shards = ~480 candidates/cell accumulated
+          # over chained rounds.
           CELL="sweep_regime_out_grid/${{ matrix.feed }}__${{ matrix.regime }}"
           for N in 0 1 2 3; do
-            timeout 20400 python tools/sweep_self_limit.py \
+            timeout 3300 python tools/sweep_self_limit.py \
               --signals "$FEED" \
               --charts $CHARTS \
               --seed $((42 + N)) \
