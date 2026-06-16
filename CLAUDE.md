@@ -230,7 +230,11 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
 
 When asked to run/redo a parameter sweep (after a strategy change, an engine
 bug fix, or new chart data), follow **`docs/SWEEP_RUNBOOK.md`** by default — no
-need to be told to. Non-negotiables from it: **verify the M1 data is real
+need to be told to. **For the Victor feed specifically, follow
+`docs/VICTOR_SWEEP_RUNBOOK.md`** — the slippage-aware, per-regime (R3=2025,
+R4=2026; Victor rewrote his generator in 2026), edge+$3/lot-bonus-ranked
+`victor-sweep.yml` workflow + signal R:R/ATR policy. Don't rebuild it; run it.
+Non-negotiables from `SWEEP_RUNBOOK.md`: **verify the M1 data is real
 1-minute bars first** (daily/hourly bars get mislabeled as M1); the **baseline
 is a hand-seeded config, not exhaustive search**, so a sweep must both **widen
 the grid** to include the champion's values *and* **re-seed the champion** or it
