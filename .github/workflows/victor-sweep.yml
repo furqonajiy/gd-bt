@@ -17,8 +17,12 @@ name: victor-sweep
 # decided) via tools/victor_sweep_aggregate.py. Results are artifacts only (no
 # branch writes), so there is no push collision between the parallel jobs.
 #
-# Stage 1 (this workflow): sweep params over ALL Victor signals. Stage 2
-# (selection filters) is a follow-up that adds a filter dimension to the grid.
+# COMPREHENSIVE: with --signal-policy every shard also explores the signal R:R /
+# SL-source dimensions (filter weak R:R, rewrite TPs to our geometry, source the
+# SL from ATR, nominal-vs-effective reference) alongside the full param grid, so
+# the take-all-vs-selective and Victor-TP-vs-our-geometry trade-offs are all in
+# one sweep. The aggregate ranks on fixed-lot edge + $3/closed-lot bonus (more
+# closed signals scores higher) guarded by DD<=40% & OOS>0.
 
 on:
   workflow_dispatch:
@@ -41,10 +45,12 @@ jobs:
   sweep:
     strategy:
       fail-fast: false
-      max-parallel: 20
+      max-parallel: 20   # GitHub free public concurrency cap
       matrix:
         regime: [R3strong, R4parab]
-        batch: [a, b]
+        # 8 seed-batches/regime x 4 shards/job = 64 shards exploring the full
+        # params x R:R x ATR space in parallel ("sweep everything, fast").
+        batch: [0, 1, 2, 3, 4, 5, 6, 7]
     runs-on: ubuntu-latest
     timeout-minutes: 330
     steps:
@@ -69,11 +75,7 @@ jobs:
       - name: Run 4 shards in parallel (all 4 runner cores, resumable)
         run: |
           set -uo pipefail
-          case "${{ matrix.batch }}" in
-            a) BASE=42 ;;
-            b) BASE=46 ;;
-            *) echo "unknown batch"; exit 1 ;;
-          esac
+          BASE=$(( 42 + ${{ matrix.batch }} * 4 ))
           MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-120}"
           CELL="victor_out/${{ matrix.regime }}"
           for N in 0 1 2 3; do
@@ -86,6 +88,7 @@ jobs:
               --validate-months 2 \
               --max-concurrent-dd-pct 40 \
               --fixed-lot 0.01 \
+              --signal-policy \
               --resume &
           done
           wait
