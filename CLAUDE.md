@@ -57,9 +57,13 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   it: **`auto --adaptive`** (live, per cycle) and **`backtest_explicit.py
   --adaptive`** (the same switch in backtest, via `run_backtest(config_resolver=)`).
   Champions live in **`champions/CHAMPION_<regime>.json`** (committed on main).
-  **R4parab is the promoted sweep winner — SC24 + `tp1_lock_delay 15` ("SC24T15")**,
-  which beat SC24 on net+bonus, OOS, AND drawdown; R1quiet/R2bull/R3strong stay
-  seeded with SC24 until the sweep publishes their winners.
+  **R4parab is a promoted sweep winner — SC24 + `tp1_lock_delay 15` ("SC24T15")**,
+  the grid's #1 by net+bonus, which beat SC24 on OOS AND drawdown. **R3strong is
+  the other promoted winner — SC24 + `entry_count 8` ("SC24T24E8", tp1_lock_delay
+  stays 24)**, which tops the R3 grid on net+bonus AND OOS (+31% OOS vs SC24 e6)
+  at DD ≤ 40% — in the strong-trend regime the lever is *more entries*, not the
+  tp1-delay. R1quiet/R2bull stay seeded with SC24 until the sweep publishes their
+  winners.
   `tools/regime_router.py` is a back-compat shim; `tools/regime_auto.py` is the
   one-shot advisory CLI.
 - `tests/` — `pytest` suite, heavy on live/backtest parity.
