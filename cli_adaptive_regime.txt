@@ -9,12 +9,14 @@
 # Feed: scalper24 (the dense intraday feed SC24 is the R4 champion of). --adaptive
 #   swaps the STRATEGY CONFIG by regime; it does NOT switch the signal feed, so
 #   run it on this one feed. (Per-feed switching is a future enhancement.)
-# Champions source: ./champions/CHAMPION_<regime>.json (committed on main). Two
-#   regimes carry promoted sweep champions: R4parab = SC24T15E6 (SC24 + tp1-lock-delay
-#   24->15, the grid's #1 by net+bonus, beats SC24 on OOS AND drawdown); R3strong =
-#   SC24T24E8 (SC24 + entry_count 6->8, tp1-lock-delay stays 24, tops the R3 grid on
-#   net+bonus AND OOS, +31% OOS vs SC24 e6). R1quiet / R2bull are still SC24
-#   placeholders until the sweep advances to them. As each regime gets a validated
+# Champions source: ./champions/CHAMPION_<regime>.json (committed on main). The
+#   three completed regimes all promote the SAME config: R2bull = R3strong =
+#   R4parab = SC24T24E8 (SC24 + entry_count 6->8, tp1-lock-delay stays 24) -- it is
+#   #1 on the reliable forward-fit metrics (OOS AND fixed-lot edge) in every one of
+#   them (R2 OOS 52,831 / R3 110,907 / R4 15,032) at DD<=40%; the universal lever is
+#   more entries (e8>e7>e6 on OOS). It supersedes the earlier R4 pick SC24T15E6,
+#   which led only on the compounded net+bonus mirage. R1quiet is still an SC24
+#   placeholder until the sweep advances to it. As each regime gets a validated
 #   winner, drop its CHAMPION_<regime>.json into champions/ and both the backtest
 #   (--adaptive) and this live executor pick it up.
 # compounded $ are model upper bounds — they rank configs, not forecast money.
@@ -41,9 +43,9 @@ python tools/live_feed_loop.py `
 # ===== 2. BACKTEST CLI =====
 # WHERE PER-REGIME PARAMS LIVE: champions/CHAMPION_<regime>.json -- ONE file per
 # regime (R1quiet / R2bull / R3strong / R4parab); --adaptive reads them. TODAY
-# R4parab = SC24T15E6 and R3strong = SC24T24E8 (entry 8) carry promoted sweep
-# winners; R1quiet / R2bull are still SC24 placeholders, so those two backtest the
-# SAME until the sweep advances to them (or you hand-edit a regime's CHAMPION file).
+# R2bull = R3strong = R4parab = SC24T24E8 (entry 8) -- the OOS/edge winner promoted
+# for all three trending regimes; only R1quiet is still an SC24 placeholder, so it
+# backtests as SC24 until the sweep advances to it (or you hand-edit its CHAMPION file).
 # To give a regime DIFFERENT parameters, edit the "config" block in
 # champions/CHAMPION_<regime>.json -- do NOT duplicate params across commands.
 # Regime windows (the sweep's slices): R1quiet 2021-11..2023-09 | R2bull

@@ -57,13 +57,15 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   it: **`auto --adaptive`** (live, per cycle) and **`backtest_explicit.py
   --adaptive`** (the same switch in backtest, via `run_backtest(config_resolver=)`).
   Champions live in **`champions/CHAMPION_<regime>.json`** (committed on main).
-  **R4parab is a promoted sweep winner — SC24 + `tp1_lock_delay 15` ("SC24T15E6")**,
-  the grid's #1 by net+bonus, which beat SC24 on OOS AND drawdown. **R3strong is
-  the other promoted winner — SC24 + `entry_count 8` ("SC24T24E8", tp1_lock_delay
-  stays 24)**, which tops the R3 grid on net+bonus AND OOS (+31% OOS vs SC24 e6)
-  at DD ≤ 40% — in the strong-trend regime the lever is *more entries*, not the
-  tp1-delay. R1quiet/R2bull stay seeded with SC24 until the sweep publishes their
-  winners.
+  **All three completed regimes (R2bull, R3strong, R4parab) promote the SAME
+  config — SC24 + `entry_count 8` ("SC24T24E8", tp1_lock_delay stays 24)** —
+  because it is **#1 on the reliable forward-fit metrics (OOS *and* fixed-lot
+  edge)** in every one of them (R2 OOS 52,831 / R3 110,907 / R4 15,032), at
+  DD ≤ 40%. The universal lever is *more entries* (e8 > e7 > e6 on OOS
+  everywhere), not the SL multiplier or tp1-delay. SC24T24E8 **supersedes the
+  earlier R4 pick SC24T15E6**, which led only on the compounded net+bonus mirage
+  (and a ~1.7 pt lower DD), not on OOS/edge. R1quiet stays seeded with SC24 until
+  the sweep advances to it.
   `tools/regime_router.py` is a back-compat shim; `tools/regime_auto.py` is the
   one-shot advisory CLI.
 - `tests/` — `pytest` suite, heavy on live/backtest parity.
@@ -229,9 +231,9 @@ from 2020, see the standalone `cli_resync_m1_from_2020.txt` (`fetch --months 80`
 `cli_*.txt` files are runnable deployment-command snapshots, each with the same
 sections (Signal Auto Generator live-loop / Backtest CLI / Auto CLI; Telegram
 Listener only for the Victor feed). The current R4 champion is
-`cli_champion_R4_scalper24_no_trailing` — **SC24 with `tp1_lock_delay 15`**
-("SC24T15E6"), the regime sweep's R4 winner (beats SC24 on net+bonus/OOS/DD;
-`champions/CHAMPION_R4parab.json`); others: `cli_champion_victor` (Victor — feed
+`cli_champion_R4_scalper24_no_trailing` — **SC24 with `entry_count 8`**
+("SC24T24E8"), the OOS/edge winner across R2/R3/R4
+(`champions/CHAMPION_R4parab.json`); others: `cli_champion_victor` (Victor — feed
 `generated/victor_live.txt`, positions `positions_victor.json`, tag VIC), `cli_R4_scalper24`,
 `cli_R4_breakout`, `cli_trailing_risk02allhours`, `cli_resync_m1_from_2020`, and
 `cli_adaptive_regime` (the `auto --adaptive` regime auto-switch — one executor
