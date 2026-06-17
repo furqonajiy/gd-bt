@@ -112,6 +112,25 @@ separate from the strategy the sweep picks).
 
 ---
 
+## 3b. ENTRY-FEATURE sweep (RSI / Bollinger / ADX / VWAP / HTF / S-R)
+
+Victor signals are *received*, not generated, so the scalper generator's
+entry-feature filters can't be applied at generation time. Instead
+`tools/filter_provider_signals_by_indicator.py` computes the **same** indicators
+(reusing `generate_scalper_signals._add_indicators` / `_entry_filters_ok`) on the
+chart and keeps a Victor signal only if its bar passes the filter — output is the
+provider feed format (drop-in for backtest/sweep/live). Run
+`.github/workflows/victor-entry-feature-sweep.yml` (dispatch): for each variant
+(base/rsi/adx12/18/25/pctb/bbsqueeze/vwap/htf15/60/sr/adx12rsi/adx12pctb/combo) it
+filters `victor_signals.txt` for the 2026/R4 window, sweeps the full strategy
+grid over the filtered feed (geometry-only, no `--signal-policy` — isolates the
+entry-feature effect against the deployed "[Victor TP/SL as-is]" champion), and
+the aggregate keeps a variant **only if it beats the unfiltered `base` feed on
+BOTH edge AND OOS at DD≤40%** (same bar as the R4 scalper entry-feature sweep).
+A follow-up full `victor-sweep --signal-policy` can then refine the winning feed.
+
+---
+
 ## 4. The grid (what's swept vs fixed)
 
 **Swept** (random, per shard): risk, entry_count, entry_ladder, entry_sl_gap,
