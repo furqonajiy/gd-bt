@@ -62,6 +62,16 @@ def build_parser() -> argparse.ArgumentParser:
                               "but that is missing from MT5 (e.g. closed by hand), with the replay's "
                               "lot, its current effective stop, and the leg's target — live keeps "
                               "mirroring the backtest until the replay itself exits the leg.")
+    runtime.add_argument("--apply-signal-edits", choices=["true", "false"], default="false",
+                         help="Consume the listener's signal-overrides journal each cycle: on a "
+                              "provider EDIT flatten the live order and re-place it at the corrected "
+                              "levels (close-and-reopen); on a DELETE flatten and untrack it. Enable "
+                              "only on the executor whose feed the Telegram listener writes (e.g. the "
+                              "VIC executor); leave 'false' for a self-feed scalper with no listener.")
+    runtime.add_argument("--signal-overrides-file", default="signal_overrides.jsonl",
+                         help="Path to the listener's append-only edit/delete journal (default: "
+                              "signal_overrides.jsonl). Only read when --apply-signal-edits true; a "
+                              "per-executor byte-offset sidecar next to it tracks consumption.")
     runtime.add_argument("--adaptive", choices=["true", "false"], default="false",
                          help="Auto-switch by regime: each cycle classify the current volatility "
                               "regime from recent chart M1 and run that regime's published champion "

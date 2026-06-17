@@ -177,6 +177,21 @@ class SignalRegistry:
         entries.append(record)
         self.save(entries)
 
+    def remove(self, signal_key: str) -> bool:
+        """Drop the entry for ``signal_key`` (tagged). Returns True if removed.
+
+        Used when a provider edit/delete flattens a signal: the executor untracks
+        it so the next cycle's replay no longer manages stale orders, and (for an
+        edit) so the candidate pass treats the corrected feed line as placeable
+        again.
+        """
+        entries = self.load()
+        kept = [e for e in entries if e.get("signal_key") != signal_key]
+        if len(kept) != len(entries):
+            self.save(kept)
+            return True
+        return False
+
     def prune(self, alive_magics: set[int]) -> int:
         """Remove entries whose magic is not in alive_magics. Returns count removed."""
         entries = self.load()
