@@ -439,6 +439,16 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         for _ideal, actual, _exec_at in tracked:
             log.merge(executor.reopen_missing_open_positions(actual, config))
 
+    # Optional provider edit/delete bridge: consume the listener's
+    # signal_overrides journal so live MT5 follows the corrected feed. revoke =
+    # flatten; amend = flatten + re-place corrected (close-and-reopen). Run before
+    # the candidate pass so an amended signal (now untracked) is re-placed below
+    # and a revoked one is held out of placement. Bool / "true"/"false" tolerant.
+    _ase = getattr(args, "apply_signal_edits", False)
+    revoked_keys: set[str] = set()
+    if _ase is True or str(_ase).lower() == "true":
+        revoked_keys = _orig._consume_signal_overrides(args, executor, registry, log=log)
+
     try:
         all_signals = parse_signals_file(signals_path, tag=getattr(args, "strategy_tag", "") or "")
     except Exception as e:
@@ -453,6 +463,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         s for s in all_signals
         if s.signal_time_chart > age_cutoff
            and s.signal_key not in existing_keys
+           and s.signal_key not in revoked_keys
     ]
     candidates.sort(key=lambda s: s.signal_time_chart)
 
