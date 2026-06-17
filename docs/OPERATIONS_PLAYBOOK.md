@@ -217,12 +217,32 @@ and appends each new Victor signal. Parse failures get quarantined to
 Messages with a pre-filled correction template — edit + send back, and
 the listener injects the correction.
 
+Every new and edited message is first run through the logic-only typo
+fixer (`apply_signal_corrections`): a stop on the wrong side, an
+out-of-order TP, an extra-zero / wrong-hundreds price, **and a
+directionally-valid but implausibly-far SL** (a wrong-hundreds mistype,
+e.g. BUY `4319-4321 SL 4214` → `4314`) are repaired before the line is
+written. It never tightens a stop to improve risk:reward; a far stop it
+can't cleanly repair is left as posted (and you're notified).
+
 The feed follows the channel's latest state: when VICTOR edits a signal
 the line is amended in place (same `N.`, same signal_key/magic) and an
-MT5 amend is queued; when he deletes one the line is removed and an MT5
-revoke is queued. Startup catch-up applies the same reconciliation to
-the last 24 h, so edits/deletions made while the listener was down are
-not lost (see "Listener was down" below for longer gaps).
+`amend` record is appended to `signal_overrides.jsonl`; when he deletes
+one the line is removed and a `revoke` record is appended. The filtered
+live feed (`generated/victor_live.txt`) regenerates from the raw feed on
+every change. Startup catch-up applies the same reconciliation to the
+last 24 h, so edits/deletions made while the listener was down are not
+lost (see "Listener was down" below for longer gaps).
+
+To have the live executor *act* on those edits/deletes, run `auto` with
+**`--apply-signal-edits`** (see Step 2). Each cycle it consumes the
+journal and, matched by the tagged magic: on an **edit** flattens the
+signal (cancels its pending orders and closes any open position) and
+re-places it at the corrected levels — **close-and-reopen**; on a
+**delete** flattens and untracks it. A byte-offset sidecar makes it
+exactly-once and anchors at end-of-file on first run, so the pre-existing
+backlog (already reflected in the feed) is never replayed onto live
+orders.
 
 ### Step 2 — start auto
 
@@ -231,12 +251,17 @@ In window 2:
 ```powershell
 python -m xauusd_trading.cli auto `
     --signals signals.txt `
-    --positions-json positions.json
+    --positions-json positions.json `
+    --apply-signal-edits
 ```
 
 Each iteration: reconcile → render dashboard → manage tracked positions →
+**apply any provider edits/deletes** (with `--apply-signal-edits`) →
 re-read `signals.txt` → for each new signal not already tracked, run
-`decide` and act on the result. Exits only on Ctrl+C.
+`decide` and act on the result. Exits only on Ctrl+C. Add
+`--apply-signal-edits` only on the executor whose feed the Telegram
+listener writes (it reads `signal_overrides.jsonl`); leave it off for a
+self-feed scalper that has no listener.
 
 Default `--watch-interval` is 5 seconds. Under 2s emits a warning; under
 1s is rejected. 5s gives a 12× safety margin against the worst-case 60s
@@ -409,8 +434,11 @@ Short outages need no manual work: on startup the listener's catch-up
 not only ingests messages that arrived while it was down, it also
 reconciles the lookback window (24 h) against the channel's current
 state — a tracked signal VICTOR edited is amended in the feed (and an
-MT5 amend queued), and a tracked signal he deleted is removed (and an
-MT5 revoke queued), exactly like the live edit/delete events.
+`amend` journalled), and a tracked signal he deleted is removed (and a
+`revoke` journalled), exactly like the live edit/delete events. With
+`auto --apply-signal-edits` running, the executor then flattens and
+(for an edit) re-places those signals at the corrected levels on its
+next cycle.
 
 For longer gaps, export the channel from Telegram Desktop (HTML format)
 and sync the feed from the export:

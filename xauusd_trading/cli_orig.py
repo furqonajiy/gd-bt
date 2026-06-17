@@ -1012,6 +1012,147 @@ def _run_manage_watch(args: argparse.Namespace, config: StrategyConfig,
 
 
 # ---------------------------------------------------------------------------
+# provider edit/delete bridge (consume the listener's signal_overrides journal)
+# ---------------------------------------------------------------------------
+
+def _read_overrides_offset(offset_path: Path) -> int:
+    """Persisted byte offset into the override journal, or -1 when none exists
+    yet (the caller then anchors at end-of-file so the pre-existing backlog --
+    already reflected in the feed -- is never replayed onto live orders)."""
+    try:
+        return int((offset_path.read_text(encoding="utf-8").strip() or "0"))
+    except FileNotFoundError:
+        return -1
+    except Exception:
+        return -1
+
+
+def _write_overrides_offset(offset_path: Path, offset: int) -> None:
+    tmp = offset_path.with_suffix(offset_path.suffix + ".tmp")
+    tmp.write_text(str(int(offset)), encoding="utf-8")
+    tmp.replace(offset_path)
+
+
+def _read_new_override_records(path: Path, offset: int) -> tuple[list[dict], int]:
+    """Complete JSONL records appended after ``offset`` (a byte position).
+
+    Mirrors the listener's notifications tail: a binary read so byte offsets line
+    up with multi-byte content, only data up to the last newline is consumed (a
+    torn final line is re-read next cycle), and a shrunk/rotated file resets to 0.
+    """
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return [], offset
+    if offset < 0 or offset > size:
+        offset = 0
+    if offset == size:
+        return [], offset
+    with path.open("rb") as f:
+        f.seek(offset)
+        raw = f.read()
+    nl = raw.rfind(b"\n")
+    if nl == -1:
+        return [], offset
+    complete = raw[: nl + 1]
+    new_offset = offset + len(complete)
+    records: list[dict] = []
+    for bline in complete.split(b"\n"):
+        line = bline.decode("utf-8", "replace").strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except Exception:
+            continue
+    return records, new_offset
+
+
+def _consume_signal_overrides(args, executor, registry, *, log) -> set[str]:
+    """Apply listener-journalled provider edits/deletes to live MT5 orders.
+
+    The Telegram listener detects when VICTOR edits or deletes a signal and
+    appends an ``amend``/``revoke`` record (keyed by the *untagged* signal_key)
+    to the override journal. Here the live executor consumes those records so MT5
+    follows the corrected feed:
+
+      * revoke -> flatten the signal (cancel pendings + close any open position)
+        and untrack it; the listener already removed it from the feed, so it is
+        also kept out of this cycle's candidate pass in case the filtered feed
+        hasn't regenerated yet.
+      * amend  -> flatten the signal (close-and-reopen, the operator's choice for
+        an already-filled leg), untrack it, and mark it for forced re-placement
+        so the normal candidate path re-places it from the now-corrected feed
+        line -- bypassing only the already-traded history guard (the close was
+        deliberate), never the live activation/expiry/staleness guards.
+
+    Returns the set of tagged signal_keys revoked this cycle. First run anchors at
+    end-of-file, so a pre-existing backlog is never replayed onto live orders.
+    """
+    overrides_path = Path(getattr(args, "signal_overrides_file", "") or "signal_overrides.jsonl")
+    if not overrides_path.exists():
+        return set()
+
+    registry_path = Path(args.positions_json or "positions.json")
+    # Namespace the offset by the registry so two executors sharing one journal
+    # (e.g. if ever pointed at the same file) consume it independently.
+    offset_path = overrides_path.with_suffix(
+        overrides_path.suffix + f".{registry_path.stem}.offset"
+    )
+    offset = _read_overrides_offset(offset_path)
+    if offset < 0:
+        try:
+            offset = overrides_path.stat().st_size
+        except FileNotFoundError:
+            offset = 0
+        _write_overrides_offset(offset_path, offset)
+        return set()
+
+    records, new_offset = _read_new_override_records(overrides_path, offset)
+    if not records:
+        return set()
+
+    tag = (getattr(args, "strategy_tag", "") or "")[:4]
+
+    def _tagged(skey: str) -> str:
+        return f"{tag}-{skey}" if tag else skey
+
+    force_replace = getattr(executor, "_amended_force_replace_keys", None)
+    if force_replace is None:
+        force_replace = set()
+        executor._amended_force_replace_keys = force_replace
+
+    revoked: set[str] = set()
+    for rec in records:
+        action = (rec.get("action") or "").lower()
+        skey = rec.get("signal_key")
+        if not skey or action not in ("amend", "revoke"):
+            continue
+        tagged = _tagged(skey)
+        flog = executor.flatten_signal(tagged, reason=action)
+        log.merge(flog)
+        removed = registry.remove(tagged)
+        if action == "amend":
+            force_replace.add(tagged)
+            log.actions.append(
+                f"Signal {tagged}: provider edit -> flattened "
+                f"({flog.cancelled} pending cancelled, {flog.closed} position(s) "
+                f"closed); queued re-placement at the corrected levels."
+            )
+        else:  # revoke
+            revoked.add(tagged)
+            log.actions.append(
+                f"Signal {tagged}: provider delete -> flattened "
+                f"({flog.cancelled} pending cancelled, {flog.closed} position(s) "
+                f"closed) and untracked"
+                + ("." if removed else " (was not tracked).")
+            )
+
+    _write_overrides_offset(offset_path, new_offset)
+    return revoked
+
+
+# ---------------------------------------------------------------------------
 # subcommand: auto
 # ---------------------------------------------------------------------------
 
@@ -1237,6 +1378,16 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         mlog = executor.manage_position(actual, config, replay_end)
         log.merge(mlog)
 
+    # 11b. Apply provider edits/deletes the listener journalled (opt-in): make
+    # live MT5 follow the corrected feed. revoke = flatten; amend = flatten +
+    # re-place corrected (close-and-reopen). Done before the candidate pass so an
+    # amended signal, now untracked, is re-placed below and a revoked one is held
+    # out of placement.
+    _ase = getattr(args, "apply_signal_edits", False)
+    revoked_keys: set[str] = set()
+    if _ase is True or str(_ase).lower() == "true":
+        revoked_keys = _consume_signal_overrides(args, executor, registry, log=log)
+
     # 12. Re-read signals.txt.
     try:
         all_signals = parse_signals_file(signals_path, tag=getattr(args, "strategy_tag", "") or "")
@@ -1253,6 +1404,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         s for s in all_signals
         if s.signal_time_chart > age_cutoff
            and s.signal_key not in existing_keys
+           and s.signal_key not in revoked_keys
     ]
     candidates.sort(key=lambda s: s.signal_time_chart)
 
@@ -1569,6 +1721,17 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Each cycle, re-open at market any entry the replay still holds OPEN "
                          "but that is missing from MT5 (e.g. closed by hand), so live execution "
                          "keeps mirroring the backtest.")
+    pa.add_argument("--apply-signal-edits", action="store_true",
+                    help="Consume the listener's signal-overrides journal each cycle: when the "
+                         "provider EDITS a signal, flatten its live order and re-place it at the "
+                         "corrected levels (close-and-reopen); when the provider DELETES one, "
+                         "flatten and untrack it. Off by default; enable it on the executor whose "
+                         "feed the Telegram listener writes (e.g. the VIC executor).")
+    pa.add_argument("--signal-overrides-file", default="signal_overrides.jsonl",
+                    help="Path to the listener's append-only edit/delete journal "
+                         "(default: signal_overrides.jsonl in the CWD). Only read when "
+                         "--apply-signal-edits is set; a per-executor byte-offset sidecar next "
+                         "to it tracks consumption so each record is applied once.")
     pa.add_argument("--adaptive", action="store_true",
                     help="Auto-switch by regime: each cycle classify the current market "
                          "(volatility regime) from recent chart M1 and run that regime's "

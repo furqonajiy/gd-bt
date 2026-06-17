@@ -268,7 +268,12 @@ class Mt5Executor(_BaseMt5Executor):
                 f"skipping placement (will manage instead)."
             )
             return log
-        if self._magic_already_traded(magic, signal.signal_time_chart):
+        # An amend (provider edit) deliberately flattened this magic moments ago
+        # via flatten_signal, so its now-closed deals are expected -- the operator
+        # chose close-and-reopen. Bypass the already-traded guard for exactly
+        # those keys; every other path still refuses to re-trade a finished magic.
+        force_replace = signal.signal_key in getattr(self, "_amended_force_replace_keys", frozenset())
+        if not force_replace and self._magic_already_traded(magic, signal.signal_time_chart):
             if signal.signal_key not in self._session_skipped_traded_signal_keys:
                 log.actions.append(
                     f"Signal {signal.signal_key} already traded this session "
@@ -602,6 +607,35 @@ class Mt5Executor(_BaseMt5Executor):
             reason = str(res.comment if res else self.mt5.last_error())
             log.actions.append(f"  FAILED {reason_label} close on #{p.ticket}: {reason}")
             failed.append((p.ticket, reason))
+
+    def flatten_signal(self, signal_key: str, *, reason: str = "amend") -> ExecutionLog:
+        """Cancel every pending order and close every open position for a signal.
+
+        Used to honour a provider edit or delete that the Telegram listener
+        detected and journalled to the override bridge: the executor must stop
+        carrying the now-stale orders for ``signal_key``'s magic. On an EDIT
+        (close-and-reopen) the caller then lets the normal candidate path
+        re-place the corrected signal, so this method never re-places -- it only
+        flattens, reusing the same cancel/close primitives as expiry and the
+        time-exit so a flatten behaves exactly like one of the lifecycle's own
+        exits. ``signal_key`` is the tagged key (the caller re-applies the
+        executor's --strategy-tag before calling), so the magic matches what
+        ``place_signal`` originally sent.
+        """
+        log = ExecutionLog()
+        magic = signal_to_magic(signal_key)
+        log.merge(self._cancel_orders(
+            magic, signal_key, f"{reason}_cancel_pending",
+            f"Cancelled pending ({reason})",
+        ))
+        closed: list[tuple[int, float]] = []
+        failed: list[tuple[int, str]] = []
+        for p in self.find_positions(magic):
+            self._close_position(
+                p, magic, signal_key, f"{reason}_close",
+                f"Closed open ({reason})", log, closed, failed,
+            )
+        return log
 
     @staticmethod
     def _lock_improves(side: str, current_sl: float, target_sl: float, tolerance: float) -> bool:

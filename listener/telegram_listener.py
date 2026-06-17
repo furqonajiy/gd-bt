@@ -255,6 +255,10 @@ def parse_victor_signal(raw_text: str) -> Optional[ParsedSignal]:
 #
 # Correct only impossible/obvious typo cases:
 #   - SL on the wrong side of the range
+#   - SL on the correct side but implausibly far -- a wrong-hundreds-digit
+#     mistype, e.g. BUY 4319-4321 SL 4214 (meant 4314) or 4327-4325 SL 4219
+#     (meant 4319): a 100+ point stop under a 40-point TP3 is not a trade VICTOR
+#     posts, so a clean +/-100*n shift back into a plausible band is applied.
 #   - TP on the wrong side of the range
 #   - TP order inconsistent with BUY/SELL direction
 #   - extra-zero / wrong-hundreds typo, e.g. 47802 -> 4802
@@ -272,6 +276,14 @@ def parse_victor_signal(raw_text: str) -> Optional[ParsedSignal]:
 _CORRECTION_TOL = 1e-6
 _EXPECTED_RANGE_WIDTH = 2.0
 _MIN_TP1_RR_BEST_ENTRY = 1.0
+
+# A directionally-valid SL that sits farther than this from the near entry bound
+# is treated as a wrong-hundreds-digit mistype rather than a real (huge) stop.
+# The reach to TP3 is the natural per-signal yardstick -- VICTOR's stop is never
+# multiples of his farthest target away -- with an absolute floor so a tight
+# scalp with a small TP3 is never flagged.
+_SL_FAR_TP3_MULT = 2.0
+_SL_FAR_ABS_FLOOR = 50.0
 
 _LEVEL_STEPS = (
     -500.0, -400.0, -300.0, -200.0, -100.0,
@@ -485,6 +497,53 @@ def _fix_sl_level(side: str, r1: float, r2: float, sl: float) -> float:
     return _choose_price(sl, candidates, lambda c: c > high, anchor)
 
 
+def _sl_distance(side: str, r1: float, r2: float, sl: float) -> float:
+    """Distance from the near entry bound to a directionally-valid SL.
+
+    BUY stops sit below the low; SELL stops sit above the high. The result is
+    positive for any SL on the correct side and negative for a wrong-side one.
+    """
+    high, low = _range_bounds(r1, r2)
+    return (low - sl) if side == "BUY" else (sl - high)
+
+
+def _tp3_reach(side: str, r1: float, r2: float, tp3: float) -> float:
+    """Distance from the far entry bound to TP3 (the signal's longest target)."""
+    high, low = _range_bounds(r1, r2)
+    return (tp3 - high) if side == "BUY" else (low - tp3)
+
+
+def _fix_sl_outlier(side: str, r1: float, r2: float, sl: float, tp3: float) -> float:
+    """Repair a directionally-valid but implausibly-far SL (wrong-hundreds typo).
+
+    Only a clean +/-100*n shift is considered -- never a small nudge, which would
+    be tuning risk:reward (forbidden). A repair is taken only when it lands the
+    stop back on the correct side AND inside the plausible band, choosing the
+    candidate nearest the entry. When no clean shift qualifies (or the stop is
+    already plausible) the original SL is returned untouched -- we correct an
+    obvious typo, we never guess a level.
+
+    Note this can fire only when the stop is already >100 points off the entry:
+    a +100 shift toward the entry stays on the correct side only if the original
+    was more than a full hundred away, so a genuine (modest) wide stop is safe.
+    """
+    if not _sl_side_ok(side, r1, r2, sl):
+        return sl  # wrong side is _fix_sl_level's job, not this one
+    max_plausible = max(_SL_FAR_ABS_FLOOR, _SL_FAR_TP3_MULT * max(_tp3_reach(side, r1, r2, tp3), 0.0))
+    best = sl
+    best_dist = _sl_distance(side, r1, r2, sl)
+    if best_dist <= max_plausible:
+        return sl  # plausible stop -- never touch
+    for n in range(1, 7):  # cover up to a 600-point hundreds error
+        for cand in (sl + 100.0 * n, sl - 100.0 * n):
+            if not _sl_side_ok(side, r1, r2, cand):
+                continue
+            dist = _sl_distance(side, r1, r2, cand)
+            if dist <= max_plausible and dist < best_dist:
+                best, best_dist = cand, dist
+    return best
+
+
 def _classify_tp1_rr(parsed: ParsedSignal) -> tuple[str, Optional[float]]:
     side = parsed.side.upper()
     entry = _best_ladder_entry(side, parsed.r1, parsed.r2)
@@ -538,6 +597,9 @@ def apply_signal_corrections(parsed: ParsedSignal) -> GeometryFix:
     new_sl = parsed.sl
     if not _sl_side_ok(side, new_r1, new_r2, new_sl):
         new_sl = _fix_sl_level(side, new_r1, new_r2, new_sl)
+    else:
+        # Directionally valid but possibly a wrong-hundreds-digit far stop.
+        new_sl = _fix_sl_outlier(side, new_r1, new_r2, new_sl, new_tp3)
     _add_change(changes, "SL", parsed.sl, new_sl)
 
     corrected = ParsedSignal(side=side, r1=new_r1, r2=new_r2, sl=new_sl, tp1=new_tp1, tp2=new_tp2, tp3=new_tp3)
