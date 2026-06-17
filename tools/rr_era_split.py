@@ -40,7 +40,7 @@ Example (TRAILING-0.5 flag block shown; swap in the DD40 block to test that):
     --charts data/XAUUSD_M1_*_ELEV8.csv `
     --output-dir reports/rr_era_split `
     --max-drawdown-limit-pct 40 --progress-interval-seconds 30 `
-    --initial-capital 5000 --sizing-mode risk --lot 0.01 --risk 0.022 `
+    --initial-capital 50000 --sizing-mode risk --lot 0.01 --risk 0.022 `
     --minimum-lot 0.01 --lot-step 0.01 --bonus-per-closed-lot 3 `
     --entries 1 --entry-ladder range_uniform --entry-sl-gap 2 `
     --activation-delay 0 --pending-expiry 630 --max-hold 15 --sl-multiplier 0.85 `

@@ -331,7 +331,7 @@ def render_live_cli(cfg: dict, *, regime: str, feed: str) -> str:
                 f"--sl-multiplier {g('sl_multiplier', 2.1)}",
                 f"--tp1-lock-delay-minutes {int(g('tp1_lock_delay_minutes', 24))}",
                 f"--final-target {g('final_target', 'TP3')}",
-                f"--initial-capital 5000",
+                f"--initial-capital 50000",
             ]) + "\n")
 
 
