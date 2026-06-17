@@ -18,7 +18,7 @@ python tools/auto_trailing.py `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
   --mt5-history-bars 5000 `
-  --initial-capital 1000 `
+  --initial-capital 50000 `
   --risk 0.0281 `
   --entries 2 `
   --entry-ladder range_to_sl `
