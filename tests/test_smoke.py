@@ -25,7 +25,7 @@ CHART_FILES = sorted(DATA_DIR.glob("XAUUSD_M1_*.csv"))
 
 
 DD40_DEFAULT_EXPECTED = {
-    "initial_capital": 5000.0,
+    "initial_capital": 50000.0,
     "sizing_mode": "risk",
     "risk_per_signal": 0.05575,
     "entry_count": 3,

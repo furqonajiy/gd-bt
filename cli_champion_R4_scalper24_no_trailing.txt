@@ -99,7 +99,7 @@ python tools/backtest_explicit.py `
   --lock-tp2-exit-slippage 1.0 `
   --trailing-close-after-stage 0 `
   --output-dir reports/SC24_E5_NO_TRAILING `
-  --initial-capital 5000 `
+  --initial-capital 50000 `
   --start-date 2026-01-01
 
 # --- 2b. RECENT BACKTEST (from 2026-06-01 only; quick current-regime check) ---
@@ -140,7 +140,7 @@ python tools/backtest_explicit.py `
   --lock-tp2-exit-slippage 1.0 `
   --trailing-close-after-stage 0 `
   --output-dir reports/SC24_E5_NO_TRAILING_JUNE `
-  --initial-capital 5000 `
+  --initial-capital 50000 `
   --start-date 2026-06-01
 
 # ===== 3. AUTO CLI =====
@@ -149,7 +149,7 @@ python tools/backtest_explicit.py `
 # re-entry risk). Window B, runs beside the generator loop above.
 # --reopen-missing-positions true: MT5 mirrors the replay — an entry the
 # backtest engine still holds OPEN is re-opened if it goes missing from MT5.
-# --initial-capital 7000: live sizes off REAL equity; this is just the DD base.
+# --initial-capital 50000: live sizes off REAL equity; this is just the DD base.
 python tools/auto_explicit.py `
   --signals generated/self_scalper24_live.txt `
   --positions-json positions_sc24_e5.json `
@@ -188,4 +188,4 @@ python tools/auto_explicit.py `
   --trailing-open-distance 0.0 `
   --trailing-close-distance 0.0 `
   --trailing-close-after-stage 0 `
-  --initial-capital 7000
+  --initial-capital 50000

@@ -74,7 +74,7 @@ python tools/backtest_explicit.py `
   --progress-interval-seconds 30 `
   --start-date 2026-01-01 `
   --output-dir reports/CHAMPION_R4parab `
-  --initial-capital 5000.0
+  --initial-capital 50000
 
 # ===== 3. AUTO CLI =====
 # LIVE AUTO EXECUTOR (places + manages orders for R4parab).
@@ -117,4 +117,4 @@ python tools/auto_explicit.py `
   --trailing-open-distance 0.0 `
   --trailing-close-distance 2.0 `
   --trailing-close-after-stage 0 `
-  --initial-capital 5000
+  --initial-capital 50000

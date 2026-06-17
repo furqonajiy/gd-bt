@@ -92,7 +92,7 @@ python tools/backtest_explicit.py `
   --champions-dir champions `
   --adaptive-window-days 20 `
   --output-dir reports/ADAPTIVE_ALL `
-  --initial-capital 5000 `
+  --initial-capital 50000 `
   --start-date 2021-11-01
 
 # Per-regime isolation -- rerun the SAME command above, changing ONLY these 3 flags:
@@ -105,8 +105,8 @@ python tools/backtest_explicit.py `
 # config on a SPECIFIC period directly, drop --adaptive/--champions-dir and set the
 # strategy flags yourself + --start-date/--end-date. e.g. "config A for 2021-2022,
 # config B for 2022-2025" = two runs, each with its own flags and date window:
-#   python tools/backtest_explicit.py ...config-A-flags... --start-date 2021-01-01 --end-date 2022-12-31 --output-dir reports/A_2021_2022 --initial-capital 5000
-#   python tools/backtest_explicit.py ...config-B-flags... --start-date 2022-01-01 --end-date 2025-12-31 --output-dir reports/B_2022_2025 --initial-capital 5000
+#   python tools/backtest_explicit.py ...config-A-flags... --start-date 2021-01-01 --end-date 2022-12-31 --output-dir reports/A_2021_2022 --initial-capital 50000
+#   python tools/backtest_explicit.py ...config-B-flags... --start-date 2022-01-01 --end-date 2025-12-31 --output-dir reports/B_2022_2025 --initial-capital 50000
 
 # ===== 3. AUTO CLI =====
 # LIVE ADAPTIVE EXECUTOR. --adaptive true classifies the regime each cycle and
@@ -153,4 +153,4 @@ python tools/auto_explicit.py `
   --trailing-open-distance 0.0 `
   --trailing-close-distance 0.0 `
   --trailing-close-after-stage 0 `
-  --initial-capital 5000
+  --initial-capital 50000

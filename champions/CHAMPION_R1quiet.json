@@ -10,7 +10,7 @@
     "entry_ladder": "range_to_sl",
     "entry_sl_gap": 0.5,
     "final_target": "TP3",
-    "initial_capital": 5000.0,
+    "initial_capital": 50000.0,
     "lock_after_tp1": true,
     "lock_after_tp2": true,
     "lot_per_entry": 0.5,
@@ -45,7 +45,7 @@
     "trend_runner_enabled": false,
     "trend_runner_override_max_hold": true
   },
-  "config_json": "{\"activation_delay_minutes\": 2, \"bep_after_move\": 0.0, \"bep_after_tp1\": false, \"bep_buffer\": 0.0, \"bep_trigger_distance\": 3.0, \"bonus_per_closed_lot\": 3.0, \"entry_count\": 6, \"entry_ladder\": \"range_to_sl\", \"entry_sl_gap\": 0.5, \"final_target\": \"TP3\", \"initial_capital\": 5000.0, \"lock_after_tp1\": true, \"lock_after_tp2\": true, \"lot_per_entry\": 0.5, \"lot_step\": 0.01, \"max_hold_minutes\": 240, \"minimum_lot\": 0.01, \"pending_expiry_minutes\": 180, \"per_entry_targets\": [], \"profit_lock_mode\": \"tp_levels\", \"risk_per_signal\": 0.01, \"runner_after_tp3\": false, \"runner_no_final_cap\": false, \"runner_trail_from\": \"TP3\", \"scale_out_at_tp1\": false, \"scale_out_at_tp2\": false, \"shared_sl\": false, \"sizing_mode\": \"risk\", \"sl_multiplier\": 2.1, \"tp1_lock_delay_minutes\": 24, \"tp1_lock_fraction\": 0.5, \"tp2_lock_delay_minutes\": 2, \"tp2_lock_target\": \"TP1\", \"tp3_lock_target\": \"TP2\", \"trailing_close_after_stage\": 0, \"trailing_close_distance\": 0.0, \"trailing_close_min_step\": 0.0, \"trailing_open_distance\": 0.0, \"trend_runner_atr_multiplier\": 3.0, \"trend_runner_atr_period\": 14, \"trend_runner_ema_fast\": 21, \"trend_runner_ema_slow\": 55, \"trend_runner_enabled\": false, \"trend_runner_override_max_hold\": true}",
+  "config_json": "{\"activation_delay_minutes\": 2, \"bep_after_move\": 0.0, \"bep_after_tp1\": false, \"bep_buffer\": 0.0, \"bep_trigger_distance\": 3.0, \"bonus_per_closed_lot\": 3.0, \"entry_count\": 6, \"entry_ladder\": \"range_to_sl\", \"entry_sl_gap\": 0.5, \"final_target\": \"TP3\", \"initial_capital\": 50000.0, \"lock_after_tp1\": true, \"lock_after_tp2\": true, \"lot_per_entry\": 0.5, \"lot_step\": 0.01, \"max_hold_minutes\": 240, \"minimum_lot\": 0.01, \"pending_expiry_minutes\": 180, \"per_entry_targets\": [], \"profit_lock_mode\": \"tp_levels\", \"risk_per_signal\": 0.01, \"runner_after_tp3\": false, \"runner_no_final_cap\": false, \"runner_trail_from\": \"TP3\", \"scale_out_at_tp1\": false, \"scale_out_at_tp2\": false, \"shared_sl\": false, \"sizing_mode\": \"risk\", \"sl_multiplier\": 2.1, \"tp1_lock_delay_minutes\": 24, \"tp1_lock_fraction\": 0.5, \"tp2_lock_delay_minutes\": 2, \"tp2_lock_target\": \"TP1\", \"tp3_lock_target\": \"TP2\", \"trailing_close_after_stage\": 0, \"trailing_close_distance\": 0.0, \"trailing_close_min_step\": 0.0, \"trailing_open_distance\": 0.0, \"trend_runner_atr_multiplier\": 3.0, \"trend_runner_atr_period\": 14, \"trend_runner_ema_fast\": 21, \"trend_runner_ema_slow\": 55, \"trend_runner_enabled\": false, \"trend_runner_override_max_hold\": true}",
   "feed": "scalper24",
   "feed_file": "generated/self_scalper24.txt",
   "kind": "champion",
