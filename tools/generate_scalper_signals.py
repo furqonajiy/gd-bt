@@ -173,6 +173,62 @@ def _add_indicators(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
     out["swing_high"] = high.shift(1).rolling(args.swing_lookback, min_periods=args.swing_lookback).max()
     out["body"] = (out["close"] - out["open"]).abs()
     out["range"] = out["high"] - out["low"]
+
+    # --- OPTIONAL entry-feature indicators -- only computed when a filter is
+    #     active, so the default feed (and its runtime) is unchanged. ---
+    if _any_entry_filter(args):
+        # RSI (Wilder smoothing)
+        delta = close.diff()
+        avg_gain = delta.clip(lower=0.0).ewm(alpha=1.0 / args.rsi_period, adjust=False,
+                                             min_periods=args.rsi_period).mean()
+        avg_loss = (-delta).clip(lower=0.0).ewm(alpha=1.0 / args.rsi_period, adjust=False,
+                                                min_periods=args.rsi_period).mean()
+        rs = avg_gain / avg_loss.replace(0.0, float("nan"))
+        out["rsi"] = 100.0 - 100.0 / (1.0 + rs)
+        # Bollinger Bands -> %B and bandwidth
+        bb_mid = close.rolling(args.bb_period, min_periods=args.bb_period).mean()
+        bb_std = close.rolling(args.bb_period, min_periods=args.bb_period).std(ddof=0)
+        bb_up = bb_mid + args.bb_k * bb_std
+        bb_lo = bb_mid - args.bb_k * bb_std
+        width = bb_up - bb_lo
+        out["bb_pctb"] = (close - bb_lo) / width.where(width != 0)
+        out["bb_bandwidth"] = width / bb_mid.where(bb_mid != 0)
+        # ADX (Wilder) -- trend strength / chop filter
+        up_move = high.diff()
+        dn_move = -low.diff()
+        plus_dm = ((up_move > dn_move) & (up_move > 0)) * up_move.clip(lower=0.0)
+        minus_dm = ((dn_move > up_move) & (dn_move > 0)) * dn_move.clip(lower=0.0)
+        atr_w = tr.ewm(alpha=1.0 / args.adx_period, adjust=False, min_periods=args.adx_period).mean()
+        plus_di = 100.0 * plus_dm.ewm(alpha=1.0 / args.adx_period, adjust=False,
+                                      min_periods=args.adx_period).mean() / atr_w
+        minus_di = 100.0 * minus_dm.ewm(alpha=1.0 / args.adx_period, adjust=False,
+                                        min_periods=args.adx_period).mean() / atr_w
+        dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0.0, float("nan"))
+        out["adx"] = dx.ewm(alpha=1.0 / args.adx_period, adjust=False, min_periods=args.adx_period).mean()
+        # Session-anchored VWAP (volume-weighted if a volume column exists; this
+        # archive's CsvChartSource drops volume, so it falls back to a time-weighted
+        # typical-price mean -- still a valid session mean-reference level).
+        typ = (out["high"] + out["low"] + out["close"]) / 3.0
+        day = out["time"].dt.normalize()
+        volcol = next((c for c in ("volume", "tickvol", "real_volume") if c in out.columns), None)
+        if args.min_vol_mult > 0.0 and volcol is None:
+            raise SystemExit("--min-vol-mult requires a volume column, which CsvChartSource does not expose.")
+        if volcol is not None:
+            vol = out[volcol].astype(float)
+            out["vwap"] = (typ * vol).groupby(day).cumsum() / vol.groupby(day).cumsum().replace(0.0, float("nan"))
+            out["vol_ratio"] = vol / vol.rolling(args.vol_period, min_periods=args.vol_period).mean()
+        else:
+            out["vwap"] = typ.groupby(day).cumsum() / (out.groupby(day).cumcount() + 1.0)
+        # Higher-timeframe EMA trend (resample close to htf_minutes, ffill back to M1)
+        htf_close = out.set_index("time")["close"].resample(f"{args.htf_minutes}min").last().dropna()
+        htf_diff = (htf_close.ewm(span=args.htf_ema_fast, adjust=False).mean()
+                    - htf_close.ewm(span=args.htf_ema_slow, adjust=False).mean())
+        out["htf_diff"] = htf_diff.reindex(pd.DatetimeIndex(out["time"]), method="ffill").to_numpy()
+        # Prior-day high/low for S/R proximity
+        daily = out.groupby(day).agg(_dh=("high", "max"), _dl=("low", "min"))
+        out["pday_high"] = day.map(daily["_dh"].shift(1))
+        out["pday_low"] = day.map(daily["_dl"].shift(1))
+
     return out
 
 
@@ -286,6 +342,89 @@ def _print_scan_progress(i: int, total: int, start: float, signals: int, row_tim
     )
 
 
+def _any_entry_filter(args: argparse.Namespace) -> bool:
+    """True if ANY optional entry-feature filter is enabled (else they're all no-ops)."""
+    return bool(
+        args.rsi_buy_max < 100.0 or args.rsi_sell_min > 0.0
+        or args.bb_buy_pctb_max < 2.0 or args.bb_sell_pctb_min > -1.0 or args.bb_bandwidth_min > 0.0
+        or args.adx_min > 0.0 or args.vwap_filter or args.htf_filter
+        or args.sr_proximity_atr > 0.0 or args.min_vol_mult > 0.0
+    )
+
+
+def _entry_filters_ok(row, side: str, args: argparse.Namespace) -> bool:
+    """Apply the enabled entry-feature filters to a candidate bar. A disabled
+    filter is skipped entirely; an enabled filter rejects on NaN (can't confirm)."""
+    if not _any_entry_filter(args):
+        return True
+    buy = side == "BUY"
+    close = float(row.close)
+    # RSI
+    if buy and args.rsi_buy_max < 100.0:
+        v = getattr(row, "rsi", float("nan"))
+        if pd.isna(v) or v > args.rsi_buy_max:
+            return False
+    if not buy and args.rsi_sell_min > 0.0:
+        v = getattr(row, "rsi", float("nan"))
+        if pd.isna(v) or v < args.rsi_sell_min:
+            return False
+    # Bollinger %B (overextension)
+    if buy and args.bb_buy_pctb_max < 2.0:
+        v = getattr(row, "bb_pctb", float("nan"))
+        if pd.isna(v) or v > args.bb_buy_pctb_max:
+            return False
+    if not buy and args.bb_sell_pctb_min > -1.0:
+        v = getattr(row, "bb_pctb", float("nan"))
+        if pd.isna(v) or v < args.bb_sell_pctb_min:
+            return False
+    # Bollinger bandwidth (avoid dead squeeze)
+    if args.bb_bandwidth_min > 0.0:
+        v = getattr(row, "bb_bandwidth", float("nan"))
+        if pd.isna(v) or v < args.bb_bandwidth_min:
+            return False
+    # ADX (trend strength / anti-chop)
+    if args.adx_min > 0.0:
+        v = getattr(row, "adx", float("nan"))
+        if pd.isna(v) or v < args.adx_min:
+            return False
+    # VWAP side filter
+    if args.vwap_filter:
+        v = getattr(row, "vwap", float("nan"))
+        if pd.isna(v) or (buy and close < v) or (not buy and close > v):
+            return False
+    # Higher-timeframe EMA trend agreement
+    if args.htf_filter:
+        v = getattr(row, "htf_diff", float("nan"))
+        if pd.isna(v) or (buy and v <= 0) or (not buy and v >= 0):
+            return False
+    # Volume confirmation
+    if args.min_vol_mult > 0.0:
+        v = getattr(row, "vol_ratio", float("nan"))
+        if pd.isna(v) or v < args.min_vol_mult:
+            return False
+    # S/R proximity (must enter near a support for BUY / resistance for SELL)
+    if args.sr_proximity_atr > 0.0:
+        atr = float(row.atr)
+        tol = args.sr_proximity_atr * atr
+        levels: list[float] = []
+        for lv in (getattr(row, "pday_high", None), getattr(row, "pday_low", None)):
+            if lv is not None and not pd.isna(lv):
+                levels.append(float(lv))
+        if args.sr_round_step > 0.0:
+            step = args.sr_round_step
+            levels.append(math.floor(close / step) * step)
+            levels.append(math.ceil(close / step) * step)
+        if buy:
+            below = [lv for lv in levels if lv <= close]
+            if not below or (close - max(below)) > tol:
+                return False
+        else:
+            above = [lv for lv in levels if lv >= close]
+            if not above or (min(above) - close) > tol:
+                return False
+    return True
+
+
 def generate_signals(df: pd.DataFrame, args: argparse.Namespace) -> list[GeneratedSignal]:
     progress_enabled = args.progress_interval_seconds > 0 and args.progress_every_rows > 0
     with _Heartbeat("indicator calculation", args.progress_interval_seconds, enabled=args.progress_interval_seconds > 0):
@@ -360,9 +499,9 @@ def generate_signals(df: pd.DataFrame, args: argparse.Namespace) -> list[Generat
         sell_confirm = close < open_ and close < ema_mid
 
         sig: GeneratedSignal | None = None
-        if buy_trend and buy_pullback and buy_confirm:
+        if buy_trend and buy_pullback and buy_confirm and _entry_filters_ok(row, "BUY", args):
             sig = _build_buy(row, args)
-        elif sell_trend and sell_pullback and sell_confirm:
+        elif sell_trend and sell_pullback and sell_confirm and _entry_filters_ok(row, "SELL", args):
             sig = _build_sell(row, args)
 
         if sig is None:
@@ -475,6 +614,34 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rr1", type=float, default=1.0)
     p.add_argument("--rr2", type=float, default=1.5)
     p.add_argument("--rr3", type=float, default=2.0)
+
+    # --- OPTIONAL entry-feature filters (all default to a NO-OP, so omitting them
+    #     reproduces the legacy feed byte-for-byte). Each gates the EXISTING
+    #     ema-pullback entry; it never creates new entries. Heavy indicators are
+    #     only computed when at least one filter is active. ---
+    p.add_argument("--rsi-period", type=int, default=14)
+    p.add_argument("--rsi-buy-max", type=float, default=100.0, help="BUY only if RSI<=X (100=off)")
+    p.add_argument("--rsi-sell-min", type=float, default=0.0, help="SELL only if RSI>=X (0=off)")
+    p.add_argument("--bb-period", type=int, default=20)
+    p.add_argument("--bb-k", type=float, default=2.0)
+    p.add_argument("--bb-buy-pctb-max", type=float, default=2.0, help="BUY only if %%B<=X (>=2=off)")
+    p.add_argument("--bb-sell-pctb-min", type=float, default=-1.0, help="SELL only if %%B>=X (<=-1=off)")
+    p.add_argument("--bb-bandwidth-min", type=float, default=0.0, help="trade only if BB bandwidth>=X (0=off)")
+    p.add_argument("--adx-period", type=int, default=14)
+    p.add_argument("--adx-min", type=float, default=0.0, help="trade only if ADX>=X (0=off)")
+    p.add_argument("--vwap-filter", action=argparse.BooleanOptionalAction, default=False,
+                   help="BUY only above / SELL only below session VWAP (TWAP if volume absent)")
+    p.add_argument("--htf-minutes", type=int, default=15)
+    p.add_argument("--htf-ema-fast", type=int, default=9)
+    p.add_argument("--htf-ema-slow", type=int, default=21)
+    p.add_argument("--htf-filter", action=argparse.BooleanOptionalAction, default=False,
+                   help="require higher-timeframe EMA trend to agree with the entry side")
+    p.add_argument("--sr-proximity-atr", type=float, default=0.0,
+                   help="enter only within X*ATR of a support(BUY)/resistance(SELL) level (0=off)")
+    p.add_argument("--sr-round-step", type=float, default=0.0, help="round-number S/R grid step, e.g. 10 (0=off)")
+    p.add_argument("--vol-period", type=int, default=20)
+    p.add_argument("--min-vol-mult", type=float, default=0.0,
+                   help="enter only if volume>=X*rolling-avg (0=off; requires a volume column)")
     return p
 
 
