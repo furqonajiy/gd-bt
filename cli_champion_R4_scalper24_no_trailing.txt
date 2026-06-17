@@ -100,7 +100,7 @@ python tools/backtest_explicit.py `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --trailing-close-after-stage 0 `
-  --output-dir reports/SC24_E5_NO_TRAILING `
+  --output-dir reports/SC24_E5_RSI `
   --initial-capital 50000 `
   --start-date 2026-01-01
 
