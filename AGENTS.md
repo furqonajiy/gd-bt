@@ -62,15 +62,19 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   it: **`auto --adaptive`** (live, per cycle) and **`backtest_explicit.py
   --adaptive`** (the same switch in backtest, via `run_backtest(config_resolver=)`).
   Champions live in **`champions/CHAMPION_<regime>.json`** (committed on main).
-  **All three completed regimes (R2bull, R3strong, R4parab) promote the SAME
-  config — SC24 + `entry_count 8` ("SC24T24E8", tp1_lock_delay stays 24)** —
-  because it is **#1 on the reliable forward-fit metrics (OOS *and* fixed-lot
-  edge)** in every one of them (R2 OOS 52,831 / R3 110,907 / R4 15,032), at
-  DD ≤ 40%. The universal lever is *more entries* (e8 > e7 > e6 on OOS
-  everywhere), not the SL multiplier or tp1-delay. SC24T24E8 **supersedes the
-  earlier R4 pick SC24T15E6**, which led only on the compounded net+bonus mirage
-  (and a ~1.7 pt lower DD), not on OOS/edge. R1quiet stays seeded with SC24 until
-  the sweep advances to it.
+  **R2bull and R3strong promote SC24 + `entry_count 8` ("SC24T24E8",
+  tp1_lock_delay 24)** — #1 on the reliable forward-fit metrics (OOS *and*
+  fixed-lot edge) in both (R2 OOS 52,831 / R3 110,907), at DD ≤ 40%; there the
+  lever is *more entries* (e8 > e7 > e6 on OOS). **R4parab now promotes the e5
+  DD-compliant winner** (e5 / range_uniform / slm2.3 / gap0.0 / max_hold 90 /
+  tp1_lock_delay 20 / tp1_lock_fraction 0.25 / lock_after_tp2 off / shared_sl):
+  on current 2026 data the prior SC24T24E8's concurrent DD rose to **58.3%**
+  (over the 40% gate), so among DD ≤ 40%-compliant configs **e5 is the edge+OOS
+  leader** (edge $39,062 / OOS $6,671 / DD 33.3%) — fewer entries + a tighter 2.3
+  stop + a 90-min hold beat the over-DD e8 once the gate binds. (SC24T24E8 had
+  itself superseded the earlier R4 pick SC24T15E6, which led only on the
+  compounded net+bonus mirage.) R1quiet stays seeded with SC24 until the sweep
+  advances to it.
   `tools/regime_router.py` is a back-compat shim; `tools/regime_auto.py` is the
   one-shot advisory CLI.
 - `tests/` — `pytest` suite, heavy on live/backtest parity.
@@ -264,9 +268,11 @@ disagree.** Compounded net+bonus is hypersensitive to leverage/variance and
 in-sample sequencing (a tighter SL or extra leverage inflates it without improving
 the real per-trade edge), so it *ranks* but does not *decide*: a config only wins
 if it leads on edge **and** OOS (the metrics that survive to live + fixed-lot
-trading). This is why **SC24T24E8 (entry 8) was promoted for R2bull/R3strong/R4parab
-over the net+bonus #1** (slm1.9 in R2, SC24T15E6 in R4) — those led only on the
-inflated headline while losing on edge and OOS. Keep **one writer per sweep
+trading). This is why **SC24T24E8 (entry 8) was promoted for R2bull/R3strong
+over the net+bonus #1** (slm1.9 in R2) — that led only on the inflated headline
+while losing on edge and OOS. For **R4parab**, SC24T24E8 later breached the
+DD ≤ 40% gate (58.3%) on current 2026 data and was superseded by the **e5
+DD-compliant edge+OOS leader**. Keep **one writer per sweep
 branch**; and run sweeps on a
 `research/...` branch, never on `main`.
 
@@ -294,9 +300,11 @@ from 2020, see the standalone `cli_resync_m1_from_2020.txt` (`fetch --months 80`
 `cli_*.txt` files are runnable deployment-command snapshots, each with the same
 sections (Signal Auto Generator live-loop / Backtest CLI / Auto CLI; Telegram
 Listener only for the Victor feed). The current R4 champion is
-`cli_champion_R4_scalper24_no_trailing` — **SC24 with `entry_count 8`**
-("SC24T24E8"), the OOS/edge winner across R2/R3/R4
-(`champions/CHAMPION_R4parab.json`); others: `cli_champion_victor` (Victor — feed
+`cli_champion_R4_scalper24_no_trailing` — the **e5 DD-compliant winner**
+(e5 / range_uniform / slm2.3 / max_hold 90 / tp1_lock_delay 20 / shared_sl;
+`champions/CHAMPION_R4parab.json`), which superseded SC24T24E8 for R4 after it
+breached the DD ≤ 40% gate on 2026 data (SC24T24E8 remains the R2bull/R3strong
+champion); others: `cli_champion_victor` (Victor — feed
 `generated/victor_live.txt`, positions `positions_victor.json`, tag VIC), `cli_R4_scalper24`,
 `cli_R4_breakout`, `cli_trailing_risk02allhours`, `cli_resync_m1_from_2020`, and
 `cli_adaptive_regime` (the `auto --adaptive` regime auto-switch — one executor

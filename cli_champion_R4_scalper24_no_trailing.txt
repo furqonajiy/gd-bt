@@ -1,19 +1,25 @@
 # =========================================================================
-# R4 (2026) CHAMPION — SCALPER24, NO TRAILING  (updated 2026-06-16) | tag SC24
-# scalper24 feed, e8 / slm2.1 / TP3 + SL locks, NO trailing, risk 1%, tp1-lock-delay
-# 24 -- the sweep-promoted R4 champion ("SC24T24E8").
-# STATUS: re-promoted to SC24 + **entry_count 6 -> 8** ("SC24T24E8") on the RELIABLE
-#   forward-fit metrics (research/regime-adaptive -> champions/CHAMPION_R4parab.json).
-#   It is #1 in R4 by OOS (15,032 vs SC24T15E6 11,624) AND fixed-lot edge ($218,244
-#   vs 165,497) -- the same config that wins R2 and R3 on OOS/edge. It SUPERSEDES the
-#   earlier SC24T15E6, which led only on the compounded net+bonus mirage (a
-#   leverage/luck artifact) and a ~1.7pt lower drawdown (37.49% vs 35.78%). The only
-#   change from SC24 is entry_count 6->8; everything else is identical.
-#   compounded $ are model upper bounds (they rank configs, not forecast money).
+# R4 (2026) CHAMPION — SCALPER24, NO TRAILING  (updated 2026-06-17) | tag SC24
+# scalper24 feed, e5 / range_uniform / slm2.3 / gap0.0 / max-hold 90 / TP3,
+# tp1-lock-delay 20 / tp1-lock-fraction 0.25 / lock-after-tp2 OFF / shared_sl,
+# NO trailing, risk 1%.
+# STATUS: re-promoted 2026-06-17 to the e5 DD-COMPLIANT winner
+#   (research self-scalper sweep -> champions/CHAMPION_R4parab.json). On current
+#   2026 (R4) data the prior SC24T24E8 champion's concurrent DD rose to 58.3%
+#   (OVER the <=40% gate), so among DD<=40%-compliant configs e5 is the edge+OOS
+#   leader: edge $39,062, OOS $6,671, DD 33.3%. It SUPERSEDES SC24T24E8 for R4
+#   ONLY; R2bull/R3strong keep SC24T24E8 (R3 had no DD-passing survivor, R2 still
+#   sweeping). compounded $ are model upper bounds (they rank configs, not money).
+# CAPITAL NOTE: at risk 1% the per-signal risk budget only clears the 0.01-lot
+#   floor once equity is large enough; at $5-7k many signals floor to 0.01 (real
+#   risk lands a touch above the nominal 1%, so DD runs a bit hotter than 33%).
+#   ~$15-20k makes the 1% risk fully faithful. Live sizes off real equity.
 # LIVE FIXES IN EFFECT (auto, via --reopen-missing-positions true below): tagged
-#   compact comments SC24-0615#NN.N (#120/#121/#123), per-entry partial placement
-#   (#125), and the reopen-churn cooldown (#130). No CLI change needed -- pull
-#   main + restart and they apply.
+#   compact comments SC24-MMDD#NN.N, per-entry partial placement, reopen-churn
+#   cooldown, and --watch-interval 3 (cuts LOCK_TP1/TP2 give-back). Pull main +
+#   restart and they apply. CUT OVER WHEN FLAT: e5 uses a fresh positions json
+#   (positions_sc24_e5.json) so the 90-min/5-entry lifecycle never manages
+#   leftover e8 (240-min/8-entry) positions.
 # =========================================================================
 
 # ===== 1. SIGNAL AUTO GENERATOR =====
@@ -37,15 +43,14 @@ python tools/live_feed_loop.py `
 #   protective lock exactly at TP1/TP2 (broker stops/freeze level rejects a stop
 #   too close to price), so sl_safety clamps it to the best legal price and
 #   ratchets it toward the true level as price recovers; the residual window +
-#   market-fill on the retrace cost a point or two. The 2026-06-16 reconciliation
-#   measured ~2.0 pt (LOCK_TP1, choppier first retrace) and ~1.0 pt (LOCK_TP2).
-#   These are the SAME values the sweep scores against (tools/sweep.base_config_dict)
-#   so the deployed params were DECIDED on real fills. Backtest-only; never live.
+#   market-fill on the retrace cost a point or two. The 2026-06-16/17 reconciliation
+#   measured ~2.0 pt (LOCK_TP1) and ~1.0 pt (LOCK_TP2). These are the SAME values the
+#   sweep scores against, so the deployed params were DECIDED on real fills.
+#   Backtest-only; never live.
 # --- 2a. PARITY BACKTEST (regenerate full history, then backtest) ---
 # STEP 2a — (re)generate the FULL static archive generated/self_scalper24.txt
 # from ALL chart history so the backtest reflects the latest data. This is the
 # 18-month feed (slow, ~15s) — DIFFERENT from the live 2-day feed in section 1.
-# Run this whenever you want a fresh backtest:
 python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24.txt --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7
 # STEP 2b — backtest that freshly-regenerated archive (full history):
 python tools/backtest_explicit.py `
@@ -60,22 +65,23 @@ python tools/backtest_explicit.py `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3.0 `
-  --entries 8 `
-  --entry-ladder range_to_sl `
-  --entry-sl-gap 0.5 `
-  --activation-delay 2 `
-  --pending-expiry 180 `
-  --max-hold 240 `
-  --sl-multiplier 2.1 `
+  --entries 5 `
+  --entry-ladder range_uniform `
+  --entry-sl-gap 0.0 `
+  --shared-sl true `
+  --activation-delay 0 `
+  --pending-expiry 420 `
+  --max-hold 90 `
+  --sl-multiplier 2.3 `
   --final-target TP3 `
   --lock-after-tp1 true `
-  --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 24 `
-  --tp2-lock-delay-minutes 2 `
+  --lock-after-tp2 false `
+  --tp1-lock-delay-minutes 20 `
+  --tp2-lock-delay-minutes 0 `
   --profit-lock-mode tp_levels `
-  --bep-trigger-distance 3.0 `
-  --tp1-lock-fraction 0.5 `
-  --tp2-lock-target TP1 `
+  --bep-trigger-distance 6.0 `
+  --tp1-lock-fraction 0.25 `
+  --tp2-lock-target TP2 `
   --runner-after-tp3 false `
   --tp3-lock-target TP2 `
   --trailing-open-distance 0.0 `
@@ -83,11 +89,11 @@ python tools/backtest_explicit.py `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --trailing-close-after-stage 0 `
-  --output-dir reports/SC24_T24E8_NO_TRAILING `
+  --output-dir reports/SC24_E5_NO_TRAILING `
   --initial-capital 5000 `
   --start-date 2026-01-01
 
-# --- 2b. RECENT BACKTEST (from 2026-06-12 only; quick current-regime check) ---
+# --- 2b. RECENT BACKTEST (from 2026-06-01 only; quick current-regime check) ---
 python tools/backtest_explicit.py `
   --signals generated/self_scalper24.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -100,22 +106,23 @@ python tools/backtest_explicit.py `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3.0 `
-  --entries 8 `
-  --entry-ladder range_to_sl `
-  --entry-sl-gap 0.5 `
-  --activation-delay 2 `
-  --pending-expiry 180 `
-  --max-hold 240 `
-  --sl-multiplier 2.1 `
+  --entries 5 `
+  --entry-ladder range_uniform `
+  --entry-sl-gap 0.0 `
+  --shared-sl true `
+  --activation-delay 0 `
+  --pending-expiry 420 `
+  --max-hold 90 `
+  --sl-multiplier 2.3 `
   --final-target TP3 `
   --lock-after-tp1 true `
-  --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 24 `
-  --tp2-lock-delay-minutes 2 `
+  --lock-after-tp2 false `
+  --tp1-lock-delay-minutes 20 `
+  --tp2-lock-delay-minutes 0 `
   --profit-lock-mode tp_levels `
-  --bep-trigger-distance 3.0 `
-  --tp1-lock-fraction 0.5 `
-  --tp2-lock-target TP1 `
+  --bep-trigger-distance 6.0 `
+  --tp1-lock-fraction 0.25 `
+  --tp2-lock-target TP2 `
   --runner-after-tp3 false `
   --tp3-lock-target TP2 `
   --trailing-open-distance 0.0 `
@@ -123,7 +130,7 @@ python tools/backtest_explicit.py `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --trailing-close-after-stage 0 `
-  --output-dir reports/SC24_T24E8_NO_TRAILING_JUNE `
+  --output-dir reports/SC24_E5_NO_TRAILING_JUNE `
   --initial-capital 5000 `
   --start-date 2026-06-01
 
@@ -132,11 +139,11 @@ python tools/backtest_explicit.py `
 # --replace-missing-entries false: self feeds are two-sided (hedge close-by
 # re-entry risk). Window B, runs beside the generator loop above.
 # --reopen-missing-positions true: MT5 mirrors the replay — an entry the
-# backtest engine still holds OPEN is re-opened at market if it goes missing
-# from MT5 (e.g. closed by hand), per the 2026-06-12 reconciliation decision.
+# backtest engine still holds OPEN is re-opened if it goes missing from MT5.
+# --initial-capital 7000: live sizes off REAL equity; this is just the DD base.
 python tools/auto_explicit.py `
   --signals generated/self_scalper24_live.txt `
-  --positions-json positions_self_no_trailing_24h.json `
+  --positions-json positions_sc24_e5.json `
   --strategy-tag SC24 `
   --watch-interval 3 `
   --mt5-symbol XAUUSD `
@@ -150,25 +157,26 @@ python tools/auto_explicit.py `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3.0 `
-  --entries 8 `
-  --entry-ladder range_to_sl `
-  --entry-sl-gap 0.5 `
-  --activation-delay 2 `
-  --pending-expiry 180 `
-  --max-hold 240 `
-  --sl-multiplier 2.1 `
+  --entries 5 `
+  --entry-ladder range_uniform `
+  --entry-sl-gap 0.0 `
+  --shared-sl true `
+  --activation-delay 0 `
+  --pending-expiry 420 `
+  --max-hold 90 `
+  --sl-multiplier 2.3 `
   --final-target TP3 `
   --lock-after-tp1 true `
-  --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 24 `
-  --tp2-lock-delay-minutes 2 `
+  --lock-after-tp2 false `
+  --tp1-lock-delay-minutes 20 `
+  --tp2-lock-delay-minutes 0 `
   --profit-lock-mode tp_levels `
-  --bep-trigger-distance 3.0 `
-  --tp1-lock-fraction 0.5 `
-  --tp2-lock-target TP1 `
+  --bep-trigger-distance 6.0 `
+  --tp1-lock-fraction 0.25 `
+  --tp2-lock-target TP2 `
   --runner-after-tp3 false `
   --tp3-lock-target TP2 `
   --trailing-open-distance 0.0 `
   --trailing-close-distance 0.0 `
   --trailing-close-after-stage 0 `
-  --initial-capital 5000
+  --initial-capital 7000
