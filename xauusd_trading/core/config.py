@@ -25,7 +25,7 @@ CHART_TIMEZONE_OFFSET = 3      # SUMMER reference only; chart is EET/EEST (see c
 
 @dataclass(frozen=True)
 class StrategyConfig:
-    initial_capital: float = 5_000.0
+    initial_capital: float = 50_000.0
 
     sizing_mode: str = "risk"              # "fixed" | "risk"
     lot_per_entry: float = 0.5

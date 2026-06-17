@@ -46,7 +46,7 @@ except Exception:  # pragma: no cover - slow fallback for environments without n
 
 POINT_VALUE = 0.01
 CONTRACT_SIZE_OZ = 100.0
-INITIAL_CAPITAL = 10_000.0
+INITIAL_CAPITAL = 50_000.0
 RISK_PER_SIGNAL = 0.02
 LOT_STEP = 0.01
 MINIMUM_LOT = 0.01
