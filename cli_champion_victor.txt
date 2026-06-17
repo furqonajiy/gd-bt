@@ -3,20 +3,27 @@
 # Strategy: victor_signals, entries 8 / range_to_sl / entry-sl-gap 0.5 /
 #   sl-multiplier 2.1 / activation-delay 2 / pending-expiry 180 / max-hold 240 /
 #   final-target TP3 / locks on / tp1-lock-delay 24 / tp2-lock-delay 2,
-#   NO trailing, risk 5%, capital $5,000.
+#   NO trailing, risk 2.5%, capital $50,000.
 #
 # All artifacts are Victor-named so nothing is confused with the scalper executor:
 #   feed = generated/victor_live.txt (the filtered Victor signals the live auto
 #   trades) | positions = positions_victor.json | report = reports/BEST_VIC_2026 |
 #   tag = VIC. The raw source is victor_signals.txt (the listener's output).
 #
-# CURRENT-DATA REALITY (2026 @ $5k, resynced feed):
-#   - at risk 5% the concurrent DD is ~57.6% -> OVER the <=40% gate (not compliant);
-#   - at risk 1% it's compliant (~25% DD) but small. The deployable R4 champion is
-#   cli_champion_R4_scalper24_no_trailing (SC24T24E8 = SC24 + entry_count 8).
-#   Run THIS (Victor) alongside it — distinct --strategy-tag (VIC vs SC24) +
-#   distinct positions json keep them isolated on one MT5 account.
-#   compounded $ are model upper bounds — they rank configs, not forecast money.
+# CURRENT-DATA REALITY (2026 @ $50k, resynced feed):
+#   - risk 2.5% keeps DD within the <=40% gate (~36.8% equity-curve DD on 2026),
+#     compounded $50k -> ~$417k -- the DD-compliant MAX (set 2026-06-17).
+#   - risk 3%+ breaches the gate (43.8% DD at 3%); risk 5% was ~57-63% DD ->
+#     dropped. risk 1% is ~16% DD but smaller. Scale risk to your real funded
+#     equity; live sizes off real equity, --initial-capital is just the DD base.
+#   - NOTE: the sweep's concurrent-DD gate metric can't be reproduced by the local
+#     engine (gave unstable >100% values); 40%-line is anchored on equity-curve DD
+#     + the prior deploy interpolation (5%->~57.6%, 1%->~25%), both ~2.7-2.8% risk.
+#   The deployable R4 champion is cli_champion_R4_scalper24_no_trailing
+#   (SC24T24E8 = SC24 + entry_count 8). Run THIS (Victor) alongside it -- distinct
+#   --strategy-tag (VIC vs SC24) + distinct positions json keep them isolated on
+#   one MT5 account. compounded $ are model upper bounds -- they rank configs, not
+#   forecast money.
 #
 # Run blocks each in their own window, in order: listener -> generator -> backtest -> auto.
 # The auto runner's strategy parameters mirror the backtest below.
@@ -54,7 +61,7 @@ python tools/backtest_explicit.py `
   --progress-interval-seconds 30 `
   --sizing-mode risk `
   --lot 0.01 `
-  --risk 0.05 `
+  --risk 0.025 `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
@@ -98,7 +105,7 @@ python tools/auto_explicit.py `
   --mt5-history-bars 5000 `
   --sizing-mode risk `
   --lot 0.01 `
-  --risk 0.05 `
+  --risk 0.025 `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `

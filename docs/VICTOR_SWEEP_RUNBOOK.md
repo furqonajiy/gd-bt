@@ -105,9 +105,10 @@ same policy (it reads the same StrategyConfig fields; confirm `auto_explicit`
 forwards them before relying on a policy winner live). A pure-param winner
 (`[Victor TP/SL as-is]`) deploys with no policy flags.
 
-Pick `--risk` to your cap (Victor's incumbent runs 5%, ~57% concurrent DD = over
-the 40% gate; 1% is compliant but smaller — your sizing choice, separate from the
-strategy the sweep picks).
+Pick `--risk` to your cap (Victor's deployed champion runs **2.5%** — the DD≤40%
+compliant max on 2026: ~36.8% equity-curve DD, $50k → ~$417k. 5% was ~57% and over
+the gate; 3%+ breaches it; 1% is compliant but smaller — your sizing choice,
+separate from the strategy the sweep picks).
 
 ---
 
