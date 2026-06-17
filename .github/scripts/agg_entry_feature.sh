@@ -4,13 +4,17 @@
 # and the winner-vs-base verdict (a variant wins only if it beats the unfiltered
 # 'base' feed on BOTH edge AND OOS at DD<=40%).
 #
-# Usage: agg_entry_feature.sh <REGIME>   (artifacts under _artifacts/selffeat-<REGIME>-*)
+# Usage: agg_entry_feature.sh <REGIME> [PREFIX]
+#   PREFIX defaults to "selffeat" (the entry-feature sweep). The R:R sweep
+#   passes "selfrr" so the two share this aggregator without colliding; both
+#   key off _artifacts/<PREFIX>-<REGIME>-* and use the identical edge+OOS gate.
 set -uo pipefail
 REG="$1"
+PREFIX="${2:-selffeat}"
 
-for d in _artifacts/selffeat-"${REG}"-*; do
+for d in _artifacts/"${PREFIX}"-"${REG}"-*; do
   [ -d "$d" ] || continue
-  v="${d#_artifacts/selffeat-${REG}-}"
+  v="${d#_artifacts/${PREFIX}-${REG}-}"
   python tools/victor_sweep_aggregate.py --root "$d" --regime "SCF_${REG}_${v}" \
     --out-dir "results/${v}" --dd-gate 40 --top-n 10 || true
 done
