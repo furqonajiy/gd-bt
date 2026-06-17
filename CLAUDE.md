@@ -35,10 +35,11 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   never tunes risk:reward and leaves a stop it can't cleanly repair as-posted.
   The feed follows the channel's latest state: edits amend the line in place
   (same `N.`/signal_key) and deletions remove it, each appending an
-  `amend`/`revoke` record to `signal_overrides.jsonl`; the filtered live feed
-  (`generated/victor_live.txt`) regenerates from the raw feed on every change;
-  startup catch-up reconciles the 24 h lookback so downtime edits/deletions are
-  applied too. **`auto --apply-signal-edits`** (opt-in) consumes that journal so
+  `amend`/`revoke` record to `signal_overrides.jsonl`; a separate provider-filter
+  (`tools/live_provider_signal_filter.py --watch`) regenerates the filtered live
+  feed (`generated/victor_live.txt`) from the raw feed on every change; startup
+  catch-up reconciles the 24 h lookback so downtime edits/deletions are applied
+  too. **`auto --apply-signal-edits`** (opt-in) consumes that journal so
   the live executor follows the corrected feed: on `amend` it **flattens** the
   signal's MT5 footprint (`Mt5Executor.flatten_signal` — cancel pendings + close
   any open position) and **re-places at the corrected levels** (close-and-reopen,

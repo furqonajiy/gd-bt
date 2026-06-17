@@ -228,9 +228,11 @@ can't cleanly repair is left as posted (and you're notified).
 The feed follows the channel's latest state: when VICTOR edits a signal
 the line is amended in place (same `N.`, same signal_key/magic) and an
 `amend` record is appended to `signal_overrides.jsonl`; when he deletes
-one the line is removed and a `revoke` record is appended. The filtered
-live feed (`generated/victor_live.txt`) regenerates from the raw feed on
-every change. Startup catch-up applies the same reconciliation to the
+one the line is removed and a `revoke` record is appended. When the Victor
+provider-filter is run (`tools/live_provider_signal_filter.py --watch`, as
+in `cli_champion_victor.txt`), it regenerates the filtered live feed
+(`generated/victor_live.txt`) from the raw feed on every change. Startup
+catch-up applies the same reconciliation to the
 last 24 h, so edits/deletions made while the listener was down are not
 lost (see "Listener was down" below for longer gaps).
 
