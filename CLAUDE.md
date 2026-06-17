@@ -27,12 +27,28 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   `dump_forensic.py`, tick tooling).
 - `listener/telegram_listener.py` — ingests Victor's Telegram channel into
   `signals.txt` (override the output feed with `--signals-file`, e.g.
-  `victor_signals.txt`). The feed follows the channel's latest state: edits
-  amend the line in place (same `N.`/signal_key) and deletions remove it,
-  each queueing the matching MT5 amend/revoke; startup catch-up reconciles
-  the 24 h lookback so downtime edits/deletions are applied too. For longer
-  outages, `tools/telegram_export_to_signals.py --merge-into` syncs the feed
-  from a Telegram Desktop HTML export through the same parse pipeline.
+  `victor_signals.txt`). New **and edited** messages pass
+  `apply_signal_corrections` first — a logic-only typo fixer (wrong-side SL/TP,
+  TP order, extra-zero / **wrong-hundreds** typos) that now also repairs a
+  **directionally-valid but implausibly-far SL** via a clean ±100·n shift
+  (e.g. BUY `4319-4321 SL 4214` → `4314`, or `4327-4325 SL 4219` → `4319`); it
+  never tunes risk:reward and leaves a stop it can't cleanly repair as-posted.
+  The feed follows the channel's latest state: edits amend the line in place
+  (same `N.`/signal_key) and deletions remove it, each appending an
+  `amend`/`revoke` record to `signal_overrides.jsonl`; the filtered live feed
+  (`generated/victor_live.txt`) regenerates from the raw feed on every change;
+  startup catch-up reconciles the 24 h lookback so downtime edits/deletions are
+  applied too. **`auto --apply-signal-edits`** (opt-in) consumes that journal so
+  the live executor follows the corrected feed: on `amend` it **flattens** the
+  signal's MT5 footprint (`Mt5Executor.flatten_signal` — cancel pendings + close
+  any open position) and **re-places at the corrected levels** (close-and-reopen,
+  bypassing only the already-traded history gate via the per-cycle
+  `_amended_force_replace_keys`), on `revoke` it flattens and untracks — matched
+  by the **tagged** magic, idempotent through a byte-offset sidecar that anchors
+  at EOF on first run (the pre-existing backlog, already in the feed, is never
+  replayed). For longer outages, `tools/telegram_export_to_signals.py
+  --merge-into` syncs the feed from a Telegram Desktop HTML export through the
+  same parse pipeline.
 - `tools/live_feed_loop.py` — the **live self-signal feed loop**: one process
   that refetches the current month (`fetch --months 1`) and regenerates a
   generator's feed **only when a new CLOSED M1 bar exists** (idle otherwise),
