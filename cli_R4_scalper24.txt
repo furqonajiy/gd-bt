@@ -63,7 +63,7 @@ python tools/auto_explicit.py `
   --signals generated/self_scalper24_live.txt `
   --positions-json positions_R4_scalper24.json `
   --strategy-tag R4S2 `
-  --watch-interval 15 --mt5-symbol XAUUSD --mt5-server-offset 3 --mt5-history-bars 5000 `
+  --watch-interval 3 --mt5-symbol XAUUSD --mt5-server-offset 3 --mt5-history-bars 5000 `
   --reopen-missing-positions true `
   --sizing-mode risk --lot 0.01 --risk 0.02 --minimum-lot 0.01 --lot-step 0.01 `
   --bonus-per-closed-lot 3 `

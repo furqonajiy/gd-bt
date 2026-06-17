@@ -138,7 +138,7 @@ python tools/auto_explicit.py `
   --signals generated/self_scalper24_live.txt `
   --positions-json positions_self_no_trailing_24h.json `
   --strategy-tag SC24 `
-  --watch-interval 15 `
+  --watch-interval 3 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
   --mt5-history-bars 5000 `
