@@ -56,7 +56,7 @@ python tools/backtest_explicit.py `
   --trailing-close-distance 0.0 `
   --trailing-close-after-stage 0 `
   --output-dir reports/R4_BREAKOUT `
-  --initial-capital 5000 `
+  --initial-capital 50000 `
   --start-date 2026-01-01
 
 # ===== 3. AUTO CLI =====
@@ -105,4 +105,4 @@ python tools/auto_explicit.py `
   --trailing-open-distance 0.0 `
   --trailing-close-distance 0.0 `
   --trailing-close-after-stage 0 `
-  --initial-capital 5000
+  --initial-capital 50000

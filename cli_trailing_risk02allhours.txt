@@ -66,7 +66,7 @@ python tools/backtest_explicit.py `
   --trailing-close-after-stage 0 `
   --shared-sl true `
   --output-dir reports/SELF_TRAILING `
-  --initial-capital 5000 `
+  --initial-capital 50000 `
   --start-date 2025-01-01
 
 # --- 2b. RECENT BACKTEST (from 2026-06-01 only; quick current-regime check) ---
@@ -105,7 +105,7 @@ python tools/backtest_explicit.py `
   --trailing-close-after-stage 0 `
   --shared-sl true `
   --output-dir reports/SELF_TRAILING_FROM_JUNE `
-  --initial-capital 5000 `
+  --initial-capital 50000 `
   --start-date 2026-06-01
 
 # ===== 3. AUTO CLI =====
@@ -150,4 +150,4 @@ python tools/auto_explicit.py `
   --trailing-close-distance 8.0 `
   --trailing-close-after-stage 0 `
   --shared-sl true `
-  --initial-capital 5000
+  --initial-capital 50000

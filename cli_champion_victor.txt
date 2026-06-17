@@ -83,7 +83,7 @@ python tools/backtest_explicit.py `
   --trailing-close-after-stage 0 `
   --start-date 2026-01-01 `
   --output-dir reports/BEST_VIC_2026 `
-  --initial-capital 5000
+  --initial-capital 50000
 
 # ===== 4. AUTO CLI =====
 # Live Auto  ->  reads the filtered feed, places + manages orders on MT5
@@ -127,4 +127,4 @@ python tools/auto_explicit.py `
   --reopen-missing-positions true `
   --apply-signal-edits true `
   --signal-overrides-file signal_overrides.jsonl `
-  --initial-capital 5000
+  --initial-capital 50000
