@@ -83,7 +83,17 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   on current 2026 data the prior SC24T24E8's concurrent DD rose to **58.3%**
   (over the 40% gate), so among DD ≤ 40%-compliant configs **e5 is the edge+OOS
   leader** (edge $39,062 / OOS $6,671 / DD 33.3%) — fewer entries + a tighter 2.3
-  stop + a 90-min hold beat the over-DD e8 once the gate binds. (SC24T24E8 had
+  stop + a 90-min hold beat the over-DD e8 once the gate binds. The e5 feed is
+  now **RSI-filtered** (generator `--rsi-buy-max 70 --rsi-sell-min 30`: skip
+  overbought BUYs / oversold SELLs): the **R4 entry-feature sweep** (16
+  generator-feature variants × strategy/geometry, slippage-aware 2.0/1.0,
+  DD ≤ 40% & OOS > 0) found RSI the **only** entry feature that beats the
+  unfiltered `base` feed on **both edge and OOS** (rsi edge $39,508 / OOS $7,199 /
+  DD 33.4% vs base $39,020 / $6,629 / 33.3%, apples-to-apples in one sweep). It's
+  a **thin** filter (~0.5% of signals dropped) so the lift is modest and the
+  **strategy params are unchanged** — a feed change, not a strategy change, hence
+  low-risk; ADX/Bollinger/VWAP/HTF/S-R/session variants all lost on edge or OOS.
+  (SC24T24E8 had
   itself superseded the earlier R4 pick SC24T15E6, which led only on the
   compounded net+bonus mirage.) R1quiet stays seeded with SC24 until the sweep
   advances to it.
@@ -312,7 +322,8 @@ from 2020, see the standalone `cli_resync_m1_from_2020.txt` (`fetch --months 80`
 sections (Signal Auto Generator live-loop / Backtest CLI / Auto CLI; Telegram
 Listener only for the Victor feed). The current R4 champion is
 `cli_champion_R4_scalper24_no_trailing` — the **e5 DD-compliant winner**
-(e5 / range_uniform / slm2.3 / max_hold 90 / tp1_lock_delay 20 / shared_sl;
+(e5 / range_uniform / slm2.3 / max_hold 90 / tp1_lock_delay 20 / shared_sl, on
+the **RSI-filtered** scalper24 feed `--rsi-buy-max 70 --rsi-sell-min 30`;
 `champions/CHAMPION_R4parab.json`), which superseded SC24T24E8 for R4 after it
 breached the DD ≤ 40% gate on 2026 data (SC24T24E8 remains the R2bull/R3strong
 champion); others: `cli_champion_victor` (Victor — feed

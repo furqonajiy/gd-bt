@@ -1,14 +1,23 @@
 # =========================================================================
 # R4 (2026) CHAMPION — SCALPER24, NO TRAILING  (updated 2026-06-17) | tag SC24
-# scalper24 feed, e5 / range_uniform / slm2.3 / gap0.0 / max-hold 90 / TP3,
-# tp1-lock-delay 20 / tp1-lock-fraction 0.25 / lock-after-tp2 OFF / shared_sl,
-# NO trailing, risk 1%.
-# STATUS: re-promoted 2026-06-17 to the e5 DD-COMPLIANT winner
-#   (research self-scalper sweep -> champions/CHAMPION_R4parab.json). On current
-#   2026 (R4) data the prior SC24T24E8 champion's concurrent DD rose to 58.3%
-#   (OVER the <=40% gate), so among DD<=40%-compliant configs e5 is the edge+OOS
-#   leader: edge $39,062, OOS $6,671, DD 33.3%. It SUPERSEDES SC24T24E8 for R4
-#   ONLY; R2bull/R3strong keep SC24T24E8 (R3 had no DD-passing survivor, R2 still
+# scalper24 feed (RSI-FILTERED), e5 / range_uniform / slm2.3 / gap0.0 /
+# max-hold 90 / TP3, tp1-lock-delay 20 / tp1-lock-fraction 0.25 /
+# lock-after-tp2 OFF / shared_sl, NO trailing, risk 1%.
+# FEED FILTER: the generator commands below now carry --rsi-buy-max 70
+#   --rsi-sell-min 30 (skip overbought BUYs / oversold SELLs). The R4
+#   entry-feature sweep (16 generator-feature variants x strategy/geometry,
+#   slippage-aware 2.0/1.0, DD<=40% & OOS>0) found RSI is the ONLY feature that
+#   beats the unfiltered 'base' feed on BOTH edge AND OOS: rsi edge $39,508 /
+#   OOS $7,199 / DD 33.4% vs base edge $39,020 / OOS $6,629 / DD 33.3%. It is a
+#   THIN filter (~0.5% of signals dropped) so the lift is modest; strategy params
+#   are UNCHANGED from the prior e5 champion (this is a feed change, not a
+#   strategy change), so it is low-risk. Live confirmation backtest (2026):
+#   $5k -> $918,981 vs base $868,807, DD 34.7% either way.
+# STATUS: e5 DD-COMPLIANT winner (research self-scalper sweep ->
+#   champions/CHAMPION_R4parab.json), now on the RSI-filtered feed. The prior
+#   e5 promotion (edge $39,062 / OOS $6,671) superseded SC24T24E8 for R4 after
+#   it breached the <=40% DD gate (58.3%). e5 SUPERSEDES SC24T24E8 for R4 ONLY;
+#   R2bull/R3strong keep SC24T24E8 (R3 had no DD-passing survivor, R2 still
 #   sweeping). compounded $ are model upper bounds (they rank configs, not money).
 # CAPITAL NOTE: at risk 1% the per-signal risk budget only clears the 0.01-lot
 #   floor once equity is large enough; at $5-7k many signals floor to 0.01 (real
@@ -35,7 +44,7 @@ python tools/live_feed_loop.py `
   --gen-recent-months 2 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
-  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24_live.txt --session-start 0 --session-end 0 --signal-tz 7
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30
 
 # ===== 2. BACKTEST CLI =====
 # --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0: model the give-back
@@ -51,7 +60,7 @@ python tools/live_feed_loop.py `
 # STEP 2a — (re)generate the FULL static archive generated/self_scalper24.txt
 # from ALL chart history so the backtest reflects the latest data. This is the
 # 18-month feed (slow, ~15s) — DIFFERENT from the live 2-day feed in section 1.
-python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24.txt --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24.txt --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30
 # STEP 2b — backtest that freshly-regenerated archive (full history):
 python tools/backtest_explicit.py `
   --signals generated/self_scalper24.txt `
