@@ -72,7 +72,7 @@ python tools/auto_explicit.py `
   --signals generated/adaptive_breakout.txt `
   --positions-json positions_R4_breakout.json `
   --strategy-tag BRK `
-  --watch-interval 15 `
+  --watch-interval 3 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
   --mt5-history-bars 5000 `
