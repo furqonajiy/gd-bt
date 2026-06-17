@@ -19,10 +19,12 @@
 #   it breached the <=40% DD gate (58.3%). e5 SUPERSEDES SC24T24E8 for R4 ONLY;
 #   R2bull/R3strong keep SC24T24E8 (R3 had no DD-passing survivor, R2 still
 #   sweeping). compounded $ are model upper bounds (they rank configs, not money).
-# CAPITAL NOTE: at risk 1% the per-signal risk budget only clears the 0.01-lot
-#   floor once equity is large enough; at $5-7k many signals floor to 0.01 (real
-#   risk lands a touch above the nominal 1%, so DD runs a bit hotter than 33%).
-#   ~$15-20k makes the 1% risk fully faithful. Live sizes off real equity.
+# CAPITAL NOTE: base is now $50,000 (re-baselined 2026-06-17) so the 0.01-lot
+#   floor no longer distorts risk. At $5-7k many wide-stop signals floored to 0.01
+#   (real risk above the nominal 1%, DD hotter); ~$15-20k softened it; $50k makes
+#   the 1% risk fully faithful. Live sizes off REAL equity, so fund ~$50k to match
+#   this base (else set --initial-capital below to your actual equity for the DD
+#   base to be correct).
 # LIVE FIXES IN EFFECT (auto, via --reopen-missing-positions true below): tagged
 #   compact comments SC24-MMDD#NN.N, per-entry partial placement, reopen-churn
 #   cooldown, and --watch-interval 3 (cuts LOCK_TP1/TP2 give-back). Pull main +

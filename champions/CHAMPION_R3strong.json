@@ -53,5 +53,5 @@
   "net_bonus": 570127427394057600,
   "oos": 110906.98857143003,
   "regime": "R3strong",
-  "source": "promoted from the regime grid sweep 2026-06-16 (SC24 + entry_count 6->8, tp1_lock_delay 24); tops the R3strong grid on net+bonus AND OOS at DD<=40% (OOS 110,907 vs SC24 e6 84,980, +31%)"
+  "source": "promoted from the regime grid sweep 2026-06-16 (SC24 + entry_count 6->8, tp1_lock_delay 24); tops the R3strong grid on net+bonus AND OOS at DD<=40% (OOS 110,907 vs SC24 e6 84,980, +31%) BASE $50k (2026-06-17): initial_capital raised to $50,000. dd (concurrent, ~capital-independent) and oos (fixed-lot) kept from the sweep; net_bonus is the $5k sweep figure pending a $50k re-sweep. RISK FLAG: an independent risk-sized re-backtest at $50k put this e8 config's concurrent DD at ~51% (over the 40% gate) vs the sweep record 39.3% -- may indicate SC24T24E8 is riskier than recorded, or an engine-methodology gap; settle via the $50k re-sweep before any redeploy."
 }

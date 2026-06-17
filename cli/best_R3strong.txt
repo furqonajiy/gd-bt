@@ -53,7 +53,7 @@ python tools/backtest_explicit.py \
   --charts data/XAUUSD_M1_2025*_ELEV8.csv \
   --start-date 2025-01-01 \
   --output-dir reports/CHAMPION_R3strong \
-  --initial-capital 1000.0 \
+  --initial-capital 50000 \
   --max-drawdown-limit-pct 50 \
   --sync-charts false \
   --progress-interval-seconds 30

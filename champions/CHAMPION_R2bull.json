@@ -53,5 +53,5 @@
   "net_bonus": 148643892511.82538,
   "oos": 52831.07571428575,
   "regime": "R2bull",
-  "source": "promoted from the regime grid sweep 2026-06-16: SC24T24E8 (SC24 + entry_count 6->8, tp1_lock_delay 24). #1 by OOS AND edge in R2bull (OOS 52,831 vs SC24 e6 ~39,457, edge $124,014) at DD<=40% -- the reliable forward-fit metrics, not the compounded mirage."
+  "source": "promoted from the regime grid sweep 2026-06-16: SC24T24E8 (SC24 + entry_count 6->8, tp1_lock_delay 24). #1 by OOS AND edge in R2bull (OOS 52,831 vs SC24 e6 ~39,457, edge $124,014) at DD<=40% -- the reliable forward-fit metrics, not the compounded mirage. BASE $50k (2026-06-17): initial_capital raised to $50,000. dd/oos kept from the sweep; net_bonus is the $5k sweep figure pending a $50k re-sweep. RISK FLAG: an independent risk-sized re-backtest put this e8 config's concurrent DD at ~75% at $50k and BLEW UP a $5k account mid-run (min-lot floor + 8 entries) -- markedly worse than the sweep record 34.8%. Treat with caution; settle via the $50k re-sweep before redeploy."
 }
