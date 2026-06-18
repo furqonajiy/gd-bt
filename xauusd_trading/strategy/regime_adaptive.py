@@ -12,6 +12,7 @@ Both need the same two things:
 from __future__ import annotations
 
 import json
+import csv
 from dataclasses import fields as _dc_fields
 from pathlib import Path
 
@@ -19,6 +20,7 @@ import pandas as pd
 
 from xauusd_trading.core.config import StrategyConfig
 from xauusd_trading.strategy.regime import detect_regime, m15_atr, read_current_regime, trend_score
+from xauusd_trading.strategy.regime_calendar import normalize_regime
 
 
 def champion_config(regime: str, champions_dir: str | Path | None,
@@ -83,4 +85,43 @@ def make_regime_config_resolver(chart_df: pd.DataFrame, *, champions_dir,
         return cfg
 
     resolver.regime_at = _regime_at  # exposed for reporting / debugging
+    return resolver
+
+
+def make_calendar_config_resolver(calendar_path: str | Path, *, champions_dir,
+                                  base_config: StrategyConfig,
+                                  layer: str = "sweep_regime"):
+    """Build ``resolver(signal) -> StrategyConfig`` from a generated calendar.
+
+    This is for historical package scoring: if a signal feed was composed from
+    per-regime feeds using ``regime_calendar.csv``, the config resolver must use
+    the same date labels instead of the live trailing-window detector.
+    """
+    labels_by_date: dict[str, str] = {}
+    try:
+        rows = csv.DictReader(Path(calendar_path).read_text().splitlines())
+        for row in rows:
+            date = (row.get("date") or "").strip()
+            label = normalize_regime((row.get(layer) or "").strip())
+            if date and label:
+                labels_by_date[date] = label
+    except OSError:
+        labels_by_date = {}
+
+    config_by_regime: dict[str, StrategyConfig] = {}
+
+    def _regime_at(ts) -> str | None:
+        return labels_by_date.get(pd.Timestamp(ts).strftime("%Y-%m-%d"))
+
+    def resolver(signal):
+        regime = _regime_at(signal.signal_time_chart)
+        if not regime:
+            return base_config
+        cfg = config_by_regime.get(regime)
+        if cfg is None:
+            cfg = champion_config(regime, champions_dir, base_config)
+            config_by_regime[regime] = cfg
+        return cfg
+
+    resolver.regime_at = _regime_at
     return resolver

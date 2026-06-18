@@ -143,12 +143,158 @@ def test_render_hold_and_switch(tmp_path):
     assert "SWITCH" in md
     assert ">>> RUN THIS NOW <<<" in md           # live regime flagged
     assert "R4parab" in md and "live regime: R4parab" in md
+    assert "Composed champion feed" in md
+    assert "generated/regime_champion_feed.txt" in md
 
 
 def test_feed_name_resolves_to_archive_path():
     assert cr.feed_signals("adE_farTP") == "generated/adaptive_adE_farTP.txt"
+    assert cr.feed_signals("scalper24") == "generated/self_scalper24.txt"
+    assert cr.feed_signals("scalperwide24") == "generated/self_scalper_widerr24.txt"
+    assert cr.feed_signals("risk02allhours") == "generated/self_risk02_allhours.txt"
     # An already-resolved path round-trips unchanged.
     assert cr.feed_signals("generated/self_better.txt") == "generated/self_better.txt"
+
+
+def test_regime_feed_compose_args_uses_published_champion_feeds():
+    champions = {
+        "R1quiet": None,
+        "R2bull": {"feed": "adE_farTP"},
+        "R3strong": {"feed": "generated/custom_feed.txt"},
+        "R4parab": {"feed": "scalper24"},
+    }
+    args = cr.regime_feed_compose_args(
+        ["R1quiet", "R2bull", "R3strong", "R4parab"],
+        champions,
+        output="generated/out.txt",
+        calendar="calendar.csv",
+    )
+
+    assert args[:6] == [
+        sys.executable,
+        "tools/compose_regime_feeds.py",
+        "--calendar", "calendar.csv",
+        "--layer", "sweep_regime",
+    ]
+    assert "--output" in args and "generated/out.txt" in args
+    assert "R1quiet=" not in " ".join(args)
+    assert "R2bull=generated/adaptive_adE_farTP.txt" in args
+    assert "R3strong=generated/custom_feed.txt" in args
+    assert "R4parab=generated/self_scalper24.txt" in args
+    assert cr.regime_feed_compose_args(["R1quiet"], {"R1quiet": None}) == []
+
+
+def test_regime_package_backtest_args_use_calendar_adaptive_champions():
+    cfg = {
+        "initial_capital": 50000,
+        "sizing_mode": "risk",
+        "lot_per_entry": 0.01,
+        "risk_per_signal": 0.025,
+        "minimum_lot": 0.01,
+        "lot_step": 0.01,
+        "bonus_per_closed_lot": 3.0,
+        "entry_count": 5,
+        "entry_ladder": "range_uniform",
+        "entry_sl_gap": 0.0,
+        "activation_delay_minutes": 0,
+        "pending_expiry_minutes": 420,
+        "max_hold_minutes": 90,
+        "sl_multiplier": 2.3,
+        "final_target": "TP3",
+        "lock_after_tp1": True,
+        "lock_after_tp2": False,
+        "tp1_lock_delay_minutes": 20,
+        "tp2_lock_delay_minutes": 0,
+        "profit_lock_mode": "tp_levels",
+        "bep_trigger_distance": 6.0,
+        "tp1_lock_fraction": 0.25,
+        "tp2_lock_target": "TP2",
+        "runner_after_tp3": False,
+        "tp3_lock_target": "TP2",
+        "trailing_open_distance": 0.0,
+        "trailing_close_distance": 0.0,
+        "trailing_close_min_step": 0.0,
+        "lock_exit_slippage_points": 0.0,
+        "lock_tp1_exit_slippage_points": 0.0,
+        "lock_tp2_exit_slippage_points": 0.0,
+        "scale_out_at_tp1": False,
+        "scale_out_at_tp2": False,
+        "bep_after_tp1": False,
+        "bep_buffer": 0.0,
+        "trailing_close_after_stage": 0,
+        "runner_no_final_cap": False,
+        "shared_sl": True,
+        "bep_after_move": 0.0,
+        "runner_trail_from": "TP3",
+    }
+    champions = {
+        "R1quiet": None,
+        "R2bull": {"config": cfg},
+        "R3strong": {"config": {**cfg, "entry_count": 7}},
+        "R4parab": None,
+    }
+
+    args = cr.regime_package_backtest_args(
+        ["R1quiet", "R2bull", "R3strong", "R4parab"],
+        champions,
+        signals="generated/out.txt",
+        calendar="calendar.csv",
+        champions_dir="champions",
+        output_dir="reports/package",
+    )
+
+    assert args[:2] == [sys.executable, "tools/backtest_explicit.py"]
+    assert "--signals" in args and "generated/out.txt" in args
+    assert "--output-dir" in args and "reports/package" in args
+    assert "--entries" in args and args[args.index("--entries") + 1] == "5"
+    assert "--shared-sl" in args and args[args.index("--shared-sl") + 1] == "true"
+    assert "--adaptive" in args and args[args.index("--adaptive") + 1] == "true"
+    assert "--champions-dir" in args and args[args.index("--champions-dir") + 1] == "champions"
+    assert "--adaptive-calendar" in args and args[args.index("--adaptive-calendar") + 1] == "calendar.csv"
+    assert cr.regime_package_backtest_args(["R1quiet"], {"R1quiet": None}) == []
+
+
+def test_regime_package_backtest_args_emit_known_backtest_flags():
+    champions = {
+        "R4parab": {
+            "config": {
+                "entry_count": 6,
+                "sl_multiplier": 2.1,
+                "risk_per_signal": 0.01,
+            },
+        },
+    }
+    args = cr.regime_package_backtest_args(["R4parab"], champions)
+    help_text = subprocess.run(
+        [sys.executable, "tools/backtest_explicit.py", "--help"],
+        cwd=ROOT, capture_output=True, text=True).stdout
+    for tok in args:
+        if tok.startswith("--"):
+            assert tok in help_text, f"unknown flag {tok} in package CLI"
+
+
+def test_calendar_regime_helpers_use_generated_calendar(tmp_path):
+    calendar = tmp_path / "regime_calendar.csv"
+    calendar.write_text("\n".join([
+        "date,month,sweep_regime,behavior_regime,old_threshold_regime",
+        "2025-10-17,2025-10,R4parab,R4parab,R4parab",
+        "2025-10-20,2025-10,R4parab,R4parab,R4parab",
+        "2026-02-02,2026-02,R4parab,R3strong,R4parab",
+        "2026-03-10,2026-03,R3strong,R3strong,R4parab",
+        "2026-04-01,2026-04,R2bull,R2trend,R4parab",
+    ]) + "\n")
+
+    assert cr.regime_start("R4parab", calendar_path=calendar) == "2025-10-17"
+    assert cr.regime_charts("R4parab", calendar_path=calendar) == (
+        "data/XAUUSD_M1_202510_ELEV8.csv data/XAUUSD_M1_202602_ELEV8.csv")
+    assert cr.regime_backtest_signals("R4parab", "scalper24", calendar_path=calendar) == (
+        "generated/regime_feeds/R4parab_scalper24.txt")
+    assert cr.regime_backtest_signals("R4parab", "generated/self_scalper24.txt", calendar_path=calendar) == (
+        "generated/regime_feeds/R4parab_scalper24.txt")
+    assert cr.regime_backtest_signals("R4parab", "generated/adaptive_adE_farTP.txt", calendar_path=calendar) == (
+        "generated/regime_feeds/R4parab_adE_farTP.txt")
+    # Existing R2trend wording aliases to the canonical R2bull bucket.
+    assert cr.regime_charts("R2trend", calendar_path=calendar) == "data/XAUUSD_M1_202604_ELEV8.csv"
 
 
 def test_rendered_cli_is_runnable_backtest_explicit():

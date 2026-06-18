@@ -96,6 +96,35 @@ def test_regime_config_resolver_maps_signal_to_champion(tmp_path):
     assert cfg.entry_count == 8       # the R4parab champion, not the base
 
 
+def test_calendar_config_resolver_maps_signal_date_to_champion(tmp_path):
+    from xauusd_trading import make_calendar_config_resolver, parse_one_signal
+    calendar = tmp_path / "regime_calendar.csv"
+    calendar.write_text("\n".join([
+        "date,sweep_regime,behavior_regime,old_threshold_regime",
+        "2026-01-02,R2trend,R2trend,R2bull",
+        "2026-01-03,R4parab,R4parab,R4parab",
+    ]) + "\n")
+    (tmp_path / "CHAMPION_R2bull.json").write_text(json.dumps({
+        "config": {**asdict(DEFAULT_CONFIG), "entry_count": 2},
+    }))
+    (tmp_path / "CHAMPION_R4parab.json").write_text(json.dumps({
+        "config": {**asdict(DEFAULT_CONFIG), "entry_count": 8},
+    }))
+
+    resolver = make_calendar_config_resolver(
+        calendar, champions_dir=tmp_path, base_config=DEFAULT_CONFIG)
+    r2_sig = parse_one_signal(
+        "1. BUY XAUUSD 4500 - 4498 SL 4490 TP1 4510 TP2 4515 TP3 4520 2:00 PM",
+        "2026-01-02", 3)
+    missing_sig = parse_one_signal(
+        "1. BUY XAUUSD 4500 - 4498 SL 4490 TP1 4510 TP2 4515 TP3 4520 2:00 PM",
+        "2026-01-04", 3)
+
+    assert resolver.regime_at(r2_sig.signal_time_chart) == "R2bull"
+    assert resolver(r2_sig).entry_count == 2
+    assert resolver(missing_sig) is DEFAULT_CONFIG
+
+
 def test_run_backtest_calls_config_resolver_per_signal(tmp_path):
     # run_backtest must invoke config_resolver once per surviving signal and use
     # the returned config (here a sentinel with entry_count=1 vs the base 3).
