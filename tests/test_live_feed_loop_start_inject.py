@@ -68,3 +68,14 @@ def test_family_start_flag_map_matches_modules():
     assert set(lfl.GENERATOR_START_FLAG) == set(lfl.GENERATOR_MODULES)
     assert lfl.GENERATOR_START_FLAG["scalper"] == "--start"
     assert lfl.GENERATOR_START_FLAG["risk02"] == "--start-date"
+    assert lfl.GENERATOR_START_FLAG["adaptive"] == "--start-date"
+    assert lfl.GENERATOR_START_FLAG["breakout"] == "--start-date"
+    assert lfl.GENERATOR_START_FLAG["meanrev"] == "--start-date"
+
+
+def test_atr_families_inject_start_date_when_absent():
+    argv = ["--m1-charts", "data/x.csv", "--output", "o.txt"]
+    out = lfl._effective_gen_argv(argv, start_days=3, recent_months=None,
+                                  today=TODAY, start_flag="--start-date")
+    assert "--start-date" in out
+    assert out[out.index("--start-date") + 1] == EXPECTED_START

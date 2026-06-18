@@ -37,6 +37,16 @@ Usage (champion no-trailing config):
       --output generated/self_scalper24_live.txt \\
       --start 2026-06-10 --session-start 0 --session-end 0
 
+Usage (ATR breakout/mean-reversion/trend-pullback families):
+
+    python tools/live_feed_loop.py \\
+      --family breakout \\
+      --interval 60 --gen-start-days 7 --gen-recent-months 2 \\
+      --mt5-symbol XAUUSD --mt5-server-offset 3 \\
+      -- \\
+      --m1-charts "data/XAUUSD_M1_*_ELEV8.csv" \\
+      --output generated/adaptive_breakout_live.txt
+
 Everything after ``--`` is passed verbatim to the generator's own argparse.
 """
 from __future__ import annotations
@@ -62,10 +72,13 @@ if str(ROOT / "tools") not in sys.path:
 # main(argv) -> int; importing keeps the signal logic identical to the
 # backtest archives (no fork of generation code).
 GENERATOR_MODULES = {
+    "adaptive": "generate_adaptive_self_signals",
+    "breakout": "generate_breakout_signals",
     "scalper": "generate_scalper_signals",
     "risk02": "generate_aggressive_limit_risk02",
     "canonical": "generate_self_signals",
     "better": "generate_better_self_signals",
+    "meanrev": "generate_meanrev_signals",
     "zones": "gen_zone_signals",
 }
 
@@ -76,10 +89,13 @@ GENERATOR_MODULES = {
 # loaded chart window (the early, cold-start bars included), diverging from a
 # full-archive backtest. None = family has no start flag (nothing to inject).
 GENERATOR_START_FLAG = {
+    "adaptive": "--start-date",
+    "breakout": "--start-date",
     "scalper": "--start",
     "risk02": "--start-date",
     "canonical": "--start-date",
     "better": "--start-date",
+    "meanrev": "--start-date",
     "zones": None,
 }
 
@@ -136,10 +152,29 @@ def _recent_month_charts(template: str, n: int, today: datetime) -> list[str]:
     return out
 
 
+def _narrow_chart_operands(argv: list[str], flag: str, *,
+                           recent_months: int, today: datetime) -> list[str]:
+    if flag not in argv:
+        return argv
+    i = argv.index(flag)
+    j = i + 1
+    operands = []
+    while j < len(argv) and not argv[j].startswith("--"):
+        operands.append(argv[j])
+        j += 1
+    template = next((o for o in operands if "*" in o), operands[0] if operands else None)
+    if not template:
+        return argv
+    narrowed = _recent_month_charts(template, recent_months, today)
+    if not narrowed:
+        return argv
+    return argv[:i + 1] + narrowed + argv[j:]
+
+
 def _effective_gen_argv(gen_argv: list[str], *, start_days: int | None,
                         recent_months: int | None, today: datetime,
                         start_flag: str | None = "--start") -> list[str]:
-    """gen_argv with a rolling --start and/or recent-month --charts applied.
+    """gen_argv with a rolling start and/or recent-month chart args applied.
 
     Keeps the single live command identical in *result* to the old per-cycle
     PowerShell loop, but recomputed in-process each pass so it rolls forward
@@ -161,18 +196,10 @@ def _effective_gen_argv(gen_argv: list[str], *, start_days: int | None,
             argv[argv.index(existing) + 1] = start
         elif start_flag:
             argv += [start_flag, start]
-    if recent_months is not None and "--charts" in argv:
-        i = argv.index("--charts")
-        # collect the existing chart operands (until the next --flag)
-        j = i + 1
-        operands = []
-        while j < len(argv) and not argv[j].startswith("--"):
-            operands.append(argv[j]); j += 1
-        template = next((o for o in operands if "*" in o), operands[0] if operands else None)
-        if template:
-            narrowed = _recent_month_charts(template, recent_months, today)
-            if narrowed:
-                argv = argv[:i + 1] + narrowed + argv[j:]
+    if recent_months is not None:
+        for chart_flag in ("--charts", "--m1-charts"):
+            argv = _narrow_chart_operands(
+                argv, chart_flag, recent_months=recent_months, today=today)
     return argv
 
 
@@ -205,9 +232,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "carries one and INJECTED if it does not (so it is never a "
                         "silent no-op). Omit to use the --start passed through.")
     p.add_argument("--gen-recent-months", type=int, default=None,
-                   help="Each cycle, narrow the generator's --charts glob to the N "
-                        "most recent monthly files (fast regen; EMAs stay warm). "
-                        "Omit to pass --charts through unchanged.")
+                   help="Each cycle, narrow the generator's --charts or --m1-charts "
+                        "glob to the N most recent monthly files (fast regen; EMAs "
+                        "stay warm). Omit to pass chart args through unchanged.")
     p.add_argument("--fetch-months", type=int, default=1,
                    help="months_back for the CSV refresh (default 1: only the "
                         "current month changes while live).")
