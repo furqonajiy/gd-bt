@@ -37,8 +37,12 @@ class _Resp:
 
 class _Sym:
     digits = 2
-    trade_stops_level = 0
     filling_mode = 2  # SYMBOL_FILLING_IOC
+
+    def __init__(self, *, stops=0, freeze=0):
+        self.trade_stops_level = stops
+        self.trade_freeze_level = freeze
+        self.freeze_level = freeze
 
 
 class _Tick:
@@ -86,15 +90,16 @@ class _FakeMt5:
     SYMBOL_FILLING_FOK = 1
 
     def __init__(self, *, bid: float, ask: float, positions=None,
-                 history_deals=None, fail_actions=()):
+                 history_deals=None, fail_actions=(), stops=0, freeze=0):
         self._tick = _Tick(bid, ask)
         self._positions = list(positions or [])
         self._history = list(history_deals or [])
         self._fail_actions = set(fail_actions)
+        self._sym = _Sym(stops=stops, freeze=freeze)
         self.requests = []
 
     def symbol_info(self, symbol):
-        return _Sym()
+        return self._sym
 
     def symbol_info_tick(self, symbol):
         return self._tick
@@ -359,6 +364,20 @@ def test_reopen_unfavorable_price_places_limit_at_entry(monkeypatch):
     assert req["comment"] == mt5_entry_comment(pos.signal.signal_key, 0)
 
 
+def test_reopen_unfavorable_limit_inside_stop_band_is_deferred(monkeypatch):
+    _reset_executor_guards()
+    pos = _pos_with_open_leg()
+    _freeze_wall_clock(monkeypatch, pos.activation_time + timedelta(minutes=10))
+    mt5 = _FakeMt5(bid=4211.00, ask=4211.30, stops=50)
+
+    log = _executor(mt5).reopen_missing_open_positions(pos, _CFG)
+
+    assert log.placed == 0
+    assert mt5.requests == []
+    assert any("re-open LIMIT deferred" in a for a in log.actions)
+    assert any("within broker stop/freeze level" in a for a in log.actions)
+
+
 def test_reopen_unfavorable_past_window_does_not_chase(monkeypatch):
     # Past expiry_time the manage pass cancels every pending each cycle; a
     # re-placed limit would ping-pong forever. Accept the miss instead.
@@ -458,6 +477,22 @@ def test_reopen_clamps_locked_stop_to_legal_level(monkeypatch):
     assert log.placed == 1
     (req,) = mt5.requests
     assert req["sl"] == 4212.50  # bid - 0.5, not the illegal 4215.50
+
+
+def test_reopen_market_stop_uses_broker_min_distance(monkeypatch):
+    _reset_executor_guards()
+    pos = _pos_with_open_leg()
+    pos.stage = 1
+    pos.stage1_time = pos.activation_time + timedelta(minutes=1)
+    _freeze_wall_clock(monkeypatch, pos.activation_time + timedelta(minutes=10))
+    mt5 = _FakeMt5(bid=4213.00, ask=4213.30, stops=100)
+
+    log = _executor(mt5).reopen_missing_open_positions(pos, _CFG)
+
+    assert log.placed == 1
+    (req,) = mt5.requests
+    assert req["action"] == mt5.TRADE_ACTION_DEAL
+    assert req["sl"] == 4212.00
 
 
 # --- 3. never re-place a signal that already traded --------------------------
