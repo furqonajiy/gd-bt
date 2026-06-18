@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from tools.compose_regime_feeds import compose_regime_feeds, feed_blocks_by_date, parse_regime_feed
 from tools.filter_signals_by_regime import allowed_dates_from_calendar, filter_feed_by_dates
 from tools.regime_calendar_env import calendar_dates, chart_paths_for_dates, env_lines
 from xauusd_trading.strategy.regime_calendar import REGIME_ORDER, build_regime_calendar, normalize_regime
@@ -92,3 +93,45 @@ def test_build_regime_calendar_has_canonical_sweep_labels() -> None:
     assert labels.issubset(set(REGIME_ORDER))
     assert calendar["behavior_regime"].dropna().isin(REGIME_ORDER).all()
     assert calendar["old_threshold_regime"].isin(REGIME_ORDER).all()
+
+
+def test_compose_regime_feeds_merges_chosen_sources_by_calendar() -> None:
+    calendar = "\n".join([
+        "date,sweep_regime,behavior_regime,old_threshold_regime",
+        "2026-01-01,R4parab,R4parab,R4parab",
+        "2026-01-02,R2bull,R2trend,R2bull",
+        "2026-01-03,R4parab,R4parab,R4parab",
+    ])
+    r4_feed = "\n".join([
+        "2026-01-01 GMT+7",
+        "1. SELL XAUUSD 4500 - 4502 SL 4510 TP1 4490 TP2 4480 TP3 4460 10:00 AM",
+        "",
+        "2026-01-02 GMT+7",
+        "1. SELL XAUUSD 4510 - 4512 SL 4520 TP1 4500 TP2 4490 TP3 4480 10:00 AM",
+        "",
+        "2026-01-03 GMT+7",
+        "1. BUY XAUUSD 4520 - 4518 SL 4510 TP1 4530 TP2 4540 TP3 4560 10:00 AM",
+    ]) + "\n"
+    r2_feed = "\n".join([
+        "2026-01-02 GMT+7",
+        "1. BUY XAUUSD 4500 - 4498 SL 4490 TP1 4510 TP2 4520 TP3 4540 10:00 AM",
+    ]) + "\n"
+
+    regime, path = parse_regime_feed("R2trend=generated/r2.txt")
+    assert regime == "R2bull"
+    assert path.as_posix() == "generated/r2.txt"
+    assert set(feed_blocks_by_date(r4_feed)) == {"2026-01-01", "2026-01-02", "2026-01-03"}
+
+    text, stats = compose_regime_feeds(
+        calendar,
+        {
+            "R4parab": ("r4.txt", r4_feed),
+            "R2bull": ("r2.txt", r2_feed),
+        },
+    )
+
+    assert text.splitlines()[0] == "2026-01-01 GMT+7"
+    assert "4510 - 4512" not in text
+    assert text.index("2026-01-01") < text.index("2026-01-02") < text.index("2026-01-03")
+    assert [s.regime for s in stats] == ["R4parab", "R2bull"]
+    assert [(s.feed_days, s.signal_count) for s in stats] == [(2, 2), (1, 1)]
