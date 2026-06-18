@@ -1,0 +1,191 @@
+# =========================================================================
+# R4 (2026) R:R RESEARCH CANDIDATE — SCALPER24 + R:R rr10x20x40 + RSI  | tag R40R
+# scalper24 feed (RSI-FILTERED: --rsi-buy-max 70 --rsi-sell-min 30), TPs rewritten
+# to TP1=1.0x / TP2=2.0x / TP3=4.0x of the posted risk (generator --rr1 1.0
+# --rr2 2.0 --rr3 4.0), then traded with e6 / range_to_sl / slm2.3 / gap0.5 /
+# activation-delay 2 / pending-expiry 180 / max-hold 240 / TP3, lock-after-tp1 +
+# lock-after-tp2, tp1-lock-delay 24 / tp2-lock-delay 2 / tp1-lock-fraction 0.5,
+# shared_sl OFF, NO trailing, risk 1%.
+#
+# SECTION MAP (same in every strategy CLI; copy-paste 3/4/5 for backtests):
+#   1. Telegram Listener            (N/A here -- self-generated feed)
+#   2. Live Loop Signal Generator   (continuous live feed)
+#   3. Signal Generator             (one-shot static archive, run before 4/5)
+#   4. Backtest from 2026-01        -> reports/RR40R_202601.xlsx
+#   5. Backtest from 2021-01        -> reports/RR40R_202101.xlsx  (full history)
+#   6. Live Auto Executor           (OPTIONAL -- validate before any live use)
+#
+# RELATIONSHIP TO cli_rr10x20x40:
+#   This is the RSI-filtered variant of cli_rr10x20x40. The R:R sweep ran on the
+#   UNFILTERED feed; this file adds --rsi-buy-max 70 --rsi-sell-min 30 to sections
+#   2 and 3 so the live feed and backtest are consistent. The RSI filter drops ~0.5%
+#   of signals (overbought BUYs / oversold SELLs) -- the same filter the current
+#   live SC24 champion uses. The RSI+R:R combination has NOT been separately swept;
+#   backtest sections 4/5 before any live use to verify the combination holds up.
+#
+# SWEEP RESULT (rr10x20x40 unfiltered baseline, self-scalper-rr-sweep R4 2026,
+#   slippage-aware 2.0/1.0, DD<=40% & OOS>0): the HIGHEST-OOS variant.
+#   edge $49,219 / OOS $9,116 / DD 38.0% (5 survivors) vs the incumbent R:R
+#   'base' edge $40,978 / OOS $5,939 (4 survivors) -- BEATS base on BOTH edge AND
+#   OOS. Same TP1=1.0x lock as base but a far TP3 (4.0x) runner. The RSI lift on
+#   the same strategy (entry-feature sweep) added ~$500 edge / $300 OOS on the
+#   unfiltered base; expect a similar lift here (unverified).
+#
+# STATUS: RESEARCH ONLY -- NOT a deployed champion. Forward/demo-validate before
+#   any live use. Tag R40R + positions_sc24_rr10x20x40_rsi.json keep it isolated
+#   from SC24, Victor, and the unfiltered RR40 executor.
+#
+# FEED/PARITY NOTE: sections 2 and 3 both carry the RSI flags so the live feed and
+#   backtest archive are byte-identical in signal selection. The strategy params
+#   (sections 4/5/6) are unchanged from cli_rr10x20x40.
+# =========================================================================
+
+# ===== 1. TELEGRAM LISTENER =====
+# N/A -- this is a SELF-GENERATED feed (no Telegram source). The signals come
+# from the generator in sections 2 (live) and 3 (backtest archive).
+
+# ===== 2. LIVE LOOP SIGNAL GENERATOR =====
+# Rolling 3-day window; RSI-filtered + R:R rewrite. Only run live after a clean
+# forward/demo validation (backtest sections 4/5 first).
+python tools/live_feed_loop.py `
+  --family scalper `
+  --interval 30 `
+  --gen-start-days 3 `
+  --gen-recent-months 2 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24_rr10x20x40_rsi_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rr1 1.0 --rr2 2.0 --rr3 4.0 --rsi-buy-max 70 --rsi-sell-min 30
+
+# ===== 3. SIGNAL GENERATOR (before backtest) =====
+# One-shot FULL static archive: RSI-filtered + R:R rewrite (run before 4/5).
+# RSI flags match section 2 exactly so backtest and live feed are consistent.
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24_rr10x20x40_rsi.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rr1 1.0 --rr2 2.0 --rr3 4.0 --rsi-buy-max 70 --rsi-sell-min 30
+
+# ===== 4. BACKTEST FROM 2026-01 (current regime) =====
+# --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
+#   give-back so the backtest matches live. Backtest-only; never live.
+python tools/backtest_explicit.py `
+  --signals generated/self_scalper24_rr10x20x40_rsi.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --shared-sl false `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.3 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/RR40R_202601 `
+  --initial-capital 50000 `
+  --start-date 2026-01-01
+
+# ===== 5. BACKTEST FROM 2021-01 (full history) =====
+python tools/backtest_explicit.py `
+  --signals generated/self_scalper24_rr10x20x40_rsi.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --shared-sl false `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.3 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/RR40R_202101 `
+  --initial-capital 50000 `
+  --start-date 2021-01-01
+
+# ===== 6. LIVE AUTO EXECUTOR (OPTIONAL -- VALIDATE BEFORE USE) =====
+# RESEARCH CANDIDATE. Only run live after a clean forward/demo validation.
+# Tag R40R + positions_sc24_rr10x20x40_rsi.json keep it isolated from SC24,
+# Victor, and the unfiltered RR40 executor. Strategy params are byte-identical
+# to sections 4/5.
+python tools/auto_explicit.py `
+  --signals generated/self_scalper24_rr10x20x40_rsi_live.txt `
+  --positions-json positions_sc24_rr10x20x40_rsi.json `
+  --strategy-tag R40R `
+  --watch-interval 3 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --replace-missing-entries false `
+  --reopen-missing-positions true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --shared-sl false `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.3 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --trailing-close-after-stage 0 `
+  --initial-capital 50000

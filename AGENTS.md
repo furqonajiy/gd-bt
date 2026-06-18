@@ -357,7 +357,11 @@ champion); the only other deployed feed is `cli_champion_victor` (Victor — fee
 `cli_rr08x15x30` / `cli_rr10x20x40` are **backtest-only R:R research candidates** —
 the two R4 signal-R:R sweep winners that beat the incumbent on edge AND OOS (TP1/
 TP2/TP3 rewritten via the generator's `--rr1/--rr2/--rr3` on the unfiltered
-scalper24 feed; **not deployed**, forward-validate before any live use). The
+scalper24 feed; **not deployed**, forward-validate before any live use).
+`cli_rr08x15x30_rsi` / `cli_rr10x20x40_rsi` are the **RSI-filtered variants** of
+those same candidates (adds `--rsi-buy-max 70 --rsi-sell-min 30` to sections 2 and 3
+so the live feed and backtest are consistent; the RSI+R:R combination has not been
+separately swept — backtest sections 4/5 before any live use; tags R08R / R40R). The
 superseded reference snapshots (`cli_R4_scalper24` / `_breakout` / `_scalperwide24`
 / `_bbsqueeze`, `cli_trailing_risk02allhours`, and `cli_adaptive_regime` — the
 `auto --adaptive` regime auto-switch, whose feature still lives in
