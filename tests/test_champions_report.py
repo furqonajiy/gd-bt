@@ -143,6 +143,8 @@ def test_render_hold_and_switch(tmp_path):
     assert "SWITCH" in md
     assert ">>> RUN THIS NOW <<<" in md           # live regime flagged
     assert "R4parab" in md and "live regime: R4parab" in md
+    assert "Composed champion feed" in md
+    assert "generated/regime_champion_feed.txt" in md
 
 
 def test_feed_name_resolves_to_archive_path():
@@ -152,6 +154,34 @@ def test_feed_name_resolves_to_archive_path():
     assert cr.feed_signals("risk02allhours") == "generated/self_risk02_allhours.txt"
     # An already-resolved path round-trips unchanged.
     assert cr.feed_signals("generated/self_better.txt") == "generated/self_better.txt"
+
+
+def test_regime_feed_compose_args_uses_published_champion_feeds():
+    champions = {
+        "R1quiet": None,
+        "R2bull": {"feed": "adE_farTP"},
+        "R3strong": {"feed": "generated/custom_feed.txt"},
+        "R4parab": {"feed": "scalper24"},
+    }
+    args = cr.regime_feed_compose_args(
+        ["R1quiet", "R2bull", "R3strong", "R4parab"],
+        champions,
+        output="generated/out.txt",
+        calendar="calendar.csv",
+    )
+
+    assert args[:6] == [
+        sys.executable,
+        "tools/compose_regime_feeds.py",
+        "--calendar", "calendar.csv",
+        "--layer", "sweep_regime",
+    ]
+    assert "--output" in args and "generated/out.txt" in args
+    assert "R1quiet=" not in " ".join(args)
+    assert "R2bull=generated/adaptive_adE_farTP.txt" in args
+    assert "R3strong=generated/custom_feed.txt" in args
+    assert "R4parab=generated/self_scalper24.txt" in args
+    assert cr.regime_feed_compose_args(["R1quiet"], {"R1quiet": None}) == []
 
 
 def test_calendar_regime_helpers_use_generated_calendar(tmp_path):

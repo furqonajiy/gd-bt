@@ -557,7 +557,7 @@ jobs:
           # CHAMPIONS.md at the repo root, and writes a directly-runnable
           # self_cli_best_<regime>.txt for each published champion.
           python - <<'PY'
-          import json, pathlib, sys
+          import json, pathlib, shlex, subprocess, sys
           sys.path.insert(0, ".")
           import tools.champions_report as cr
 
@@ -626,6 +626,17 @@ jobs:
           print("wrote CHAMPIONS.md")
           cr.write_deployment_cli_files(pathlib.Path("."), REGIMES, champions)
           print("wrote per-regime cli/best_<regime>.txt")
+
+          compose_args = cr.regime_feed_compose_args(REGIMES, champions)
+          compose_cmd_path = pathlib.Path("cli/compose_regime_champion_feed.txt")
+          compose_cmd_path.parent.mkdir(parents=True, exist_ok=True)
+          if compose_args:
+              compose_cmd_path.write_text(" ".join(shlex.quote(a) for a in compose_args) + "\n")
+              subprocess.run(compose_args, check=True)
+              print("wrote generated/regime_champion_feed.txt")
+          else:
+              compose_cmd_path.write_text("# no published champion feeds yet\n")
+              print("skipped generated/regime_champion_feed.txt: no published champion feeds")
           PY
 
       - name: Mark cells DONE (all 4 shards have >= 120 lines)

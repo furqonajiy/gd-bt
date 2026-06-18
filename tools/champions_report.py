@@ -149,6 +149,38 @@ def regime_backtest_signals(regime: str, feed: str,
     return f"generated/regime_feeds/{regime}_{_regime_feed_label(feed)}.txt"
 
 
+def regime_feed_compose_args(
+        regimes: list[str],
+        champions: dict[str, dict | None],
+        *,
+        output: str = "generated/regime_champion_feed.txt",
+        calendar: str = "sweep_regime_out_grid/regime_calendar.csv",
+        layer: str = "sweep_regime") -> list[str]:
+    """Command args to compose published champion feeds into one deploy feed."""
+    mappings: list[str] = []
+    for regime in regimes:
+        champion = champions.get(regime)
+        if not champion:
+            continue
+        feed = str(champion.get("feed") or "")
+        if not feed:
+            continue
+        mappings.append(f"{regime}={feed_signals(feed)}")
+    if not mappings:
+        return []
+
+    args = [
+        sys.executable,
+        "tools/compose_regime_feeds.py",
+        "--calendar", calendar,
+        "--layer", layer,
+        "--output", output,
+    ]
+    for mapping in mappings:
+        args.extend(["--regime-feed", mapping])
+    return args
+
+
 # --------------------------------------------------------------------------
 # Metric helpers (all higher-is-better; None treated as 0.0 for ranking).
 # --------------------------------------------------------------------------
@@ -652,6 +684,15 @@ def render_champions_md(
             lines.append(
                 f"| {regime} | `{s.get('_feed')}` | {_fmt(_net_bonus(s))} | "
                 f"{_fmt(_oos(s))} | {_fmt(_dd(s))}% | {mult_txt} |")
+
+    if any(champions.get(r) for r in regimes):
+        lines.append("")
+        lines.append("## Composed champion feed")
+        lines.append("")
+        lines.append("The aggregate writes `generated/regime_champion_feed.txt` by "
+                     "combining each published regime champion's source feed through "
+                     "the generated calendar. The replay command is saved at "
+                     "`cli/compose_regime_champion_feed.txt`.")
 
     lines.append("")
     lines.append("## Runnable champion commands")
