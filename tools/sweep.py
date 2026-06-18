@@ -511,8 +511,69 @@ def sc24_neighborhood_grid() -> list[dict[str, Any]]:
     return out
 
 
+# The R4parab live champion (champions/CHAMPION_R4parab.json): the e5 DD-compliant
+# winner. Distinct geometry from SC24 (e5 vs e6, slm 2.3 vs 2.1, hold 90 vs 240,
+# tp1_delay 20 vs 24), so the BEP seed grid anchors on BOTH so "champion + early
+# floor vs champion" is direct for R4 (e5) and for R2/R3 (SC24).
+R4_E5_OVERRIDES: dict[str, Any] = {
+    "entry_count": 5,
+    "entry_ladder": "range_uniform",
+    "entry_sl_gap": 0.0,
+    "activation_delay_minutes": 0,
+    "pending_expiry_minutes": 420,
+    "max_hold_minutes": 90,
+    "sl_multiplier": 2.3,
+    "lock_after_tp2": False,
+    "tp1_lock_delay_minutes": 20,
+    "risk_per_signal": 0.01,
+    "shared_sl": True,
+}
+
+
+def _r4_e5_config() -> dict[str, Any]:
+    cfg = base_config_dict()
+    cfg.update(R4_E5_OVERRIDES)
+    cfg["trailing_open_distance"] = 0.0
+    cfg["trailing_close_distance"] = 0.0
+    return cfg
+
+
+def sc24_bep_seed_grid() -> list[dict[str, Any]]:
+    """Champion geometries (SC24 for R2/R3, e5 for R4) + the BEP early-floor
+    overrides: an explicit grid over the floor's trigger distance, its buffer (the
+    "+ small points"), and the TP1-lock fraction (the ceiling). Guaranteed-evaluated
+    by the --bep-policy sweep so "champion + early floor" is compared head-to-head
+    against the champion in every regime.
+
+    Rationale (2026-06-18 reconciliation): on a wild bar a leg can spike toward TP1
+    and reverse before the TP1 lock ratchets up, giving back several points (live
+    SC24-0618 #17 locked ~5 pt below ideal TP1). An early floor that arms at
+    bep_trigger_distance -- BEFORE TP1 -- and parks the stop at entry +/- bep_buffer
+    converts that give-back into a small locked gain, while the stage-1 (fractional)
+    TP1 lock still applies as the ceiling. buffer 0.0 keeps the pure break-even
+    point in the grid so the "+ small points" lift is measured cleanly."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for base in (sc24_config(), _r4_e5_config()):
+        center = dict(base)
+        center["profit_lock_mode"] = "bep_plus_half_tp1"
+        center["lock_after_tp1"] = True  # required for the stage-1 TP1-lock ceiling
+        for trig in (2.0, 3.0, 4.0):
+            for buf in (0.0, 0.4, 1.0, 2.0):
+                for frac in (1.0, 0.5, 0.25):
+                    cfg = dict(center)
+                    cfg["bep_trigger_distance"] = trig
+                    cfg["bep_buffer"] = buf
+                    cfg["tp1_lock_fraction"] = frac
+                    h = _json_hash(cfg)
+                    if h not in seen:
+                        seen.add(h)
+                        out.append(cfg)
+    return out
+
+
 def candidate_config(rng: random.Random, *, include_trend_runner: bool,
-                     signal_policy: bool = False) -> dict[str, Any]:
+                     signal_policy: bool = False, bep_policy: bool = False) -> dict[str, Any]:
     cfg = base_config_dict()
     cfg.update({
         # Ranges WIDENED to include the SC24 champion's values (1% risk,
@@ -592,6 +653,22 @@ def candidate_config(rng: random.Random, *, include_trend_runner: bool,
                 (0.8, 1.5, 2.5), (2.0, 4.0, 6.0), (1.0, 2.0, 4.0), (3.0, 4.5, 6.0),
                 (0.6, 1.2, 2.0), (1.0, 3.0, 5.0),
             ])
+
+    if bep_policy:
+        # SELF-SCALPER "BEP + small points" early-floor block. Gated so the default
+        # scalper sweep space is byte-unchanged. Forces the bep_plus_half_tp1 lock
+        # model: a leg that moves bep_trigger_distance in favour BEFORE TP1 ratchets
+        # its stop to entry +/- bep_buffer (the "+ small points" floor that catches a
+        # wild-bar reversal), while the stage-1 (fractional) TP1 lock still applies as
+        # the ceiling -- so lock_after_tp1 is forced on (the ceiling needs it) and the
+        # delay is re-drawn since the base draw zeroes it whenever lock_after_tp1 was
+        # rolled off. buffer 0.0 stays in the draw so pure break-even competes.
+        cfg["profit_lock_mode"] = "bep_plus_half_tp1"
+        cfg["lock_after_tp1"] = True
+        cfg["bep_trigger_distance"] = rng.choice([1.5, 2.0, 3.0, 4.0, 5.0])
+        cfg["bep_buffer"] = rng.choice([0.0, 0.4, 1.0, 2.0])
+        cfg["tp1_lock_fraction"] = rng.choice([0.5, 0.75, 1.0])
+        cfg["tp1_lock_delay_minutes"] = rng.choice([0, 5, 10, 15, 20, 24, 30])
 
     return cfg
 

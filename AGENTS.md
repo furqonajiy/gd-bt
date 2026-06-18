@@ -59,7 +59,12 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   that refetches the current month (`fetch --months 1`) and regenerates a
   generator's feed **only when a new CLOSED M1 bar exists** (idle otherwise),
   with `--gen-start-days`/`--gen-recent-months` rolling the start + narrowing
-  charts in-process for speed. It imports the generator module unmodified, so
+  charts in-process for speed. `--gen-start-days` **rewrites** an existing
+  `--start`/`--start-date` and is **injected** (family-aware) when the
+  pass-through omits one — so it is never a silent no-op; without that injection
+  the feed emitted the whole loaded chart window (cold-start bars and all),
+  diverging from a full-archive backtest (the 2026-06-18 live-vs-backtest signal
+  drift). It imports the generator module unmodified, so
   the live feed stays byte-identical to the backtest archive; logs like `auto`
   (header, then `[ts] Add Signal …` per new signal). `--family` picks the
   generator; args after `--` pass through. `fetch` gained `--months N` (default
@@ -142,7 +147,16 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   `bep_after_move` (per-leg break-even+ once a leg is N price units in
   favour) — all default to **disabled** and are enabled **explicitly per run
   via CLI flags** (the full surface lives in `tools/backtest_explicit.py` /
-  `tools/auto_explicit.py`). They are deliberately NOT read from environment
+  `tools/auto_explicit.py`). The **`bep_plus_half_tp1` profit-lock mode**'s
+  early-arm stop (a leg that moves `bep_trigger_distance` *before* TP1) now parks
+  at **entry ± `bep_buffer`** instead of exactly entry — `bep_buffer` defaults
+  **0.0** so it is exact break-even (byte-identical to before, parity preserved),
+  and a positive buffer locks "+ small points" of profit on a leg that spikes
+  toward TP1 then reverses before the TP1 lock can ratchet up (the wild-bar
+  give-back measured live on SC24-0618 #17). The stage-1 (fractional) TP1 lock
+  stays the ceiling. This is the lever the **`self-scalper-bep-sweep.yml`** sweep
+  + `sweep_self_limit.py --bep-policy` explore per regime (base vs bep, deploy
+  only on an edge **and** OOS win at DD ≤ 40%). They are deliberately NOT read from environment
   vars, so `DEFAULT_CONFIG` is always reproducible regardless of shell
   state. Don't add env-var config reads. **Locked-exit slippage** is a
   **backtest-realism** model: a *locked* protective stop (LOCK_TP1/LOCK_TP2)

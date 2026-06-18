@@ -56,11 +56,18 @@ FILTER_LABEL = "self_limit"  # stored in the row; not a provider filter
 
 
 def make_limit_candidates(seed: int, max_candidates: int,
-                          *, signal_policy: bool = False) -> list[dict]:
+                          *, signal_policy: bool = False,
+                          bep_policy: bool = False) -> list[dict]:
     """sweep.candidate_config draws with trailing-open pinned to 0 (LIMIT).
 
     Pinning collapses configs that differed only in trailing_open, so we draw
     with headroom to still fill the cap.
+
+    With ``bep_policy`` the cell is the BEP early-floor variant: it seeds the
+    explicit "SC24 champion + early floor" grid (not the bep-OFF base/neighborhood)
+    and draws bep_plus_half_tp1 candidates, so its leaderboard contains only
+    early-floor configs and the per-variant aggregate compares it cleanly against
+    the bep-OFF base cell. Without it the candidate space is byte-unchanged.
     """
     seen: set[str] = set()
     out: list[dict] = []
@@ -73,20 +80,26 @@ def make_limit_candidates(seed: int, max_candidates: int,
             seen.add(h)
             out.append(cfg)
 
-    _add(sweep.base_config_dict())  # DD40 base is itself a LIMIT config
     # STAGE 1 (shard 0 / seed 42 only, so the other shards keep their full random
-    # budget for breadth): SC24 + its coordinate neighborhood, GUARANTEED-evaluated
-    # so the sweep can reproduce/beat the live champion. The widened random draw
-    # below cannot otherwise reach entry_count=6 / max_hold=240 / tp1_delay=24 /
-    # risk=0.01. --resume skips these once scored, so it costs the cell once.
-    if seed == 42:
-        for cfg in sweep.sc24_neighborhood_grid():
-            _add(cfg)
+    # budget for breadth): the guaranteed-evaluated seeds. --resume skips these
+    # once scored, so it costs the cell once. The widened random draw below cannot
+    # otherwise reach entry_count=6 / max_hold=240 / tp1_delay=24 / risk=0.01.
+    if bep_policy:
+        # BEP cell: ONLY early-floor configs (no bep-OFF base), so "champion + floor"
+        # is what this leaderboard is measuring against the separate base cell.
+        if seed == 42:
+            for cfg in sweep.sc24_bep_seed_grid():
+                _add(cfg)
+    else:
+        _add(sweep.base_config_dict())  # DD40 base is itself a LIMIT config
+        if seed == 42:
+            for cfg in sweep.sc24_neighborhood_grid():
+                _add(cfg)
     rng = random.Random(seed)
     attempts = 0
     while len(out) < max_candidates and attempts < max_candidates * 30:
         _add(sweep.candidate_config(rng, include_trend_runner=False,
-                                    signal_policy=signal_policy))
+                                    signal_policy=signal_policy, bep_policy=bep_policy))
         attempts += 1
     return out[:max_candidates]
 
@@ -202,6 +215,13 @@ def build_parser() -> argparse.ArgumentParser:
                         "dimensions to the grid: ATR-vs-posted SL, TP rewrite, "
                         "R:R filter, nominal/effective reference. Off => the "
                         "scalper sweep's candidate space is unchanged.")
+    p.add_argument("--bep-policy", action="store_true",
+                   help="BEP early-floor variant: force the bep_plus_half_tp1 lock "
+                        "model and draw bep_trigger_distance / bep_buffer ('+ small "
+                        "points') / tp1_lock_fraction, seeded with the SC24 champion "
+                        "+ early floor. Off => the scalper sweep's space is unchanged. "
+                        "Run a base cell (no flag) and a bep cell (this flag) and "
+                        "compare their winners on edge AND OOS.")
     p.add_argument("--progress-every", type=int, default=10)
     return p
 
@@ -216,7 +236,8 @@ def main(argv: list[str] | None = None) -> int:
     checkpoint = output_dir / "results.jsonl"
 
     candidates = make_limit_candidates(args.seed, args.max_candidates,
-                                       signal_policy=args.signal_policy)
+                                       signal_policy=args.signal_policy,
+                                       bep_policy=args.bep_policy)
     chart = CsvChartSource(sweep._expand_chart_paths(args.charts))
     signals = parse_signals_file(signals_path)
     train, validate = sweep.split_train_validate(signals, args.validate_months)
