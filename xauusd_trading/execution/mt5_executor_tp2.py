@@ -87,6 +87,24 @@ def _entry_index_from_comment(comment: str | None) -> int | None:
     return idx if idx >= 0 else None
 
 
+def _pending_limit_reject_reason(side: str, price: float, bid: float, ask: float,
+                                 min_dist: float) -> str | None:
+    if side == "BUY":
+        if price >= ask:
+            return f"stale BUY LIMIT {price:g} >= live ask {ask:g}"
+        if price > ask - min_dist:
+            return (f"unplaceable BUY LIMIT {price:g} within broker "
+                    f"stop/freeze level of ask {ask:g} (min {min_dist:g})")
+        return None
+
+    if price <= bid:
+        return f"stale SELL LIMIT {price:g} <= live bid {bid:g}"
+    if price < bid + min_dist:
+        return (f"unplaceable SELL LIMIT {price:g} within broker "
+                f"stop/freeze level of bid {bid:g} (min {min_dist:g})")
+    return None
+
+
 class Mt5Executor(_BaseMt5Executor):
     """Public MT5 executor with live parity guards."""
 
@@ -113,6 +131,7 @@ class Mt5Executor(_BaseMt5Executor):
     # is observed when reconcile flips a PENDING/NO_FILL slot to OPEN, and a
     # flapping replay could revisit PENDING, so the set guards against re-firing.
     _session_announced_triggers: set[str] = set()
+    _session_deferred_reopen_limit_entries: set[str] = set()
 
     def _broker_epoch_to_chart_time(self, epoch: int) -> datetime:
         """MT5 broker-time-as-UTC-epoch -> chart-time naive datetime."""
@@ -225,19 +244,8 @@ class Mt5Executor(_BaseMt5Executor):
         for order in plan.orders:
             key = signal_entry_key(signal.signal_key, order.entry_index)
             price = float(order.entry_price)
-            stale_reason = None
-            if signal.side == "BUY":
-                if price >= ask:
-                    stale_reason = f"stale BUY LIMIT {price:g} >= live ask {ask:g}"
-                elif price > ask - min_dist:
-                    stale_reason = (f"unplaceable BUY LIMIT {price:g} within broker "
-                                    f"stop/freeze level of ask {ask:g} (min {min_dist:g})")
-            else:
-                if price <= bid:
-                    stale_reason = f"stale SELL LIMIT {price:g} <= live bid {bid:g}"
-                elif price < bid + min_dist:
-                    stale_reason = (f"unplaceable SELL LIMIT {price:g} within broker "
-                                    f"stop/freeze level of bid {bid:g} (min {min_dist:g})")
+            stale_reason = _pending_limit_reject_reason(
+                signal.side, price, bid, ask, min_dist)
 
             if stale_reason is not None:
                 stale_entries.append(key)
@@ -905,6 +913,7 @@ class Mt5Executor(_BaseMt5Executor):
             return log
         sym = self._sym_info if self._sym_info is not None else self.mt5.symbol_info(self.symbol)
         digits = sym.digits
+        min_dist = min_stop_distance_for(self)
 
         reopened: list[dict] = []
         failed: list[tuple[int, float, str]] = []
@@ -939,12 +948,13 @@ class Mt5Executor(_BaseMt5Executor):
             tp = entry.target_price if entry.target_price is not None else engine_pos.target_level
             comment = mt5_entry_comment(signal_key, entry.entry_index)
             if favorable or stop_beyond_entry:
+                stop_buffer = max(LATE_LOCK_FALLBACK_BUFFER, min_dist)
                 if side == "BUY":
                     order_type, price = self.mt5.ORDER_TYPE_BUY, float(tick.ask)
-                    sl = min(raw_stop, float(tick.bid) - LATE_LOCK_FALLBACK_BUFFER)
+                    sl = min(raw_stop, float(tick.bid) - stop_buffer)
                 else:
                     order_type, price = self.mt5.ORDER_TYPE_SELL, float(tick.bid)
-                    sl = max(raw_stop, float(tick.ask) + LATE_LOCK_FALLBACK_BUFFER)
+                    sl = max(raw_stop, float(tick.ask) + stop_buffer)
                 request = {
                     "action":       self.mt5.TRADE_ACTION_DEAL,
                     "symbol":       self.symbol,
@@ -969,6 +979,17 @@ class Mt5Executor(_BaseMt5Executor):
                 order_type = (self.mt5.ORDER_TYPE_BUY_LIMIT if side == "BUY"
                               else self.mt5.ORDER_TYPE_SELL_LIMIT)
                 price = entry_price
+                reject_reason = _pending_limit_reject_reason(
+                    side, price, float(tick.bid), float(tick.ask), min_dist)
+                if reject_reason is not None:
+                    key = signal_entry_key(signal_key, entry.entry_index)
+                    guard_key = f"reopen:{key}"
+                    if guard_key not in self._session_deferred_reopen_limit_entries:
+                        log.actions.append(
+                            f"  {key}: re-open LIMIT deferred: {reject_reason}"
+                        )
+                        self._session_deferred_reopen_limit_entries.add(guard_key)
+                    continue
                 request = {
                     "action":       self.mt5.TRADE_ACTION_PENDING,
                     "symbol":       self.symbol,
