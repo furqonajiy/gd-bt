@@ -87,26 +87,27 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   **R2bull and R3strong promote SC24 + `entry_count 8` ("SC24T24E8",
   tp1_lock_delay 24)** — #1 on the reliable forward-fit metrics (OOS *and*
   fixed-lot edge) in both (R2 OOS 52,831 / R3 110,907), at DD ≤ 40%; there the
-  lever is *more entries* (e8 > e7 > e6 on OOS). **R4parab now promotes the e5
-  DD-compliant winner** (e5 / range_uniform / slm2.3 / gap0.0 / max_hold 90 /
-  tp1_lock_delay 20 / tp1_lock_fraction 0.25 / lock_after_tp2 off / shared_sl):
-  on current 2026 data the prior SC24T24E8's concurrent DD rose to **58.3%**
-  (over the 40% gate), so among DD ≤ 40%-compliant configs **e5 is the edge+OOS
-  leader** (edge $39,062 / OOS $6,671 / DD 33.3%) — fewer entries + a tighter 2.3
-  stop + a 90-min hold beat the over-DD e8 once the gate binds. The e5 feed is
-  now **RSI-filtered** (generator `--rsi-buy-max 70 --rsi-sell-min 30`: skip
-  overbought BUYs / oversold SELLs): the **R4 entry-feature sweep** (16
-  generator-feature variants × strategy/geometry, slippage-aware 2.0/1.0,
-  DD ≤ 40% & OOS > 0) found RSI the **only** entry feature that beats the
-  unfiltered `base` feed on **both edge and OOS** (rsi edge $39,508 / OOS $7,199 /
-  DD 33.4% vs base $39,020 / $6,629 / 33.3%, apples-to-apples in one sweep). It's
-  a **thin** filter (~0.5% of signals dropped) so the lift is modest and the
-  **strategy params are unchanged** — a feed change, not a strategy change, hence
-  low-risk; ADX/Bollinger/VWAP/HTF/S-R/session variants all lost on edge or OOS.
-  (SC24T24E8 had
-  itself superseded the earlier R4 pick SC24T15E6, which led only on the
-  compounded net+bonus mirage.) R1quiet stays seeded with SC24 until the sweep
-  advances to it.
+  lever is *more entries* (e8 > e7 > e6 on OOS). **R4parab now promotes
+  `rsi75_sqz6_rr40`** — the SC24 **e8** strategy (e8 / range_to_sl / slm2.1 /
+  gap0.5 / max_hold 240 / tp1_lock_delay 24 / tp1_lock_fraction 0.5 /
+  lock_after_tp2 on / shared_sl off) fed a **triple-filtered** scalper24 feed:
+  **RSI 75/25** (skip overbought BUYs / oversold SELLs) + a **Bollinger bandwidth
+  squeeze** (generator `--bb-bandwidth-min 0.0006`) + **R:R 1.0/2.0/4.0**
+  (`--rr1 1.0 --rr2 2.0 --rr3 4.0`). It is **#1 of the 34-variant RSI × Bollinger
+  × R:R R4 sweep** on **both** reliable forward-fit metrics — fixed-lot edge
+  **$63,940** (edge+bonus $65,948) **and** OOS **$11,633** — at DD **38.4%**
+  (≤ 40% gate), 6/6 stable months. The **lever is the feed**, not the strategy:
+  the Bollinger squeeze + the wide 4.0 R:R on the more-entries e8 geometry;
+  **RSI is near-neutral on top** (`sqz6_rr40` alone ≈ `rsi75_sqz6_rr40`, within
+  ~$600 edge). It beats the **superseded e5 RSI champion** (edge $39,508 /
+  OOS $7,199 / DD 33.4%) by ~+62% on **both** edge and OOS, and beats both prior
+  standalone R:R winners (`rr08x15x30` edge $46,671, `rr10x20x40` OOS $9,116). The
+  compounded net+bonus ($6.5M) is the model upper bound — it *ranks*, it does not
+  *decide*. **Fresh sweep winner — forward-validate before scaling live.** (The e5
+  RSI pick had itself superseded SC24T24E8 for R4 after SC24T24E8 breached the
+  40% DD gate at **58.3%** on 2026 data; **R2bull/R3strong keep SC24T24E8**, whose
+  e8 lever is *more entries*, e8 > e7 > e6 on OOS.) R1quiet stays seeded with SC24
+  until the sweep advances to it.
   `tools/regime_router.py` is a back-compat shim; `tools/regime_auto.py` is the
   one-shot advisory CLI.
 - `tests/` — `pytest` suite, heavy on live/backtest parity.
@@ -324,9 +325,10 @@ if it leads on edge **and** OOS (the metrics that survive to live + fixed-lot
 trading). This is why **SC24T24E8 (entry 8) was promoted for R2bull/R3strong
 over the net+bonus #1** (slm1.9 in R2) — that led only on the inflated headline
 while losing on edge and OOS. For **R4parab**, SC24T24E8 later breached the
-DD ≤ 40% gate (58.3%) on current 2026 data and was superseded by the **e5
-DD-compliant edge+OOS leader**. Keep **one writer per sweep
-branch**; and run sweeps on a
+DD ≤ 40% gate (58.3%) on current 2026 data and was superseded — first by the e5
+RSI champion, now by **`rsi75_sqz6_rr40`**, the edge+OOS leader of the 34-variant
+RSI × Bollinger × R:R sweep (edge $63,940 / OOS $11,633 / DD 38.4%). Keep **one
+writer per sweep branch**; and run sweeps on a
 `research/...` branch, never on `main`.
 
 ## Commands
@@ -358,12 +360,15 @@ from 2020, see the standalone `cli_resync_m1_from_2020.txt` (`fetch --months 80`
 `cli_*.txt` files are runnable deployment-command snapshots, each with the same
 sections (Signal Auto Generator live-loop / Backtest CLI / Auto CLI; Telegram
 Listener only for the Victor feed). The current R4 champion is
-`cli_champion_R4_SC24_no_trailing` — the **e5 DD-compliant winner**
-(e5 / range_uniform / slm2.3 / max_hold 90 / tp1_lock_delay 20 / shared_sl, on
-the **RSI-filtered** scalper24 feed `--rsi-buy-max 70 --rsi-sell-min 30`;
-`champions/CHAMPION_R4parab.json`), which superseded SC24T24E8 for R4 after it
-breached the DD ≤ 40% gate on 2026 data (SC24T24E8 remains the R2bull/R3strong
-champion); the only other deployed feed is `cli_champion_victor` (Victor — feed
+`cli_champion_R4_SC24_no_trailing` — **`rsi75_sqz6_rr40`**
+(e8 / range_to_sl / slm2.1 / max_hold 240 / tp1_lock_delay 24 / lock_after_tp2 on /
+shared_sl off, on the **triple-filtered** scalper24 feed `--rsi-buy-max 75
+--rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0`;
+`champions/CHAMPION_R4parab.json`), the edge+OOS leader of the 34-variant RSI ×
+Bollinger × R:R sweep (edge $63,940 / OOS $11,633 / DD 38.4%) — it superseded the
+e5 RSI champion, which had superseded SC24T24E8 for R4 after it breached the DD ≤
+40% gate on 2026 data (SC24T24E8 remains the R2bull/R3strong champion); the only
+other deployed feed is `cli_champion_victor` (Victor — feed
 `generated/victor_live.txt`, positions `positions_victor.json`, tag VIC).
 `cli_resync_m1_from_2020` is the M1-archive resync utility (not a strategy), and
 `cli_rr08x15x30` / `cli_rr10x20x40` are **backtest-only R:R research candidates** —
