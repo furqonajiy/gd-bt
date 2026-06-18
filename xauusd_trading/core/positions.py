@@ -198,7 +198,15 @@ class Position:
             elif stage >= 1:
                 stop = self._half_tp1_stop_for(entry, config.tp1_lock_fraction)
             elif entry.bep_armed:
-                stop = entry.entry_price
+                # Early protective floor: once the leg has moved bep_trigger_distance
+                # in favour (before TP1), ratchet the stop to entry +/- bep_buffer.
+                # bep_buffer defaults to 0.0 -> exact break-even (the historical
+                # behaviour, byte-identical), so DEFAULT_CONFIG and every existing
+                # bep_plus_half_tp1 run are unchanged; a positive buffer locks a few
+                # points of profit on a +N-then-reverse leg (the wild-bar case the
+                # TP1 lock alone can give back), while stage>=1 still applies the
+                # (fractional) TP1 lock as the ceiling.
+                stop = self._bep_lock_stop(entry, getattr(config, "bep_buffer", 0.0))
             else:
                 stop = entry.initial_sl
             return self._combine_with_trailing_stop(entry, stop, config)
