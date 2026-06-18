@@ -346,16 +346,23 @@ from 2020, see the standalone `cli_resync_m1_from_2020.txt` (`fetch --months 80`
 `cli_*.txt` files are runnable deployment-command snapshots, each with the same
 sections (Signal Auto Generator live-loop / Backtest CLI / Auto CLI; Telegram
 Listener only for the Victor feed). The current R4 champion is
-`cli_champion_R4_scalper24_no_trailing` — the **e5 DD-compliant winner**
+`cli_champion_R4_SC24_no_trailing` — the **e5 DD-compliant winner**
 (e5 / range_uniform / slm2.3 / max_hold 90 / tp1_lock_delay 20 / shared_sl, on
 the **RSI-filtered** scalper24 feed `--rsi-buy-max 70 --rsi-sell-min 30`;
 `champions/CHAMPION_R4parab.json`), which superseded SC24T24E8 for R4 after it
 breached the DD ≤ 40% gate on 2026 data (SC24T24E8 remains the R2bull/R3strong
-champion); others: `cli_champion_victor` (Victor — feed
-`generated/victor_live.txt`, positions `positions_victor.json`, tag VIC), `cli_R4_scalper24`,
-`cli_R4_breakout`, `cli_trailing_risk02allhours`, `cli_resync_m1_from_2020`, and
-`cli_adaptive_regime` (the `auto --adaptive` regime auto-switch — one executor
-that runs each regime's `CHAMPION_<regime>.json` and falls back to SC24).
+champion); the only other deployed feed is `cli_champion_victor` (Victor — feed
+`generated/victor_live.txt`, positions `positions_victor.json`, tag VIC).
+`cli_resync_m1_from_2020` is the M1-archive resync utility (not a strategy), and
+`cli_rr08x15x30` / `cli_rr10x20x40` are **backtest-only R:R research candidates** —
+the two R4 signal-R:R sweep winners that beat the incumbent on edge AND OOS (TP1/
+TP2/TP3 rewritten via the generator's `--rr1/--rr2/--rr3` on the unfiltered
+scalper24 feed; **not deployed**, forward-validate before any live use). The
+superseded reference snapshots (`cli_R4_scalper24` / `_breakout` / `_scalperwide24`
+/ `_bbsqueeze`, `cli_trailing_risk02allhours`, and `cli_adaptive_regime` — the
+`auto --adaptive` regime auto-switch, whose feature still lives in
+`strategy/regime_adaptive.py`) were removed 2026-06-18; recover from git history if
+needed.
 
 ## Docs to keep in sync with code
 
