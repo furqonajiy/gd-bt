@@ -1,0 +1,120 @@
+name: self-scalper-rsi-bb-rr-sweep
+
+# SELF-SCALPER (SC24) RSI x BOLLINGER x R:R combination sweep — R4 (2026) only.
+# For each FEED VARIANT (a combination of RSI / Bollinger / R:R generator flags) we
+# regenerate the unfiltered scalper24 feed with those flags, then sweep the full
+# strategy/geometry grid over it (tools/sweep_self_limit.py, slippage-aware
+# 2.0/1.0). The aggregate keeps a variant only if it beats the incumbent 'base'
+# feed (no filter, R:R 1.0/1.5/2.0) on BOTH edge AND OOS at DD<=40% — the identical
+# bar the entry-feature and R:R sweeps used (shared
+# .github/scripts/agg_entry_feature.sh, prefix selfrbr).
+#
+# WHY: RSI 70/30 was the only entry filter that beat the unfiltered base on both
+# edge AND OOS in the R4 entry-feature sweep (Bollinger lost on its own there);
+# rr08x15x30 / rr10x20x40 were the R4 R:R winners. Neither sweep crossed the two,
+# so the 3-way RSI x Bollinger x R:R interaction is unmeasured. This sweep is the
+# full cross of the best-of-each levels (34 variants): RSI {off,70/30,75/25} x
+# Bollinger {off, %B 0.80/0.20, bw>=0.0006, + finer/combined} x R:R {base, rr08,
+# rr40, rr25}. Singles + 2-ways are included so any 3-way lift can be attributed.
+#
+# Artifact-only (no branch writes). Mirrors the R4 job of self-scalper-rr-sweep.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_candidates:
+        description: "candidates per shard"
+        default: "150"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-scalper-rsi-bb-rr-sweep
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  # ---------------- R4 (2026) ----------------
+  r4:
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include:
+          - { v: base,                  gen: "" }                                                                                                          # incumbent
+          - { v: rr08,                  gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rr40,                  gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: pctb80,                gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: pctb80_rr08,           gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: pctb80_rr40,           gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: sqz6,                  gen: "--bb-bandwidth-min 0.0006" }
+          - { v: sqz6_rr08,             gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: sqz6_rr40,             gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70,                 gen: "--rsi-buy-max 70 --rsi-sell-min 30" }
+          - { v: rsi70_rr08,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_rr40,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_pctb80,          gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: rsi70_pctb80_rr08,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_pctb80_rr40,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_sqz6,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006" }
+          - { v: rsi70_sqz6_rr08,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_sqz6_rr40,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75,                 gen: "--rsi-buy-max 75 --rsi-sell-min 25" }
+          - { v: rsi75_rr08,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_rr40,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_pctb80,          gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: rsi75_pctb80_rr08,     gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_pctb80_rr40,     gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_sqz6,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006" }
+          - { v: rsi75_sqz6_rr08,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_sqz6_rr40,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_rr25,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_pctb80_rr25,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_sqz6_rr25,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_pbsqz_rr08,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_pbsqz_rr40,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_pctb85_rr08,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.85 --bb-sell-pctb-min 0.15 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_sqz10_rr08,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0010 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate scalper24 feed (R4 2026) variant ${{ matrix.v }}
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py --charts "data/XAUUSD_M1_2026"*"_ELEV8.csv" \
+            --output feed.txt --start 2026-01-01 --session-start 0 --session-end 0 --signal-tz 7 ${{ matrix.gen }}
+          echo "R4 ${{ matrix.v }} feed lines: $(wc -l < feed.txt)"
+      - name: Sweep 4 shards
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-150}"
+          for N in 0 1 2 3; do
+            timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+              --charts "data/XAUUSD_M1_2026"*"_ELEV8.csv" --seed $((42 + N)) --max-candidates "$MC" \
+              --output-dir "out/${{ matrix.v }}_shard${N}" --validate-months 2 \
+              --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume &
+          done; wait
+      - uses: actions/upload-artifact@v4
+        with: { name: "selfrbr-R4-${{ matrix.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r4_agg:
+    needs: r4
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "selfrbr-R4-*", path: _artifacts }
+      - name: Aggregate R4 RSI x BB x R:R variants + winner-vs-base
+        run: bash .github/scripts/agg_entry_feature.sh R4 selfrbr
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-rbr-R4-results", path: "results/**", if-no-files-found: warn }

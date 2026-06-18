@@ -46,5 +46,12 @@ of their pinned version — a safe catch-all.
   → R1), risk 1–5%, and ranks DD‑≤‑40% champions on **compounded net P&L +
   the $3/closed‑lot bonus** (with a positive held‑out OOS gate). See
   `../../docs/SWEEP_RUNBOOK.md` for the methodology.
+- `self-scalper-rsi-bb-rr-sweep.yml` — the SC24 **RSI × Bollinger × R:R**
+  combination sweep (R4/2026 only). Full cross of the best-of-each levels (34
+  feed variants); each variant regenerates the scalper24 feed with those
+  generator flags, then sweeps the full strategy/geometry grid via
+  `tools/sweep_self_limit.py` (slippage-aware 2.0/1.0). Artifact-only; the agg
+  (`agg_entry_feature.sh R4 selfrbr`) keeps variants that beat `base` on edge
+  AND OOS at DD≤40%. Mirrors the R4 job of `self-scalper-rr-sweep.yml`.
 
 _Reference: <https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/>_
