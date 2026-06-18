@@ -42,6 +42,22 @@ def _freeze_level_points(sym) -> int:
     return max(_level_points(sym, "trade_freeze_level"), _level_points(sym, "freeze_level"))
 
 
+def min_stop_distance_for(executor) -> float:
+    """Broker stops/freeze minimum distance from market, in price units.
+
+    A pending LIMIT (or an SL) must sit at least this far from the current
+    Bid/Ask or the broker rejects it (retcode 10015/10016). Returns 0.0 when the
+    symbol spec is unavailable (e.g. test fakes that don't set the levels), which
+    degrades to the legacy price-passed-only guard.
+    """
+    mt5 = getattr(executor, "mt5", None)
+    if mt5 is None:
+        return 0.0
+    sym = getattr(executor, "_sym_info", None) or mt5.symbol_info(executor.symbol)
+    points = max(_level_points(sym, "trade_stops_level"), _freeze_level_points(sym))
+    return points * POINT_VALUE
+
+
 def _round_buy_sl(value: float, digits: int) -> float:
     factor = 10 ** digits
     return round(math.floor(value * factor + 1e-9) / factor, digits)

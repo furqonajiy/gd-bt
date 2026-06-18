@@ -37,7 +37,7 @@ from .mt5_executor import (
     signal_entry_key,
     signal_to_magic,
 )
-from .sl_safety import clamp_sltp_sl
+from .sl_safety import clamp_sltp_sl, min_stop_distance_for
 
 
 _REPLAY_CLOSED_STATUSES = {
@@ -207,16 +207,37 @@ class Mt5Executor(_BaseMt5Executor):
 
         bid = float(tick.bid)
         ask = float(tick.ask)
+        # A pending LIMIT is broker-placeable only when its price sits beyond the
+        # market by at least the stops/freeze level (BUY <= Ask - min_dist, SELL
+        # >= Bid + min_dist). A leg that is already price-passed OR sits inside
+        # that band cannot be a LIMIT -- the broker rejects it (retcode 10015
+        # invalid price). Such a leg is DEFERRED here (not order_sent), so one
+        # un-placeable leg never hard-fails the whole signal. The replay-driven
+        # passes then mirror it: reopen_missing_open_positions opens it at market
+        # with the original stop+target once the replay holds it OPEN (better
+        # basis, never chased -- only while the replay/backtest still holds the
+        # position, so a leg the backtest already stopped is never resurrected),
+        # and replace_missing_pending_entries re-places it as a LIMIT if it drifts
+        # back outside the band while the replay still holds it PENDING.
+        min_dist = min_stop_distance_for(self)
         stale_entries = []
         fresh_orders = []
         for order in plan.orders:
             key = signal_entry_key(signal.signal_key, order.entry_index)
             price = float(order.entry_price)
             stale_reason = None
-            if signal.side == "BUY" and price >= ask:
-                stale_reason = f"stale BUY LIMIT {price:g} >= live ask {ask:g}"
-            elif signal.side == "SELL" and price <= bid:
-                stale_reason = f"stale SELL LIMIT {price:g} <= live bid {bid:g}"
+            if signal.side == "BUY":
+                if price >= ask:
+                    stale_reason = f"stale BUY LIMIT {price:g} >= live ask {ask:g}"
+                elif price > ask - min_dist:
+                    stale_reason = (f"unplaceable BUY LIMIT {price:g} within broker "
+                                    f"stop/freeze level of ask {ask:g} (min {min_dist:g})")
+            else:
+                if price <= bid:
+                    stale_reason = f"stale SELL LIMIT {price:g} <= live bid {bid:g}"
+                elif price < bid + min_dist:
+                    stale_reason = (f"unplaceable SELL LIMIT {price:g} within broker "
+                                    f"stop/freeze level of bid {bid:g} (min {min_dist:g})")
 
             if stale_reason is not None:
                 stale_entries.append(key)
