@@ -1,0 +1,297 @@
+name: self-scalper-rsi-bb-rr-sweep-r3r2r1
+
+# SELF-SCALPER (SC24) RSI x BOLLINGER x R:R combination sweep — R3 -> R2 -> R1,
+# sequentially in ONE run (chained by job `needs:`, same ordering as the R:R and
+# entry-feature sweeps). R4parab already has its champion (SQZ6 / rsi75_sqz6_rr40,
+# the #1 of the R4 run of self-scalper-rsi-bb-rr-sweep.yml), so this run covers the
+# remaining regimes in volatility order R3 -> R2 -> R1.
+#
+# For each regime, for each FEED VARIANT (a combination of RSI / Bollinger / R:R
+# generator flags) we regenerate the scalper24 feed with those flags from THAT
+# regime's chart window, then sweep the full strategy/geometry grid over it
+# (tools/sweep_self_limit.py, slippage-aware 2.0/1.0). The per-regime aggregate
+# keeps a variant only if it beats the incumbent 'base' feed (no filter, R:R
+# 1.0/1.5/2.0) on BOTH edge AND OOS at DD<=40% — the identical bar the R4 run used
+# (shared .github/scripts/agg_entry_feature.sh, prefix selfrbr).
+#
+# 34 variants (same matrix as the R4 run): RSI {off,70/30,75/25} x Bollinger
+# {off, %B 0.80/0.20, bw>=0.0006, + finer/combined} x R:R {base, rr08, rr40, rr25}.
+# Singles + 2-ways are included so any 3-way lift can be attributed.
+#
+# Regime chart windows (from the regime calendar / rr sweep):
+#   R3strong = 2025                  (data/XAUUSD_M1_2025*),       start 2025-01-01
+#   R2bull   = 2023-10 .. 2024       (202310/11/12 + 2024*),       start 2023-10-01
+#   R1quiet  = 2021-11 .. 2023-09    (202111/12 + 2022* + 2023[01-09]), start 2021-11-01
+#
+# Artifact-only (no branch writes). Mirrors self-scalper-rsi-bb-rr-sweep.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_candidates:
+        description: "candidates per shard"
+        default: "150"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-scalper-rsi-bb-rr-sweep-r3r2r1
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  # ---------------- R3 (2025) ----------------
+  r3:
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include:
+          - { v: base,                  gen: "" }                                                                                                          # incumbent
+          - { v: rr08,                  gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rr40,                  gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: pctb80,                gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: pctb80_rr08,           gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: pctb80_rr40,           gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: sqz6,                  gen: "--bb-bandwidth-min 0.0006" }
+          - { v: sqz6_rr08,             gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: sqz6_rr40,             gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70,                 gen: "--rsi-buy-max 70 --rsi-sell-min 30" }
+          - { v: rsi70_rr08,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_rr40,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_pctb80,          gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: rsi70_pctb80_rr08,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_pctb80_rr40,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_sqz6,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006" }
+          - { v: rsi70_sqz6_rr08,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_sqz6_rr40,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75,                 gen: "--rsi-buy-max 75 --rsi-sell-min 25" }
+          - { v: rsi75_rr08,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_rr40,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_pctb80,          gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: rsi75_pctb80_rr08,     gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_pctb80_rr40,     gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_sqz6,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006" }
+          - { v: rsi75_sqz6_rr08,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_sqz6_rr40,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_rr25,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_pctb80_rr25,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_sqz6_rr25,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_pbsqz_rr08,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_pbsqz_rr40,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_pctb85_rr08,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.85 --bb-sell-pctb-min 0.15 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_sqz10_rr08,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0010 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate scalper24 feed (R3 2025) variant ${{ matrix.v }}
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py --charts "data/XAUUSD_M1_2025"*"_ELEV8.csv" \
+            --output feed.txt --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7 ${{ matrix.gen }}
+          echo "R3 ${{ matrix.v }} feed lines: $(wc -l < feed.txt)"
+      - name: Sweep 4 shards
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-150}"
+          for N in 0 1 2 3; do
+            timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+              --charts "data/XAUUSD_M1_2025"*"_ELEV8.csv" --seed $((42 + N)) --max-candidates "$MC" \
+              --output-dir "out/${{ matrix.v }}_shard${N}" --validate-months 2 \
+              --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume &
+          done; wait
+      - uses: actions/upload-artifact@v4
+        with: { name: "selfrbr-R3-${{ matrix.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r3_agg:
+    needs: r3
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "selfrbr-R3-*", path: _artifacts }
+      - name: Aggregate R3 RSI x BB x R:R variants + winner-vs-base
+        run: bash .github/scripts/agg_entry_feature.sh R3 selfrbr
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-rbr-R3-results", path: "results/**", if-no-files-found: warn }
+
+  # ---------------- R2 (2023-10..2024) -- waits for R3 ----------------
+  r2:
+    needs: r3_agg
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include:
+          - { v: base,                  gen: "" }
+          - { v: rr08,                  gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rr40,                  gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: pctb80,                gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: pctb80_rr08,           gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: pctb80_rr40,           gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: sqz6,                  gen: "--bb-bandwidth-min 0.0006" }
+          - { v: sqz6_rr08,             gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: sqz6_rr40,             gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70,                 gen: "--rsi-buy-max 70 --rsi-sell-min 30" }
+          - { v: rsi70_rr08,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_rr40,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_pctb80,          gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: rsi70_pctb80_rr08,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_pctb80_rr40,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_sqz6,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006" }
+          - { v: rsi70_sqz6_rr08,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_sqz6_rr40,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75,                 gen: "--rsi-buy-max 75 --rsi-sell-min 25" }
+          - { v: rsi75_rr08,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_rr40,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_pctb80,          gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: rsi75_pctb80_rr08,     gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_pctb80_rr40,     gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_sqz6,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006" }
+          - { v: rsi75_sqz6_rr08,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_sqz6_rr40,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_rr25,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_pctb80_rr25,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_sqz6_rr25,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_pbsqz_rr08,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_pbsqz_rr40,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_pctb85_rr08,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.85 --bb-sell-pctb-min 0.15 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_sqz10_rr08,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0010 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate scalper24 feed (R2 2023-10..2024) variant ${{ matrix.v }}
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py \
+            --charts data/XAUUSD_M1_202310_ELEV8.csv data/XAUUSD_M1_202311_ELEV8.csv \
+                     data/XAUUSD_M1_202312_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv \
+            --output feed.txt --start 2023-10-01 --session-start 0 --session-end 0 --signal-tz 7 ${{ matrix.gen }}
+          echo "R2 ${{ matrix.v }} feed lines: $(wc -l < feed.txt)"
+      - name: Sweep 4 shards
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-150}"
+          CHARTS="data/XAUUSD_M1_202310_ELEV8.csv data/XAUUSD_M1_202311_ELEV8.csv data/XAUUSD_M1_202312_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv"
+          for N in 0 1 2 3; do
+            timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+              --charts $CHARTS --seed $((42 + N)) --max-candidates "$MC" \
+              --output-dir "out/${{ matrix.v }}_shard${N}" --validate-months 2 \
+              --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume &
+          done; wait
+      - uses: actions/upload-artifact@v4
+        with: { name: "selfrbr-R2-${{ matrix.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r2_agg:
+    needs: r2
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "selfrbr-R2-*", path: _artifacts }
+      - name: Aggregate R2 RSI x BB x R:R variants + winner-vs-base
+        run: bash .github/scripts/agg_entry_feature.sh R2 selfrbr
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-rbr-R2-results", path: "results/**", if-no-files-found: warn }
+
+  # ---------------- R1 (2021-11..2023-09) -- waits for R2 ----------------
+  r1:
+    needs: r2_agg
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include:
+          - { v: base,                  gen: "" }
+          - { v: rr08,                  gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rr40,                  gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: pctb80,                gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: pctb80_rr08,           gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: pctb80_rr40,           gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: sqz6,                  gen: "--bb-bandwidth-min 0.0006" }
+          - { v: sqz6_rr08,             gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: sqz6_rr40,             gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70,                 gen: "--rsi-buy-max 70 --rsi-sell-min 30" }
+          - { v: rsi70_rr08,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_rr40,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_pctb80,          gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: rsi70_pctb80_rr08,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_pctb80_rr40,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_sqz6,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006" }
+          - { v: rsi70_sqz6_rr08,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_sqz6_rr40,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75,                 gen: "--rsi-buy-max 75 --rsi-sell-min 25" }
+          - { v: rsi75_rr08,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_rr40,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_pctb80,          gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: rsi75_pctb80_rr08,     gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_pctb80_rr40,     gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_sqz6,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006" }
+          - { v: rsi75_sqz6_rr08,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_sqz6_rr40,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_rr25,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_pctb80_rr25,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_sqz6_rr25,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_pbsqz_rr08,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_pbsqz_rr40,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_pctb85_rr08,     gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.85 --bb-sell-pctb-min 0.15 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_sqz10_rr08,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0010 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate scalper24 feed (R1 2021-11..2023-09) variant ${{ matrix.v }}
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py \
+            --charts data/XAUUSD_M1_20211[12]_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_20230[1-9]_ELEV8.csv \
+            --output feed.txt --start 2021-11-01 --session-start 0 --session-end 0 --signal-tz 7 ${{ matrix.gen }}
+          echo "R1 ${{ matrix.v }} feed lines: $(wc -l < feed.txt)"
+      - name: Sweep 4 shards
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-150}"
+          CHARTS="data/XAUUSD_M1_20211[12]_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_20230[1-9]_ELEV8.csv"
+          for N in 0 1 2 3; do
+            timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+              --charts $CHARTS --seed $((42 + N)) --max-candidates "$MC" \
+              --output-dir "out/${{ matrix.v }}_shard${N}" --validate-months 2 \
+              --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume &
+          done; wait
+      - uses: actions/upload-artifact@v4
+        with: { name: "selfrbr-R1-${{ matrix.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r1_agg:
+    needs: r1
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "selfrbr-R1-*", path: _artifacts }
+      - name: Aggregate R1 RSI x BB x R:R variants + winner-vs-base
+        run: bash .github/scripts/agg_entry_feature.sh R1 selfrbr
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-rbr-R1-results", path: "results/**", if-no-files-found: warn }
