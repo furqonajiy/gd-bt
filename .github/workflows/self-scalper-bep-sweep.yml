@@ -1,0 +1,204 @@
+name: self-scalper-bep-sweep
+
+# SELF-SCALPER (SC24 / R4-e5) BEP EARLY-FLOOR sweep across regimes, sequentially
+# R4 -> R3 -> R2 in ONE run (chained by job `needs:`, same ordering as the entry-
+# feature / R:R sweeps). For each regime we regenerate the RSI-filtered scalper24
+# feed (the deployed champion feed, --rsi-buy-max 70 --rsi-sell-min 30) ONCE and
+# sweep the full strategy/geometry grid over it twice:
+#   * cell `base` -- the incumbent lock model (tp_levels), i.e. the current
+#     champion region; identical to what the entry-feature/R:R sweeps' base did.
+#   * cell `bep`  -- tools/sweep_self_limit.py --bep-policy: forces the
+#     bep_plus_half_tp1 lock model and draws bep_trigger_distance / bep_buffer
+#     ("+ small points") / tp1_lock_fraction, seeded with the SC24 and e5 champion
+#     geometries + the early floor.
+# Both cells: LIMIT-only, slippage-aware (sweep_self_limit pins 2.0/1.0 via base),
+# fixed-lot 0.01 edge ranking, concurrent-DD gate 40%, fixed-lot OOS on a 2-month
+# tail. The per-regime aggregate writes results/base and results/bep WINNER files;
+# DEPLOY only if the bep winner beats the base winner on BOTH edge AND OOS at
+# DD<=40% (the reliable forward-fit bar -- net+bonus does NOT decide).
+#
+# WHY (2026-06-18 reconciliation): on a wild bar a leg can spike toward TP1 and
+# reverse before the TP1 lock ratchets up, giving back several points (live
+# SC24-0618 #17 locked ~5 pt below ideal TP1). An early floor at entry +/- buffer,
+# armed BEFORE TP1, converts that give-back into a small locked gain while the TP1
+# lock still applies as the ceiling. This sweep measures whether that lifts the
+# real (edge+OOS) per-trade result per regime, or -- as the operator expects -- it
+# may not beat the current strategy.
+#
+# Artifact-only (no branch writes). Mirrors self-scalper-rr-sweep.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_candidates:
+        description: "candidates per shard"
+        default: "150"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-scalper-bep-sweep
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  # ---------------- R4 (2026) ----------------
+  r4:
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include:
+          - { v: base, bep: "" }
+          - { v: bep,  bep: "--bep-policy" }
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate RSI scalper24 feed (R4 2026)
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py --charts "data/XAUUSD_M1_2026"*"_ELEV8.csv" \
+            --output feed.txt --start 2026-01-01 --session-start 0 --session-end 0 --signal-tz 7 \
+            --rsi-buy-max 70 --rsi-sell-min 30
+          echo "R4 feed lines: $(wc -l < feed.txt)"
+      - name: Sweep 4 shards (${{ matrix.v }})
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-150}"
+          for N in 0 1 2 3; do
+            timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+              --charts "data/XAUUSD_M1_2026"*"_ELEV8.csv" --seed $((42 + N)) --max-candidates "$MC" \
+              --output-dir "out/${{ matrix.v }}_shard${N}" --validate-months 2 \
+              --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume ${{ matrix.bep }} &
+          done; wait
+      - uses: actions/upload-artifact@v4
+        with: { name: "selfbep-R4-${{ matrix.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r4_agg:
+    needs: r4
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "selfbep-R4-*", path: _artifacts }
+      - name: Aggregate R4 base/bep + winner files
+        run: bash .github/scripts/agg_entry_feature.sh R4 selfbep
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-bep-R4-results", path: "results/**", if-no-files-found: warn }
+
+  # ---------------- R3 (2025) -- waits for R4 ----------------
+  r3:
+    needs: r4_agg
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include:
+          - { v: base, bep: "" }
+          - { v: bep,  bep: "--bep-policy" }
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate RSI scalper24 feed (R3 2025)
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py --charts "data/XAUUSD_M1_2025"*"_ELEV8.csv" \
+            --output feed.txt --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7 \
+            --rsi-buy-max 70 --rsi-sell-min 30
+          echo "R3 feed lines: $(wc -l < feed.txt)"
+      - name: Sweep 4 shards (${{ matrix.v }})
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-150}"
+          for N in 0 1 2 3; do
+            timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+              --charts "data/XAUUSD_M1_2025"*"_ELEV8.csv" --seed $((42 + N)) --max-candidates "$MC" \
+              --output-dir "out/${{ matrix.v }}_shard${N}" --validate-months 2 \
+              --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume ${{ matrix.bep }} &
+          done; wait
+      - uses: actions/upload-artifact@v4
+        with: { name: "selfbep-R3-${{ matrix.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r3_agg:
+    needs: r3
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "selfbep-R3-*", path: _artifacts }
+      - name: Aggregate R3 base/bep + winner files
+        run: bash .github/scripts/agg_entry_feature.sh R3 selfbep
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-bep-R3-results", path: "results/**", if-no-files-found: warn }
+
+  # ---------------- R2 (2023-10..2024) -- waits for R3 ----------------
+  r2:
+    needs: r3_agg
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include:
+          - { v: base, bep: "" }
+          - { v: bep,  bep: "--bep-policy" }
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate RSI scalper24 feed (R2 2023-10..2024)
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py \
+            --charts data/XAUUSD_M1_202310_ELEV8.csv data/XAUUSD_M1_202311_ELEV8.csv \
+                     data/XAUUSD_M1_202312_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv \
+            --output feed.txt --start 2023-10-01 --session-start 0 --session-end 0 --signal-tz 7 \
+            --rsi-buy-max 70 --rsi-sell-min 30
+          echo "R2 feed lines: $(wc -l < feed.txt)"
+      - name: Sweep 4 shards (${{ matrix.v }})
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-150}"
+          CHARTS="data/XAUUSD_M1_202310_ELEV8.csv data/XAUUSD_M1_202311_ELEV8.csv data/XAUUSD_M1_202312_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv"
+          for N in 0 1 2 3; do
+            timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+              --charts $CHARTS --seed $((42 + N)) --max-candidates "$MC" \
+              --output-dir "out/${{ matrix.v }}_shard${N}" --validate-months 2 \
+              --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume ${{ matrix.bep }} &
+          done; wait
+      - uses: actions/upload-artifact@v4
+        with: { name: "selfbep-R2-${{ matrix.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r2_agg:
+    needs: r2
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "selfbep-R2-*", path: _artifacts }
+      - name: Aggregate R2 base/bep + winner files
+        run: bash .github/scripts/agg_entry_feature.sh R2 selfbep
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-bep-R2-results", path: "results/**", if-no-files-found: warn }

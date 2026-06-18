@@ -69,6 +69,20 @@ GENERATOR_MODULES = {
     "zones": "gen_zone_signals",
 }
 
+# The CLI flag each generator family uses for its rolling start. `--gen-start-days`
+# rewrites it when present and INJECTS it when absent (see _effective_gen_argv), so
+# the live loop's rolling window is honored even if the pass-through omitted the
+# flag -- otherwise --gen-start-days is a silent no-op and the feed emits the whole
+# loaded chart window (the early, cold-start bars included), diverging from a
+# full-archive backtest. None = family has no start flag (nothing to inject).
+GENERATOR_START_FLAG = {
+    "scalper": "--start",
+    "risk02": "--start-date",
+    "canonical": "--start-date",
+    "better": "--start-date",
+    "zones": None,
+}
+
 
 _SIGNAL_LINE = re.compile(r"^\s*\d+\.\s")
 
@@ -123,19 +137,30 @@ def _recent_month_charts(template: str, n: int, today: datetime) -> list[str]:
 
 
 def _effective_gen_argv(gen_argv: list[str], *, start_days: int | None,
-                        recent_months: int | None, today: datetime) -> list[str]:
+                        recent_months: int | None, today: datetime,
+                        start_flag: str | None = "--start") -> list[str]:
     """gen_argv with a rolling --start and/or recent-month --charts applied.
 
     Keeps the single live command identical in *result* to the old per-cycle
     PowerShell loop, but recomputed in-process each pass so it rolls forward
     across day/month boundaries with no shell date math.
+
+    `start_days` REWRITES an existing --start/--start-date when the pass-through
+    already carries one, and otherwise INJECTS `start_flag` (the family's start
+    flag). Injection is the fix for the silent no-op: without it, omitting --start
+    from the pass-through left --gen-start-days doing nothing, so the feed emitted
+    the entire loaded chart window (cold-start bars included) instead of the
+    intended trailing window -- the root cause of live-vs-backtest signal drift.
+    `start_flag=None` (a family with no start flag, e.g. zones) skips injection.
     """
     argv = list(gen_argv)
     if start_days is not None:
         start = (today - timedelta(days=start_days)).strftime("%Y-%m-%d")
-        for flag in ("--start", "--start-date"):  # scalper uses --start; risk02/canonical --start-date
-            if flag in argv:
-                argv[argv.index(flag) + 1] = start
+        existing = next((f for f in ("--start", "--start-date") if f in argv), None)
+        if existing is not None:  # scalper uses --start; risk02/canonical --start-date
+            argv[argv.index(existing) + 1] = start
+        elif start_flag:
+            argv += [start_flag, start]
     if recent_months is not None and "--charts" in argv:
         i = argv.index("--charts")
         # collect the existing chart operands (until the next --flag)
@@ -174,9 +199,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "can only form once per closed M1 bar, so faster than "
                         "~60s buys nothing).")
     p.add_argument("--gen-start-days", type=int, default=None,
-                   help="Each cycle, override the generator's --start/--start-date "
+                   help="Each cycle, set the generator's --start/--start-date "
                         "to (today - N days) so the live feed stays small and "
-                        "rolls forward. Omit to use the --start passed through.")
+                        "rolls forward. The flag is rewritten if the pass-through "
+                        "carries one and INJECTED if it does not (so it is never a "
+                        "silent no-op). Omit to use the --start passed through.")
     p.add_argument("--gen-recent-months", type=int, default=None,
                    help="Each cycle, narrow the generator's --charts glob to the N "
                         "most recent monthly files (fast regen; EMAs stay warm). "
@@ -242,7 +269,8 @@ def main(argv: list[str] | None = None) -> int:
                     eff_argv = _effective_gen_argv(
                         gen_argv, start_days=args.gen_start_days,
                         recent_months=args.gen_recent_months,
-                        today=datetime.now())
+                        today=datetime.now(),
+                        start_flag=GENERATOR_START_FLAG.get(args.family, "--start"))
                     # Silence the generator's own stdout ("Generated signals: N");
                     # the loop owns user-facing output.
                     with contextlib.redirect_stdout(io.StringIO()):
