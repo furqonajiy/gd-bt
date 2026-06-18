@@ -25,7 +25,7 @@ or ask the user to re‑explain.
   now runs **`rsi75_sqz6_rr40`** — the edge+OOS leader of the 34-variant RSI ×
   Bollinger × R:R sweep (edge $63,940 / OOS $11,633 / DD 38.4%), which superseded
   an interim e5 RSI champion. They live in `champions/CHAMPION_{R2bull,R3strong,
-  R4parab}.json` / `cli_champion_R4_SC24_no_trailing`. SC24 (e6 d24) stays the
+  R4parab}.json` / `cli_champion_R4_SQZ6_no_trailing` (tag SQZ6). SC24 (e6 d24) stays the
   baseline so the per-regime "did anything beat it?" comparison is stable across
   R4→R3→R2→R1.
 - **Sweep = search for something that beats the baseline.** It samples many

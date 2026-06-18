@@ -175,10 +175,18 @@ so the tag, month-day, signal-of-day, and entry stay visible even on brokers tha
 truncate comments below MT5's 31-char cap.
 
 To run **two auto executors on one MT5 account** (e.g. Victor + a self-feed
-scalper), give each a distinct **`--strategy-tag`** (e.g. `VIC` vs `SC24`, capped
+scalper), give each a distinct **`--strategy-tag`** (e.g. `VIC` vs `SQZ6`, capped
 at 4 chars) and its own `--positions-json`. The tag is stamped onto `signal_key`,
 so the two get disjoint magics + comments and never manage each other's orders.
 It is live-only (empty in backtests, so parity holds).
+
+**One distinct identity per strategy.** Every deployed strategy gets its OWN
+names for *all four* artifacts — `--strategy-tag`, `--positions-json`, the
+generated signal/feed `.txt`, and the backtest report (Excel) dir — all keyed off
+the same short tag, so nothing collides and every file traces to one strategy at
+a glance. The R4 champion is tag `SQZ6` → `positions_sqz6.json`,
+`generated/sqz6.txt` / `generated/sqz6_live.txt`, `reports/SQZ6_2026xx`; Victor is
+`VIC` → `positions_victor.json`, `generated/victor_live.txt`.
 
 Two live modes:
 

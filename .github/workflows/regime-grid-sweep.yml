@@ -21,7 +21,7 @@ name: regime-grid-sweep
 # DD<=40% (tools/champions_report.best_challenger), so trade frequency counts.
 #
 # CHAMPION/CHALLENGER deploy. The grid is the CHALLENGER. The user keeps trading
-# their INCUMBENT live config = SC24 (cli_champion_R4_SC24_no_trailing:
+# their INCUMBENT baseline = SC24 (R4 live champion SQZ6, cli_champion_R4_SQZ6_no_trailing:
 # DEFAULT_CONFIG + entries 6 / slm 2.1 / max_hold 240 / locks tp1-delay 24,
 # tp2-delay 2 / no trailing / 1% risk; defined once in sweep.sc24_config) and only
 # SWITCHES when a challenger STRICTLY beats it at DD<=40%. The grid seeds SC24 +

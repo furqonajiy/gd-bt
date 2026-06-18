@@ -354,7 +354,7 @@ from 2020, see the standalone `cli_resync_m1_from_2020.txt` (`fetch --months 80`
 `cli_*.txt` files are runnable deployment-command snapshots, each with the same
 sections (Signal Auto Generator live-loop / Backtest CLI / Auto CLI; Telegram
 Listener only for the Victor feed). The current R4 champion is
-`cli_champion_R4_SC24_no_trailing` — **`rsi75_sqz6_rr40`**
+`cli_champion_R4_SQZ6_no_trailing` (tag **SQZ6**) — **`rsi75_sqz6_rr40`**
 (e8 / range_to_sl / slm2.1 / max_hold 240 / tp1_lock_delay 24 / lock_after_tp2 on /
 shared_sl off, on the **triple-filtered** scalper24 feed `--rsi-buy-max 75
 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0`;
@@ -452,6 +452,18 @@ The engine enforces this where it generates files: `_backtest_output_path`
 (`strategy/backtest.py`) renders the workbook stem dot-free, so even a dotted
 run name can't be truncated at its last "extension" again — keep any new
 file-writing code on the same convention.
+
+**One distinct identity per strategy.** Every deployed strategy gets its OWN
+names across the board — `--strategy-tag`, `--positions-json`, the generated
+signal/feed `.txt`, and the backtest report (Excel) dir — all keyed off the same
+short tag (≤ 4 chars, e.g. `SQZ6`, `VIC`). **No two strategies ever share a tag,
+positions file, feed file, or report name**, so live executors stay isolated
+(disjoint magics) and every artifact traces to exactly one strategy at a glance.
+Example: the R4 champion is tag `SQZ6` → `positions_sqz6.json`,
+`generated/sqz6.txt` / `generated/sqz6_live.txt`, `reports/SQZ6_2026xx`, snapshot
+`cli_champion_R4_SQZ6_no_trailing.txt`; Victor is `VIC` →
+`positions_victor.json`, `generated/victor_live.txt`. When you add a strategy,
+mint a fresh tag and derive all four artifact names from it.
 </content>
 
 ## GitHub Actions / CI

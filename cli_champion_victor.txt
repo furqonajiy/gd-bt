@@ -26,8 +26,8 @@
 #     --initial-capital is just the DD base.
 #   - Victor only began posting in ~2024, so section 5 ("from 2021-01") just emits
 #     from his first signal; for current behaviour use section 4 (from 2026-01).
-#   The other deployed feed is cli_champion_R4_SC24_no_trailing (SC24). Run THIS
-#   (Victor) alongside it -- distinct --strategy-tag (VIC vs SC24) + distinct
+#   The other deployed feed is cli_champion_R4_SQZ6_no_trailing (SQZ6). Run THIS
+#   (Victor) alongside it -- distinct --strategy-tag (VIC vs SQZ6) + distinct
 #   positions json keep them isolated on one MT5 account.
 #
 # Run blocks each in their own window, in order: listener -> filter -> backtest -> auto.
