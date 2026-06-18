@@ -23,7 +23,7 @@ or ask the user to re‑explain.
   **reliable forward-fit metrics (OOS AND fixed-lot edge)**, on which it is #1 in
   all three (it supersedes the earlier R4 pick SC24T15E6, which led only on the
   compounded net+bonus mirage). It lives in `champions/CHAMPION_{R2bull,R3strong,
-  R4parab}.json` / `cli_champion_R4_scalper24_no_trailing`. SC24 (e6 d24) stays the
+  R4parab}.json` / `cli_champion_R4_SC24_no_trailing`. SC24 (e6 d24) stays the
   baseline so the per-regime "did anything beat it?" comparison is stable across
   R4→R3→R2→R1.
 - **Sweep = search for something that beats the baseline.** It samples many

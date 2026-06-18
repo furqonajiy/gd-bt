@@ -17,7 +17,7 @@ than once -> reopen duplicates) and **likely manual closes** (live close not at
 the backtest exit, the SL, or a TP). Read-only; never touches MT5 or the registry.
 
     python tools/reconcile_report_html.py --report ReportHistory.html \
-        --backtest reports/BEST_VIC_2026.xlsx --tag VIC
+        --backtest reports/VIC_202601.xlsx --tag VIC
 """
 from __future__ import annotations
 

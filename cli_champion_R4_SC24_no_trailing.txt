@@ -1,0 +1,190 @@
+# =========================================================================
+# R4 (2026) CHAMPION — SCALPER24 (SC24), NO TRAILING  (updated 2026-06-18) | tag SC24
+# scalper24 feed (RSI-FILTERED), e5 / range_uniform / slm2.3 / gap0.0 /
+# max-hold 90 / TP3, tp1-lock-delay 20 / tp1-lock-fraction 0.25 /
+# lock-after-tp2 OFF / shared_sl, NO trailing, risk 1%.
+#
+# SECTION MAP (same in every strategy CLI; copy-paste 3/4/5 for backtests):
+#   1. Telegram Listener            (N/A here -- self-generated feed)
+#   2. Live Loop Signal Generator   (continuous live feed)
+#   3. Signal Generator             (one-shot static archive, run before 4/5)
+#   4. Backtest from 2026-01        -> reports/SC24E5_202601.xlsx
+#   5. Backtest from 2021-01        -> reports/SC24E5_202101.xlsx  (full history)
+#   6. Live Auto Executor           (places + manages real orders)
+#
+# FEED FILTER: the generator commands carry --rsi-buy-max 70 --rsi-sell-min 30
+#   (skip overbought BUYs / oversold SELLs). The R4 entry-feature sweep (16
+#   generator-feature variants x strategy/geometry, slippage-aware 2.0/1.0,
+#   DD<=40% & OOS>0) found RSI is the ONLY feature that beats the unfiltered
+#   'base' feed on BOTH edge AND OOS: rsi edge $39,508 / OOS $7,199 / DD 33.4% vs
+#   base edge $39,020 / OOS $6,629 / DD 33.3%. THIN filter (~0.5% dropped) so the
+#   lift is modest; strategy params are UNCHANGED from the prior e5 champion (a
+#   feed change, not a strategy change), so it is low-risk.
+# STATUS: e5 DD-COMPLIANT winner (research self-scalper sweep ->
+#   champions/CHAMPION_R4parab.json), on the RSI-filtered feed. It SUPERSEDES
+#   SC24T24E8 for R4 ONLY (that breached the <=40% DD gate at 58.3% on 2026 data);
+#   R2bull/R3strong keep SC24T24E8. compounded $ are model upper bounds.
+# CAPITAL NOTE: base is $50,000 so the 0.01-lot floor no longer distorts risk%.
+#   Live sizes off REAL equity, so fund ~$50k to match this base (else set
+#   --initial-capital to your actual equity for the DD base to be correct).
+# LIVE FIXES IN EFFECT (auto, via --reopen-missing-positions true in section 6):
+#   tagged compact comments SC24-MMDD#NN.N, per-entry partial placement, reopen-
+#   churn cooldown, and --watch-interval 3 (cuts LOCK_TP1/TP2 give-back). CUT OVER
+#   WHEN FLAT: e5 uses a fresh positions json (positions_sc24_e5.json) so the
+#   90-min/5-entry lifecycle never manages leftover e8 (240-min/8-entry) positions.
+# =========================================================================
+
+# ===== 1. TELEGRAM LISTENER =====
+# N/A -- this is a SELF-GENERATED feed (no Telegram source). The signals come
+# from the generator in sections 2 (live) and 3 (backtest archive).
+
+# ===== 2. LIVE LOOP SIGNAL GENERATOR =====
+# One process, no shell loop. Refetches the current month + regenerates ONLY when
+# a new closed M1 bar exists, narrows to the 2 most recent months + a rolling
+# 3-day window (fast), and prints like `auto`: a header, then one line per NEW
+# signal -- e.g. [ts] Add Signal 75. BUY XAUUSD ...
+python tools/live_feed_loop.py `
+  --family scalper `
+  --interval 30 `
+  --gen-start-days 3 `
+  --gen-recent-months 2 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30
+
+# ===== 3. SIGNAL GENERATOR (before backtest) =====
+# One-shot FULL static archive generated/self_scalper24.txt from ALL chart
+# history (run before sections 4/5). RSI-filtered to match live. The ELEV8 archive
+# begins 2021-11, so --start 2021-01-01 simply emits from the first available bar.
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30
+
+# ===== 4. BACKTEST FROM 2026-01 (current regime) =====
+# --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
+#   give-back so the backtest matches live (the SAME values the sweep scored
+#   against). Backtest-only; never live.
+python tools/backtest_explicit.py `
+  --signals generated/self_scalper24.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 5 `
+  --entry-ladder range_uniform `
+  --entry-sl-gap 0.0 `
+  --shared-sl true `
+  --activation-delay 0 `
+  --pending-expiry 420 `
+  --max-hold 90 `
+  --sl-multiplier 2.3 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 false `
+  --tp1-lock-delay-minutes 20 `
+  --tp2-lock-delay-minutes 0 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 6.0 `
+  --tp1-lock-fraction 0.25 `
+  --tp2-lock-target TP2 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/SC24E5_202601 `
+  --initial-capital 50000 `
+  --start-date 2026-01-01
+
+# ===== 5. BACKTEST FROM 2021-01 (full history) =====
+python tools/backtest_explicit.py `
+  --signals generated/self_scalper24.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 5 `
+  --entry-ladder range_uniform `
+  --entry-sl-gap 0.0 `
+  --shared-sl true `
+  --activation-delay 0 `
+  --pending-expiry 420 `
+  --max-hold 90 `
+  --sl-multiplier 2.3 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 false `
+  --tp1-lock-delay-minutes 20 `
+  --tp2-lock-delay-minutes 0 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 6.0 `
+  --tp1-lock-fraction 0.25 `
+  --tp2-lock-target TP2 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/SC24E5_202101 `
+  --initial-capital 50000 `
+  --start-date 2021-01-01
+
+# ===== 6. LIVE AUTO EXECUTOR =====
+# Reads the live feed (section 2), places + manages real orders. Runs beside the
+# generator loop. --replace-missing-entries false: self feeds are two-sided.
+# --reopen-missing-positions true: MT5 mirrors the replay. Strategy params are
+# byte-identical to sections 4/5. --initial-capital 50000 is just the DD base
+# (live sizes off REAL equity).
+python tools/auto_explicit.py `
+  --signals generated/self_scalper24_live.txt `
+  --positions-json positions_sc24_e5.json `
+  --strategy-tag SC24 `
+  --watch-interval 3 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --replace-missing-entries false `
+  --reopen-missing-positions true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 5 `
+  --entry-ladder range_uniform `
+  --entry-sl-gap 0.0 `
+  --shared-sl true `
+  --activation-delay 0 `
+  --pending-expiry 420 `
+  --max-hold 90 `
+  --sl-multiplier 2.3 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 false `
+  --tp1-lock-delay-minutes 20 `
+  --tp2-lock-delay-minutes 0 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 6.0 `
+  --tp1-lock-fraction 0.25 `
+  --tp2-lock-target TP2 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --trailing-close-after-stage 0 `
+  --initial-capital 50000

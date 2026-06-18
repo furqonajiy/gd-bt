@@ -346,7 +346,7 @@ from 2020, see the standalone `cli_resync_m1_from_2020.txt` (`fetch --months 80`
 `cli_*.txt` files are runnable deployment-command snapshots, each with the same
 sections (Signal Auto Generator live-loop / Backtest CLI / Auto CLI; Telegram
 Listener only for the Victor feed). The current R4 champion is
-`cli_champion_R4_scalper24_no_trailing` — the **e5 DD-compliant winner**
+`cli_champion_R4_SC24_no_trailing` — the **e5 DD-compliant winner**
 (e5 / range_uniform / slm2.3 / max_hold 90 / tp1_lock_delay 20 / shared_sl, on
 the **RSI-filtered** scalper24 feed `--rsi-buy-max 70 --rsi-sell-min 30`;
 `champions/CHAMPION_R4parab.json`), which superseded SC24T24E8 for R4 after it

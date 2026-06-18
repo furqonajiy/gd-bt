@@ -5,28 +5,32 @@
 #   final-target TP3 / locks on / tp1-lock-delay 24 / tp2-lock-delay 2,
 #   NO trailing, risk 2.5%, capital $50,000.
 #
+# SECTION MAP (same in every strategy CLI; copy-paste 3/4/5 for backtests):
+#   1. Telegram Listener            (ingests Victor's channel -> victor_signals.txt)
+#   2. Live Loop Signal Generator   (provider filter --watch -> victor_live.txt)
+#   3. Signal Generator             (N/A -- backtest reads victor_signals.txt direct)
+#   4. Backtest from 2026-01        -> reports/VIC_202601.xlsx
+#   5. Backtest from 2021-01        -> reports/VIC_202101.xlsx  (full Victor history)
+#   6. Live Auto Executor           (places + manages real orders)
+#
 # All artifacts are Victor-named so nothing is confused with the scalper executor:
 #   feed = generated/victor_live.txt (the filtered Victor signals the live auto
-#   trades) | positions = positions_victor.json | report = reports/BEST_VIC_2026 |
-#   tag = VIC. The raw source is victor_signals.txt (the listener's output).
+#   trades) | positions = positions_victor.json | tag = VIC. The raw source is
+#   victor_signals.txt (the listener's output).
 #
 # CURRENT-DATA REALITY (2026 @ $50k, resynced feed):
 #   - risk 2.5% keeps DD within the <=40% gate (~36.8% equity-curve DD on 2026),
 #     compounded $50k -> ~$417k -- the DD-compliant MAX (set 2026-06-17).
 #   - risk 3%+ breaches the gate (43.8% DD at 3%); risk 5% was ~57-63% DD ->
-#     dropped. risk 1% is ~16% DD but smaller. Scale risk to your real funded
-#     equity; live sizes off real equity, --initial-capital is just the DD base.
-#   - NOTE: the sweep's concurrent-DD gate metric can't be reproduced by the local
-#     engine (gave unstable >100% values); 40%-line is anchored on equity-curve DD
-#     + the prior deploy interpolation (5%->~57.6%, 1%->~25%), both ~2.7-2.8% risk.
-#   The deployable R4 champion is cli_champion_R4_scalper24_no_trailing
-#   (SC24T24E8 = SC24 + entry_count 8). Run THIS (Victor) alongside it -- distinct
-#   --strategy-tag (VIC vs SC24) + distinct positions json keep them isolated on
-#   one MT5 account. compounded $ are model upper bounds -- they rank configs, not
-#   forecast money.
+#     dropped. Scale risk to your real funded equity; live sizes off real equity,
+#     --initial-capital is just the DD base.
+#   - Victor only began posting in ~2024, so section 5 ("from 2021-01") just emits
+#     from his first signal; for current behaviour use section 4 (from 2026-01).
+#   The other deployed feed is cli_champion_R4_SC24_no_trailing (SC24). Run THIS
+#   (Victor) alongside it -- distinct --strategy-tag (VIC vs SC24) + distinct
+#   positions json keep them isolated on one MT5 account.
 #
-# Run blocks each in their own window, in order: listener -> generator -> backtest -> auto.
-# The auto runner's strategy parameters mirror the backtest below.
+# Run blocks each in their own window, in order: listener -> filter -> backtest -> auto.
 
 cd C:\Git\github.com\furqonajiy\xauusd-backtest
 conda activate trading
@@ -34,15 +38,15 @@ git checkout main
 git pull origin main
 
 # ===== 1. TELEGRAM LISTENER =====
-# Ingests Victor's Telegram channel into victor_signals.txt. This IS this CLI's
+# Ingests Victor's Telegram channel into victor_signals.txt -- this IS this CLI's
 # live signal source.
 #    First-time setup only: `python listener\telegram_listener.py list-chats`
 #    to find the channel id, then paste it into listener_config.json.
 python listener\telegram_listener.py --signals-file victor_signals.txt
 
-# ===== 2. SIGNAL AUTO GENERATOR =====
-# Victor signal filter -> reads victor_signals.txt (the listener's raw feed) and
-# writes generated/victor_live.txt, the Victor feed the live auto trades.
+# ===== 2. LIVE LOOP SIGNAL GENERATOR =====
+# Victor's "live loop" is the provider filter in --watch mode: it regenerates
+# generated/victor_live.txt from victor_signals.txt on every change.
 #    `--preset all` keeps EVERY Victor signal (no hour/side filtering), so the
 #    live feed is exactly Victor's signals and matches the backtest below.
 python tools/live_provider_signal_filter.py `
@@ -52,8 +56,15 @@ python tools/live_provider_signal_filter.py `
   --watch `
   --interval 2
 
-# ===== 3. BACKTEST CLI =====
-# Parity backtest (reference; same strategy parameters as the auto runner).
+# ===== 3. SIGNAL GENERATOR (before backtest) =====
+# N/A -- there is no generation step for Victor. The backtest reads
+# victor_signals.txt directly (the listener output IS the signal source); sections
+# 4/5 below pass it as --signals.
+
+# ===== 4. BACKTEST FROM 2026-01 (current regime) =====
+# --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
+#   give-back so the backtest matches live. Backtest-only; never live. Strategy
+#   params are byte-identical to the auto runner (section 6).
 python tools/backtest_explicit.py `
   --signals victor_signals.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -88,13 +99,52 @@ python tools/backtest_explicit.py `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --trailing-close-after-stage 0 `
-  --start-date 2026-01-01 `
-  --output-dir reports/BEST_VIC_2026 `
-  --initial-capital 50000
+  --output-dir reports/VIC_202601 `
+  --initial-capital 50000 `
+  --start-date 2026-01-01
 
-# ===== 4. AUTO CLI =====
-# Live Auto  ->  reads the filtered feed, places + manages orders on MT5
-#    Strategy parameters are byte-identical to the parity backtest above.
+# ===== 5. BACKTEST FROM 2021-01 (full Victor history) =====
+python tools/backtest_explicit.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.025 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0 `
+  --trailing-close-distance 0 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/VIC_202101 `
+  --initial-capital 50000 `
+  --start-date 2021-01-01
+
+# ===== 6. LIVE AUTO EXECUTOR =====
+# Reads the filtered feed (section 2), places + manages real orders on MT5.
+# Strategy parameters are byte-identical to the parity backtests (sections 4/5).
 python tools/auto_explicit.py `
   --signals generated/victor_live.txt `
   --positions-json positions_victor.json `
