@@ -147,8 +147,35 @@ def test_render_hold_and_switch(tmp_path):
 
 def test_feed_name_resolves_to_archive_path():
     assert cr.feed_signals("adE_farTP") == "generated/adaptive_adE_farTP.txt"
+    assert cr.feed_signals("scalper24") == "generated/self_scalper24.txt"
+    assert cr.feed_signals("scalperwide24") == "generated/self_scalper_widerr24.txt"
+    assert cr.feed_signals("risk02allhours") == "generated/self_risk02_allhours.txt"
     # An already-resolved path round-trips unchanged.
     assert cr.feed_signals("generated/self_better.txt") == "generated/self_better.txt"
+
+
+def test_calendar_regime_helpers_use_generated_calendar(tmp_path):
+    calendar = tmp_path / "regime_calendar.csv"
+    calendar.write_text("\n".join([
+        "date,month,sweep_regime,behavior_regime,old_threshold_regime",
+        "2025-10-17,2025-10,R4parab,R4parab,R4parab",
+        "2025-10-20,2025-10,R4parab,R4parab,R4parab",
+        "2026-02-02,2026-02,R4parab,R3strong,R4parab",
+        "2026-03-10,2026-03,R3strong,R3strong,R4parab",
+        "2026-04-01,2026-04,R2bull,R2trend,R4parab",
+    ]) + "\n")
+
+    assert cr.regime_start("R4parab", calendar_path=calendar) == "2025-10-17"
+    assert cr.regime_charts("R4parab", calendar_path=calendar) == (
+        "data/XAUUSD_M1_202510_ELEV8.csv data/XAUUSD_M1_202602_ELEV8.csv")
+    assert cr.regime_backtest_signals("R4parab", "scalper24", calendar_path=calendar) == (
+        "generated/regime_feeds/R4parab_scalper24.txt")
+    assert cr.regime_backtest_signals("R4parab", "generated/self_scalper24.txt", calendar_path=calendar) == (
+        "generated/regime_feeds/R4parab_scalper24.txt")
+    assert cr.regime_backtest_signals("R4parab", "generated/adaptive_adE_farTP.txt", calendar_path=calendar) == (
+        "generated/regime_feeds/R4parab_adE_farTP.txt")
+    # Existing R2trend wording aliases to the canonical R2bull bucket.
+    assert cr.regime_charts("R2trend", calendar_path=calendar) == "data/XAUUSD_M1_202604_ELEV8.csv"
 
 
 def test_rendered_cli_is_runnable_backtest_explicit():

@@ -123,31 +123,25 @@ jobs:
         if: steps.guard.outputs.done != 'true'
         run: pip install -r requirements.txt
 
-      - name: Resolve this regime's chart month-glob
+      - name: Build regime calendar + resolve this regime's chart months
         if: steps.guard.outputs.done != 'true'
         id: charts
         run: |
-          # Each regime is fit on a distinct slice of XAUUSD history. The globs
-          # are expanded by the shell into the actual ELEV8 chart files below.
-          # This case mapping is identical to self-regime-sweep.yml.
-          case "${{ matrix.regime }}" in
-            R1quiet)
-              CHARTS="data/XAUUSD_M1_20211[12]_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_20230[1-9]_ELEV8.csv"
-              ;;
-            R2bull)
-              CHARTS="data/XAUUSD_M1_20231[012]_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv"
-              ;;
-            R3strong)
-              CHARTS="data/XAUUSD_M1_2025*_ELEV8.csv"
-              ;;
-            R4parab)
-              CHARTS="data/XAUUSD_M1_2026*_ELEV8.csv"
-              ;;
-            *)
-              echo "unknown regime ${{ matrix.regime }}"; exit 1 ;;
-          esac
-          echo "CHARTS=${CHARTS}" >> "$GITHUB_ENV"
-          echo "regime ${{ matrix.regime }} charts: ${CHARTS}"
+          # Regime membership is generated from M1/M15 behavior, not hardcoded
+          # calendar eras. CHARTS contains the monthly files that include at
+          # least one day of this regime; signals are filtered by exact dates.
+          mkdir -p sweep_regime_out_grid
+          python tools/build_regime_calendar.py \
+            --charts data/XAUUSD_M1_*_ELEV8.csv \
+            --output sweep_regime_out_grid/regime_calendar.csv \
+            --monthly-output sweep_regime_out_grid/regime_calendar_monthly.csv
+          python tools/regime_calendar_env.py \
+            --calendar sweep_regime_out_grid/regime_calendar.csv \
+            --regime "${{ matrix.regime }}" \
+            --layer sweep_regime \
+            --github-env "$GITHUB_ENV"
+          echo "regime ${{ matrix.regime }} calendar-derived charts:"
+          grep '^CHARTS=' "$GITHUB_ENV" | tail -n 1
 
       - name: Resolve this feed's signal archive
         if: steps.guard.outputs.done != 'true'
@@ -167,30 +161,18 @@ jobs:
           if [ ! -f "$FEED" ]; then
             echo "feed file $FEED is missing"; exit 1
           fi
-          # The archive feed spans the FULL 2021-2026 history, but each regime is
-          # fit on its own chart slice. tools/sweep.py:split_train_validate() picks
-          # the OOS validate set as the last 2 SIGNAL-months of whatever feed it is
-          # handed -- so feeding the full feed with regime-restricted charts puts the
-          # held-out tail (2026-05/06) OUTSIDE every non-R4 regime's charts, yielding
-          # $0 OOS for every candidate. Filter the feed to THIS regime's signal
-          # months first so the OOS tail lands inside the regime window. The regex is
-          # matched against the YYYY-MM at the start of each `... GMT` date header;
-          # a header (and its signal lines) is kept only while its month matches.
-          case "${{ matrix.regime }}" in
-            R1quiet)  SIG_RE='^(2021-1[12]|2022-|2023-0[1-9])' ;;
-            R2bull)   SIG_RE='^(2023-1[012]|2024-)' ;;
-            R3strong) SIG_RE='^2025-' ;;
-            R4parab)  SIG_RE='^2026-' ;;
-            *) echo "unknown regime ${{ matrix.regime }}"; exit 1 ;;
-          esac
+          # Filter the archive feed to exact calendar days in this regime. That
+          # keeps sweep.split_train_validate()'s OOS tail inside the regime.
           FILTERED="/tmp/feed_${{ matrix.feed }}_${{ matrix.regime }}.txt"
-          awk -v re="$SIG_RE" '
-            /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] GMT/ { keep = (substr($0,1,7) ~ re); if (keep) print; next }
-            keep
-          ' "$FEED" > "$FILTERED"
+          python tools/filter_signals_by_regime.py \
+            --signals "$FEED" \
+            --calendar sweep_regime_out_grid/regime_calendar.csv \
+            --regime "${{ matrix.regime }}" \
+            --layer sweep_regime \
+            --output "$FILTERED"
           test -s "$FILTERED" || { echo "ERROR: filtered feed empty for ${{ matrix.regime }}"; exit 1; }
           echo "FEED=${FILTERED}" >> "$GITHUB_ENV"
-          echo "feed ${{ matrix.feed }} archive: ${FEED} -> regime-filtered ${FILTERED} ($(grep -cE '^[0-9]+\. ' "$FILTERED") signals for ${{ matrix.regime }})"
+          echo "feed ${{ matrix.feed }} archive: ${FEED} -> calendar-filtered ${FILTERED} ($(grep -cE '^[0-9]+\. ' "$FILTERED") signals for ${{ matrix.regime }})"
 
       - name: Run 4 shards in parallel (use all 4 runner cores, resumable, time-boxed)
         if: steps.guard.outputs.done != 'true'
@@ -267,42 +249,42 @@ jobs:
 
       - name: Compute missing incumbent baselines (cached per regime)
         run: |
-          # Resolve each regime's chart glob with the SAME case mapping the shard
-          # job uses, and only compute the baseline if its JSON is absent (cache).
-          # $CHARTS is intentionally unquoted so the shell expands the glob.
+          # Resolve each regime from the generated calendar, matching the shard
+          # job exactly. CHARTS is a space-separated list of monthly files that
+          # contain at least one day of that regime.
           set -e
+          mkdir -p sweep_regime_out_grid
+          python tools/build_regime_calendar.py \
+            --charts data/XAUUSD_M1_*_ELEV8.csv \
+            --output sweep_regime_out_grid/regime_calendar.csv \
+            --monthly-output sweep_regime_out_grid/regime_calendar_monthly.csv
           for regime in R1quiet R2bull R3strong R4parab; do
             out="sweep_regime_out_grid/INCUMBENT_${regime}.json"
             if [ -f "$out" ]; then
               echo "incumbent ${regime}: cached (${out}) — skip"
               continue
             fi
-            case "$regime" in
-              R1quiet)
-                CHARTS="data/XAUUSD_M1_20211[12]_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_20230[1-9]_ELEV8.csv"
-                SIG_RE='^(2021-1[12]|2022-|2023-0[1-9])' ;;
-              R2bull)
-                CHARTS="data/XAUUSD_M1_20231[012]_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv"
-                SIG_RE='^(2023-1[012]|2024-)' ;;
-              R3strong)
-                CHARTS="data/XAUUSD_M1_2025*_ELEV8.csv"
-                SIG_RE='^2025-' ;;
-              R4parab)
-                CHARTS="data/XAUUSD_M1_2026*_ELEV8.csv"
-                SIG_RE='^2026-' ;;
-            esac
+            ENV_FILE="/tmp/regime_${regime}.env"
+            rm -f "$ENV_FILE"
+            python tools/regime_calendar_env.py \
+              --calendar sweep_regime_out_grid/regime_calendar.csv \
+              --regime "$regime" \
+              --layer sweep_regime \
+              --github-env "$ENV_FILE"
+            CHARTS="$(grep '^CHARTS=' "$ENV_FILE" | tail -n 1 | cut -d= -f2-)"
             # The incumbent is the user's LIVE current CLI = SC24 (the full
             # no-trailing champion config at 1% risk, pinned in incumbent_config
             # -> sweep.sc24_config) on the DENSE self_scalper24 archive it actually
             # trades -- NOT the lower-frequency self_better feed, which understates
-            # the bonus + compounding. Same OOS-window handling as the shard
-            # job: incumbent_baseline.py calls sweep.split_train_validate(), so
-            # filter the feed to THIS regime's signal months first.
+            # the bonus + compounding. The filtered feed gives
+            # sweep.split_train_validate() an OOS tail inside this regime.
             FILTERED="/tmp/feed_incumbent_${regime}.txt"
-            awk -v re="$SIG_RE" '
-              /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] GMT/ { keep = (substr($0,1,7) ~ re); if (keep) print; next }
-              keep
-            ' generated/self_scalper24.txt > "$FILTERED"
+            python tools/filter_signals_by_regime.py \
+              --signals generated/self_scalper24.txt \
+              --calendar sweep_regime_out_grid/regime_calendar.csv \
+              --regime "$regime" \
+              --layer sweep_regime \
+              --output "$FILTERED"
             test -s "$FILTERED" || { echo "ERROR: filtered incumbent feed empty for ${regime}"; exit 1; }
             echo "incumbent ${regime}: computing on regime-filtered ${FILTERED} ($(grep -cE '^[0-9]+\. ' "$FILTERED") signals) ..."
             # Non-fatal per regime: a single regime's baseline failing must not red
@@ -355,6 +337,38 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Build regime calendar + filtered deploy feeds
+        run: |
+          set -e
+          mkdir -p sweep_regime_out_grid generated/regime_feeds
+          python tools/build_regime_calendar.py \
+            --charts data/XAUUSD_M1_*_ELEV8.csv \
+            --output sweep_regime_out_grid/regime_calendar.csv \
+            --monthly-output sweep_regime_out_grid/regime_calendar_monthly.csv
+          FEEDS="adA_base adB_tightSL adC_wideSL adD_closeTP adE_farTP adF_tightSL_closeTP adG_wideSL_farTP breakout meanrev scalper24 scalperwide24 risk02allhours"
+          REGIMES="R1quiet R2bull R3strong R4parab"
+          for feed in $FEEDS; do
+            case "$feed" in
+              scalper24)      SRC="generated/self_scalper24.txt" ;;
+              scalperwide24)  SRC="generated/self_scalper_widerr24.txt" ;;
+              risk02allhours) SRC="generated/self_risk02_allhours.txt" ;;
+              *)              SRC="generated/adaptive_${feed}.txt" ;;
+            esac
+            if [ ! -f "$SRC" ]; then
+              echo "skip missing feed ${SRC}"
+              continue
+            fi
+            for regime in $REGIMES; do
+              OUT="generated/regime_feeds/${regime}_${feed}.txt"
+              python tools/filter_signals_by_regime.py \
+                --signals "$SRC" \
+                --calendar sweep_regime_out_grid/regime_calendar.csv \
+                --regime "$regime" \
+                --layer sweep_regime \
+                --output "$OUT"
+            done
+          done
 
       - name: Download all cell artifacts
         uses: actions/download-artifact@v4
@@ -480,7 +494,7 @@ jobs:
                           % (exc, feed, signals, json.dumps(cfg, indent=2, sort_keys=True)))
 
           leaderboard = ["# feed x regime adaptive grid — best (feed,config) per regime",
-                         f"# DD gate <= {DD_GATE:.0f}%, ranked by OOS then edge", ""]
+                         f"# DD gate <= {DD_GATE:.0f}%, ranked by net+bonus then OOS then edge", ""]
 
           for regime in REGIMES:
               rows = load_regime(regime)
@@ -491,7 +505,7 @@ jobs:
               best_path = OUT / f"BEST_{regime}.txt"
               lines = [
                   f"# regime {regime}: top DD<={DD_GATE:.0f}% candidates across "
-                  f"ALL feeds, by OOS then edge "
+                  f"ALL feeds, by net+bonus then OOS then edge "
                   f"({len(survivors)}/{len(rows)} pass DD gate)",
                   "",
               ]
