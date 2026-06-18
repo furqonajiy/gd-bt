@@ -299,6 +299,21 @@ the comment survives the broker's truncation (Elev8 cuts near 16 chars). The
 tag is **capped at 4 chars**; a longer one keeps its first 4. The tag is
 live-only — backtests run untagged, so parity is unaffected.
 
+**One distinct identity per strategy.** Don't stop at the tag — give every
+deployed strategy its OWN names for *all four* artifacts, keyed off that short
+tag, so nothing ever collides and every file traces to one strategy at a glance:
+
+| Artifact | flag / path | example (R4 champion, tag `SQZ6`) | Victor (`VIC`) |
+|---|---|---|---|
+| Strategy tag | `--strategy-tag` | `SQZ6` | `VIC` |
+| Positions json | `--positions-json` | `positions_sqz6.json` | `positions_victor.json` |
+| Signal/feed txt | generator `--output` / `--signals` | `generated/sqz6.txt`, `generated/sqz6_live.txt` | `generated/victor_live.txt` |
+| Report (Excel) dir | `--output-dir` | `reports/SQZ6_202601` | `reports/VIC_202601` |
+
+No two strategies share a tag, positions file, feed file, or report name. The
+snapshot file follows too (`cli_champion_R4_SQZ6_no_trailing.txt`). When you add
+a strategy, mint a fresh ≤ 4-char tag and derive all four names from it.
+
 ### Regime auto-switch (`--adaptive`)
 
 Pass `--adaptive` (and `--champions-dir <dir>` if your `CHAMPION_<regime>.json`

@@ -1,16 +1,22 @@
 # =========================================================================
-# R4 (2026) CHAMPION — SCALPER24 (SC24), NO TRAILING  (updated 2026-06-18) | tag SC24
-# rsi75_sqz6_rr40: scalper24 feed FILTERED by RSI 75/25 + Bollinger bandwidth
-# squeeze (>=0.0006) + R:R 1.0/2.0/4.0, run on the e8 strategy —
+# R4 (2026) CHAMPION — SCALPER24 RSI×BB×R:R  (updated 2026-06-18) | tag SQZ6
+# "SQZ6" = rsi75_sqz6_rr40: scalper24 feed FILTERED by RSI 75/25 + Bollinger
+# bandwidth squeeze (>=0.0006) + R:R 1.0/2.0/4.0, run on the e8 strategy —
 # e8 / range_to_sl / slm2.1 / gap0.5 / max-hold 240 / TP3, tp1-lock-delay 24 /
 # tp1-lock-fraction 0.5 / lock-after-tp2 ON / shared_sl OFF, NO trailing, risk 1%.
+#
+# ONE IDENTITY PER STRATEGY (so live deployments never collide and stay easy to
+# track): this champion is keyed end-to-end off the short tag **SQZ6** —
+#   --strategy-tag SQZ6 · --positions-json positions_sqz6.json ·
+#   feed generated/sqz6.txt (static) + generated/sqz6_live.txt (live) ·
+#   reports/SQZ6_2026xx (Excel). No other strategy reuses any of these names.
 #
 # SECTION MAP (same in every strategy CLI; copy-paste 3/4/5 for backtests):
 #   1. Telegram Listener            (N/A here -- self-generated feed)
 #   2. Live Loop Signal Generator   (continuous live feed)
 #   3. Signal Generator             (one-shot static archive, run before 4/5)
-#   4. Backtest from 2026-01        -> reports/RSI75SQZ6RR40_202601.xlsx
-#   5. Backtest from 2021-01        -> reports/RSI75SQZ6RR40_202101.xlsx  (full history)
+#   4. Backtest from 2026-01        -> reports/SQZ6_202601.xlsx
+#   5. Backtest from 2021-01        -> reports/SQZ6_202101.xlsx  (full history)
 #   6. Live Auto Executor           (places + manages real orders)
 #
 # FEED FILTER: the generator commands carry
@@ -23,21 +29,21 @@
 #   $11,633 at DD 38.4% (<=40% gate), 6/6 stable months, worst month +$4,993. The
 #   lever is the FEED (Bollinger squeeze + 1.0/2.0/4.0 R:R on the more-entries e8
 #   geometry); RSI is near-neutral on top (sqz6_rr40 ~ rsi75_sqz6_rr40).
-# STATUS: rsi75_sqz6_rr40 (research self-scalper RSI x BB x R:R sweep ->
+# STATUS: SQZ6 / rsi75_sqz6_rr40 (research self-scalper RSI x BB x R:R sweep ->
 #   champions/CHAMPION_R4parab.json). It SUPERSEDES the e5 RSI champion for R4 ONLY
-#   (edge $39,508 / OOS $7,199 / DD 33.4%; rsi75_sqz6_rr40 is ~+62% on both); the e5
-#   pick had itself superseded SC24T24E8 after it breached the <=40% DD gate (58.3%)
-#   on 2026 data. R2bull/R3strong keep SC24T24E8. Compounded $ are model upper bounds
+#   (edge $39,508 / OOS $7,199 / DD 33.4%; SQZ6 is ~+62% on both); the e5 pick had
+#   itself superseded SC24T24E8 after it breached the <=40% DD gate (58.3%) on 2026
+#   data. R2bull/R3strong keep SC24T24E8. Compounded $ are model upper bounds
 #   (rank, do not decide). FRESH SWEEP WINNER -- forward-validate before scaling live.
 # CAPITAL NOTE: base is $50,000 so the 0.01-lot floor no longer distorts risk%.
 #   Live sizes off REAL equity, so fund ~$50k to match this base (else set
 #   --initial-capital to your actual equity for the DD base to be correct).
 # LIVE FIXES IN EFFECT (auto, via --reopen-missing-positions true in section 6):
-#   tagged compact comments SC24-MMDD#NN.N, per-entry partial placement, reopen-
+#   tagged compact comments SQZ6-MMDD#NN.N, per-entry partial placement, reopen-
 #   churn cooldown, freeze/stops-band deferral + reopen-at-market, and
-#   --watch-interval 3 (cuts LOCK_TP1/TP2 give-back). CUT OVER WHEN FLAT: this pick
-#   uses a fresh positions json (positions_sc24_rsi75sqz6rr40.json) so the e8
-#   (240-min/8-entry) lifecycle never manages leftover e5 (90-min/5-entry) positions.
+#   --watch-interval 3 (cuts LOCK_TP1/TP2 give-back). CUT OVER WHEN FLAT: SQZ6 uses
+#   its own positions json (positions_sqz6.json) + tag, so its e8 (240-min/8-entry)
+#   lifecycle never manages another strategy's (e.g. the old e5) positions.
 # =========================================================================
 
 # ===== 1. TELEGRAM LISTENER =====
@@ -56,21 +62,21 @@ python tools/live_feed_loop.py `
   --gen-recent-months 2 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
-  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/sqz6_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0
 
 # ===== 3. SIGNAL GENERATOR (before backtest) =====
-# One-shot FULL static archive generated/self_scalper24.txt from ALL chart
-# history (run before sections 4/5). RSI + Bollinger-squeeze + R:R filtered to
-# match live. The ELEV8 archive begins 2021-11, so --start 2021-01-01 simply emits
-# from the first available bar.
-python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper24.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0
+# One-shot FULL static archive generated/sqz6.txt from ALL chart history (run
+# before sections 4/5). RSI + Bollinger-squeeze + R:R filtered to match live. The
+# ELEV8 archive begins 2021-11, so --start 2021-01-01 simply emits from the first
+# available bar.
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/sqz6.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0
 
 # ===== 4. BACKTEST FROM 2026-01 (current regime) =====
 # --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
 #   give-back so the backtest matches live (the SAME values the sweep scored
 #   against). Backtest-only; never live.
 python tools/backtest_explicit.py `
-  --signals generated/self_scalper24.txt `
+  --signals generated/sqz6.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
   --max-drawdown-limit-pct 50 `
   --progress-interval-seconds 30 `
@@ -105,13 +111,13 @@ python tools/backtest_explicit.py `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --trailing-close-after-stage 0 `
-  --output-dir reports/RSI75SQZ6RR40_202601 `
+  --output-dir reports/SQZ6_202601 `
   --initial-capital 50000 `
   --start-date 2026-01-01
 
 # ===== 5. BACKTEST FROM 2021-01 (full history) =====
 python tools/backtest_explicit.py `
-  --signals generated/self_scalper24.txt `
+  --signals generated/sqz6.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
   --max-drawdown-limit-pct 50 `
   --progress-interval-seconds 30 `
@@ -146,7 +152,7 @@ python tools/backtest_explicit.py `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --trailing-close-after-stage 0 `
-  --output-dir reports/RSI75SQZ6RR40_202101 `
+  --output-dir reports/SQZ6_202101 `
   --initial-capital 50000 `
   --start-date 2021-01-01
 
@@ -157,9 +163,9 @@ python tools/backtest_explicit.py `
 # byte-identical to sections 4/5. --initial-capital 50000 is just the DD base
 # (live sizes off REAL equity).
 python tools/auto_explicit.py `
-  --signals generated/self_scalper24_live.txt `
-  --positions-json positions_sc24_rsi75sqz6rr40.json `
-  --strategy-tag SC24 `
+  --signals generated/sqz6_live.txt `
+  --positions-json positions_sqz6.json `
+  --strategy-tag SQZ6 `
   --watch-interval 3 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `

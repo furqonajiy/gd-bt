@@ -23,7 +23,7 @@
 #   set. (#1 by edge is rr08x15x30; this one tops OOS.)
 #
 # STATUS: RESEARCH ONLY -- NOT a deployed champion. The live R4 champion stays
-#   cli_champion_R4_SC24_no_trailing (the RSI-filtered e5 winner). This is
+#   cli_champion_R4_SQZ6_no_trailing (SQZ6 / rsi75_sqz6_rr40). This is
 #   in-sample on one 2026 path; forward/demo-validate before any live use. The
 #   live (section 6) block is provided for that validation, isolated by its own
 #   --strategy-tag RR40 + positions_sc24_rr10x20x40.json so it never touches the
