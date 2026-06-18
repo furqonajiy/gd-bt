@@ -18,11 +18,13 @@ or ask the user to re‑explain.
   **incumbent baseline (every regime)** is **SC24** (`e6 slm2.1 max_hold240 d24
   tp2d2`, no trailing, 1% risk), defined once in `tools/sweep.py::sc24_config()`
   and seeded as a guaranteed candidate via `sc24_neighborhood_grid()`, *not* found
-  by the random grid. The **deployable champion for R2bull, R3strong, AND R4parab**
-  is the SAME config — **SC24 + `entry_count 8` ("SC24T24E8")** — promoted on the
-  **reliable forward-fit metrics (OOS AND fixed-lot edge)**, on which it is #1 in
-  all three (it supersedes the earlier R4 pick SC24T15E6, which led only on the
-  compounded net+bonus mirage). It lives in `champions/CHAMPION_{R2bull,R3strong,
+  by the random grid. The **deployable champion for R2bull and R3strong** is
+  **SC24 + `entry_count 8` ("SC24T24E8")** — promoted on the **reliable forward-fit
+  metrics (OOS AND fixed-lot edge)**, on which it is #1 in both. **R4parab has since
+  moved on**: SC24T24E8 breached the ≤ 40% DD gate (58.3%) on 2026 data, so R4parab
+  now runs **`rsi75_sqz6_rr40`** — the edge+OOS leader of the 34-variant RSI ×
+  Bollinger × R:R sweep (edge $63,940 / OOS $11,633 / DD 38.4%), which superseded
+  an interim e5 RSI champion. They live in `champions/CHAMPION_{R2bull,R3strong,
   R4parab}.json` / `cli_champion_R4_SC24_no_trailing`. SC24 (e6 d24) stays the
   baseline so the per-regime "did anything beat it?" comparison is stable across
   R4→R3→R2→R1.
@@ -52,10 +54,12 @@ or ask the user to re‑explain.
       (`--validate-months 2` in the regime grid). The best proxy for forward/live
       performance, because live is always out‑of‑sample.
   - When net+bonus and edge/OOS **disagree, edge+OOS wins.** Real example:
-    **SC24T24E8 (entry 8) was promoted for R2bull/R3strong/R4parab** even though the
-    net+bonus #1 was a different config (slm1.9 in R2, SC24T15E6 in R4) — those led
-    only on the inflated compounded headline while *losing* on edge AND OOS. The
-    universal lever across trending regimes is **more entries** (e8 > e7 > e6 on OOS).
+    **SC24T24E8 (entry 8) was promoted for R2bull/R3strong** (and originally R4parab)
+    even though the net+bonus #1 was a different config (slm1.9 in R2, SC24T15E6 in
+    R4) — those led only on the inflated compounded headline while *losing* on edge
+    AND OOS. The universal lever across trending regimes is **more entries**
+    (e8 > e7 > e6 on OOS). (R4parab has since switched to `rsi75_sqz6_rr40` on the
+    same edge+OOS rule after SC24T24E8 breached the DD gate on 2026 data.)
 - **DD gate.** Candidates must keep concurrent drawdown ≤ the limit
   (`--max-concurrent-dd-pct`). Current target: **40%**, and risk is swept up
   to push each champion against that 40% DD gate.
@@ -170,9 +174,10 @@ alone beat, the baseline. The champion's `d24` (tp1‑lock‑delay = 24), `e6/e8
    seeds that grid on shard 0 so SC24 + neighbors are always evaluated. The SAME
    `sc24_config()` is the sweep's **incumbent** (`incumbent_baseline.incumbent_config`),
    so "did a challenger beat the baseline?" is exactly apples‑to‑apples. (The
-   `entry_count 8` neighbor — "SC24T24E8" — is what won R2/R3/R4 on OOS+edge and
-   got promoted; the `tp1_lock_delay 15` neighbor "SC24T15E6" led R4 only on the
-   compounded net+bonus mirage and was superseded.)
+   `entry_count 8` neighbor — "SC24T24E8" — is what won R2/R3 (and initially R4) on
+   OOS+edge and got promoted; the `tp1_lock_delay 15` neighbor "SC24T15E6" led R4
+   only on the compounded net+bonus mirage and was superseded. R4parab later moved
+   to `rsi75_sqz6_rr40` once SC24T24E8 breached the DD gate on 2026 data.)
 3. Keep **trailing pinned 0** (no‑trailing sweep).
 
 > The previous "best" only beat ~6 seeds + a few hundred random draws — it is
@@ -280,7 +285,8 @@ echo "$(date -u +%H:%M)Z $up <feed>=$n/300"
    OOS** (the reliable forward‑fit metrics) when they disagree with the compounded
    headline — compounded net+bonus is inflated by leverage/variance and ranks but
    does not decide (see "Two‑stage selection" above; SC24T24E8 was promoted across
-   R2/R3/R4 over the net+bonus #1 on exactly this rule).
+   R2/R3 — and initially R4 — over the net+bonus #1 on exactly this rule; R4parab
+   now runs `rsi75_sqz6_rr40` on the same rule).
    The compounded figure **does** reach billions/quadrillions on a dense feed
    (1% of a growing balance over thousands of signals) — that is expected and it
    is a **model upper bound that RANKS configs, not a money forecast**. The
