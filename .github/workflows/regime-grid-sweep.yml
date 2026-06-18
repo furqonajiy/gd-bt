@@ -637,6 +637,15 @@ jobs:
           else:
               compose_cmd_path.write_text("# no published champion feeds yet\n")
               print("skipped generated/regime_champion_feed.txt: no published champion feeds")
+
+          package_args = cr.regime_package_backtest_args(REGIMES, champions)
+          package_cmd_path = pathlib.Path("cli/backtest_regime_champion_package.txt")
+          if package_args:
+              package_cmd_path.write_text(" ".join(shlex.quote(a) for a in package_args) + "\n")
+              print("wrote cli/backtest_regime_champion_package.txt")
+          else:
+              package_cmd_path.write_text("# no published champion configs yet\n")
+              print("skipped cli/backtest_regime_champion_package.txt: no published champion configs")
           PY
 
       - name: Mark cells DONE (all 4 shards have >= 120 lines)

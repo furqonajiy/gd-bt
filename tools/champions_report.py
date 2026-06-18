@@ -181,6 +181,110 @@ def regime_feed_compose_args(
     return args
 
 
+def _bool_arg(value) -> str:
+    return "true" if bool(value) else "false"
+
+
+def _cfg_value(cfg: dict, key: str, default):
+    value = cfg.get(key)
+    return default if value is None else value
+
+
+def explicit_backtest_args_from_config(
+        cfg: dict,
+        *,
+        signals: str,
+        charts: str,
+        output_dir: str,
+        start_date: str = "2021-11-01") -> list[str]:
+    """Flat ``backtest_explicit.py`` args for a StrategyConfig-like dict."""
+    args = [
+        sys.executable, "tools/backtest_explicit.py",
+        "--signals", signals,
+        "--charts", charts,
+        "--output-dir", output_dir,
+        "--start-date", start_date,
+        "--max-drawdown-limit-pct", "40",
+        "--sync-charts", "false",
+        "--progress-interval-seconds", "0",
+        "--initial-capital", str(_cfg_value(cfg, "initial_capital", 5000)),
+        "--sizing-mode", str(_cfg_value(cfg, "sizing_mode", "risk")),
+        "--lot", str(_cfg_value(cfg, "lot_per_entry", 0.01)),
+        "--risk", str(_cfg_value(cfg, "risk_per_signal", 0.01)),
+        "--minimum-lot", str(_cfg_value(cfg, "minimum_lot", 0.01)),
+        "--lot-step", str(_cfg_value(cfg, "lot_step", 0.01)),
+        "--bonus-per-closed-lot", str(_cfg_value(cfg, "bonus_per_closed_lot", 3.0)),
+        "--entries", str(_cfg_value(cfg, "entry_count", 6)),
+        "--entry-ladder", str(_cfg_value(cfg, "entry_ladder", "range_uniform")),
+        "--entry-sl-gap", str(_cfg_value(cfg, "entry_sl_gap", 0.0)),
+        "--activation-delay", str(_cfg_value(cfg, "activation_delay_minutes", 0)),
+        "--pending-expiry", str(_cfg_value(cfg, "pending_expiry_minutes", 420)),
+        "--max-hold", str(_cfg_value(cfg, "max_hold_minutes", 90)),
+        "--sl-multiplier", str(_cfg_value(cfg, "sl_multiplier", 2.3)),
+        "--final-target", str(_cfg_value(cfg, "final_target", "TP3")),
+        "--lock-after-tp1", _bool_arg(_cfg_value(cfg, "lock_after_tp1", True)),
+        "--lock-after-tp2", _bool_arg(_cfg_value(cfg, "lock_after_tp2", False)),
+        "--tp1-lock-delay-minutes", str(_cfg_value(cfg, "tp1_lock_delay_minutes", 20)),
+        "--tp2-lock-delay-minutes", str(_cfg_value(cfg, "tp2_lock_delay_minutes", 0)),
+        "--profit-lock-mode", str(_cfg_value(cfg, "profit_lock_mode", "tp_levels")),
+        "--bep-trigger-distance", str(_cfg_value(cfg, "bep_trigger_distance", 6.0)),
+        "--tp1-lock-fraction", str(_cfg_value(cfg, "tp1_lock_fraction", 0.25)),
+        "--tp2-lock-target", str(_cfg_value(cfg, "tp2_lock_target", "TP2")),
+        "--runner-after-tp3", _bool_arg(_cfg_value(cfg, "runner_after_tp3", False)),
+        "--tp3-lock-target", str(_cfg_value(cfg, "tp3_lock_target", "TP2")),
+        "--trailing-open-distance", str(_cfg_value(cfg, "trailing_open_distance", 0.0)),
+        "--trailing-close-distance", str(_cfg_value(cfg, "trailing_close_distance", 0.0)),
+        "--trailing-close-min-step", str(_cfg_value(cfg, "trailing_close_min_step", 0.0)),
+        "--lock-exit-slippage", str(_cfg_value(cfg, "lock_exit_slippage_points", 0.0)),
+        "--lock-tp1-exit-slippage", str(_cfg_value(cfg, "lock_tp1_exit_slippage_points", 0.0)),
+        "--lock-tp2-exit-slippage", str(_cfg_value(cfg, "lock_tp2_exit_slippage_points", 0.0)),
+        "--scale-out-at-tp1", _bool_arg(_cfg_value(cfg, "scale_out_at_tp1", False)),
+        "--scale-out-at-tp2", _bool_arg(_cfg_value(cfg, "scale_out_at_tp2", False)),
+        "--bep-after-tp1", _bool_arg(_cfg_value(cfg, "bep_after_tp1", False)),
+        "--bep-buffer", str(_cfg_value(cfg, "bep_buffer", 0.0)),
+        "--trailing-close-after-stage", str(_cfg_value(cfg, "trailing_close_after_stage", 0)),
+        "--runner-final-cap", "none" if _cfg_value(cfg, "runner_no_final_cap", False) else "tp3",
+        "--shared-sl", _bool_arg(_cfg_value(cfg, "shared_sl", False)),
+        "--bep-after-move", str(_cfg_value(cfg, "bep_after_move", 0.0)),
+        "--runner-trail-from", str(_cfg_value(cfg, "runner_trail_from", "TP3")),
+    ]
+    targets = cfg.get("per_entry_targets")
+    if targets:
+        args.extend(["--entry-targets", ",".join(str(t) for t in targets)])
+    return args
+
+
+def regime_package_backtest_args(
+        regimes: list[str],
+        champions: dict[str, dict | None],
+        *,
+        signals: str = "generated/regime_champion_feed.txt",
+        charts: str = "data/XAUUSD_M1_*_ELEV8.csv",
+        output_dir: str = "reports/regime_champion_package",
+        champions_dir: str = "sweep_regime_out_grid",
+        calendar: str = "sweep_regime_out_grid/regime_calendar.csv",
+        layer: str = "sweep_regime") -> list[str]:
+    """Backtest args for the composed feed + calendar-selected champion configs."""
+    champ_configs = [
+        (champions.get(regime) or {}).get("config")
+        for regime in regimes
+        if champions.get(regime)
+    ]
+    base_cfg = next((c for c in champ_configs if isinstance(c, dict)), {})
+    if not base_cfg:
+        return []
+    args = explicit_backtest_args_from_config(
+        base_cfg, signals=signals, charts=charts,
+        output_dir=output_dir, start_date="2021-11-01")
+    args.extend([
+        "--adaptive", "true",
+        "--champions-dir", champions_dir,
+        "--adaptive-calendar", calendar,
+        "--adaptive-calendar-layer", layer,
+    ])
+    return args
+
+
 # --------------------------------------------------------------------------
 # Metric helpers (all higher-is-better; None treated as 0.0 for ranking).
 # --------------------------------------------------------------------------
@@ -692,7 +796,9 @@ def render_champions_md(
         lines.append("The aggregate writes `generated/regime_champion_feed.txt` by "
                      "combining each published regime champion's source feed through "
                      "the generated calendar. The replay command is saved at "
-                     "`cli/compose_regime_champion_feed.txt`.")
+                     "`cli/compose_regime_champion_feed.txt`. The calendar-adaptive "
+                     "package backtest command is saved at "
+                     "`cli/backtest_regime_champion_package.txt`.")
 
     lines.append("")
     lines.append("## Runnable champion commands")

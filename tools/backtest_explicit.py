@@ -410,6 +410,13 @@ def _add_adaptive_flags(p: argparse.ArgumentParser) -> None:
                    help="Directory holding CHAMPION_<regime>.json for --adaptive (default: champions/).")
     g.add_argument("--adaptive-window-days", type=int, default=20,
                    help="Trailing window (days) of M1 used to classify each signal's regime.")
+    g.add_argument("--adaptive-calendar", default=None,
+                   help="Optional generated regime_calendar.csv. When set, adaptive backtest "
+                        "maps each signal's date through this calendar instead of using the "
+                        "live trailing-window detector.")
+    g.add_argument("--adaptive-calendar-layer", default="sweep_regime",
+                   choices=["sweep_regime", "behavior_regime", "old_threshold_regime"],
+                   help="Calendar column to use with --adaptive-calendar.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -556,12 +563,21 @@ def main(argv: list[str] | None = None) -> int:
     # Regime-adaptive: replay each signal under its regime's champion config.
     resolver = None
     if getattr(args, "adaptive", False):
-        from xauusd_trading import make_regime_config_resolver
-        resolver = make_regime_config_resolver(
-            chart.dataframe, champions_dir=args.champions_dir,
-            base_config=config, window_days=args.adaptive_window_days)
-        print(f"[adaptive] regime-switching backtest | champions-dir={args.champions_dir} "
-              f"| window={args.adaptive_window_days}d | fallback=incumbent config")
+        if args.adaptive_calendar:
+            from xauusd_trading import make_calendar_config_resolver
+            resolver = make_calendar_config_resolver(
+                args.adaptive_calendar, champions_dir=args.champions_dir,
+                base_config=config, layer=args.adaptive_calendar_layer)
+            print(f"[adaptive] calendar-switching backtest | champions-dir={args.champions_dir} "
+                  f"| calendar={args.adaptive_calendar} | layer={args.adaptive_calendar_layer} "
+                  f"| fallback=incumbent config")
+        else:
+            from xauusd_trading import make_regime_config_resolver
+            resolver = make_regime_config_resolver(
+                chart.dataframe, champions_dir=args.champions_dir,
+                base_config=config, window_days=args.adaptive_window_days)
+            print(f"[adaptive] regime-switching backtest | champions-dir={args.champions_dir} "
+                  f"| window={args.adaptive_window_days}d | fallback=incumbent config")
 
     with Heartbeat("backtest", args.progress_interval_seconds, enabled=progress_enabled):
         result = run_backtest(

@@ -184,6 +184,95 @@ def test_regime_feed_compose_args_uses_published_champion_feeds():
     assert cr.regime_feed_compose_args(["R1quiet"], {"R1quiet": None}) == []
 
 
+def test_regime_package_backtest_args_use_calendar_adaptive_champions():
+    cfg = {
+        "initial_capital": 50000,
+        "sizing_mode": "risk",
+        "lot_per_entry": 0.01,
+        "risk_per_signal": 0.025,
+        "minimum_lot": 0.01,
+        "lot_step": 0.01,
+        "bonus_per_closed_lot": 3.0,
+        "entry_count": 5,
+        "entry_ladder": "range_uniform",
+        "entry_sl_gap": 0.0,
+        "activation_delay_minutes": 0,
+        "pending_expiry_minutes": 420,
+        "max_hold_minutes": 90,
+        "sl_multiplier": 2.3,
+        "final_target": "TP3",
+        "lock_after_tp1": True,
+        "lock_after_tp2": False,
+        "tp1_lock_delay_minutes": 20,
+        "tp2_lock_delay_minutes": 0,
+        "profit_lock_mode": "tp_levels",
+        "bep_trigger_distance": 6.0,
+        "tp1_lock_fraction": 0.25,
+        "tp2_lock_target": "TP2",
+        "runner_after_tp3": False,
+        "tp3_lock_target": "TP2",
+        "trailing_open_distance": 0.0,
+        "trailing_close_distance": 0.0,
+        "trailing_close_min_step": 0.0,
+        "lock_exit_slippage_points": 0.0,
+        "lock_tp1_exit_slippage_points": 0.0,
+        "lock_tp2_exit_slippage_points": 0.0,
+        "scale_out_at_tp1": False,
+        "scale_out_at_tp2": False,
+        "bep_after_tp1": False,
+        "bep_buffer": 0.0,
+        "trailing_close_after_stage": 0,
+        "runner_no_final_cap": False,
+        "shared_sl": True,
+        "bep_after_move": 0.0,
+        "runner_trail_from": "TP3",
+    }
+    champions = {
+        "R1quiet": None,
+        "R2bull": {"config": cfg},
+        "R3strong": {"config": {**cfg, "entry_count": 7}},
+        "R4parab": None,
+    }
+
+    args = cr.regime_package_backtest_args(
+        ["R1quiet", "R2bull", "R3strong", "R4parab"],
+        champions,
+        signals="generated/out.txt",
+        calendar="calendar.csv",
+        champions_dir="champions",
+        output_dir="reports/package",
+    )
+
+    assert args[:2] == [sys.executable, "tools/backtest_explicit.py"]
+    assert "--signals" in args and "generated/out.txt" in args
+    assert "--output-dir" in args and "reports/package" in args
+    assert "--entries" in args and args[args.index("--entries") + 1] == "5"
+    assert "--shared-sl" in args and args[args.index("--shared-sl") + 1] == "true"
+    assert "--adaptive" in args and args[args.index("--adaptive") + 1] == "true"
+    assert "--champions-dir" in args and args[args.index("--champions-dir") + 1] == "champions"
+    assert "--adaptive-calendar" in args and args[args.index("--adaptive-calendar") + 1] == "calendar.csv"
+    assert cr.regime_package_backtest_args(["R1quiet"], {"R1quiet": None}) == []
+
+
+def test_regime_package_backtest_args_emit_known_backtest_flags():
+    champions = {
+        "R4parab": {
+            "config": {
+                "entry_count": 6,
+                "sl_multiplier": 2.1,
+                "risk_per_signal": 0.01,
+            },
+        },
+    }
+    args = cr.regime_package_backtest_args(["R4parab"], champions)
+    help_text = subprocess.run(
+        [sys.executable, "tools/backtest_explicit.py", "--help"],
+        cwd=ROOT, capture_output=True, text=True).stdout
+    for tok in args:
+        if tok.startswith("--"):
+            assert tok in help_text, f"unknown flag {tok} in package CLI"
+
+
 def test_calendar_regime_helpers_use_generated_calendar(tmp_path):
     calendar = tmp_path / "regime_calendar.csv"
     calendar.write_text("\n".join([
