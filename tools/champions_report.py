@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import sys
+import csv
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -48,6 +49,7 @@ DD_GATE = 40.0
 STRETCH_DD_GATE = 50.0
 STRETCH_MARGIN = 1.25   # >= +25% net+bonus over the DD<=40% champion
 LIVE_REGIME = "R4parab"
+CALENDAR_PATH = ROOT / "sweep_regime_out_grid" / "regime_calendar.csv"
 
 # Same regime -> chart month-glob mapping the shard job and incumbent use.
 REGIME_CHARTS: dict[str, str] = {
@@ -63,6 +65,63 @@ REGIME_START: dict[str, str] = {
     "R3strong": "2025-01-01",
     "R4parab": "2026-01-01",
 }
+_FEED_FILE_OVERRIDES = {
+    "scalper24": "generated/self_scalper24.txt",
+    "scalperwide24": "generated/self_scalper_widerr24.txt",
+    "risk02allhours": "generated/self_risk02_allhours.txt",
+}
+
+
+def _safe_feed_label(feed: str) -> str:
+    label = feed.strip().replace("\\", "/")
+    if "/" in label:
+        label = Path(label).stem
+    if label.endswith(".txt"):
+        label = label[:-4]
+    return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in label)
+
+
+def _regime_feed_label(feed: str) -> str:
+    norm = feed.strip().replace("\\", "/")
+    for label, path in _FEED_FILE_OVERRIDES.items():
+        if norm == label or norm == path:
+            return label
+    if norm.startswith("generated/adaptive_") and norm.endswith(".txt"):
+        return norm.removeprefix("generated/adaptive_").removesuffix(".txt")
+    return _safe_feed_label(feed)
+
+
+def _calendar_dates(regime: str, *, calendar_path: Path | None = None,
+                    layer: str = "sweep_regime") -> list[str]:
+    path = calendar_path or CALENDAR_PATH
+    if not path.exists():
+        return []
+    wanted = "R2bull" if regime == "R2trend" else regime
+    out: list[str] = []
+    for row in csv.DictReader(path.read_text().splitlines()):
+        label = row.get(layer) or ""
+        if label == "R2trend":
+            label = "R2bull"
+        date = row.get("date") or ""
+        if date and label == wanted:
+            out.append(date)
+    return sorted(dict.fromkeys(out))
+
+
+def regime_charts(regime: str, *, calendar_path: Path | None = None) -> str:
+    """Chart month files for a regime, preferring the generated calendar."""
+    dates = _calendar_dates(regime, calendar_path=calendar_path)
+    if not dates:
+        return REGIME_CHARTS.get(regime, "data/XAUUSD_M1_*_ELEV8.csv")
+    months = sorted({d[:7].replace("-", "") for d in dates})
+    return " ".join(f"data/XAUUSD_M1_{m}_ELEV8.csv" for m in months)
+
+
+def regime_start(regime: str, *, calendar_path: Path | None = None) -> str:
+    dates = _calendar_dates(regime, calendar_path=calendar_path)
+    if not dates:
+        return REGIME_START.get(regime, "2021-11-01")
+    return dates[0]
 
 
 def feed_signals(feed: str) -> str:
@@ -75,9 +134,19 @@ def feed_signals(feed: str) -> str:
     """
     if not feed:
         return feed
+    if feed in _FEED_FILE_OVERRIDES:
+        return _FEED_FILE_OVERRIDES[feed]
     if "/" in feed or feed.endswith(".txt"):
         return feed
     return f"generated/adaptive_{feed}.txt"
+
+
+def regime_backtest_signals(regime: str, feed: str,
+                            *, calendar_path: Path | None = None) -> str:
+    """Calendar-filtered feed path for backtests, falling back to the archive."""
+    if not _calendar_dates(regime, calendar_path=calendar_path):
+        return feed_signals(feed)
+    return f"generated/regime_feeds/{regime}_{_regime_feed_label(feed)}.txt"
 
 
 # --------------------------------------------------------------------------
@@ -174,9 +243,9 @@ def render_champion_cli(cfg: dict, *, regime: str, feed: str) -> str:
     command actually targets this regime. Falls back to a plain
     ``python -m xauusd_trading.cli backtest`` line if the renderer is unavailable.
     """
-    charts = REGIME_CHARTS.get(regime, "data/XAUUSD_M1_*_ELEV8.csv")
-    start = REGIME_START.get(regime, "2021-11-01")
-    signals = feed_signals(feed)  # resolve a matrix feed NAME to its archive path
+    charts = regime_charts(regime)
+    start = regime_start(regime)
+    signals = regime_backtest_signals(regime, feed)
     cont = " \\\n  "
     try:
         from sweep2021 import orchestrate as o  # noqa: E402
