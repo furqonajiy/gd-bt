@@ -1,0 +1,119 @@
+name: self-scalper-rr-bb-rsi-sr-sd-sweep
+
+# SELF-SCALPER 5-WAY COMBINATION sweep — R4 (2026) only.
+# Full cross-product of the five feed-filter dimensions on the scalper24 generator:
+#   R:R   {base 1.0/1.5/2.0, rr40 1.0/2.0/4.0}
+#   BB    {off, sqz6 = bandwidth>=0.0006}
+#   RSI   {off, 75/25}
+#   S/R   {off, prox 0.5*ATR + round-10 grid}          (--sr-proximity-atr / --sr-round-step)
+#   S&D   {off, RBR/DBD demand|supply zone, prox 0.5*ATR}  (--sd-mode rbr_dbd, NEW)
+# 2 levels each -> 2^5 = 32 feed variants. For each variant we regenerate the R4
+# feed with those generator flags, then sweep the full strategy/geometry grid over
+# it (tools/sweep_self_limit.py, slippage-aware 2.0/1.0). The aggregate keeps a
+# variant only if it beats the incumbent 'base' feed (no filter) on BOTH edge AND
+# OOS at DD<=40% — the identical bar the RSI x BB x R:R sweep used (shared
+# .github/scripts/agg_entry_feature.sh, prefix selfsdr).
+#
+# GOAL: can any combination beat the current R4 champion rsi75_sqz6_rr40 (= the
+# 'rsi_sqz6_rr40' cell here; edge $63,940 / OOS $11,633 / DD 38.4%)? The S/R and S&D
+# extensions of the champion (rsi_sqz6_rr40_sr / _sd / _sr_sd) are the cells to watch.
+#
+# Artifact-only (no branch writes). Mirrors the R4 job of self-scalper-rsi-bb-rr-sweep.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_candidates:
+        description: "candidates per shard"
+        default: "150"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-scalper-rr-bb-rsi-sr-sd-sweep
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  # ---------------- R4 (2026) ----------------
+  r4:
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include:
+          - { v: base,                gen: "" }
+          - { v: rr40,                gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi,                 gen: "--rsi-buy-max 75 --rsi-sell-min 25" }
+          - { v: sd,                  gen: "--sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6,                gen: "--bb-bandwidth-min 0.0006" }
+          - { v: sr,                  gen: "--sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rr40_sd,             gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr40_sr,             gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi_rr40,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi_sd,              gen: "--rsi-buy-max 75 --rsi-sell-min 25 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi_sqz6,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006" }
+          - { v: rsi_sr,              gen: "--rsi-buy-max 75 --rsi-sell-min 25 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sqz6_rr40,           gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: sqz6_sd,             gen: "--bb-bandwidth-min 0.0006 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_sr,             gen: "--bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sr_sd,               gen: "--sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr40_sr_sd,          gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi_rr40_sd,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi_rr40_sr,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi_sqz6_rr40,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi_sqz6_sd,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi_sqz6_sr,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi_sr_sd,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr40_sd,        gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr40_sr,        gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sqz6_sr_sd,          gen: "--bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi_rr40_sr_sd,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi_sqz6_rr40_sd,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi_sqz6_rr40_sr,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi_sqz6_sr_sd,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr40_sr_sd,     gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi_sqz6_rr40_sr_sd, gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate scalper24 feed (R4 2026) variant ${{ matrix.v }}
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py --charts "data/XAUUSD_M1_2026"*"_ELEV8.csv" \
+            --output feed.txt --start 2026-01-01 --session-start 0 --session-end 0 --signal-tz 7 ${{ matrix.gen }}
+          echo "R4 ${{ matrix.v }} feed lines: $(wc -l < feed.txt)"
+      - name: Sweep 4 shards
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-150}"
+          for N in 0 1 2 3; do
+            timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+              --charts "data/XAUUSD_M1_2026"*"_ELEV8.csv" --seed $((42 + N)) --max-candidates "$MC" \
+              --output-dir "out/${{ matrix.v }}_shard${N}" --validate-months 2 \
+              --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume &
+          done; wait
+      - uses: actions/upload-artifact@v4
+        with: { name: "selfsdr-R4-${{ matrix.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r4_agg:
+    needs: r4
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "selfsdr-R4-*", path: _artifacts }
+      - name: Aggregate R4 5-way variants + winner-vs-base
+        run: bash .github/scripts/agg_entry_feature.sh R4 selfsdr
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-sdr-R4-results", path: "results/**", if-no-files-found: warn }

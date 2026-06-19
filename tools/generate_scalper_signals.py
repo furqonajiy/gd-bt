@@ -233,6 +233,29 @@ def _add_indicators(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
         daily = out.groupby(day).agg(_dh=("high", "max"), _dl=("low", "min"))
         out["pday_high"] = day.map(daily["_dh"].shift(1))
         out["pday_low"] = day.map(daily["_dl"].shift(1))
+        # Supply & Demand (Rally-Base-Rally / Drop-Base-Drop) zone bands. A tight
+        # 'base' over B bars that is then broken by an impulse marks a zone whose
+        # band is the base's [low, high]. The zone is confirmed K bars after the
+        # base end (via shift(K)) so it only activates AFTER the breakout completes
+        # -- no lookahead at the entry bar -- then carries forward (ffill, limited
+        # to sd_max_age_bars) so a later return into the band can be filtered on.
+        if args.sd_mode != "off":
+            B = max(1, args.sd_base_bars)
+            K = max(1, args.sd_impulse_bars)
+            base_high = high.rolling(B, min_periods=B).max()
+            base_low = low.rolling(B, min_periods=B).min()
+            tight = (base_high - base_low) <= args.sd_base_max_atr * out["atr"]
+            base_high_prev = base_high.shift(K)
+            base_low_prev = base_low.shift(K)
+            tight_prev = tight.shift(K).fillna(False)
+            imp = args.sd_impulse_min_atr * out["atr"]
+            up_impulse = tight_prev & ((close - base_high_prev) >= imp)
+            dn_impulse = tight_prev & ((base_low_prev - close) >= imp)
+            age = max(1, args.sd_max_age_bars)
+            out["sd_demand_low"] = base_low_prev.where(up_impulse).ffill(limit=age)
+            out["sd_demand_high"] = base_high_prev.where(up_impulse).ffill(limit=age)
+            out["sd_supply_low"] = base_low_prev.where(dn_impulse).ffill(limit=age)
+            out["sd_supply_high"] = base_high_prev.where(dn_impulse).ffill(limit=age)
 
     return out
 
@@ -354,6 +377,7 @@ def _any_entry_filter(args: argparse.Namespace) -> bool:
         or args.bb_buy_pctb_max < 2.0 or args.bb_sell_pctb_min > -1.0 or args.bb_bandwidth_min > 0.0
         or args.adx_min > 0.0 or args.vwap_filter or args.htf_filter
         or args.sr_proximity_atr > 0.0 or args.min_vol_mult > 0.0
+        or args.sd_mode != "off"
     )
 
 
@@ -427,6 +451,18 @@ def _entry_filters_ok(row, side: str, args: argparse.Namespace) -> bool:
             above = [lv for lv in levels if lv >= close]
             if not above or (min(above) - close) > tol:
                 return False
+    # Supply & Demand zone proximity (RBR demand for BUY / DBD supply for SELL):
+    # require the entry to be within sd_proximity_atr*ATR of an active zone band.
+    if args.sd_mode != "off":
+        prox = args.sd_proximity_atr * float(row.atr)
+        if buy:
+            zl = getattr(row, "sd_demand_low", float("nan"))
+            zh = getattr(row, "sd_demand_high", float("nan"))
+        else:
+            zl = getattr(row, "sd_supply_low", float("nan"))
+            zh = getattr(row, "sd_supply_high", float("nan"))
+        if pd.isna(zl) or pd.isna(zh) or close < (zl - prox) or close > (zh + prox):
+            return False
     return True
 
 
@@ -647,6 +683,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--vol-period", type=int, default=20)
     p.add_argument("--min-vol-mult", type=float, default=0.0,
                    help="enter only if volume>=X*rolling-avg (0=off; requires a volume column)")
+    # Supply & Demand (Rally-Base-Rally / Drop-Base-Drop) zone filter
+    p.add_argument("--sd-mode", choices=["off", "rbr_dbd"], default="off",
+                   help="Supply&Demand zone filter. 'rbr_dbd': a tight consolidation 'base' "
+                        "followed by an impulse marks a DEMAND zone (up impulse) or SUPPLY zone "
+                        "(down impulse); BUY only on a return into a demand zone, SELL into a "
+                        "supply zone. off=disabled.")
+    p.add_argument("--sd-base-bars", type=int, default=6,
+                   help="S&D: number of bars forming the consolidation 'base'.")
+    p.add_argument("--sd-base-max-atr", type=float, default=1.5,
+                   help="S&D: base qualifies only if its high-low range <= X*ATR (tight).")
+    p.add_argument("--sd-impulse-bars", type=int, default=3,
+                   help="S&D: bars after the base end at which the breakout impulse is confirmed.")
+    p.add_argument("--sd-impulse-min-atr", type=float, default=1.5,
+                   help="S&D: impulse must break beyond the base by >= X*ATR to mark a zone.")
+    p.add_argument("--sd-proximity-atr", type=float, default=0.5,
+                   help="S&D: entry must be within X*ATR of the demand/supply zone band.")
+    p.add_argument("--sd-max-age-bars", type=int, default=240,
+                   help="S&D: a zone stays valid for at most N bars after it activates.")
     return p
 
 
