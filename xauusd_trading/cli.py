@@ -326,6 +326,24 @@ def _maybe_adaptive_config(args: argparse.Namespace, base_config: StrategyConfig
     return config
 
 
+def _stamped(text: str) -> str:
+    """Prefix every non-blank line with a local wall-clock stamp.
+
+    Anchors each auto-cycle event block (EXECUTION / RECONCILIATION / sanity) in
+    time so a live log -- e.g. the VIC and SQZ6 executors writing to the same
+    console -- can be correlated. Matches the live feed loop's stamp format.
+    """
+    stamp = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] "
+    return "\n".join(stamp + ln if ln.strip() else ln for ln in text.splitlines())
+
+
+def _render_reconcile_log(reconcile_log) -> str:
+    lines = ["RECONCILIATION:"]
+    lines.extend(reconcile_log.actions)
+    lines.extend(f"  ! {w}" for w in reconcile_log.warnings)
+    return "\n".join(lines)
+
+
 # Sanity-check failures (e.g. broker maintenance disabling trading) recur every
 # watch interval -- a few seconds apart -- so an hours-long outage would print
 # thousands of identical banners. Print at most once per this window, and again
@@ -342,11 +360,11 @@ def _maybe_print_sanity_errors(state: dict, errors: list[str]) -> None:
     due = last_at is None or (now - float(last_at)) >= _SANITY_REPRINT_SECONDS
     if not (changed or due):
         return
-    print("SANITY CHECKS FAILED -- skipping MT5 actions this iteration:")
-    for e in errors:
-        print(f"  ! {e}")
-    print(f"  (identical warnings suppressed; reprints in "
-          f"{_SANITY_REPRINT_SECONDS // 60} min or when the reason changes)")
+    block = ["SANITY CHECKS FAILED -- skipping MT5 actions this iteration:"]
+    block += [f"  ! {e}" for e in errors]
+    block.append(f"  (identical warnings suppressed; reprints in "
+                 f"{_SANITY_REPRINT_SECONDS // 60} min or when the reason changes)")
+    print(_stamped("\n".join(block)))
     state["__sanity_at__"] = now
     state["__sanity_sig__"] = signature
 
@@ -424,7 +442,8 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         rlog = executor.reconcile_with_mt5(actual, config, chart, replay_end)
         reconcile_log.merge(rlog)
     if _execution_log_has_output(reconcile_log):
-        _print_reconcile_log(reconcile_log)
+        print(_stamped(_render_reconcile_log(reconcile_log)))
+        print()
 
     _emit_per_signal_snapshots(forensic, executor, tracked)
 
@@ -435,7 +454,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         return 0
     if candidate_console_state.pop("__sanity_sig__", None) is not None:
         candidate_console_state.pop("__sanity_at__", None)
-        print("[sanity] checks passing again -- resuming MT5 actions.")
+        print(_stamped("[sanity] checks passing again -- resuming MT5 actions."))
 
     log = ExecutionLog()
 
@@ -621,7 +640,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         )
 
     if _execution_log_has_output(log):
-        print(render_execution_log(log))
+        print(_stamped(render_execution_log(log)))
 
     forensic.end_cycle(placed=log.placed, modified=log.modified,
                        cancelled=log.cancelled, closed=log.closed)
