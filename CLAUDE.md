@@ -203,7 +203,12 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   `CHART_TIMEZONE_OFFSET = 3` remains only the *summer* reference. CSV charts and
   the MT5 server clock store this EET/EEST time verbatim — `fetch` with
   `--mt5-server-offset 3` (shift 0) keeps the broker clock as-is. Don't hardcode
-  tz conversions outside `chart_tz`.
+  tz conversions outside `chart_tz`. **Live LOG timestamps display in GMT+7** (the
+  signal-authoring zone, so the log lines up with the feed and the operator's
+  clock): `chart_tz.to_log_tz` (= `from_chart_tz(dt, LOG_DISPLAY_OFFSET=7)`)
+  converts a chart-local instant to GMT+7 for the executor's activation / expiry /
+  reconcile-fill / no-chase / `SKIP_EXPIRED` lines. Display only — internal/stored
+  times stay chart-local, so parity is unchanged.
 - **`positions.json`** is the tracked-signal registry (`SignalRegistry` in
   `execution/mt5_executor.py`). Entry shape:
   `{"signal_key", "signal", "date", "tz", "equity_at_open", "executed_at"?}`.
@@ -219,7 +224,13 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   Only the **year** is dropped from the date (it lives in the magic + open time)
   so the whole comment fits brokers that truncate below MT5's 31-char cap (Elev8
   cuts near 16); the `.N` suffix is never trimmed, and matching is per-magic so
-  dropping the year never confuses two signals. To run **two auto executors on
+  dropping the year never confuses two signals. **Close/exit DEALs use the same
+  short base** via `mt5_close_comment(signal_key, action)` — the compact
+  `[TAG-]MMDD#DD` ref + the action's most specific tail (e.g. `SQZ6-0619#65/tp3`),
+  capped at ~16 — because the full-key form (`SQZ6-2026-06-19#65/catchup-tp3`,
+  ~30 chars) made Elev8 reject the close with `(-2, 'Invalid "comment" argument')`,
+  so the catch-up/late-lock/timeout close never fired and the leg rode on. The
+  close is matched by magic, so the shortened comment is cosmetic. To run **two auto executors on
   one account** (e.g. Victor + a self-feed scalper), give each a distinct
   **`--strategy-tag`** (e.g. `VIC` vs `SC24`) — it is stamped onto `signal_key`
   so the two get disjoint magics/comments and never manage each other's orders.
