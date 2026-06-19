@@ -1137,10 +1137,15 @@ class Mt5Executor(_BaseMt5Executor):
                 if wall_clock_now > engine_pos.expiry_time:
                     nc_key = signal_entry_key(signal_key, entry.entry_index)
                     if nc_key not in self._session_skipped_no_chase:
+                        mins_past = (wall_clock_now
+                                     - engine_pos.expiry_time).total_seconds() / 60.0
                         log.actions.append(
                             f"  {nc_key}: replay still holds this leg OPEN but it is "
                             f"missing from MT5, price moved past entry {entry_price:g}, "
-                            f"and the pending window is closed; not chasing (logged once)"
+                            f"and the pending window closed at "
+                            f"{engine_pos.expiry_time:%Y-%m-%d %H:%M} GMT+3 "
+                            f"({mins_past:.0f} min ago, now "
+                            f"{wall_clock_now:%H:%M} GMT+3); not chasing (logged once)"
                         )
                         self._session_skipped_no_chase.add(nc_key)
                     continue
