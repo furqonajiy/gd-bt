@@ -3,7 +3,12 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from tools.regime_router import detect_regime, read_current_regime
+from tools.regime_router import (
+    RegimeThresholds,
+    detect_regime,
+    read_current_regime,
+    regime_thresholds_from_mapping,
+)
 
 
 def test_detect_regime_vol_tiers():
@@ -17,6 +22,39 @@ def test_detect_regime_vol_tiers():
     # high tier = R4
     assert detect_regime(9.5) == "R4parab"
     assert detect_regime(15.0, trend=-0.2) == "R4parab"
+
+
+def test_detect_regime_accepts_custom_thresholds():
+    thresholds = RegimeThresholds(
+        vol_tier_low_max=6.23,
+        vol_tier_mid_max=12.49,
+        bull_trend_min=0.015,
+    )
+    assert detect_regime(10.0, trend=-0.02, thresholds=thresholds) == "R3strong"
+    assert detect_regime(13.0, trend=-0.02, thresholds=thresholds) == "R4parab"
+    assert detect_regime(5.0, trend=0.03, thresholds=thresholds) == "R2bull"
+
+
+def test_thresholds_from_calibration_report_learned_boundaries():
+    report = {
+        "meta": {
+            "learned_boundaries": [2.88, 6.23, 12.49],
+            "router_thresholds": {"bull_trend_min": 0.02},
+        }
+    }
+    thresholds = regime_thresholds_from_mapping(report, use_learned_boundaries=True)
+    assert thresholds.vol_tier_low_max == 6.23
+    assert thresholds.vol_tier_mid_max == 12.49
+    assert thresholds.bull_trend_min == 0.02
+
+
+def test_thresholds_from_plain_mapping():
+    thresholds = regime_thresholds_from_mapping({
+        "vol_tier_low_max": 5.0,
+        "vol_tier_mid_max": 11.0,
+        "bull_trend_min": 0.01,
+    })
+    assert thresholds == RegimeThresholds(5.0, 11.0, 0.01)
 
 
 def _synth_m1(price: float, wiggle: float, drift: float = 0.0, minutes: int = 60 * 24) -> pd.DataFrame:

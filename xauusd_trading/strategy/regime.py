@@ -17,7 +17,9 @@ CLI. Dependency-light (pandas only) so it can run inside the live loop.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import pandas as pd
 
@@ -35,18 +37,81 @@ BULL_TREND_MIN = 0.015
 DEFAULT_LIVE_REGIME = "R4parab"
 
 
-def detect_regime(smoothed_m15_atr: float, trend: float = 0.0) -> str:
+@dataclass(frozen=True)
+class RegimeThresholds:
+    """ATR/trend cutoffs used by the live regime router."""
+    vol_tier_low_max: float = VOL_TIER_LOW_MAX
+    vol_tier_mid_max: float = VOL_TIER_MID_MAX
+    bull_trend_min: float = BULL_TREND_MIN
+
+    def __post_init__(self) -> None:
+        if self.vol_tier_low_max <= 0:
+            raise ValueError("vol_tier_low_max must be > 0")
+        if self.vol_tier_mid_max <= self.vol_tier_low_max:
+            raise ValueError("vol_tier_mid_max must be > vol_tier_low_max")
+
+
+DEFAULT_REGIME_THRESHOLDS = RegimeThresholds()
+
+
+def _thresholds(t: RegimeThresholds | None) -> RegimeThresholds:
+    return t or DEFAULT_REGIME_THRESHOLDS
+
+
+def regime_thresholds_from_mapping(
+        data: dict, *, use_learned_boundaries: bool = False) -> RegimeThresholds:
+    """Build thresholds from a plain dict or a regime-calibration report JSON.
+
+    Plain threshold dictionaries may contain ``vol_tier_low_max``,
+    ``vol_tier_mid_max`` and ``bull_trend_min``. A calibration report JSON may be
+    passed directly; by default its ``router_thresholds`` are read. With
+    ``use_learned_boundaries=True``, the learned R2/R3 and R3/R4 ATR boundaries
+    are used as ``vol_tier_low_max`` and ``vol_tier_mid_max`` while the low-tier
+    R1/R2 split remains trend-based.
+    """
+    source = data.get("meta", data)
+    if use_learned_boundaries:
+        boundaries = source.get("learned_boundaries") or data.get("learned_boundaries")
+        if not isinstance(boundaries, list) or len(boundaries) < 3:
+            raise ValueError("learned_boundaries must contain at least 3 values")
+        base = source.get("router_thresholds") or {}
+        return RegimeThresholds(
+            vol_tier_low_max=float(boundaries[1]),
+            vol_tier_mid_max=float(boundaries[2]),
+            bull_trend_min=float(base.get("bull_trend_min", BULL_TREND_MIN)),
+        )
+
+    values = source.get("router_thresholds") or source.get("thresholds") or source
+    return RegimeThresholds(
+        vol_tier_low_max=float(values.get("vol_tier_low_max", VOL_TIER_LOW_MAX)),
+        vol_tier_mid_max=float(values.get("vol_tier_mid_max", VOL_TIER_MID_MAX)),
+        bull_trend_min=float(values.get("bull_trend_min", BULL_TREND_MIN)),
+    )
+
+
+def regime_thresholds_from_json_file(
+        path: str | Path, *, use_learned_boundaries: bool = False) -> RegimeThresholds:
+    data = json.loads(Path(path).read_text())
+    if not isinstance(data, dict):
+        raise ValueError("regime thresholds JSON must contain an object")
+    return regime_thresholds_from_mapping(data, use_learned_boundaries=use_learned_boundaries)
+
+
+def detect_regime(
+        smoothed_m15_atr: float, trend: float = 0.0,
+        thresholds: RegimeThresholds | None = None) -> str:
     """Classify the current market from smoothed M15 ATR (USD) and a trend score.
 
     `trend` is the recent fractional price change; it only matters in the
     low-vol tier, where it separates a quiet range (R1) from a trending bull
     (R2). At mid/high volatility the ATR alone decides.
     """
-    if smoothed_m15_atr >= VOL_TIER_MID_MAX:
+    t = _thresholds(thresholds)
+    if smoothed_m15_atr >= t.vol_tier_mid_max:
         return "R4parab"
-    if smoothed_m15_atr >= VOL_TIER_LOW_MAX:
+    if smoothed_m15_atr >= t.vol_tier_low_max:
         return "R3strong"
-    return "R2bull" if trend >= BULL_TREND_MIN else "R1quiet"
+    return "R2bull" if trend >= t.bull_trend_min else "R1quiet"
 
 
 def _m15(m1: pd.DataFrame) -> pd.DataFrame:
@@ -86,13 +151,17 @@ class RegimeReading:
     regime: str
     m15_atr: float
     trend: float
+    thresholds: RegimeThresholds = DEFAULT_REGIME_THRESHOLDS
 
     @property
     def is_live_default(self) -> bool:
         return self.regime == DEFAULT_LIVE_REGIME
 
 
-def read_current_regime(m1: pd.DataFrame, period: int = 14) -> RegimeReading:
+def read_current_regime(
+        m1: pd.DataFrame, period: int = 14,
+        thresholds: RegimeThresholds | None = None) -> RegimeReading:
     atr = m15_atr(m1, period=period)
     tr = trend_score(m1)
-    return RegimeReading(regime=detect_regime(atr, tr), m15_atr=atr, trend=tr)
+    t = _thresholds(thresholds)
+    return RegimeReading(regime=detect_regime(atr, tr, t), m15_atr=atr, trend=tr, thresholds=t)

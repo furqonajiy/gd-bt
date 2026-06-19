@@ -218,10 +218,14 @@ from .strategy.trailing_engine import decide
 # report, the live --adaptive router, and the regime_auto CLI)
 from .strategy.regime import (
     DEFAULT_LIVE_REGIME,
+    DEFAULT_REGIME_THRESHOLDS,
     RegimeReading,
+    RegimeThresholds,
     detect_regime,
     m15_atr,
     read_current_regime,
+    regime_thresholds_from_json_file,
+    regime_thresholds_from_mapping,
     trend_score,
 )
 from .strategy.regime_adaptive import champion_config, make_regime_config_resolver
@@ -295,8 +299,10 @@ __all__ = [
     "ChartSource", "CsvChartSource", "ManualPositionSource", "PositionSource",
     "EntryStatus", "NewSignalPlan", "PlannedOrder", "PositionStatus", "Recommendation",
     "decide", "format_replay_outcome", "render_report",
-    "DEFAULT_LIVE_REGIME", "RegimeReading", "detect_regime", "m15_atr",
-    "read_current_regime", "trend_score",
+    "DEFAULT_LIVE_REGIME", "DEFAULT_REGIME_THRESHOLDS", "RegimeReading",
+    "RegimeThresholds", "detect_regime", "m15_atr",
+    "read_current_regime", "regime_thresholds_from_json_file",
+    "regime_thresholds_from_mapping", "trend_score",
     "champion_config", "make_regime_config_resolver",
     "position_status", "replay_signal", "run_backtest", "write_backtest_outputs",
     "GeneratedSignal", "RejectionSignalConfig", "format_generated_signals", "generate_rejection_signals",

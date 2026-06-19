@@ -44,6 +44,27 @@ def test_adaptive_uses_champion_when_present(tmp_path):
     assert state["__regime__"].startswith("R4parab|champion")
 
 
+def test_adaptive_can_use_custom_regime_thresholds(tmp_path):
+    # Raising the R3/R4 boundary routes this high-vol chart to R3strong instead
+    # of the built-in R4parab, so the R3 champion is selected deliberately.
+    champ = {"config": {**asdict(DEFAULT_CONFIG), "entry_count": 7}}
+    (tmp_path / "CHAMPION_R3strong.json").write_text(json.dumps(champ))
+    args = SimpleNamespace(
+        adaptive="true",
+        champions_dir=str(tmp_path),
+        adaptive_window_days=20,
+        regime_thresholds_json=None,
+        regime_use_learned_boundaries=False,
+        regime_vol_tier_low_max=6.23,
+        regime_vol_tier_mid_max=20.0,
+        regime_bull_trend_min=None,
+    )
+    state: dict = {}
+    cfg = _maybe_adaptive_config(args, DEFAULT_CONFIG, _chart(4500.0, 6.0), state)
+    assert cfg.entry_count == 7
+    assert state["__regime__"].startswith("R3strong|champion")
+
+
 def test_adaptive_falls_back_to_incumbent_when_no_champion(tmp_path):
     # A quiet chart classifies R1quiet; with no CHAMPION_R1quiet.json the incumbent
     # (base) config is returned unchanged.

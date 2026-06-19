@@ -410,6 +410,18 @@ def _add_adaptive_flags(p: argparse.ArgumentParser) -> None:
                    help="Directory holding CHAMPION_<regime>.json for --adaptive (default: champions/).")
     g.add_argument("--adaptive-window-days", type=int, default=20,
                    help="Trailing window (days) of M1 used to classify each signal's regime.")
+    g.add_argument("--regime-thresholds-json", default=None,
+                   help="Optional JSON with regime router thresholds. Also accepts the regime "
+                        "calibration report JSON when --regime-use-learned-boundaries true.")
+    g.add_argument("--regime-use-learned-boundaries", type=_bool_text, default=False,
+                   help="When --regime-thresholds-json is a calibration report, use its learned "
+                        "R2/R3 and R3/R4 ATR boundaries for routing.")
+    g.add_argument("--regime-vol-tier-low-max", type=float, default=None,
+                   help="Override the low/mid ATR boundary for regime routing.")
+    g.add_argument("--regime-vol-tier-mid-max", type=float, default=None,
+                   help="Override the mid/high ATR boundary for regime routing.")
+    g.add_argument("--regime-bull-trend-min", type=float, default=None,
+                   help="Override the low-vol trend threshold for R1 vs R2.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -557,11 +569,19 @@ def main(argv: list[str] | None = None) -> int:
     resolver = None
     if getattr(args, "adaptive", False):
         from xauusd_trading import make_regime_config_resolver
+        from xauusd_trading.cli import _regime_thresholds_from_args
+        thresholds = _regime_thresholds_from_args(args)
         resolver = make_regime_config_resolver(
             chart.dataframe, champions_dir=args.champions_dir,
-            base_config=config, window_days=args.adaptive_window_days)
+            base_config=config, window_days=args.adaptive_window_days,
+            thresholds=thresholds)
+        threshold_note = ""
+        if thresholds is not None:
+            threshold_note = (f" | thresholds low<{thresholds.vol_tier_low_max:.2f} "
+                              f"mid<{thresholds.vol_tier_mid_max:.2f} "
+                              f"bull>={thresholds.bull_trend_min:.3f}")
         print(f"[adaptive] regime-switching backtest | champions-dir={args.champions_dir} "
-              f"| window={args.adaptive_window_days}d | fallback=incumbent config")
+              f"| window={args.adaptive_window_days}d{threshold_note} | fallback=incumbent config")
 
     with Heartbeat("backtest", args.progress_interval_seconds, enabled=progress_enabled):
         result = run_backtest(
