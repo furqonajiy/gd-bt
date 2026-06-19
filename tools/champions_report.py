@@ -41,6 +41,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tools.scalper_feed_variants import (  # noqa: E402
+    scalper_feed_args,
+    scalper_variant_archive,
+)
+
 DD_GATE = 40.0
 # "Stretch" tier: a config that runs DD between the 40% deploy gate and 50% is
 # only worth surfacing if it beats the DD<=40% champion's net+bonus by a wide
@@ -80,10 +85,13 @@ def feed_signals(feed: str) -> str:
     """
     if not feed:
         return feed
-    if feed in _FEED_FILE_OVERRIDES:
-        return _FEED_FILE_OVERRIDES[feed]
     if "/" in feed or feed.endswith(".txt"):
         return feed
+    if feed in _FEED_FILE_OVERRIDES:
+        return _FEED_FILE_OVERRIDES[feed]
+    scalper_path = scalper_variant_archive(feed)
+    if scalper_path:
+        return scalper_path
     return f"generated/adaptive_{feed}.txt"
 
 
@@ -248,6 +256,20 @@ def _generate_command(feed: str) -> str:
     """
     out = feed_signals(feed)  # generated/adaptive_<feed>.txt
     cont = " `\n  "
+    if _feed_family(feed) == "scalper":
+        args = [
+            "--charts data/XAUUSD_M1_*_ELEV8.csv",
+            f"--output {out}",
+            "--start 2021-11-01",
+            "--session-start 0",
+            "--session-end 0",
+            "--signal-tz 7",
+        ]
+        args.extend(scalper_feed_args(feed) or [])
+        return (
+            f"# SC24 scalper signals for feed `{feed}` over ALL chart history.\n"
+            "python tools/generate_scalper_signals.py" + cont
+            + cont.join(args) + "\n")
     if feed == "breakout":
         return (
             "# ATR-adaptive breakout signals over ALL chart history (SL/TP scale\n"
@@ -330,8 +352,7 @@ def render_live_feed_loop_cli(feed: str, *, output: str | None = None) -> str:
             "--session-end 0",
             "--signal-tz 7",
         ])
-        if str(feed or "") == "scalperwide24":
-            args.extend(["--rr1 1.5", "--rr2 2.5", "--rr3 4.0"])
+        args.extend(scalper_feed_args(feed) or [])
     elif family == "risk02":
         args.extend([
             "--charts data/XAUUSD_M1_*_ELEV8.csv",
@@ -564,17 +585,34 @@ def update_champion(out_dir: Path, regime: str, challenger: dict | None) -> dict
     stored champion when it STRICTLY beats the stored champion's net+bonus
     (tiebreak oos, edge) -- so the published deploy target is monotonic.
     """
+    def with_feed_metadata(record: dict | None) -> dict | None:
+        if not record:
+            return record
+        feed_name = record.get("feed") or record.get("_feed") or ""
+        if not feed_name:
+            return record
+        out = dict(record)
+        out["feed_file"] = feed_signals(feed_name)
+        out["feed_live_file"] = live_feed_signals(feed_name)
+        args = scalper_feed_args(feed_name)
+        if args is not None:
+            out["feed_generator"] = "tools/generate_scalper_signals.py"
+            out["feed_generator_args"] = args
+        return out
+
     path = out_dir / f"CHAMPION_{regime}.json"
-    stored = load_json(path)
+    stored_raw = load_json(path)
+    stored = with_feed_metadata(stored_raw)
+    if stored_raw is not None and stored != stored_raw:
+        path.write_text(json.dumps(stored, indent=2, sort_keys=True) + "\n")
 
     cand_record = None
     if challenger is not None:
         feed_name = challenger.get("_feed")
-        cand_record = {
+        cand_record = with_feed_metadata({
             "regime": regime,
             "kind": "champion",
             "feed": feed_name,
-            "feed_file": feed_signals(feed_name or ""),
             "edge": _edge(challenger),
             "oos": _oos(challenger),
             "dd": _dd(challenger),
@@ -583,7 +621,7 @@ def update_champion(out_dir: Path, regime: str, challenger: dict | None) -> dict
             "config_json": challenger.get(
                 "config_json",
                 json.dumps(challenger.get("config") or {}, sort_keys=True)),
-        }
+        })
 
     if stored is None:
         if cand_record is not None:

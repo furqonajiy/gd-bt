@@ -149,6 +149,9 @@ def test_render_hold_and_switch(tmp_path):
 def test_feed_name_resolves_to_archive_path():
     assert cr.feed_signals("adE_farTP") == "generated/adaptive_adE_farTP.txt"
     assert cr.feed_signals("scalper24") == "generated/self_scalper24.txt"
+    assert cr.feed_signals("base") == "generated/self_scalper24.txt"
+    assert cr.feed_signals("rsi70_sqz6_rr08") == (
+        "generated/self_scalper24_rsi70_sqz6_rr08.txt")
     assert cr.feed_signals("risk02allhours") == "generated/self_risk02_allhours.txt"
     # An already-resolved path round-trips unchanged.
     assert cr.feed_signals("generated/self_better.txt") == "generated/self_better.txt"
@@ -175,6 +178,13 @@ def test_live_feed_loop_cli_routes_known_feed_families():
     assert "--family scalper" in scalper
     assert "--output generated/self_scalper_widerr24_live.txt" in scalper
     assert "--rr1 1.5" in scalper
+
+    rbr = cr.render_live_feed_loop_cli("rsi70_sqz6_rr08")
+    assert "--family scalper" in rbr
+    assert "--output generated/self_scalper24_rsi70_sqz6_rr08_live.txt" in rbr
+    assert "--rsi-buy-max 70" in rbr
+    assert "--bb-bandwidth-min 0.0006" in rbr
+    assert "--rr1 0.8" in rbr
 
 
 def test_rendered_cli_is_runnable_backtest_explicit():
@@ -271,6 +281,31 @@ def test_render_deployment_cli_feed_routes_to_generator():
     assert "--family adaptive" in adf
     assert "generated/adaptive_adF_tightSL_closeTP.txt" in adf
     assert "generated/adaptive_adF_tightSL_closeTP_live.txt" in adf
+
+    rbr = cr.render_deployment_cli(
+        {"entry_count": 5}, regime="R3strong", feed="rsi70_sqz6_rr08",
+        edge=200.0, oos=100.0, dd=19.0)
+    assert "tools/generate_scalper_signals.py" in rbr
+    assert "generated/self_scalper24_rsi70_sqz6_rr08.txt" in rbr
+    assert "generated/self_scalper24_rsi70_sqz6_rr08_live.txt" in rbr
+    assert "--rsi-buy-max 70" in rbr
+    assert "--rsi-sell-min 30" in rbr
+    assert "--bb-bandwidth-min 0.0006" in rbr
+    assert "--rr1 0.8" in rbr
+
+
+def test_update_champion_stores_scalper_feed_manifest(tmp_path):
+    row = _chrow("rsi75_sqz6_rr40", 2000.0, 500.0, 31.0, {"entry_count": 5},
+                 net=3000.0)
+    champ = cr.update_champion(tmp_path, "R4parab", row)
+    assert champ["feed_file"] == "generated/self_scalper24_rsi75_sqz6_rr40.txt"
+    assert champ["feed_live_file"] == "generated/self_scalper24_rsi75_sqz6_rr40_live.txt"
+    assert champ["feed_generator"] == "tools/generate_scalper_signals.py"
+    assert champ["feed_generator_args"] == [
+        "--rsi-buy-max 75", "--rsi-sell-min 25",
+        "--bb-bandwidth-min 0.0006",
+        "--rr1 1.0", "--rr2 2.0", "--rr3 4.0",
+    ]
 
 
 def test_write_deployment_cli_files_champion_and_placeholder(tmp_path):
