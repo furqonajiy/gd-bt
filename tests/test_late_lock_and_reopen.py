@@ -406,6 +406,7 @@ def test_reopen_unfavorable_past_window_does_not_chase(monkeypatch):
     nc = [a for a in log.actions if "not chasing" in a]
     assert len(nc) == 1 and pos.signal.signal_key in nc[0]
     assert "GMT+7" in nc[0] and "GMT+3" not in nc[0]  # logs render in the signal tz
+    assert "\n" in nc[0]  # long notice is wrapped onto continuation lines
 
     log2 = ex.reopen_missing_open_positions(pos, _CFG)
     assert not any("not chasing" in a for a in log2.actions)  # deduped

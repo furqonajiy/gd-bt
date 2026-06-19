@@ -1139,13 +1139,17 @@ class Mt5Executor(_BaseMt5Executor):
                     if nc_key not in self._session_skipped_no_chase:
                         mins_past = (wall_clock_now
                                      - engine_pos.expiry_time).total_seconds() / 60.0
+                        expiry7 = chart_tz.to_log_tz(engine_pos.expiry_time)
+                        now7 = chart_tz.to_log_tz(wall_clock_now)
+                        # Wrap the detail onto indented continuation lines so the
+                        # notice is readable instead of one very long line.
                         log.actions.append(
-                            f"  {nc_key}: replay still holds this leg OPEN but it is "
-                            f"missing from MT5, price moved past entry {entry_price:g}, "
-                            f"and the pending window closed at "
-                            f"{chart_tz.to_log_tz(engine_pos.expiry_time):%Y-%m-%d %H:%M} GMT+7 "
-                            f"({mins_past:.0f} min ago, now "
-                            f"{chart_tz.to_log_tz(wall_clock_now):%H:%M} GMT+7); not chasing (logged once)"
+                            f"  {nc_key}: not chasing (logged once) --\n"
+                            f"      replay still holds this leg OPEN but it is missing "
+                            f"from MT5;\n"
+                            f"      price moved past entry {entry_price:g};\n"
+                            f"      pending window closed {expiry7:%Y-%m-%d %H:%M} GMT+7 "
+                            f"({mins_past:.0f} min ago, now {now7:%H:%M} GMT+7)"
                         )
                         self._session_skipped_no_chase.add(nc_key)
                     continue
