@@ -115,7 +115,10 @@ def _bt_fixed(b: dict, usd_per_point: float) -> float | None:
     """Backtest leg P&L at the live fixed lot, from prices (lot-independent)."""
     if b["entry_p"] is None or b["exit_p"] is None:
         return None
-    sign = 1.0 if b["side"] == "buy" else -1.0
+    # The workbook's Side column is upper-case (BUY/SELL); normalise so a buy is
+    # +1 and a sell -1. Comparing it against the lower-case live "buy" signed
+    # every leg as a sell and inverted buy P&L.
+    sign = 1.0 if str(b["side"]).strip().lower() == "buy" else -1.0
     return (b["exit_p"] - b["entry_p"]) * sign * usd_per_point
 
 
