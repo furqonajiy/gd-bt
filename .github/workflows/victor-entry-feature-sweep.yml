@@ -114,6 +114,8 @@ jobs:
                       except: return None
                   dd=f(r["concurrent_risk_max_dd_pct"]); oos=f(r["oos_fixed_no_bonus_profit"]); edge=f(r["fixed_no_bonus_profit"])
                   if dd is None or oos is None or edge is None: continue
+                  if str(r.get("passes_walk_forward", "true")).strip().lower() in ("false", "0", "no"):
+                      continue
                   if abs(dd)<=40 and oos>0:
                       key=f(r["fixed_with_bonus_profit"]) or edge
                       if best is None or key>best[0]:

@@ -22,7 +22,8 @@ name: victor-sweep
 # SL from ATR, nominal-vs-effective reference) alongside the full param grid, so
 # the take-all-vs-selective and Victor-TP-vs-our-geometry trade-offs are all in
 # one sweep. The aggregate ranks on fixed-lot edge + $3/closed-lot bonus (more
-# closed signals scores higher) guarded by DD<=40% & OOS>0.
+# closed signals scores higher) guarded by DD<=40%, OOS>0, and rolling
+# walk-forward fold stability.
 
 on:
   workflow_dispatch:

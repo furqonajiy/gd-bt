@@ -869,8 +869,10 @@ def write_leaderboards(rows: list[dict[str, Any]], output_dir: Path, top_n: int)
             "rank": idx,
             "candidate_id": row["candidate_id"],
             "filter_preset": row["filter_preset"],
-            "metrics": {k: v for k, v in row.items() if k not in {"config", "config_json", "monthly_json"}},
+            "metrics": {k: v for k, v in row.items()
+                        if k not in {"config", "config_json", "monthly_json", "walk_forward_json"}},
             "monthly": json.loads(row.get("monthly_json", "[]")),
+            "walk_forward": json.loads(row.get("walk_forward_json", "[]")),
             "config": row["config"] if "config" in row else json.loads(row["config_json"]),
             "live_command": live_command(row),
         }

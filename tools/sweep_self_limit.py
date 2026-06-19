@@ -20,6 +20,8 @@ So this tool:
     because the backtest understates live concurrent DD);
   * GATES on monthly consistency (fixed-lot no-bonus): a minimum fraction of
     months profitable, with an optional worst-month floor;
+  * GATES on rolling walk-forward folds (fixed-lot no-bonus), so one lucky
+    held-out tail is not enough to crown a champion;
   * validates OOS on a held-out tail, also fixed-lot no-bonus.
 
 It reuses sweep.py's validated concurrent engine, candidate draw, checkpointing
@@ -118,6 +120,54 @@ def _monthly_stats(monthly: list[dict]) -> dict:
     }
 
 
+def _median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    vals = sorted(values)
+    mid = len(vals) // 2
+    if len(vals) % 2:
+        return vals[mid]
+    return (vals[mid - 1] + vals[mid]) / 2.0
+
+
+def _walk_forward_stats(monthly: list[dict], fold_months: int) -> dict:
+    """Rolling OOS-style stats over fixed-lot no-bonus monthly P&L.
+
+    Each fold is a consecutive chunk of ``fold_months`` months. The final partial
+    chunk is kept, which matters for the active 2026 regime while the current
+    month is still forming.
+    """
+    width = max(1, int(fold_months or 1))
+    ordered = sorted(monthly, key=lambda m: str(m.get("month") or ""))
+    folds: list[dict] = []
+    for idx in range(0, len(ordered), width):
+        chunk = ordered[idx:idx + width]
+        if not chunk:
+            continue
+        pnl = sum(float(m.get("trading_pnl") or 0.0) for m in chunk)
+        folds.append({
+            "start_month": chunk[0].get("month"),
+            "end_month": chunk[-1].get("month"),
+            "months": len(chunk),
+            "trading_pnl": pnl,
+        })
+
+    pnls = [float(f["trading_pnl"]) for f in folds]
+    positives = sum(1 for p in pnls if p > 0.0)
+    count = len(pnls)
+    return {
+        "fold_months": width,
+        "fold_count": count,
+        "positive_folds": positives,
+        "positive_fraction": (positives / count) if count else 0.0,
+        "worst_fold_pnl": min(pnls) if pnls else 0.0,
+        "best_fold_pnl": max(pnls) if pnls else 0.0,
+        "average_fold_pnl": (sum(pnls) / count) if count else 0.0,
+        "median_fold_pnl": _median(pnls),
+        "folds": folds,
+    }
+
+
 def evaluate_self_limit(cfg: dict, *, signals, chart, validate_signals, args) -> dict:
     """Evaluate one LIMIT candidate with fixed-lot edge + concurrent-DD gates."""
     candidate_id = sweep._json_hash({"preset": FILTER_LABEL, "config": cfg})
@@ -150,6 +200,7 @@ def evaluate_self_limit(cfg: dict, *, signals, chart, validate_signals, args) ->
     dd_concurrent = abs(float(risk_full.get("max_drawdown_pct") or 0.0))
     monthly = fixed_nb.get("monthly", [])
     ms = _monthly_stats(monthly)
+    wf = _walk_forward_stats(monthly, args.walk_forward_months)
     oos = float(fixed_nb_val.get("net_profit") or 0.0) if fixed_nb_val else None
 
     passes_dd = dd_concurrent <= args.max_concurrent_dd_pct
@@ -157,11 +208,20 @@ def evaluate_self_limit(cfg: dict, *, signals, chart, validate_signals, args) ->
     passes_consistency = (ms["total_months"] > 0
                           and ms["stable_fraction"] >= args.min_stable_month_fraction
                           and ms["worst_month"] >= args.worst_month_floor)
+    passes_walk_forward = (
+        wf["fold_count"] >= args.min_walk_forward_folds
+        and wf["positive_fraction"] >= args.min_walk_forward_positive_fraction
+        and wf["worst_fold_pnl"] >= args.walk_forward_worst_fold_floor
+    )
     passes_oos = (not validate_signals) or (oos is not None and oos > 0.0)
-    passes = bool(passes_dd and passes_edge and passes_consistency and passes_oos)
+    passes = bool(passes_dd and passes_edge and passes_consistency
+                  and passes_walk_forward and passes_oos)
 
-    # Among survivors, reward both edge and consistency; add a small OOS term.
-    score = edge * max(ms["stable_fraction"], 0.0) + 0.25 * (oos or 0.0)
+    # Among survivors, reward edge that persists across both monthly and rolling
+    # fold views; add a small held-out OOS term.
+    score = (edge * max(ms["stable_fraction"], 0.0)
+             * max(wf["positive_fraction"], 0.0)
+             + 0.25 * (oos or 0.0))
 
     return {
         "candidate_id": candidate_id,
@@ -170,6 +230,7 @@ def evaluate_self_limit(cfg: dict, *, signals, chart, validate_signals, args) ->
         "passes_dd": passes_dd,
         "passes_edge": passes_edge,
         "passes_consistency": passes_consistency,
+        "passes_walk_forward": passes_walk_forward,
         "passes_oos": passes_oos,
         "score": score,
         "fixed_no_bonus_profit": edge,
@@ -181,17 +242,27 @@ def evaluate_self_limit(cfg: dict, *, signals, chart, validate_signals, args) ->
         "total_months": ms["total_months"],
         "stable_fraction": ms["stable_fraction"],
         "worst_month_pnl": ms["worst_month"],
+        "walk_forward_months": wf["fold_months"],
+        "walk_forward_folds": wf["fold_count"],
+        "walk_forward_positive_folds": wf["positive_folds"],
+        "walk_forward_positive_fraction": wf["positive_fraction"],
+        "walk_forward_worst_pnl": wf["worst_fold_pnl"],
+        "walk_forward_best_pnl": wf["best_fold_pnl"],
+        "walk_forward_average_pnl": wf["average_fold_pnl"],
+        "walk_forward_median_pnl": wf["median_fold_pnl"],
         "oos_fixed_no_bonus_profit": oos,
         "config": cfg,
         "config_json": json.dumps(cfg, sort_keys=True),
         "monthly_json": json.dumps(monthly, default=str),
+        "walk_forward_json": json.dumps(wf["folds"], default=str),
     }
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Self-archive LIMIT-only sweep: fixed-lot edge ranking, "
-                    "concurrent-DD gate, monthly-consistency gate, fixed-lot OOS.")
+                    "concurrent-DD gate, monthly/walk-forward consistency gates, "
+                    "fixed-lot OOS.")
     p.add_argument("--signals", default="generated/self_m15_archive.txt",
                    help="Self-generated signal archive (parsed directly; no provider filter).")
     p.add_argument("--charts", nargs="+", default=["data/XAUUSD_M1_*.csv"])
@@ -206,6 +277,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Min fraction of months with positive fixed-lot no-bonus P&L.")
     p.add_argument("--worst-month-floor", type=float, default=-1e18,
                    help="Reject if any month's fixed-lot no-bonus P&L is below this (default off).")
+    p.add_argument("--walk-forward-months", type=int, default=2,
+                   help="Consecutive months per rolling OOS fold for the fixed-lot no-bonus stability gate.")
+    p.add_argument("--min-walk-forward-folds", type=int, default=1,
+                   help="Reject if fewer than this many rolling folds are available.")
+    p.add_argument("--min-walk-forward-positive-fraction", type=float, default=0.50,
+                   help="Reject if fewer than this fraction of rolling folds are profitable.")
+    p.add_argument("--walk-forward-worst-fold-floor", type=float, default=-1e18,
+                   help="Reject if any rolling fold's fixed-lot no-bonus P&L is below this.")
     p.add_argument("--fixed-lot", type=float, default=0.01)
     p.add_argument("--exclude-structural-anomalies", action="store_true")
     p.add_argument("--top-n", type=int, default=20)
@@ -228,6 +307,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.walk_forward_months < 1:
+        raise SystemExit("--walk-forward-months must be >= 1")
+    if args.min_walk_forward_folds < 0:
+        raise SystemExit("--min-walk-forward-folds must be >= 0")
+    if not 0.0 <= args.min_walk_forward_positive_fraction <= 1.0:
+        raise SystemExit("--min-walk-forward-positive-fraction must be between 0 and 1")
     signals_path = Path(args.signals)
     if not signals_path.exists():
         raise SystemExit(f"signals file not found: {signals_path}")
@@ -244,7 +329,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[self-limit] candidates={len(candidates)} signals={len(signals)} "
           f"train={len(train)} validate={len(validate)} "
           f"(trailing_open pinned 0; DD<= {args.max_concurrent_dd_pct}% concurrent; "
-          f"consistency>= {args.min_stable_month_fraction})", flush=True)
+          f"consistency>= {args.min_stable_month_fraction}; "
+          f"walk-forward {args.walk_forward_months}m folds >= "
+          f"{args.min_walk_forward_positive_fraction:.0%} positive)", flush=True)
 
     eval_args = SimpleNamespace(
         exclude_structural_anomalies=args.exclude_structural_anomalies,
@@ -252,6 +339,10 @@ def main(argv: list[str] | None = None) -> int:
         min_fixed_no_bonus_profit=args.min_fixed_no_bonus_profit,
         min_stable_month_fraction=args.min_stable_month_fraction,
         worst_month_floor=args.worst_month_floor,
+        walk_forward_months=args.walk_forward_months,
+        min_walk_forward_folds=args.min_walk_forward_folds,
+        min_walk_forward_positive_fraction=args.min_walk_forward_positive_fraction,
+        walk_forward_worst_fold_floor=args.walk_forward_worst_fold_floor,
         fixed_lot=args.fixed_lot,
     )
 
