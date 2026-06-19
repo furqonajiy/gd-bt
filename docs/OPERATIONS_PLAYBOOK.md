@@ -345,10 +345,29 @@ Common ones:
 - **Equity differs by 50%+** → you're running on the wrong account, or
   your account has been credited/debited a lot. Verify the MT5 terminal
   is logged into the expected account before trying again.
-- **Trading disabled** → MT5 has algorithmic trading off. Tools → Options
-  → Expert Advisors → "Allow algorithmic trading".
+- **Trading disabled** → MT5 has algorithmic trading off (Tools → Options
+  → Expert Advisors → "Allow algorithmic trading"), **or the broker has
+  disabled trading for a maintenance window**. During an outage `auto` keeps
+  skipping MT5 actions but the `SANITY CHECKS FAILED ... Account has trading
+  disabled` banner is throttled to **once per 30 min** (and reprints if the
+  reason changes); when trading returns it prints `[sanity] checks passing
+  again -- resuming MT5 actions.` Holding open positions into a maintenance
+  window is a real risk — price can move while the engine is frozen out and
+  can neither lock nor exit (see the live↔backtest reconciliation notes).
 
 The executor never half-places. Either everything got placed or nothing did.
+
+### Reading the live `auto` log
+
+Every `auto` event line is timestamped and rendered in **GMT+7** (the
+signal-authoring zone), so the log lines up with the feed and your wall clock —
+not the GMT+3 chart/server clock the MT5 terminal shows. A
+`... not chasing (logged once)` notice means the replay still holds a leg open
+that is missing from MT5, price has passed the entry, and the pending window has
+closed; the executor correctly declines to chase and logs it **once per leg**
+(it clears when the replay exits the leg, or remove the signal from
+`positions_*.json`). To reconcile a live session against the backtest, see
+`tools/reconcile_report_html.py` (one command per strategy tag).
 
 ### MT5 orders don't match `positions.json`
 
