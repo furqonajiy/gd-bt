@@ -23,7 +23,20 @@ from xauusd_trading import (
     open_position, parse_one_signal, signal_to_magic,
 )
 from xauusd_trading.execution import mt5_executor_tp2
-from xauusd_trading.execution.mt5_executor import mt5_entry_comment
+from xauusd_trading.execution.mt5_executor import mt5_close_comment, mt5_entry_comment
+
+
+def test_close_comment_fits_broker_limit():
+    # Regression: the catch-up/timeout/late close comment used the FULL signal
+    # key (SQZ6-2026-06-19#65/catchup-tp3 ~30 chars), which Elev8 rejected with
+    # (-2, 'Invalid "comment" argument') -> the leg never closed. It must build
+    # from the compact ref and stay within the broker's ~16-char limit.
+    c = mt5_close_comment("SQZ6-2026-06-19#65", "catchup-tp3")
+    assert len(c) <= 16 and c.startswith("SQZ6-0619#65")
+    # untagged short key keeps the full action label
+    assert mt5_close_comment("2026-06-12#01", "late-tp1") == "0612#01/late-tp1"
+    # a long tag still fits
+    assert len(mt5_close_comment("R4S24-2026-06-15#36", "timeout")) <= 16
 
 
 # --- stub MT5 ---------------------------------------------------------------
