@@ -252,18 +252,29 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   the still-PENDING legs as fresh LIMITs and tracks the signal on its replay-OPEN
   legs, so the reopen pass restores the already-OPEN legs (the `_allow_partial_placement`
   gate; default OFF keeps the legacy signal-level skip, so backtests are unchanged).
-  At placement, a leg that is **price-passed** (BUY ≥ live ask / SELL ≤ live bid) **or
-  sits inside the broker stops/freeze band** (BUY > ask − min_dist / SELL <
+  At placement (reopen/mirror mode), a leg that is **price-passed favourably**
+  (BUY ≥ live ask = buy cheaper / SELL ≤ live bid = sell higher) is **opened at
+  MARKET in the same cycle** at the better basis with the leg's planned
+  stop+target — instead of waiting for the next-cycle reopen pass (the operator
+  rule "if price already passed the entry the right way, take it at market, don't
+  wait for a LIMIT that can never rest there", 2026-06-19) — gated on the replay
+  still holding the leg (OPEN/PENDING, never already-closed) so a leg the backtest
+  already exited is never resurrected. A leg that merely **sits inside the broker
+  stops/freeze band** but has not reached its entry (BUY > ask − min_dist / SELL <
   bid + min_dist, `sl_safety.min_stop_distance_for`) is **deferred**, not
   order-sent as a doomed pending LIMIT — the broker rejects an in-band LIMIT with
   retcode 10015 and that rejection used to roll back + abandon the whole signal
   (so it was never tracked and reopen never ran; the 2026-06-18 VIC-#09 failure).
-  Deferring lets the placeable legs place and the signal track; the replay-driven
-  passes then mirror the deferred legs — `reopen_missing_open_positions` opens a
-  price-passed leg at market with the original stop+target once the replay holds
-  it OPEN (better basis, never chased, only while the backtest still holds the
-  position), and `replace_missing_pending_entries` re-places it as a LIMIT if it
-  drifts back outside the band while the replay still holds it PENDING.
+  The market opens + the placeable LIMITs both place and the signal tracks; the
+  deferred in-band legs are mirrored by the replay-driven passes —
+  `reopen_missing_open_positions` opens a price-passed leg at market with the
+  original stop+target once the replay holds it OPEN (better basis, never chased,
+  only while the backtest still holds the position; also the fallback if a
+  same-cycle market open is rejected), and `replace_missing_pending_entries`
+  re-places it as a LIMIT if it drifts back outside the band while the replay
+  still holds it PENDING. Without reopen mode (`_allow_partial_placement` OFF) the
+  legacy path is unchanged — a price-passed leg is stale and skips the whole
+  ladder — so backtests stay byte-identical.
   Per-entry identity holds end-to-end: the manage/reopen path recovers the
   strategy tag from the registry `signal_key`, so every managed/reopened leg
   carries the same tagged magic + `[TAG-]MMDD#DD.N` comment `place_signal` used.
