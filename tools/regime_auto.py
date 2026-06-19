@@ -3,12 +3,13 @@
 Detects the live market regime from recent M1 data (via `tools.regime_router`'s
 smoothed-ATR + trend classifier), looks up that regime's published champion in
 `sweep_regime_out_grid/CHAMPION_<regime>.json`, and emits the exact runnable
-`backtest_explicit.py` CLI for it. So instead of manually choosing R3 vs R4, you
-run this and it tells you which champion to run *now* based on volatility.
+deployment commands for it. So instead of manually choosing R3 vs R4, you run
+this and it tells you which champion to run *now* based on volatility.
 
-    python tools/regime_auto.py                       # detect from all charts, print champion CLI
+    python tools/regime_auto.py                       # detect from all charts, print deployment CLI
     python tools/regime_auto.py --window-days 30      # use a 30-day window to classify
     python tools/regime_auto.py --charts 'data/XAUUSD_M1_2026*_ELEV8.csv'
+    python tools/regime_auto.py --backtest-only       # print only the regime backtest command
 
 When no champion exists for the detected regime yet, it falls back to "run your
 incumbent" so you're never left without an answer. This is the decision brain
@@ -29,7 +30,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tools.regime_router import read_current_regime, DEFAULT_LIVE_REGIME
-from tools.champions_report import render_champion_cli
+from tools.champions_report import render_champion_cli, render_deployment_cli
 
 
 def _load_recent_m1(charts_glob: str, window_days: int) -> pd.DataFrame:
@@ -48,7 +49,7 @@ def _load_recent_m1(charts_glob: str, window_days: int) -> pd.DataFrame:
     return m1[m1.index >= cutoff]
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--charts", default="data/XAUUSD_M1_*_ELEV8.csv",
                     help="chart glob; the most recent window is used to classify.")
@@ -56,7 +57,9 @@ def main() -> None:
                     help="where CHAMPION_<regime>.json live.")
     ap.add_argument("--window-days", type=int, default=20,
                     help="trailing window (days) used to read current regime.")
-    args = ap.parse_args()
+    ap.add_argument("--backtest-only", action="store_true",
+                    help="emit only the runnable regime-slice backtest command.")
+    args = ap.parse_args(argv)
 
     m1 = _load_recent_m1(args.charts, args.window_days)
     r = read_current_regime(m1)
@@ -70,16 +73,27 @@ def main() -> None:
               f"-> HOLD: keep running your incumbent config.")
         if r.regime != DEFAULT_LIVE_REGIME:
             print(f"# (today's reference live regime is {DEFAULT_LIVE_REGIME}.)")
-        return
+        return 0
 
     champ = json.loads(champ_path.read_text())
     print(f"# champion: feed={champ.get('feed')} "
           f"edge=${float(champ.get('edge', 0)):.0f} "
           f"oos=${float(champ.get('oos', 0)):.0f} "
           f"dd={float(champ.get('dd', 0)):.1f}%")
-    print(render_champion_cli(champ.get("config") or {},
-                              regime=r.regime, feed=champ.get("feed") or ""))
+    if args.backtest_only:
+        print(render_champion_cli(champ.get("config") or {},
+                                  regime=r.regime, feed=champ.get("feed") or ""))
+    else:
+        print(render_deployment_cli(
+            champ.get("config") or {},
+            regime=r.regime,
+            feed=champ.get("feed") or "",
+            edge=champ.get("edge"),
+            oos=champ.get("oos"),
+            dd=champ.get("dd"),
+        ))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
