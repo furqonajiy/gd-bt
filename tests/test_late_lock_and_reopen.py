@@ -190,17 +190,39 @@ def test_late_lock_moves_sl_to_tp1_when_price_still_beyond_it(monkeypatch):
     assert deals == []  # the old behavior (market close) must be gone
 
 
-def test_late_lock_falls_back_to_buffered_stop_when_price_through_tp1(monkeypatch):
+def test_late_lock_closes_at_market_when_through_lock_but_in_profit(monkeypatch):
+    # Price retraced back through TP1 (4215.50) but the leg is still in profit
+    # vs its 4211 entry: take the profit at market now instead of parking a
+    # below-lock stop that could run to a loss (the 0618#04 give-back).
     pos = _pos_with_lock_exited_leg()
     live = _live_leg(pos, sl=pos.entries[0].initial_sl)
-    mt5 = _FakeMt5(bid=4213.00, ask=4213.30, positions=[live])  # below TP1 4215.50
+    mt5 = _FakeMt5(bid=4213.00, ask=4213.30, positions=[live])  # below TP1, above entry
 
     _manage(monkeypatch, mt5, pos)
 
     sltp = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_SLTP]
     deals = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_DEAL]
-    assert len(sltp) == 1 and sltp[0]["sl"] == 4212.50  # bid - 0.5 buffer
-    assert deals == []
+    assert sltp == []                       # no below-lock stop parked
+    assert len(deals) == 1                  # closed at market in profit
+    assert deals[0]["comment"].endswith("/late-tp1")
+
+
+def test_late_lock_protects_underwater_leg_without_market_dumping(monkeypatch):
+    # Same late-lock state but the leg is now UNDERWATER (below the 4211 entry):
+    # do NOT crystallize the loss at market (the 2026-06-12 lesson). Park the
+    # closest legal protective stop and let later cycles ratchet it up.
+    pos = _pos_with_lock_exited_leg()
+    entry = pos.entries[0].entry_price                  # 4211.0
+    live = _live_leg(pos, sl=pos.entries[0].initial_sl)  # 4201.55
+    bid = round(entry - 3.0, 2)                          # 4208.0, underwater
+    mt5 = _FakeMt5(bid=bid, ask=round(bid + 0.30, 2), positions=[live])
+
+    _manage(monkeypatch, mt5, pos)
+
+    sltp = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_SLTP]
+    deals = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_DEAL]
+    assert len(sltp) == 1 and sltp[0]["sl"] == round(bid - 0.5, 2)  # buffered stop
+    assert deals == []                                              # never dumped
 
 
 def test_late_lock_ratchets_fallback_to_tp1_once_price_recovers(monkeypatch):
@@ -214,20 +236,14 @@ def test_late_lock_ratchets_fallback_to_tp1_once_price_recovers(monkeypatch):
     assert len(sltp) == 1 and sltp[0]["sl"] == pos.signal.tp1
 
 
-def test_late_lock_skips_sub_step_ratchets_and_never_moves_backwards(monkeypatch):
+def test_late_lock_leaves_an_already_protected_stop_alone(monkeypatch):
+    # Stop already at/beyond the lock level and price still beyond it: nothing
+    # to do -- no modify, no close.
     pos = _pos_with_lock_exited_leg()
-    live = _live_leg(pos, sl=4212.50)
-    # bid up only 0.10: fallback would improve by < LATE_LOCK_MIN_STEP.
-    mt5 = _FakeMt5(bid=4213.10, ask=4213.40, positions=[live])
-
+    live = _live_leg(pos, sl=pos.signal.tp1)
+    mt5 = _FakeMt5(bid=4217.00, ask=4217.30, positions=[live])
     _manage(monkeypatch, mt5, pos)
-    assert [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_SLTP] == []
-
-    # And a stop already at/beyond the level is left alone entirely.
-    live2 = _live_leg(pos, sl=pos.signal.tp1)
-    mt5b = _FakeMt5(bid=4217.00, ask=4217.30, positions=[live2])
-    _manage(monkeypatch, mt5b, pos)
-    assert mt5b.requests == []
+    assert mt5.requests == []
 
 
 def test_late_lock_closes_at_market_only_when_modify_fails(monkeypatch):
@@ -556,3 +572,58 @@ def test_partial_placement_places_fresh_legs_in_reopen_mode(monkeypatch):
         mt5_entry_comment(signal.signal_key, 4),
         mt5_entry_comment(signal.signal_key, 5),
     }
+
+
+# --- 4. time-exit deadline fallback when the replay never recorded a fill -----
+
+def _live_open_leg(pos, *, open_chart):
+    """A live BUY position whose broker open time maps to open_chart."""
+    key = pos.signal.signal_key
+    return _FakePos(
+        ticket=88, magic=signal_to_magic(key),
+        comment=mt5_entry_comment(key, 0),
+        type_=_FakeMt5.POSITION_TYPE_BUY, sl=pos.entries[0].initial_sl,
+        tp=pos.signal.tp3, price_open=pos.entries[0].entry_price,
+        time=_epoch_chart(open_chart),
+    )
+
+
+def test_time_exit_fires_via_deadline_fallback_when_replay_never_set_it(monkeypatch):
+    # Orphan case: a live position is open past max-hold but the replay never
+    # set time_exit_deadline (reconcile missed the fill / executor restarted).
+    # The fallback derives the deadline from the live position's own open time,
+    # so the leg still time-exits instead of sitting open forever.
+    _reset_executor_guards()
+    pos = _pos_with_open_leg()
+    pos.first_fill_time = None
+    pos.time_exit_deadline = None
+    now = pos.activation_time + timedelta(minutes=_CFG.max_hold_minutes + 30)
+    _freeze_wall_clock(monkeypatch, now)
+    open_chart = now - timedelta(minutes=_CFG.max_hold_minutes + 10)  # past max-hold
+    mt5 = _FakeMt5(bid=4212.00, ask=4212.30,
+                   positions=[_live_open_leg(pos, open_chart=open_chart)])
+
+    log = _executor(mt5).manage_position(pos, _CFG, now)
+
+    deals = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_DEAL]
+    assert len(deals) == 1  # the orphaned leg was timed out
+    assert any("Time-exit" in a for a in log.actions)
+
+
+def test_deadline_fallback_keeps_a_fresh_leg_open(monkeypatch):
+    # Same None-deadline state, but the live position opened well within max-hold:
+    # the fallback must NOT close it early.
+    _reset_executor_guards()
+    pos = _pos_with_open_leg()
+    pos.first_fill_time = None
+    pos.time_exit_deadline = None
+    now = pos.activation_time + timedelta(minutes=10)
+    _freeze_wall_clock(monkeypatch, now)
+    open_chart = now - timedelta(minutes=5)  # fresh
+    mt5 = _FakeMt5(bid=4212.00, ask=4212.30,
+                   positions=[_live_open_leg(pos, open_chart=open_chart)])
+
+    log = _executor(mt5).manage_position(pos, _CFG, now)
+
+    deals = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_DEAL]
+    assert deals == []  # not at max-hold yet -> leg stays open
