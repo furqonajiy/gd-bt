@@ -147,6 +147,9 @@ def test_render_hold_and_switch(tmp_path):
 
 def test_feed_name_resolves_to_archive_path():
     assert cr.feed_signals("adE_farTP") == "generated/adaptive_adE_farTP.txt"
+    assert cr.feed_signals("scalper24") == "generated/self_scalper24.txt"
+    assert cr.feed_signals("scalperwide24") == "generated/self_scalper_widerr24.txt"
+    assert cr.feed_signals("risk02allhours") == "generated/self_risk02_allhours.txt"
     # An already-resolved path round-trips unchanged.
     assert cr.feed_signals("generated/self_better.txt") == "generated/self_better.txt"
 
@@ -216,7 +219,7 @@ def test_render_deployment_cli_full_format():
 
 
 def test_render_deployment_cli_feed_routes_to_generator():
-    """meanrev and ad* feeds route to their generators; backtest signals match."""
+    """Matrix feeds route to their generator and archive paths."""
     mr = cr.render_deployment_cli(
         {"entry_count": 6}, regime="R3strong", feed="meanrev",
         edge=100.0, oos=50.0, dd=20.0)
@@ -229,6 +232,30 @@ def test_render_deployment_cli_feed_routes_to_generator():
         edge=13331.0, oos=2242.0, dd=29.7)
     assert "tools/generate_adaptive_self_signals.py" in adf
     assert "generated/adaptive_adF_tightSL_closeTP.txt" in adf
+
+    scalper = cr.render_deployment_cli(
+        {"entry_count": 6}, regime="R4parab", feed="scalper24",
+        edge=100.0, oos=50.0, dd=20.0)
+    assert "tools/generate_scalper_signals.py" in scalper
+    assert "generated/self_scalper24.txt" in scalper
+    assert "generated/adaptive_scalper24.txt" not in scalper
+    assert "--session-start 0" in scalper
+    assert "--session-end 0" in scalper
+
+    wide = cr.render_deployment_cli(
+        {"entry_count": 6}, regime="R4parab", feed="scalperwide24",
+        edge=100.0, oos=50.0, dd=20.0)
+    assert "tools/generate_scalper_signals.py" in wide
+    assert "generated/self_scalper_widerr24.txt" in wide
+    assert "--rr1 1.5" in wide and "--rr2 2.5" in wide and "--rr3 4.0" in wide
+
+    risk02 = cr.render_deployment_cli(
+        {"entry_count": 6}, regime="R4parab", feed="risk02allhours",
+        edge=100.0, oos=50.0, dd=20.0)
+    assert "tools/generate_aggressive_limit_risk02.py" in risk02
+    assert "generated/self_risk02_allhours.txt" in risk02
+    assert "--execution-hours 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23" in risk02
+    assert "generated/adaptive_risk02allhours.txt" not in risk02
 
 
 def test_write_deployment_cli_files_champion_and_placeholder(tmp_path):
