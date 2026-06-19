@@ -187,6 +187,43 @@ def test_auto_idle_cycle_is_quiet(tmp_path, monkeypatch, capsys):
     assert "(no tracked signals)" not in captured.out
 
 
+def test_adaptive_auto_pass_parses_selected_champion_feed(tmp_path, monkeypatch):
+    base = tmp_path / "base_live.txt"
+    selected = tmp_path / "champion_live.txt"
+    base.write_text("base", encoding="utf-8")
+    selected.write_text("champion", encoding="utf-8")
+    parsed_paths: list[Path] = []
+
+    args = _args(tmp_path)
+    args.adaptive = "true"
+    args.champions_dir = str(tmp_path)
+    args.adaptive_window_days = 20
+
+    monkeypatch.setattr(
+        cli,
+        "_maybe_adaptive_context",
+        lambda *_a, **_k: (DEFAULT_CONFIG, selected),
+    )
+    monkeypatch.setattr(
+        cli,
+        "parse_signals_file",
+        lambda path, **kw: (parsed_paths.append(Path(path)) or []),
+    )
+
+    exit_code = cli._auto_pass(
+        args,
+        DEFAULT_CONFIG,
+        _FakeConn(),
+        _FakeChart(datetime(2026, 6, 2, 6, 0)),
+        base,
+        iteration=1,
+        candidate_console_state={},
+    )
+
+    assert exit_code == 0
+    assert parsed_paths == [selected]
+
+
 def test_auto_placement_prints_single_event_line(tmp_path, monkeypatch, capsys):
     signal = _signal()
     plog = ExecutionLog(actions=["  BUY LIMIT placed for test"], placed=1)

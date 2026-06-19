@@ -292,15 +292,23 @@ def _adaptive_enabled(args: argparse.Namespace) -> bool:
 
 def _maybe_adaptive_config(args: argparse.Namespace, base_config: StrategyConfig,
                            chart, console_state: dict) -> StrategyConfig:
+    config, _signals = _maybe_adaptive_context(
+        args, base_config, Path(getattr(args, "signals", "") or "."), chart, console_state)
+    return config
+
+
+def _maybe_adaptive_context(args: argparse.Namespace, base_config: StrategyConfig,
+                            base_signals_path: Path, chart,
+                            console_state: dict) -> tuple[StrategyConfig, Path]:
     """In --adaptive mode, classify the current volatility regime from recent
-    chart M1 and run that regime's published champion config
+    chart M1 and run that regime's published champion config/feed
     (CHAMPION_<regime>.json under --champions-dir); fall back to ``base_config``
     (the CLI/incumbent config) when no champion exists or anything fails. Logs
     once per regime/source change so a switch is visible in the event log. Never
     raises -- a detection failure keeps the incumbent and the cycle continues."""
     import pandas as pd
 
-    from xauusd_trading import champion_config, read_current_regime
+    from xauusd_trading import champion_config, champion_live_feed, read_current_regime
 
     try:
         m1 = chart.dataframe[["time", "open", "high", "low", "close"]].set_index("time")
@@ -310,20 +318,32 @@ def _maybe_adaptive_config(args: argparse.Namespace, base_config: StrategyConfig
         if console_state.get("__regime__") != "ERR":
             print(f"[adaptive] regime detection failed ({e}); using incumbent config.")
             console_state["__regime__"] = "ERR"
-        return base_config
+        return base_config, base_signals_path
 
     regime = reading.regime
     champ_dir = getattr(args, "champions_dir", "champions") or "champions"
     config = champion_config(regime, champ_dir, base_config)
-    source = (f"champion {champ_dir}/CHAMPION_{regime}.json"
-              if config is not base_config else "no champion yet; using incumbent")
+    signals_path = base_signals_path
+    if config is not base_config:
+        candidate_feed = champion_live_feed(regime, champ_dir, base_signals_path)
+        if candidate_feed != base_signals_path:
+            if candidate_feed.exists():
+                signals_path = candidate_feed
+            else:
+                config = base_config
+                source = (f"champion {champ_dir}/CHAMPION_{regime}.json feed "
+                          f"{candidate_feed} missing; using incumbent")
+        if config is not base_config:
+            source = f"champion {champ_dir}/CHAMPION_{regime}.json | feed {signals_path}"
+    else:
+        source = "no champion yet; using incumbent"
 
     note = f"{regime}|{source}"
     if console_state.get("__regime__") != note:
         print(f"[adaptive] regime={regime} (M15 ATR ${reading.m15_atr:.2f}, "
               f"trend {reading.trend:+.3f}) -> {source}")
         console_state["__regime__"] = note
-    return config
+    return config, signals_path
 
 
 def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
@@ -361,9 +381,11 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         return 0
 
     # Regime auto-switch: classify the current market and swap in that regime's
-    # published champion config before any placement/management this cycle.
+    # published champion config/feed before any placement/management this cycle.
+    active_signals_path = signals_path
     if _adaptive_enabled(args):
-        config = _maybe_adaptive_config(args, config, chart, candidate_console_state)
+        config, active_signals_path = _maybe_adaptive_context(
+            args, config, signals_path, chart, candidate_console_state)
 
     tracked = []
     for item in prior_entries:
@@ -450,9 +472,9 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         revoked_keys = _orig._consume_signal_overrides(args, executor, registry, log=log)
 
     try:
-        all_signals = parse_signals_file(signals_path, tag=getattr(args, "strategy_tag", "") or "")
+        all_signals = parse_signals_file(active_signals_path, tag=getattr(args, "strategy_tag", "") or "")
     except Exception as e:
-        print(f"[signals] failed to parse {signals_path}: {e}")
+        print(f"[signals] failed to parse {active_signals_path}: {e}")
         forensic.error("auto_pass.parse_signals", str(e), traceback.format_exc())
         all_signals = []
 
