@@ -102,6 +102,33 @@ def mt5_entry_comment(signal_key: str, entry_index: int, max_len: int = 31) -> s
     return f"{ref[:prefix_len]}{suffix}"
 
 
+# Elev8 (and similar) reject an order comment longer than ~16 chars with
+# (-2, 'Invalid "comment" argument'); the compact place comment is built to fit.
+_BROKER_COMMENT_MAX = 16
+
+
+def mt5_close_comment(signal_key: str, action_name: str,
+                      max_len: int = _BROKER_COMMENT_MAX) -> str:
+    """Broker-safe comment for a close / exit DEAL.
+
+    Build from the COMPACT signal ref (``[TAG-]MMDD#DD``) -- the same short base
+    the place path uses -- not the full ``[TAG-]YYYY-MM-DD#DD`` signal_key, then
+    append as much of the action label as fits. The full-key form (e.g.
+    ``SQZ6-2026-06-19#65/catchup-tp3`` ~30 chars) is what Elev8 rejected with
+    ``(-2, 'Invalid "comment" argument')``, leaving the leg open. The close is
+    matched by magic, so the comment is purely cosmetic; when the action does not
+    fit we keep its most specific tail (e.g. ``tp3`` from ``catchup-tp3``) so the
+    exit level stays visible.
+    """
+    ref = _compact_comment_ref(signal_key)
+    room = max_len - len(ref) - 1
+    if room <= 0:
+        return ref[:max_len]
+    act = action_name if len(action_name) <= room else action_name.split("-")[-1]
+    return f"{ref}/{act}"[:max_len]
+
+
+
 def round_lot(lot: float, min_lot: float = 0.01, lot_step: float = 0.01) -> float:
     """Floor `lot` to a multiple of `lot_step` and enforce `min_lot`.
 
@@ -733,7 +760,7 @@ class Mt5Executor:
                         "type":         close_type,
                         "price":        price,
                         "magic":        magic,
-                        "comment":      f"{signal_key}/late-tp1"[:31],
+                        "comment":      mt5_close_comment(signal_key, "late-tp1"),
                         "deviation":    self.CLOSE_DEVIATION_POINTS,
                         "type_filling": self._market_fill_mode(),
                     }
@@ -827,7 +854,7 @@ class Mt5Executor:
                     "type":         close_type,
                     "price":        price,
                     "magic":        magic,
-                    "comment":      f"{signal_key}/timeout"[:31],
+                    "comment":      mt5_close_comment(signal_key, "timeout"),
                     "deviation":    self.CLOSE_DEVIATION_POINTS,
                     "type_filling": self._market_fill_mode(),
                 }
