@@ -203,6 +203,11 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _stamp() -> str:
+    """Local wall-clock stamp for log lines (matches the live feed loop)."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     input_path = Path(args.input)
@@ -211,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.watch:
         total, kept_count, _kept = run_once(input_path, output_path, args.preset)
         print(
-            f"[provider-filter] input={total:,} kept={kept_count:,} preset={args.preset} output={output_path}",
+            f"[{_stamp()}] [provider-filter] input={total:,} kept={kept_count:,} preset={args.preset} output={output_path}",
             flush=True,
         )
         return 0
@@ -220,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     last_mtime: int | None = None
     first_run = True
     print(
-        f"[provider-filter] watching {input_path} -> {output_path} | preset={args.preset} | quiet until a new kept signal appears",
+        f"[{_stamp()}] [provider-filter] watching {input_path} -> {output_path} | preset={args.preset} | quiet until a new kept signal appears",
         flush=True,
     )
 
@@ -234,16 +239,16 @@ def main(argv: list[str] | None = None) -> int:
                 seen = kept_keys
                 if args.print_existing_on_start:
                     for sig in kept:
-                        print(f"[provider-filter][KEPT] {_describe_signal(sig)}", flush=True)
+                        print(f"[{_stamp()}] [provider-filter][KEPT] {_describe_signal(sig)}", flush=True)
                 print(
-                    f"[provider-filter] ready | input={total:,} kept={kept_count:,} output={output_path}",
+                    f"[{_stamp()}] [provider-filter] ready | input={total:,} kept={kept_count:,} output={output_path}",
                     flush=True,
                 )
                 first_run = False
             else:
                 new_kept = [sig for sig in kept if _signal_key(sig) not in seen]
                 for sig in new_kept:
-                    print(f"[provider-filter][NEW KEPT] {_describe_signal(sig)}", flush=True)
+                    print(f"[{_stamp()}] [provider-filter][NEW KEPT] {_describe_signal(sig)}", flush=True)
                 seen = kept_keys
 
             last_mtime = current_mtime

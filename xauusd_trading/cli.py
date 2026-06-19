@@ -326,14 +326,38 @@ def _maybe_adaptive_config(args: argparse.Namespace, base_config: StrategyConfig
     return config
 
 
+# Sanity-check failures (e.g. broker maintenance disabling trading) recur every
+# watch interval -- a few seconds apart -- so an hours-long outage would print
+# thousands of identical banners. Print at most once per this window, and again
+# immediately if the set of failures changes so a NEW problem is never hidden.
+_SANITY_REPRINT_SECONDS = 30 * 60
+
+
+def _maybe_print_sanity_errors(state: dict, errors: list[str]) -> None:
+    """Print the sanity-check banner, throttled to once per reprint window."""
+    signature = " | ".join(errors)
+    now = time.monotonic()
+    last_at = state.get("__sanity_at__")
+    changed = signature != state.get("__sanity_sig__")
+    due = last_at is None or (now - float(last_at)) >= _SANITY_REPRINT_SECONDS
+    if not (changed or due):
+        return
+    print("SANITY CHECKS FAILED -- skipping MT5 actions this iteration:")
+    for e in errors:
+        print(f"  ! {e}")
+    print(f"  (identical warnings suppressed; reprints in "
+          f"{_SANITY_REPRINT_SECONDS // 60} min or when the reason changes)")
+    state["__sanity_at__"] = now
+    state["__sanity_sig__"] = signature
+
+
 def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                conn, chart, signals_path: Path, iteration: int = 1,
                candidate_console_state: dict[str, str] | None = None,
                notified_keys: dict[str, set] | None = None) -> int:
-    from xauusd_trading import mt5_equity
     from xauusd_trading import (
         Mt5Executor, SignalRegistry, signal_to_magic,
-        render_execution_log, ExecutionLog,
+        render_execution_log, ExecutionLog, mt5_equity,
     )
 
     if candidate_console_state is None:
@@ -406,11 +430,12 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
 
     errors = executor.sanity_checks(expected_equity=equity)
     if errors:
-        print("SANITY CHECKS FAILED -- skipping MT5 actions this iteration:")
-        for e in errors:
-            print(f"  ! {e}")
+        _maybe_print_sanity_errors(candidate_console_state, errors)
         forensic.end_cycle(errors=1)
         return 0
+    if candidate_console_state.pop("__sanity_sig__", None) is not None:
+        candidate_console_state.pop("__sanity_at__", None)
+        print("[sanity] checks passing again -- resuming MT5 actions.")
 
     log = ExecutionLog()
 
