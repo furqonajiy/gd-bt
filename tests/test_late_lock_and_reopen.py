@@ -190,17 +190,39 @@ def test_late_lock_moves_sl_to_tp1_when_price_still_beyond_it(monkeypatch):
     assert deals == []  # the old behavior (market close) must be gone
 
 
-def test_late_lock_falls_back_to_buffered_stop_when_price_through_tp1(monkeypatch):
+def test_late_lock_closes_at_market_when_through_lock_but_in_profit(monkeypatch):
+    # Price retraced back through TP1 (4215.50) but the leg is still in profit
+    # vs its 4211 entry: take the profit at market now instead of parking a
+    # below-lock stop that could run to a loss (the 0618#04 give-back).
     pos = _pos_with_lock_exited_leg()
     live = _live_leg(pos, sl=pos.entries[0].initial_sl)
-    mt5 = _FakeMt5(bid=4213.00, ask=4213.30, positions=[live])  # below TP1 4215.50
+    mt5 = _FakeMt5(bid=4213.00, ask=4213.30, positions=[live])  # below TP1, above entry
 
     _manage(monkeypatch, mt5, pos)
 
     sltp = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_SLTP]
     deals = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_DEAL]
-    assert len(sltp) == 1 and sltp[0]["sl"] == 4212.50  # bid - 0.5 buffer
-    assert deals == []
+    assert sltp == []                       # no below-lock stop parked
+    assert len(deals) == 1                  # closed at market in profit
+    assert deals[0]["comment"].endswith("/late-tp1")
+
+
+def test_late_lock_protects_underwater_leg_without_market_dumping(monkeypatch):
+    # Same late-lock state but the leg is now UNDERWATER (below the 4211 entry):
+    # do NOT crystallize the loss at market (the 2026-06-12 lesson). Park the
+    # closest legal protective stop and let later cycles ratchet it up.
+    pos = _pos_with_lock_exited_leg()
+    entry = pos.entries[0].entry_price                  # 4211.0
+    live = _live_leg(pos, sl=pos.entries[0].initial_sl)  # 4201.55
+    bid = round(entry - 3.0, 2)                          # 4208.0, underwater
+    mt5 = _FakeMt5(bid=bid, ask=round(bid + 0.30, 2), positions=[live])
+
+    _manage(monkeypatch, mt5, pos)
+
+    sltp = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_SLTP]
+    deals = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_DEAL]
+    assert len(sltp) == 1 and sltp[0]["sl"] == round(bid - 0.5, 2)  # buffered stop
+    assert deals == []                                              # never dumped
 
 
 def test_late_lock_ratchets_fallback_to_tp1_once_price_recovers(monkeypatch):
@@ -214,20 +236,14 @@ def test_late_lock_ratchets_fallback_to_tp1_once_price_recovers(monkeypatch):
     assert len(sltp) == 1 and sltp[0]["sl"] == pos.signal.tp1
 
 
-def test_late_lock_skips_sub_step_ratchets_and_never_moves_backwards(monkeypatch):
+def test_late_lock_leaves_an_already_protected_stop_alone(monkeypatch):
+    # Stop already at/beyond the lock level and price still beyond it: nothing
+    # to do -- no modify, no close.
     pos = _pos_with_lock_exited_leg()
-    live = _live_leg(pos, sl=4212.50)
-    # bid up only 0.10: fallback would improve by < LATE_LOCK_MIN_STEP.
-    mt5 = _FakeMt5(bid=4213.10, ask=4213.40, positions=[live])
-
+    live = _live_leg(pos, sl=pos.signal.tp1)
+    mt5 = _FakeMt5(bid=4217.00, ask=4217.30, positions=[live])
     _manage(monkeypatch, mt5, pos)
-    assert [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_SLTP] == []
-
-    # And a stop already at/beyond the level is left alone entirely.
-    live2 = _live_leg(pos, sl=pos.signal.tp1)
-    mt5b = _FakeMt5(bid=4217.00, ask=4217.30, positions=[live2])
-    _manage(monkeypatch, mt5b, pos)
-    assert mt5b.requests == []
+    assert mt5.requests == []
 
 
 def test_late_lock_closes_at_market_only_when_modify_fails(monkeypatch):

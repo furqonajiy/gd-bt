@@ -275,9 +275,16 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
   carries the same tagged magic + `[TAG-]MMDD#DD.N` comment `place_signal` used.
   Fresh
   placement is history-gated: a magic with closed deals is never re-placed,
-  so a finished signal can't trade twice. The late TP1/TP2 catch-up protects
-  legs with a stop at the lock level (ratcheted toward it on recovery) and
-  closes at market only as a last resort.
+  so a finished signal can't trade twice. The late TP1/TP2 catch-up (a leg the
+  replay already lock-exited but live still holds open) protects the leg: if price
+  is still beyond the lock the stop moves to the lock level (parity); if price has
+  retraced **back through the lock but the leg is still in profit** it is **closed
+  at market now** rather than parked on a below-lock stop that can run to a loss
+  (the 2026-06-18 0618#04 give-back — a locked winner that gave back to a loss);
+  if it is **underwater** the closest legal protective stop is parked and ratcheted
+  toward the level on recovery (never market-dumped — the 2026-06-12 lesson that
+  flattening losers cost $468); market close is the last resort only when no legal
+  stop exists.
 
 ## Invariants to respect
 

@@ -839,10 +839,14 @@ class Mt5Executor(_BaseMt5Executor):
         * price still on the profitable side of the level -> SL moves to the
           exact level; the broker then exits at model parity (or the leg keeps
           running and beats the model — accepted, profit is never given up);
-        * price already back through the level -> SL locks at the closest legal
-          level (`LATE_LOCK_FALLBACK_BUFFER` off the live bid/ask) and later
-          cycles ratchet it toward the true level as price recovers, in steps of
-          at least `LATE_LOCK_MIN_STEP`, never backwards (`_lock_improves`);
+        * price retraced to/through the level but the leg is STILL in profit ->
+          close at market NOW (a below-lock stop is the one that ran away in the
+          0618#04 give-back; taking the profit is certain and can't become a loss);
+        * price already through the level AND underwater -> SL locks at the
+          closest legal level (`LATE_LOCK_FALLBACK_BUFFER` off the live bid/ask)
+          and later cycles ratchet it toward the true level as price recovers, in
+          steps of at least `LATE_LOCK_MIN_STEP`, never backwards (`_lock_improves`);
+          never market-dumped (the 2026-06-12 lesson that flattening losers cost $468);
         * no legal protective stop exists, or the modify is rejected -> close at
           market (the old catch-up behavior), because an unprotected leg riding
           to its original SL is the one outcome that must never happen.
@@ -863,6 +867,32 @@ class Mt5Executor(_BaseMt5Executor):
             desired = min(target, float(tick.bid) - LATE_LOCK_FALLBACK_BUFFER)
         else:
             desired = max(target, float(tick.ask) + LATE_LOCK_FALLBACK_BUFFER)
+
+        # If price has retraced to/through the lock level (the protective stop
+        # would have to sit BELOW it) but the leg is STILL in profit, take that
+        # profit at market now instead of parking a below-lock stop. A below-lock
+        # stop is the one that ran away in the 0618#04 give-back -- a +$8 lock the
+        # leg gave back to -$15 before any stop caught it. Closing while in profit
+        # can never crystallize a loss, so the 2026-06-12 "don't market-dump
+        # losers" rule still holds: an underwater leg (or one still beyond the
+        # lock, which keeps full parity) falls through to the stop logic below.
+        entry_px = float(getattr(p, "price_open", 0.0) or 0.0)
+        exit_px = float(tick.bid) if side == "BUY" else float(tick.ask)
+        through_lock = (desired < target - tolerance if side == "BUY"
+                        else desired > target + tolerance)
+        gain = (exit_px - entry_px) if side == "BUY" else (entry_px - exit_px)
+        if through_lock and entry_px > 0 and gain > tolerance:
+            log.actions.append(
+                f"  Late {label} on #{p.ticket}: price retraced to the lock but the "
+                f"leg is still +{gain:g} pt vs entry {entry_px:g}; closing at market "
+                f"{exit_px:g} now rather than parking a below-lock stop ({signal_key})"
+            )
+            self._close_position(
+                p, magic, signal_key, f"late-{label.lower()}",
+                f"Late {label} profit-protect", log, closed, failed,
+            )
+            return
+
         legal = clamp_sltp_sl(self, p, desired)
         if legal is None:
             log.actions.append(
