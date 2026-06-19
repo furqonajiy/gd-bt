@@ -158,10 +158,13 @@ python tools/backtest_explicit.py `
 
 # ===== 6. LIVE AUTO EXECUTOR =====
 # Reads the live feed (section 2), places + manages real orders. Runs beside the
-# generator loop. --replace-missing-entries false: self feeds are two-sided.
-# --reopen-missing-positions true: MT5 mirrors the replay. Strategy params are
-# byte-identical to sections 4/5. --initial-capital 50000 is just the DD base
-# (live sizes off REAL equity).
+# generator loop. --reopen-missing-positions true: MT5 mirrors the replay.
+# Strategy params are byte-identical to sections 4/5.
+# Flags omitted because they do NOT affect live execution (auto_explicit defaults
+# them): --initial-capital (live sizes off REAL MT5 equity), --bonus-per-closed-lot
+# (backtest scoring only), --tp3-lock-target (only TP2). Also dropped the flags
+# already at their default: --replace-missing-entries false (self feeds are
+# two-sided), --shared-sl false, --trailing-close-after-stage 0.
 python tools/auto_explicit.py `
   --signals generated/sqz6_live.txt `
   --positions-json positions_sqz6.json `
@@ -170,18 +173,15 @@ python tools/auto_explicit.py `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
   --mt5-history-bars 5000 `
-  --replace-missing-entries false `
   --reopen-missing-positions true `
   --sizing-mode risk `
   --lot 0.01 `
   --risk 0.01 `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
-  --bonus-per-closed-lot 3.0 `
   --entries 8 `
   --entry-ladder range_to_sl `
   --entry-sl-gap 0.5 `
-  --shared-sl false `
   --activation-delay 2 `
   --pending-expiry 180 `
   --max-hold 240 `
@@ -196,8 +196,5 @@ python tools/auto_explicit.py `
   --tp1-lock-fraction 0.5 `
   --tp2-lock-target TP1 `
   --runner-after-tp3 false `
-  --tp3-lock-target TP2 `
   --trailing-open-distance 0.0 `
-  --trailing-close-distance 0.0 `
-  --trailing-close-after-stage 0 `
-  --initial-capital 50000
+  --trailing-close-distance 0.0
