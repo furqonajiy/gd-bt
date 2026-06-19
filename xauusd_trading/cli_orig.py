@@ -1742,6 +1742,18 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Directory holding CHAMPION_<regime>.json for --adaptive.")
     pa.add_argument("--adaptive-window-days", type=int, default=20,
                     help="Trailing window (days) of M1 used to classify the regime in --adaptive.")
+    pa.add_argument("--regime-thresholds-json", default=None,
+                    help="Optional JSON with regime router thresholds. Also accepts the regime "
+                         "calibration report JSON when --regime-use-learned-boundaries is set.")
+    pa.add_argument("--regime-use-learned-boundaries", action="store_true",
+                    help="When --regime-thresholds-json is a calibration report, use its learned "
+                         "R2/R3 and R3/R4 ATR boundaries for routing.")
+    pa.add_argument("--regime-vol-tier-low-max", type=float, default=None,
+                    help="Override the low/mid ATR boundary for regime routing.")
+    pa.add_argument("--regime-vol-tier-mid-max", type=float, default=None,
+                    help="Override the mid/high ATR boundary for regime routing.")
+    pa.add_argument("--regime-bull-trend-min", type=float, default=None,
+                    help="Override the low-vol trend threshold for R1 vs R2.")
     _add_strategy_overrides(pa)
     _add_mt5_flags(pa)
     _add_notification_flags(pa)

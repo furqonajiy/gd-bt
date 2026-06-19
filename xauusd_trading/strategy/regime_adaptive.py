@@ -18,7 +18,13 @@ from pathlib import Path
 import pandas as pd
 
 from xauusd_trading.core.config import StrategyConfig
-from xauusd_trading.strategy.regime import detect_regime, m15_atr, read_current_regime, trend_score
+from xauusd_trading.strategy.regime import (
+    RegimeThresholds,
+    detect_regime,
+    m15_atr,
+    read_current_regime,
+    trend_score,
+)
 
 
 def champion_config(regime: str, champions_dir: str | Path | None,
@@ -46,7 +52,8 @@ def champion_config(regime: str, champions_dir: str | Path | None,
 
 def make_regime_config_resolver(chart_df: pd.DataFrame, *, champions_dir,
                                 base_config: StrategyConfig,
-                                window_days: int = 20):
+                                window_days: int = 20,
+                                thresholds: RegimeThresholds | None = None):
     """Build ``resolver(signal) -> StrategyConfig`` for ``run_backtest``'s
     ``config_resolver``. For each signal it classifies the regime from the
     ``window_days`` of M1 ending at the signal's chart time (no lookahead) and
@@ -68,9 +75,12 @@ def make_regime_config_resolver(chart_df: pd.DataFrame, *, champions_dir,
             return cached
         window = idx[(idx.index <= ts) & (idx.index > ts - win)]
         if len(window) < 60:
-            regime = read_current_regime(idx[idx.index <= ts]).regime if len(idx[idx.index <= ts]) else "R4parab"
+            regime = (
+                read_current_regime(idx[idx.index <= ts], thresholds=thresholds).regime
+                if len(idx[idx.index <= ts]) else "R4parab"
+            )
         else:
-            regime = detect_regime(m15_atr(window), trend_score(window))
+            regime = detect_regime(m15_atr(window), trend_score(window), thresholds=thresholds)
         regime_by_day[day] = regime
         return regime
 

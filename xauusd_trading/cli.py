@@ -291,6 +291,33 @@ def _adaptive_enabled(args: argparse.Namespace) -> bool:
     return v is True or str(v).lower() == "true"
 
 
+def _boolish(value) -> bool:
+    return value is True or str(value).lower() == "true"
+
+
+def _regime_thresholds_from_args(args: argparse.Namespace):
+    """Optional custom regime thresholds; None means keep built-in defaults."""
+    from xauusd_trading import RegimeThresholds, regime_thresholds_from_json_file
+
+    path = getattr(args, "regime_thresholds_json", None)
+    use_learned = _boolish(getattr(args, "regime_use_learned_boundaries", False))
+    thresholds = (
+        regime_thresholds_from_json_file(path, use_learned_boundaries=use_learned)
+        if path else None
+    )
+    low = getattr(args, "regime_vol_tier_low_max", None)
+    mid = getattr(args, "regime_vol_tier_mid_max", None)
+    bull = getattr(args, "regime_bull_trend_min", None)
+    if thresholds is None and low is None and mid is None and bull is None:
+        return None
+    base = thresholds or RegimeThresholds()
+    return RegimeThresholds(
+        vol_tier_low_max=base.vol_tier_low_max if low is None else float(low),
+        vol_tier_mid_max=base.vol_tier_mid_max if mid is None else float(mid),
+        bull_trend_min=base.bull_trend_min if bull is None else float(bull),
+    )
+
+
 def _maybe_adaptive_config(args: argparse.Namespace, base_config: StrategyConfig,
                            chart, console_state: dict) -> StrategyConfig:
     """In --adaptive mode, classify the current volatility regime from recent
@@ -306,7 +333,11 @@ def _maybe_adaptive_config(args: argparse.Namespace, base_config: StrategyConfig
     try:
         m1 = chart.dataframe[["time", "open", "high", "low", "close"]].set_index("time")
         window = int(getattr(args, "adaptive_window_days", 20) or 20)
-        reading = read_current_regime(m1[m1.index >= m1.index.max() - pd.Timedelta(days=window)])
+        thresholds = _regime_thresholds_from_args(args)
+        reading = read_current_regime(
+            m1[m1.index >= m1.index.max() - pd.Timedelta(days=window)],
+            thresholds=thresholds,
+        )
     except Exception as e:  # pragma: no cover - defensive, live data shape varies
         if console_state.get("__regime__") != "ERR":
             print(f"[adaptive] regime detection failed ({e}); using incumbent config.")
@@ -321,8 +352,15 @@ def _maybe_adaptive_config(args: argparse.Namespace, base_config: StrategyConfig
 
     note = f"{regime}|{source}"
     if console_state.get("__regime__") != note:
+        threshold_note = ""
+        if thresholds is not None:
+            threshold_note = (
+                f", thresholds low<{thresholds.vol_tier_low_max:.2f} "
+                f"mid<{thresholds.vol_tier_mid_max:.2f} "
+                f"bull>={thresholds.bull_trend_min:.3f}"
+            )
         print(f"[adaptive] regime={regime} (M15 ATR ${reading.m15_atr:.2f}, "
-              f"trend {reading.trend:+.3f}) -> {source}")
+              f"trend {reading.trend:+.3f}{threshold_note}) -> {source}")
         console_state["__regime__"] = note
     return config
 

@@ -20,6 +20,7 @@ import argparse
 import glob
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -28,7 +29,12 @@ import pandas as pd
 # as well as `python -m tools.regime_auto`.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tools.regime_router import read_current_regime, DEFAULT_LIVE_REGIME
+from tools.regime_router import (
+    DEFAULT_LIVE_REGIME,
+    RegimeThresholds,
+    read_current_regime,
+    regime_thresholds_from_json_file,
+)
 from tools.champions_report import render_champion_cli
 
 
@@ -48,6 +54,39 @@ def _load_recent_m1(charts_glob: str, window_days: int) -> pd.DataFrame:
     return m1[m1.index >= cutoff]
 
 
+def _thresholds_from_args(args: argparse.Namespace) -> RegimeThresholds | None:
+    thresholds = (
+        regime_thresholds_from_json_file(
+            args.regime_thresholds_json,
+            use_learned_boundaries=args.regime_use_learned_boundaries,
+        )
+        if args.regime_thresholds_json else None
+    )
+    if (
+        thresholds is None
+        and args.regime_vol_tier_low_max is None
+        and args.regime_vol_tier_mid_max is None
+        and args.regime_bull_trend_min is None
+    ):
+        return None
+    base = thresholds or RegimeThresholds()
+    return replace(
+        base,
+        vol_tier_low_max=(
+            base.vol_tier_low_max if args.regime_vol_tier_low_max is None
+            else args.regime_vol_tier_low_max
+        ),
+        vol_tier_mid_max=(
+            base.vol_tier_mid_max if args.regime_vol_tier_mid_max is None
+            else args.regime_vol_tier_mid_max
+        ),
+        bull_trend_min=(
+            base.bull_trend_min if args.regime_bull_trend_min is None
+            else args.regime_bull_trend_min
+        ),
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--charts", default="data/XAUUSD_M1_*_ELEV8.csv",
@@ -56,13 +95,29 @@ def main() -> None:
                     help="where CHAMPION_<regime>.json live.")
     ap.add_argument("--window-days", type=int, default=20,
                     help="trailing window (days) used to read current regime.")
+    ap.add_argument("--regime-thresholds-json", default=None,
+                    help="Optional JSON with router thresholds. Also accepts the "
+                         "regime calibration report JSON with --regime-use-learned-boundaries.")
+    ap.add_argument("--regime-use-learned-boundaries", action="store_true",
+                    help="Use learned R2/R3 and R3/R4 ATR boundaries from a calibration report JSON.")
+    ap.add_argument("--regime-vol-tier-low-max", type=float, default=None,
+                    help="Override the low/mid ATR boundary.")
+    ap.add_argument("--regime-vol-tier-mid-max", type=float, default=None,
+                    help="Override the mid/high ATR boundary.")
+    ap.add_argument("--regime-bull-trend-min", type=float, default=None,
+                    help="Override the low-vol trend threshold for R1 vs R2.")
     args = ap.parse_args()
 
     m1 = _load_recent_m1(args.charts, args.window_days)
-    r = read_current_regime(m1)
+    thresholds = _thresholds_from_args(args)
+    r = read_current_regime(m1, thresholds=thresholds)
     print(f"# detected regime: {r.regime}   "
           f"(M15 ATR ${r.m15_atr:.2f}, trend {r.trend:+.3f}, "
           f"window={args.window_days}d ending {m1.index.max():%Y-%m-%d})")
+    if thresholds is not None:
+        print(f"# thresholds: low<{thresholds.vol_tier_low_max:.2f} "
+              f"mid<{thresholds.vol_tier_mid_max:.2f} "
+              f"bull>={thresholds.bull_trend_min:.3f}")
 
     champ_path = Path(args.champions_dir) / f"CHAMPION_{r.regime}.json"
     if not champ_path.exists():
