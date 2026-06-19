@@ -63,6 +63,11 @@ REGIME_START: dict[str, str] = {
     "R3strong": "2025-01-01",
     "R4parab": "2026-01-01",
 }
+FEED_SIGNAL_OVERRIDES: dict[str, str] = {
+    "scalper24": "generated/self_scalper24.txt",
+    "scalperwide24": "generated/self_scalper_widerr24.txt",
+    "risk02allhours": "generated/self_risk02_allhours.txt",
+}
 
 
 def feed_signals(feed: str) -> str:
@@ -77,6 +82,8 @@ def feed_signals(feed: str) -> str:
         return feed
     if "/" in feed or feed.endswith(".txt"):
         return feed
+    if feed in FEED_SIGNAL_OVERRIDES:
+        return FEED_SIGNAL_OVERRIDES[feed]
     return f"generated/adaptive_{feed}.txt"
 
 
@@ -220,17 +227,45 @@ def render_champion_cli(cfg: dict, *, regime: str, feed: str) -> str:
 # --------------------------------------------------------------------------
 # Full deployment CLI for a published champion (GENERATE/BACKTEST/LIVE deployment format).
 # --------------------------------------------------------------------------
+def _all_hours() -> str:
+    return ",".join(str(hour) for hour in range(24))
+
+
 def _generate_command(feed: str) -> str:
     """Render the GENERATE-section command that refreshes ``feed``'s archive.
 
     Maps a champion feed to the generator that produces its committed archive
-    feed file. ``breakout``/``meanrev`` have dedicated generators; everything
-    else (the ``ad*`` matrix feeds) comes from the adaptive-self generator. A
-    one-line pointer is enough -- the exact ATR-multiplier args live in the
-    generator's defaults / the archive itself.
+    feed file. The high-frequency scalper archives have dedicated commands;
+    ``breakout``/``meanrev`` have dedicated generators; everything else (the
+    ``ad*`` matrix feeds) comes from the adaptive-self generator.
     """
-    out = feed_signals(feed)  # generated/adaptive_<feed>.txt
+    out = feed_signals(feed)
     cont = " `\n  "
+    if feed in {"scalper24", "scalperwide24"}:
+        args = [
+            "--charts data/XAUUSD_M1_*_ELEV8.csv",
+            f"--output {out}",
+            "--start 2021-11-01",
+            "--session-start 0",
+            "--session-end 0",
+            "--signal-tz 7",
+        ]
+        if feed == "scalperwide24":
+            args.extend(["--rr1 1.5", "--rr2 2.5", "--rr3 4.0"])
+        return (
+            "# High-frequency scalper signals over ALL chart history.\n"
+            "python tools/generate_scalper_signals.py" + cont
+            + cont.join(args) + "\n")
+    if feed == "risk02allhours":
+        return (
+            "# High-frequency aggressive LIMIT signals over ALL chart history.\n"
+            "python tools/generate_aggressive_limit_risk02.py" + cont
+            + cont.join([
+                "--charts data/XAUUSD_M1_*_ELEV8.csv",
+                f"--output {out}",
+                "--start-date 2021-11-01",
+                f"--execution-hours {_all_hours()}",
+            ]) + "\n")
     if feed == "breakout":
         return (
             "# ATR-adaptive breakout signals over ALL chart history (SL/TP scale\n"
