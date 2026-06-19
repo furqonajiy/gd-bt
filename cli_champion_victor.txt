@@ -22,8 +22,8 @@
 #   - risk 2.5% keeps DD within the <=40% gate (~36.8% equity-curve DD on 2026),
 #     compounded $50k -> ~$417k -- the DD-compliant MAX (set 2026-06-17).
 #   - risk 3%+ breaches the gate (43.8% DD at 3%); risk 5% was ~57-63% DD ->
-#     dropped. Scale risk to your real funded equity; live sizes off real equity,
-#     --initial-capital is just the DD base.
+#     dropped. Scale risk to your real funded equity; live sizes off real equity
+#     (--initial-capital is a backtest/DD base only and is omitted from section 6).
 #   - Victor only began posting in ~2024, so section 5 ("from 2021-01") just emits
 #     from his first signal; for current behaviour use section 4 (from 2026-01).
 #   The other deployed feed is cli_champion_R4_SQZ6_no_trailing (SQZ6). Run THIS
@@ -145,6 +145,12 @@ python tools/backtest_explicit.py `
 # ===== 6. LIVE AUTO EXECUTOR =====
 # Reads the filtered feed (section 2), places + manages real orders on MT5.
 # Strategy parameters are byte-identical to the parity backtests (sections 4/5).
+# Flags omitted because they do NOT affect live execution (auto_explicit defaults
+# them): --initial-capital (live sizes off REAL MT5 equity), --bonus-per-closed-lot
+# (backtest scoring only), --tp3-lock-target (only TP2). Also dropped the flag
+# already at its default: --trailing-close-after-stage 0. KEPT because they are
+# NON-default and Victor needs them: --replace-missing-entries / --reopen-missing-
+# positions / --apply-signal-edits / --signal-overrides-file.
 python tools/auto_explicit.py `
   --signals generated/victor_live.txt `
   --positions-json positions_victor.json `
@@ -158,7 +164,6 @@ python tools/auto_explicit.py `
   --risk 0.025 `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
-  --bonus-per-closed-lot 3 `
   --entries 8 `
   --entry-ladder range_to_sl `
   --entry-sl-gap 0.5 `
@@ -176,12 +181,9 @@ python tools/auto_explicit.py `
   --tp1-lock-fraction 0.5 `
   --tp2-lock-target TP1 `
   --runner-after-tp3 false `
-  --tp3-lock-target TP2 `
   --trailing-open-distance 0 `
   --trailing-close-distance 0 `
-  --trailing-close-after-stage 0 `
   --replace-missing-entries true `
   --reopen-missing-positions true `
   --apply-signal-edits true `
-  --signal-overrides-file signal_overrides.jsonl `
-  --initial-capital 50000
+  --signal-overrides-file signal_overrides.jsonl

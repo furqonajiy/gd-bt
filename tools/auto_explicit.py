@@ -5,8 +5,12 @@ Use this instead of ``python -m xauusd_trading.cli auto`` when running live.
 The goal is safety: live execution must not silently depend on StrategyConfig
 or parser defaults that may change during research.
 
-Every strategy-critical field is required by argparse. Optional MT5 credentials,
-notifications and forensic logging remain optional operational flags.
+Every strategy-critical field that changes live order behavior is required by
+argparse. Fields that do NOT affect live execution are optional: --initial-capital
+and --bonus-per-closed-lot (live sizes off real MT5 equity and pays no bonus --
+these only feed the startup banner / backtest reports) and --tp3-lock-target
+(only TP2 is supported). MT5 credentials, notifications and forensic logging are
+optional operational flags.
 """
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from xauusd_trading import StrategyConfig, parse_signals_file  # noqa: E402
+from xauusd_trading import DEFAULT_CONFIG, StrategyConfig, parse_signals_file  # noqa: E402
 from xauusd_trading.cli import ARCHIVE_DIR, ARCHIVE_MONTHS, _run_auto_watch  # noqa: E402
 
 
@@ -91,14 +95,23 @@ def build_parser() -> argparse.ArgumentParser:
     mt5.add_argument("--mt5-password", default=None)
     mt5.add_argument("--mt5-server", default=None)
 
+    # Not live-execution parameters: live sizes off the real MT5 equity and pays
+    # no bonus, so these only feed the startup banner / backtest reports. They are
+    # OPTIONAL here (backtest_explicit.py still requires them) -- pass them only if
+    # you want the banner to show a specific DD base.
+    noexec = p.add_argument_group("not used for live execution (optional)")
+    noexec.add_argument("--initial-capital", type=_positive_float,
+                        default=DEFAULT_CONFIG.initial_capital,
+                        help="DD/report base only; NOT used for live sizing (live uses MT5 equity).")
+    noexec.add_argument("--bonus-per-closed-lot", type=_positive_float, default=0.0,
+                        help="Backtest scoring only ($/closed lot); no effect on live orders.")
+
     strategy = p.add_argument_group("required strategy contract")
-    strategy.add_argument("--initial-capital", type=_positive_float, required=True)
     strategy.add_argument("--sizing-mode", choices=["fixed", "risk"], required=True)
     strategy.add_argument("--lot", type=_positive_float, required=True)
     strategy.add_argument("--risk", type=_positive_float, required=True)
     strategy.add_argument("--minimum-lot", type=_positive_float, required=True)
     strategy.add_argument("--lot-step", type=_positive_float, required=True)
-    strategy.add_argument("--bonus-per-closed-lot", type=_positive_float, required=True)
     strategy.add_argument("--entries", type=int, required=True)
     strategy.add_argument("--entry-ladder", choices=["signal_range_3", "range_uniform", "range_to_sl"], required=True)
     strategy.add_argument("--entry-sl-gap", type=_positive_float, required=True)
@@ -116,7 +129,9 @@ def build_parser() -> argparse.ArgumentParser:
     strategy.add_argument("--tp1-lock-fraction", type=float, required=True)
     strategy.add_argument("--tp2-lock-target", choices=["TP1", "TP2"], required=True)
     strategy.add_argument("--runner-after-tp3", choices=["true", "false"], required=True)
-    strategy.add_argument("--tp3-lock-target", choices=["TP2"], required=True)
+    strategy.add_argument("--tp3-lock-target", choices=["TP2"], default="TP2",
+                          help="Where a TP3-locked leg parks its stop; only TP2 is "
+                               "supported, so this is fixed and optional.")
     strategy.add_argument("--trailing-open-distance", type=_positive_float, required=True,
                           help="Virtual trailing-open entry distance in price units; 0 disables.")
     strategy.add_argument("--trailing-close-distance", type=_positive_float, required=True,
