@@ -356,7 +356,14 @@ over the net+bonus #1** (slm1.9 in R2) — that led only on the inflated headlin
 while losing on edge and OOS. For **R4parab**, SC24T24E8 later breached the
 DD ≤ 40% gate (58.3%) on current 2026 data and was superseded — first by the e5
 RSI champion, now by **`rsi75_sqz6_rr40`**, the edge+OOS leader of the 34-variant
-RSI × Bollinger × R:R sweep (edge $63,940 / OOS $11,633 / DD 38.4%). Keep **one
+RSI × Bollinger × R:R sweep (edge $63,940 / OOS $11,633 / DD 38.4%). The scalper24
+generator also filters on **Support/Resistance** (`--sr-proximity-atr` +
+`--sr-round-step`) and **Supply/Demand** (`--sd-mode rbr_dbd` — Rally-Base-Rally /
+Drop-Base-Drop zones: a tight base broken by an impulse marks a demand/supply band,
+confirmed `--sd-impulse-bars` later so no lookahead; BUY only on a return into a
+demand band, SELL into supply); the **full 2⁵ cross-product** of R:R × Bollinger ×
+RSI × S/R × S&D for R4 runs from `.github/workflows/self-scalper-rr-bb-rsi-sr-sd-sweep.yml`
+(prefix `selfsdr`), whose `rsi_sqz6_rr40` cell reproduces the champion. Keep **one
 writer per sweep branch**; and run sweeps on a
 `research/...` branch, never on `main`.
 

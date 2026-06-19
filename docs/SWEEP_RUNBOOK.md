@@ -199,6 +199,32 @@ python tools/sweep_self_limit.py \
 ```
 - `_sweep_self.py` = the wrapper that injects seeds (use it, or replicate the
   seed injection if calling `sweep_self_limit.py` directly).
+
+### Feed‑filter combination sweeps (R4)
+
+The scalper24 generator (`tools/generate_scalper_signals.py`) can pre‑filter the
+feed on five orthogonal dimensions; the workflows cross them and keep a variant
+only if it beats the unfiltered **`base`** feed on **BOTH edge AND OOS at DD ≤ 40%**
+(shared aggregator `.github/scripts/agg_entry_feature.sh`):
+
+- **R:R** — `--rr1/--rr2/--rr3` (TP geometry).
+- **Bollinger** — `--bb-bandwidth-min` (squeeze) / `--bb-buy-pctb-max` /
+  `--bb-sell-pctb-min` (%B overextension).
+- **RSI** — `--rsi-buy-max` / `--rsi-sell-min`.
+- **Support/Resistance** — `--sr-proximity-atr` (+ `--sr-round-step`): enter only
+  within X·ATR of prior‑day H/L or a round‑number level.
+- **Supply/Demand** — `--sd-mode rbr_dbd`: Rally‑Base‑Rally / Drop‑Base‑Drop. A
+  tight `--sd-base-bars` consolidation (range ≤ `--sd-base-max-atr`·ATR) broken by
+  an impulse ≥ `--sd-impulse-min-atr`·ATR (confirmed `--sd-impulse-bars` later, so
+  **no lookahead**) marks a demand (up) / supply (down) zone; BUY only on a return
+  within `--sd-proximity-atr`·ATR of a demand band, SELL into a supply band. Zones
+  expire after `--sd-max-age-bars`.
+
+`self-scalper-rsi-bb-rr-sweep.yml` crossed the first three (→ champion
+`rsi75_sqz6_rr40`). `self-scalper-rr-bb-rsi-sr-sd-sweep.yml` is the **full 2⁵
+cross‑product** of all five (R4 only, prefix `selfsdr`) — its `rsi_sqz6_rr40` cell
+reproduces the current champion, and the `…_sr` / `…_sd` cells test whether adding
+S/R or S&D beats it.
 - Incumbent: run the live "current CLI" (scalper24 `e6 slm2.1 d24`, 1% risk)
   once via `tools/backtest_explicit.py` over the same charts/regime window →
   record compounded net + bonus, OOS, and DD as the "beat this" target.
