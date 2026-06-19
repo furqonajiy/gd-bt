@@ -113,6 +113,11 @@ class Mt5Executor(_BaseMt5Executor):
     # is observed when reconcile flips a PENDING/NO_FILL slot to OPEN, and a
     # flapping replay could revisit PENDING, so the set guards against re-firing.
     _session_announced_triggers: set[str] = set()
+    # Legs opened at MARKET at first placement because price had already moved
+    # FAVOURABLY past the entry (reopen/mirror mode). Logged once per leg so a
+    # retry cycle (e.g. a transient broker reject on a sibling leg) does not
+    # re-announce a fill that already happened.
+    _session_market_opened_entries: set[str] = set()
 
     def _broker_epoch_to_chart_time(self, epoch: int) -> datetime:
         """MT5 broker-time-as-UTC-epoch -> chart-time naive datetime."""
@@ -220,24 +225,73 @@ class Mt5Executor(_BaseMt5Executor):
         # and replace_missing_pending_entries re-places it as a LIMIT if it drifts
         # back outside the band while the replay still holds it PENDING.
         min_dist = min_stop_distance_for(self)
+        # Each leg is one of three states relative to the live market:
+        #   * fresh    -> a normal pending LIMIT can rest beyond the market.
+        #   * passed   -> price has already moved FAVOURABLY past the entry
+        #                 (BUY: ask <= entry, cheaper; SELL: bid >= entry, higher).
+        #                 In reopen/mirror mode we open it at MARKET *now* at the
+        #                 better basis instead of deferring to the next-cycle reopen
+        #                 pass -- the operator rule "if price passed the entry the
+        #                 right way, take it at market, don't wait for a LIMIT that
+        #                 can never rest there". Gated on the replay still holding
+        #                 the leg (OPEN/PENDING, never already-closed) so we never
+        #                 resurrect a leg the backtest already exited.
+        #   * in-band  -> within the broker stops/freeze distance but NOT yet
+        #                 reached: a LIMIT there 10015s, and a market fill would sit
+        #                 on the WRONG side of the entry, so it stays deferred for
+        #                 the replay-driven passes.
         stale_entries = []
         fresh_orders = []
+        market_orders = []
         for order in plan.orders:
             key = signal_entry_key(signal.signal_key, order.entry_index)
             price = float(order.entry_price)
-            stale_reason = None
             if signal.side == "BUY":
-                if price >= ask:
-                    stale_reason = f"stale BUY LIMIT {price:g} >= live ask {ask:g}"
-                elif price > ask - min_dist:
-                    stale_reason = (f"unplaceable BUY LIMIT {price:g} within broker "
-                                    f"stop/freeze level of ask {ask:g} (min {min_dist:g})")
+                passed = price >= ask
+                in_band = (not passed) and price > ask - min_dist
             else:
-                if price <= bid:
-                    stale_reason = f"stale SELL LIMIT {price:g} <= live bid {bid:g}"
-                elif price < bid + min_dist:
-                    stale_reason = (f"unplaceable SELL LIMIT {price:g} within broker "
-                                    f"stop/freeze level of bid {bid:g} (min {min_dist:g})")
+                passed = price <= bid
+                in_band = (not passed) and price < bid + min_dist
+
+            replay_terminal = False
+            if replay_pos is not None:
+                re_entry = next(
+                    (e for e in replay_pos.entries if e.entry_index == order.entry_index),
+                    None,
+                )
+                replay_terminal = (re_entry is not None
+                                   and re_entry.status in _REPLAY_CLOSED_STATUSES)
+
+            # Same-cycle market open only in reopen/mirror mode, and only when the
+            # replay is present and still holds the leg (not terminal). Without a
+            # replay (old direct-construction callers / backtests) keep the legacy
+            # defer so placement parity is byte-identical.
+            if (passed and allow_partial and replay_pos is not None
+                    and not replay_terminal):
+                market_orders.append(order)
+                if key not in self._session_market_opened_entries:
+                    edge = (f"ask {ask:g} <= entry" if signal.side == "BUY"
+                            else f"bid {bid:g} >= entry")
+                    log.actions.append(
+                        f"  {key}: {signal.side} entry {price:g} price-passed "
+                        f"favourably ({edge}); opening at market"
+                    )
+                    self._session_market_opened_entries.add(key)
+                continue
+
+            if passed:
+                stale_reason = (f"stale BUY LIMIT {price:g} >= live ask {ask:g}"
+                                if signal.side == "BUY"
+                                else f"stale SELL LIMIT {price:g} <= live bid {bid:g}")
+            elif in_band:
+                stale_reason = (
+                    f"unplaceable BUY LIMIT {price:g} within broker "
+                    f"stop/freeze level of ask {ask:g} (min {min_dist:g})"
+                    if signal.side == "BUY"
+                    else f"unplaceable SELL LIMIT {price:g} within broker "
+                    f"stop/freeze level of bid {bid:g} (min {min_dist:g})")
+            else:
+                stale_reason = None
 
             if stale_reason is not None:
                 stale_entries.append(key)
@@ -255,17 +309,18 @@ class Mt5Executor(_BaseMt5Executor):
             )
             return log
 
-        # In reopen/mirror mode, a price-passed (stale) leg is an OPEN leg the
-        # replay holds: place only the fresh LIMITs here; reopen_missing_open_positions
-        # restores the passed legs at market with the planned stop (better basis,
-        # never chased). The caller still tracks the signal on its replay-OPEN legs
-        # so re-open runs next cycle even when nothing is placeable as a LIMIT now.
+        # In reopen/mirror mode the fresh LIMITs place here; the favourably
+        # price-passed legs (market_orders) open at market below; only the
+        # in-band-not-reached legs (stale_entries) stay deferred for the
+        # replay-driven passes (reopen_missing_open_positions / replace_missing_
+        # pending_entries). The caller still tracks the signal on its replay-OPEN
+        # legs so the mirror runs next cycle even when nothing places now.
         orders_to_place = fresh_orders if allow_partial else plan.orders
-        if not orders_to_place:
+        if not orders_to_place and not market_orders:
             if allow_partial and stale_entries:
                 log.actions.append(
                     f"Signal {signal.signal_key}: no fresh LIMIT entries to place "
-                    f"now; {len(stale_entries)} price-passed leg(s) will be re-opened "
+                    f"now; {len(stale_entries)} in-band leg(s) will be mirrored "
                     f"by reopen-missing-positions."
                 )
             return log
@@ -311,6 +366,79 @@ class Mt5Executor(_BaseMt5Executor):
         place_failures: list[tuple[int, float, str]] = []
         placed_tickets: list[int] = []
         placed_details: list[dict] = []
+
+        # Same-cycle MARKET opens for the favourably price-passed legs. The fill
+        # is at the live bid/ask (a better basis than the modeled entry: BUY buys
+        # cheaper, SELL sells higher), with the leg's planned stop+target. This is
+        # best-effort: a leg that the broker rejects here is left for the
+        # next-cycle reopen pass (the replay still holds it OPEN), so a transient
+        # reject never aborts the placeable LIMIT legs or the signal's tracking.
+        market_details: list[dict] = []
+        market_failures: list[tuple[int, float, str]] = []
+        for o in market_orders:
+            lot = round_lot(o.lot, self.min_lot, self.lot_step)
+            if lot <= 0:
+                log.actions.append(
+                    f"  #{o.entry_index}: replay lot {o.lot:.4f} below broker "
+                    f"minimum {self.min_lot}; cannot open at market"
+                )
+                continue
+            entry_key = signal_entry_key(signal.signal_key, o.entry_index)
+            comment = mt5_entry_comment(signal.signal_key, o.entry_index)
+            raw_stop = float(o.initial_sl)
+            if signal.side == "BUY":
+                deal_type, deal_price = self.mt5.ORDER_TYPE_BUY, ask
+                sl = min(raw_stop, bid - LATE_LOCK_FALLBACK_BUFFER)
+            else:
+                deal_type, deal_price = self.mt5.ORDER_TYPE_SELL, bid
+                sl = max(raw_stop, ask + LATE_LOCK_FALLBACK_BUFFER)
+            request = {
+                "action":       self.mt5.TRADE_ACTION_DEAL,
+                "symbol":       self.symbol,
+                "volume":       lot,
+                "type":         deal_type,
+                "price":        deal_price,
+                "sl":           round(sl, digits),
+                "tp":           round(plan.final_target_price, digits),
+                "magic":        magic,
+                "comment":      comment,
+                "deviation":    self.CLOSE_DEVIATION_POINTS,
+                "type_filling": self._market_fill_mode(),
+            }
+            res = self.mt5.order_send(request)
+            success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+            self._log_order_send(signal.signal_key, "place_market_passed", request, res, success=success)
+            if success:
+                ticket = int(getattr(res, "order", 0) or 0)
+                log.placed += 1
+                log.placed_entry_indices.append(o.entry_index)
+                log.actions.append(
+                    f"  {entry_key}: opened at MARKET ticket={ticket} comment={comment} "
+                    f"@ {deal_price:g} lot={lot} SL={request['sl']:g} TP={request['tp']:g} "
+                    f"(price-passed favourably; better basis than the {o.entry_price:g} entry)"
+                )
+                market_details.append({
+                    "entry_index": o.entry_index, "ticket": ticket,
+                    "price": deal_price, "lot": lot,
+                    "sl": request["sl"], "tp": request["tp"],
+                })
+            else:
+                reason = str(res.comment if res is not None else self.mt5.last_error())
+                log.actions.append(
+                    f"  {entry_key}: FAILED market open ({reason}); the reopen pass "
+                    f"will retry next cycle while the replay holds it OPEN"
+                )
+                market_failures.append((o.entry_index, deal_price, reason))
+
+        if self.notifier is not None and market_details:
+            self.notifier.order_placed(
+                signal_key=signal.signal_key, side=signal.side,
+                order_kind=f"{signal.side} MARKET (passed entry)", placed=market_details,
+            )
+        if self.notifier is not None and market_failures:
+            self.notifier.place_failed(
+                signal_key=signal.signal_key, side=signal.side, failures=market_failures,
+            )
 
         for o in orders_to_place:
             lot = rounded_lots[o.entry_index]
@@ -390,12 +518,23 @@ class Mt5Executor(_BaseMt5Executor):
                             f"({signal.signal_key}); live footprint remains"
                         )
                 if not rollback_failed:
-                    log.placed = 0
-                    log.placed_entry_indices = []
-                    log.actions.append(
-                        f"Signal {signal.signal_key}: partial placement rolled back; "
-                        f"no registry entry should be recorded."
-                    )
+                    # Roll back ONLY the LIMIT contribution. Any same-cycle MARKET
+                    # legs already filled are real live positions that cannot be
+                    # cancelled like a pending -- keep them and keep the signal
+                    # tracked so they are managed (and the rest mirrored).
+                    log.placed = len(market_details)
+                    log.placed_entry_indices = [d["entry_index"] for d in market_details]
+                    if market_details:
+                        log.actions.append(
+                            f"Signal {signal.signal_key}: partial LIMIT placement "
+                            f"rolled back; {len(market_details)} market leg(s) kept "
+                            f"and tracked."
+                        )
+                    else:
+                        log.actions.append(
+                            f"Signal {signal.signal_key}: partial placement rolled back; "
+                            f"no registry entry should be recorded."
+                        )
             log.actions.append(
                 f"Signal {signal.signal_key}: placement failed; skipped further "
                 f"retries in this Auto run. Restart Auto to retry manually."
