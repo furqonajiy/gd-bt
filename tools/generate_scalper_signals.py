@@ -80,7 +80,7 @@ class _Heartbeat:
         if not self.enabled:
             return self
         self._start = time.time()
-        print(f"[{self.label}] started", file=sys.stderr, flush=True)
+        print(f"[{_stamp()}] [{self.label}] started", file=sys.stderr, flush=True)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         return self
@@ -92,13 +92,13 @@ class _Heartbeat:
         if self._thread is not None:
             self._thread.join(timeout=1.0)
         elapsed = time.time() - self._start
-        print(f"[{self.label}] finished after {_fmt_duration(elapsed)}", file=sys.stderr, flush=True)
+        print(f"[{_stamp()}] [{self.label}] finished after {_fmt_duration(elapsed)}", file=sys.stderr, flush=True)
         return False
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval_seconds):
             elapsed = time.time() - self._start
-            print(f"[{self.label}] still running... elapsed {_fmt_duration(elapsed)}", file=sys.stderr, flush=True)
+            print(f"[{_stamp()}] [{self.label}] still running... elapsed {_fmt_duration(elapsed)}", file=sys.stderr, flush=True)
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -110,6 +110,11 @@ def _fmt_duration(seconds: float) -> str:
     if m:
         return f"{m:d}m {s:02d}s"
     return f"{s:d}s"
+
+
+def _stamp() -> str:
+    """Local wall-clock stamp for log lines (matches the live feed loop)."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _expand_chart_paths(patterns: Iterable[str]) -> list[Path]:
@@ -335,7 +340,7 @@ def _print_scan_progress(i: int, total: int, start: float, signals: int, row_tim
     eta = (total - i) / rate if rate > 0 else None
     eta_text = _fmt_duration(eta) if eta is not None else "calculating"
     print(
-        f"[generate] {i:,}/{total:,} rows ({pct:5.1f}%) | "
+        f"[{_stamp()}] [generate] {i:,}/{total:,} rows ({pct:5.1f}%) | "
         f"signals={signals:,} | candle={row_time} | elapsed={_fmt_duration(elapsed)} | ETA={eta_text}",
         file=sys.stderr,
         flush=True,
@@ -441,7 +446,7 @@ def generate_signals(df: pd.DataFrame, args: argparse.Namespace) -> list[Generat
     next_time_print = start_clock + max(1.0, args.progress_interval_seconds)
 
     if progress_enabled:
-        print(f"[generate] scanning {total:,} candles...", file=sys.stderr, flush=True)
+        print(f"[{_stamp()}] [generate] scanning {total:,} candles...", file=sys.stderr, flush=True)
 
     for i, row in enumerate(df.itertuples(index=False), start=1):
         t = row.time.to_pydatetime() if hasattr(row.time, "to_pydatetime") else row.time
@@ -514,7 +519,7 @@ def generate_signals(df: pd.DataFrame, args: argparse.Namespace) -> list[Generat
     if progress_enabled:
         elapsed = time.time() - start_clock
         print(
-            f"[generate] completed scan: {total:,} rows, {len(signals):,} signals, elapsed {_fmt_duration(elapsed)}",
+            f"[{_stamp()}] [generate] completed scan: {total:,} rows, {len(signals):,} signals, elapsed {_fmt_duration(elapsed)}",
             file=sys.stderr,
             flush=True,
         )
@@ -656,11 +661,11 @@ def main(argv: list[str] | None = None) -> int:
 
     progress_enabled = args.progress_interval_seconds > 0
     chart_paths = _expand_chart_paths(args.charts)
-    print(f"Loading chart files: {len(chart_paths):,}", file=sys.stderr, flush=True)
+    print(f"[{_stamp()}] Loading chart files: {len(chart_paths):,}", file=sys.stderr, flush=True)
     with _Heartbeat("chart load", args.progress_interval_seconds, enabled=progress_enabled):
         chart = CsvChartSource(chart_paths)
     print(
-        f"Loaded chart rows: {len(chart.dataframe):,} | range: {chart.first_time()} -> {chart.last_time()}",
+        f"[{_stamp()}] Loaded chart rows: {len(chart.dataframe):,} | range: {chart.first_time()} -> {chart.last_time()}",
         file=sys.stderr,
         flush=True,
     )
@@ -668,10 +673,10 @@ def main(argv: list[str] | None = None) -> int:
     signals = generate_signals(chart.dataframe, args)
 
     output = Path(args.output)
-    print(f"Writing signals to {output}", file=sys.stderr, flush=True)
+    print(f"[{_stamp()}] Writing signals to {output}", file=sys.stderr, flush=True)
     _write_signal_file(signals, output, signal_tz=args.signal_tz)
     if args.diagnostics:
-        print(f"Writing diagnostics to {args.diagnostics}", file=sys.stderr, flush=True)
+        print(f"[{_stamp()}] Writing diagnostics to {args.diagnostics}", file=sys.stderr, flush=True)
         _write_diagnostics(signals, Path(args.diagnostics))
 
     parsed = parse_signals_file(output)
