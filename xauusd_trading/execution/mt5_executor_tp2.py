@@ -104,6 +104,11 @@ class Mt5Executor(_BaseMt5Executor):
     # the leg OPEN, so re-open would resurrect a just-closed leg (which then closes
     # again immediately -- the observed churn). Logged once per leg.
     _session_skipped_recently_closed: set[str] = set()
+    # Legs the replay still holds OPEN but that are missing from MT5 and can no
+    # longer be restored -- price moved past the entry and the pending window is
+    # closed (no-chase). The reopen pass re-evaluates them every cycle, so the
+    # "not chasing" line is logged once per leg here instead of every interval.
+    _session_skipped_no_chase: set[str] = set()
     # Each cycle re-replays the signal from scratch, so a live position whose
     # replay status is non-terminal (e.g. TRAILING_STOP, which is absent from
     # _REPLAY_CLOSED_STATUSES) gets re-patched to OPEN and would re-announce the
@@ -1130,11 +1135,14 @@ class Mt5Executor(_BaseMt5Executor):
                 }
             else:
                 if wall_clock_now > engine_pos.expiry_time:
-                    log.actions.append(
-                        f"  #{entry.entry_index}: price moved past entry "
-                        f"{entry_price:g} and the pending window is closed; "
-                        f"not chasing"
-                    )
+                    nc_key = signal_entry_key(signal_key, entry.entry_index)
+                    if nc_key not in self._session_skipped_no_chase:
+                        log.actions.append(
+                            f"  {nc_key}: replay still holds this leg OPEN but it is "
+                            f"missing from MT5, price moved past entry {entry_price:g}, "
+                            f"and the pending window is closed; not chasing (logged once)"
+                        )
+                        self._session_skipped_no_chase.add(nc_key)
                     continue
                 order_type = (self.mt5.ORDER_TYPE_BUY_LIMIT if side == "BUY"
                               else self.mt5.ORDER_TYPE_SELL_LIMIT)

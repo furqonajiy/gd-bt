@@ -148,6 +148,7 @@ def _reset_executor_guards():
     Mt5Executor._session_failed_signal_keys.clear()
     Mt5Executor._session_skipped_traded_signal_keys.clear()
     Mt5Executor._session_skipped_recently_closed.clear()
+    Mt5Executor._session_skipped_no_chase.clear()
 
 
 def _freeze_wall_clock(monkeypatch, when):
@@ -395,10 +396,18 @@ def test_reopen_unfavorable_past_window_does_not_chase(monkeypatch):
     pos = _pos_with_open_leg()
     _freeze_wall_clock(monkeypatch, pos.expiry_time + timedelta(minutes=1))
     mt5 = _FakeMt5(bid=4212.00, ask=4212.30)
+    ex = _executor(mt5)
 
-    log = _executor(mt5).reopen_missing_open_positions(pos, _CFG)
+    log = ex.reopen_missing_open_positions(pos, _CFG)
     assert log.placed == 0
     assert mt5.requests == []
+    # The "not chasing" line names the signal+leg (not a bare #index) and is
+    # logged exactly once -- not every watch cycle.
+    nc = [a for a in log.actions if "not chasing" in a]
+    assert len(nc) == 1 and pos.signal.signal_key in nc[0]
+
+    log2 = ex.reopen_missing_open_positions(pos, _CFG)
+    assert not any("not chasing" in a for a in log2.actions)  # deduped
 
 
 def test_reopen_locked_leg_stays_market_even_at_unfavorable_price(monkeypatch):
