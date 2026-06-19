@@ -460,6 +460,9 @@ jobs:
                   r.get("fixed_no_bonus_profit") or 0.0,
               )
 
+          def walk_forward_ok(r):
+              return r.get("passes_walk_forward", True) is not False
+
           def render_cli(cfg, *, regime, feed):
               # Mirror the 2021 orchestrator's renderer when importable so the
               # winning CLI is a runnable backtest_explicit command; otherwise
@@ -485,7 +488,8 @@ jobs:
           for regime in REGIMES:
               rows = load_regime(regime)
               survivors = [r for r in rows
-                           if dd(r) is not None and dd(r) <= DD_GATE]
+                           if dd(r) is not None and dd(r) <= DD_GATE
+                           and walk_forward_ok(r)]
               survivors.sort(key=keyfn, reverse=True)
 
               best_path = OUT / f"BEST_{regime}.txt"
@@ -501,6 +505,7 @@ jobs:
                       f"oos={r.get('oos_fixed_no_bonus_profit')} "
                       f"edge={r.get('fixed_no_bonus_profit')} "
                       f"dd={r.get('concurrent_risk_max_dd_pct')}% "
+                      f"wf={r.get('walk_forward_positive_fraction')} "
                       f"stable={r.get('stable_fraction')} "
                       f"cfg={r.get('config_json')}")
               best_path.write_text("\n".join(lines) + "\n")
@@ -515,13 +520,16 @@ jobs:
                       f"# best {regime} config: feed={best_feed} "
                       f"oos={top.get('oos_fixed_no_bonus_profit')} "
                       f"edge={top.get('fixed_no_bonus_profit')} "
-                      f"dd={top.get('concurrent_risk_max_dd_pct')}%\n\n")
+                      f"dd={top.get('concurrent_risk_max_dd_pct')}%\n"
+                      f"# walk_forward={top.get('walk_forward_positive_fraction')} "
+                      f"folds={top.get('walk_forward_folds')}\n\n")
                   cli_path.write_text(header + render_cli(best_cfg, regime=regime, feed=best_feed))
                   leaderboard.append(
                       f"{regime}: feed={best_feed} "
                       f"edge={top.get('fixed_no_bonus_profit')} "
                       f"oos={top.get('oos_fixed_no_bonus_profit')} "
                       f"dd={top.get('concurrent_risk_max_dd_pct')}% "
+                      f"wf={top.get('walk_forward_positive_fraction')} "
                       f"cfg={top.get('config_json')}")
               else:
                   cli_path.write_text(

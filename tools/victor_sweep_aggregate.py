@@ -64,6 +64,13 @@ def _objective(r: dict) -> float:
     return _f(v) if v is not None else _f(r.get("fixed_no_bonus_profit"))
 
 
+def _walk_forward_ok(r: dict) -> bool:
+    v = r.get("passes_walk_forward", True)
+    if isinstance(v, str):
+        return v.strip().lower() not in {"false", "0", "no"}
+    return v is not False
+
+
 # Headline metrics to surface the per-objective best of, so the winner under
 # EACH lens can be compared ("net profit's not bad -> execute"). All share the
 # same hard gates (DD<=gate & OOS>0); they only differ in what they MAXIMIZE.
@@ -89,6 +96,8 @@ def survivors(rows: list[dict], dd_gate: float) -> list[dict]:
         if dd is None or _f(dd) > dd_gate:
             continue
         if oos is None or _f(oos) <= 0.0:   # OOS>0 overfit guard (hard gate)
+            continue
+        if not _walk_forward_ok(r):
             continue
         out.append(r)
     # Rank on edge+bonus (the deploy objective), tiebreak OOS then raw edge.
@@ -134,7 +143,8 @@ def main(argv: list[str] | None = None) -> int:
     lines.append(f"- candidates scored: **{len(rows)}** | "
                  f"DD<={args.dd_gate:.0f}% & OOS>0 survivors: **{len(surv)}**")
     lines.append("- ranked by **edge + $3/lot bonus** (fixed-lot, slippage-aware; more "
-                 "closed signals lifts it), guarded by OOS>0; compounded shown for reference only.")
+                 "closed signals lifts it), guarded by OOS>0 and walk-forward folds "
+                 "when present; compounded shown for reference only.")
     lines.append("")
     if not surv:
         lines.append("**No DD-passing, OOS>0 config found.**")
@@ -150,14 +160,15 @@ def main(argv: list[str] | None = None) -> int:
     # (e.g. accept a slightly-lower-edge config because its net profit is great).
     lines.append("## Best config per objective (all gated DD<=%.0f%% & OOS>0)" % args.dd_gate)
     lines.append("")
-    lines.append("| MAX of | edge $ | edge+bonus $ | OOS $ | net+bonus $ | DD % | config |")
-    lines.append("|---|---:|---:|---:|---:|---:|---|")
+    lines.append("| MAX of | edge $ | edge+bonus $ | OOS $ | WF +% | net+bonus $ | DD % | config |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---|")
     seen_obj = {}
     for name, r in best_per_objective(surv):
         seen_obj[name] = r
         lines.append(
             f"| **{name}** | {_f(r.get('fixed_no_bonus_profit')):,.0f} | "
             f"{_objective(r):,.0f} | {_f(r.get('oos_fixed_no_bonus_profit')):,.0f} | "
+            f"{_f(r.get('walk_forward_positive_fraction')):.0%} | "
             f"{_f(r.get('risk_net_profit_with_bonus')):,.0f} | "
             f"{_f(r.get('concurrent_risk_max_dd_pct')):.1f} | "
             f"`{_cfg_brief(r.get('config') or {})}` |")
@@ -169,14 +180,15 @@ def main(argv: list[str] | None = None) -> int:
     lines.append("")
     lines.append("## Full leaderboard (ranked by edge + $3/lot bonus)")
     lines.append("")
-    lines.append("| # | edge+bonus $ | edge $ | bonus $ | OOS $ | DD % | compounded $ | config |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---|")
+    lines.append("| # | edge+bonus $ | edge $ | bonus $ | OOS $ | WF +% | DD % | compounded $ | config |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---|")
     for i, r in enumerate(surv[:args.top_n], 1):
         lines.append(
             f"| {i} | {_objective(r):,.0f} | "
             f"{_f(r.get('fixed_no_bonus_profit')):,.0f} | "
             f"{_f(r.get('bonus_contribution')):,.0f} | "
             f"{_f(r.get('oos_fixed_no_bonus_profit')):,.0f} | "
+            f"{_f(r.get('walk_forward_positive_fraction')):.0%} | "
             f"{_f(r.get('concurrent_risk_max_dd_pct')):.1f} | "
             f"{_f(r.get('risk_net_profit_with_bonus')):,.0f} | "
             f"`{_cfg_brief(r.get('config') or {})}` |")

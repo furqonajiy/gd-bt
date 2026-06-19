@@ -91,6 +91,10 @@ def main(argv: list[str] | None = None) -> int:
         min_fixed_no_bonus_profit=0.0,
         min_stable_month_fraction=0.0,
         worst_month_floor=-1e18,
+        walk_forward_months=2,
+        min_walk_forward_folds=1,
+        min_walk_forward_positive_fraction=0.50,
+        walk_forward_worst_fold_floor=-1e18,
         fixed_lot=args.fixed_lot,
     )
 
@@ -111,6 +115,10 @@ def main(argv: list[str] | None = None) -> int:
         "oos": row.get("oos_fixed_no_bonus_profit"),
         "dd": row.get("concurrent_risk_max_dd_pct"),
         "net_bonus": row.get("risk_net_profit_with_bonus"),
+        "passes_walk_forward": row.get("passes_walk_forward"),
+        "walk_forward_folds": row.get("walk_forward_folds"),
+        "walk_forward_positive_fraction": row.get("walk_forward_positive_fraction"),
+        "walk_forward_worst_pnl": row.get("walk_forward_worst_pnl"),
         "config": cfg,
         "config_json": json.dumps(cfg, sort_keys=True),
     }

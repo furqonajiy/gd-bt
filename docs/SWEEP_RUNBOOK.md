@@ -119,6 +119,7 @@ the engine treats each row as one minute, so a daily bar corrupts the backtest.
 | Risk levels | **1–5%** | swept and pushed to the 40% DD gate |
 | Period | per‑regime window (see `sweep2021/REGIME_ANALYSIS.md`) | candidates **and** incumbent over the *same* window |
 | OOS | held‑out tail | `--validate-months 6` for the long full‑history sweep; **`2` for the regime grid** (short regime windows — e.g. R4 is only 2026, so the OOS tail is its last 2 months). Used as the OOS > 0 gate **and** the promote‑decision metric. |
+| Walk-forward folds | 2-month rolling folds | fixed-lot no-bonus; at least 50% of folds must be profitable, so one lucky held-out tail is not enough |
 | Feeds | scalper24, scalperwide24, risk02allhours (3 HIGH‑FREQ self‑scalpers) + adaptive / breakout / meanrev | high‑frequency, 24h, loose filters → more closed lots |
 | Candidates/feed | 300 (Phase 1) | **(ASK)** bump to 600 for denser coverage |
 | Run model | in‑container (free) OR GitHub‑paid | **(ASK)** — see §6 |

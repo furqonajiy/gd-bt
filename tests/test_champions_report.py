@@ -57,6 +57,22 @@ def test_best_challenger_requires_positive_oos():
     assert cr.best_challenger(rows, dd_gate=40.0) is None
 
 
+def test_best_challenger_rejects_failed_walk_forward_when_present():
+    failed = _chrow("unstable", 9000.0, 5000.0, 20.0, {}, net=900000.0)
+    failed["passes_walk_forward"] = False
+    stable = _chrow("stable", 1000.0, 100.0, 20.0, {}, net=1000.0)
+    stable["passes_walk_forward"] = True
+
+    best = cr.best_challenger([failed, stable], dd_gate=40.0)
+    assert best is not None
+    assert best["_feed"] == "stable"
+
+
+def test_best_challenger_accepts_legacy_rows_without_walk_forward():
+    legacy = _chrow("legacy", 9000.0, 5000.0, 20.0, {}, net=900000.0)
+    assert cr.best_challenger([legacy], dd_gate=40.0) is legacy
+
+
 def test_strictly_beats_uses_net_bonus():
     hi = {"net_bonus": 600000.0, "oos": 100.0, "edge": 100.0}
     lo = {"net_bonus": 400000.0, "oos": 9000.0, "edge": 9000.0}

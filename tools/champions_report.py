@@ -124,6 +124,14 @@ def _dd(d: dict):
         return None
 
 
+def _walk_forward_ok(d: dict) -> bool:
+    """Old result rows do not have this field; treat them as pre-gate rows."""
+    v = d.get("passes_walk_forward", True)
+    if isinstance(v, str):
+        return v.strip().lower() not in {"false", "0", "no"}
+    return v is not False
+
+
 def strictly_beats(challenger: dict, incumbent: dict) -> bool:
     """challenger strictly beats incumbent on the deploy objective: higher
     net+bonus profit, tiebreak higher OOS (held-out tail) then edge."""
@@ -141,7 +149,8 @@ def best_challenger(rows: list[dict], dd_gate: float = DD_GATE) -> dict | None:
     objective) then OOS then edge. OOS>0 is required as an overfit guard, so an
     in-sample-only blowup never wins."""
     survivors = [r for r in rows
-                 if _dd(r) is not None and _dd(r) <= dd_gate and _oos(r) > 0.0]
+                 if _dd(r) is not None and _dd(r) <= dd_gate
+                 and _oos(r) > 0.0 and _walk_forward_ok(r)]
     if not survivors:
         return None
     survivors.sort(key=lambda r: (_net_bonus(r), _oos(r), _edge(r)), reverse=True)
@@ -443,6 +452,10 @@ def update_champion(out_dir: Path, regime: str, challenger: dict | None) -> dict
             "oos": _oos(challenger),
             "dd": _dd(challenger),
             "net_bonus": _net_bonus(challenger),
+            "passes_walk_forward": challenger.get("passes_walk_forward"),
+            "walk_forward_folds": challenger.get("walk_forward_folds"),
+            "walk_forward_positive_fraction": challenger.get("walk_forward_positive_fraction"),
+            "walk_forward_worst_pnl": challenger.get("walk_forward_worst_pnl"),
             "config": challenger.get("config") or {},
             "config_json": challenger.get(
                 "config_json",
