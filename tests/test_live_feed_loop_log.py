@@ -72,6 +72,26 @@ def test_effective_gen_argv_rolls_start_and_narrows_charts(tmp_path, monkeypatch
     assert eff[eff.index("--output") + 1] == "f.txt"  # rest intact
 
 
+def test_effective_gen_argv_narrows_m1_charts_for_atr_generators(tmp_path):
+    from datetime import datetime
+    from live_feed_loop import _effective_gen_argv
+    for ym in ("202604", "202605", "202606"):
+        (tmp_path / f"XAUUSD_M1_{ym}_ELEV8.csv").write_text("x")
+    tmpl = str(tmp_path / "XAUUSD_M1_*_ELEV8.csv")
+
+    argv = ["--m1-charts", tmpl, "--output", "f.txt", "--start-date", "2025-01-01"]
+    eff = _effective_gen_argv(
+        argv, start_days=3, recent_months=2, today=datetime(2026, 6, 12),
+        start_flag="--start-date")
+
+    ci = eff.index("--m1-charts")
+    assert eff[ci + 1:ci + 3] == [
+        str(tmp_path / "XAUUSD_M1_202605_ELEV8.csv"),
+        str(tmp_path / "XAUUSD_M1_202606_ELEV8.csv"),
+    ]
+    assert eff[eff.index("--start-date") + 1] == "2026-06-09"
+
+
 def test_effective_gen_argv_noop_when_flags_absent():
     from datetime import datetime
     from live_feed_loop import _effective_gen_argv

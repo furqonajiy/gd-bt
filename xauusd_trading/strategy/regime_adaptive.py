@@ -21,6 +21,17 @@ from xauusd_trading.core.config import StrategyConfig
 from xauusd_trading.strategy.regime import detect_regime, m15_atr, read_current_regime, trend_score
 
 
+def champion_record(regime: str, champions_dir: str | Path | None) -> dict | None:
+    path = Path(champions_dir or ".") / f"CHAMPION_{regime}.json"
+    if not path.exists():
+        return None
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
 def champion_config(regime: str, champions_dir: str | Path | None,
                     fallback: StrategyConfig) -> StrategyConfig:
     """The regime's published champion as a StrategyConfig, or ``fallback``.
@@ -30,18 +41,29 @@ def champion_config(regime: str, champions_dir: str | Path | None,
     callers never have to guard -- an absent champion just means "run the
     incumbent for this regime".
     """
-    path = Path(champions_dir or ".") / f"CHAMPION_{regime}.json"
-    if not path.exists():
+    record = champion_record(regime, champions_dir)
+    if not record:
         return fallback
-    try:
-        cfg = json.loads(path.read_text()).get("config") or {}
-    except (OSError, json.JSONDecodeError):
-        return fallback
+    cfg = record.get("config") or {}
     valid = {f.name for f in _dc_fields(StrategyConfig)}
     try:
         return StrategyConfig(**{k: v for k, v in cfg.items() if k in valid})
     except (TypeError, ValueError):
         return fallback
+
+
+def champion_live_feed(regime: str, champions_dir: str | Path | None,
+                       fallback: Path | str) -> Path:
+    """The regime champion's live signal feed, or ``fallback``.
+
+    New sweep deploy files store ``feed_live_file``. Older champion files only
+    contain strategy config; those keep the caller's fixed ``--signals`` path.
+    """
+    record = champion_record(regime, champions_dir)
+    if not record:
+        return Path(fallback)
+    feed = record.get("feed_live_file") or record.get("feed_file")
+    return Path(feed) if feed else Path(fallback)
 
 
 def make_regime_config_resolver(chart_df: pd.DataFrame, *, champions_dir,

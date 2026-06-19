@@ -210,7 +210,18 @@ python tools/live_feed_loop.py --family scalper --interval 30 `
 # window 2 — execute that feed (auto_explicit.py with the strategy flags)
 ```
 
-`--family` selects the generator (`scalper`/`risk02`/`canonical`/`better`/`zones`);
+For ATR-scaled generators (`adaptive`, `breakout`, `meanrev`), pass
+`--m1-charts` instead of `--charts`; `--gen-start-days` injects/rewrites
+`--start-date`, and `--gen-recent-months` narrows the `--m1-charts` month glob:
+
+```powershell
+python tools/live_feed_loop.py --family breakout --interval 30 `
+  --gen-start-days 7 --gen-recent-months 2 --mt5-symbol XAUUSD --mt5-server-offset 3 `
+  -- --m1-charts data/XAUUSD_M1_*_ELEV8.csv --output generated/adaptive_breakout_live.txt
+```
+
+`--family` selects the generator (`adaptive`/`breakout`/`meanrev`/`scalper`/
+`risk02`/`canonical`/`better`/`zones`);
 everything after `--` is passed verbatim to that generator, so the live feed is
 byte-identical to the backtest archive for the same bars.
 

@@ -47,6 +47,14 @@ def test_parser_forwards_generator_args_and_validates():
         "--charts", "x.csv", "--output", "o.txt"]
 
 
+def test_parser_accepts_atr_generator_families():
+    p = build_parser()
+    for family in ("adaptive", "breakout", "meanrev"):
+        args = p.parse_args(["--family", family, "--",
+                             "--m1-charts", "x.csv", "--output", "o.txt"])
+        assert args.family == family
+
+
 def test_all_generator_modules_importable():
     import importlib
     for mod in GENERATOR_MODULES.values():

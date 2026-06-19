@@ -41,6 +41,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tools.scalper_feed_variants import (  # noqa: E402
+    scalper_feed_args,
+    scalper_variant_archive,
+)
+
 DD_GATE = 40.0
 # "Stretch" tier: a config that runs DD between the 40% deploy gate and 50% is
 # only worth surfacing if it beats the DD<=40% champion's net+bonus by a wide
@@ -48,6 +53,11 @@ DD_GATE = 40.0
 STRETCH_DD_GATE = 50.0
 STRETCH_MARGIN = 1.25   # >= +25% net+bonus over the DD<=40% champion
 LIVE_REGIME = "R4parab"
+_FEED_FILE_OVERRIDES = {
+    "scalper24": "generated/self_scalper24.txt",
+    "scalperwide24": "generated/self_scalper_widerr24.txt",
+    "risk02allhours": "generated/self_risk02_allhours.txt",
+}
 
 # Same regime -> chart month-glob mapping the shard job and incumbent use.
 REGIME_CHARTS: dict[str, str] = {
@@ -77,7 +87,22 @@ def feed_signals(feed: str) -> str:
         return feed
     if "/" in feed or feed.endswith(".txt"):
         return feed
+    if feed in _FEED_FILE_OVERRIDES:
+        return _FEED_FILE_OVERRIDES[feed]
+    scalper_path = scalper_variant_archive(feed)
+    if scalper_path:
+        return scalper_path
     return f"generated/adaptive_{feed}.txt"
+
+
+def live_feed_signals(feed: str) -> str:
+    """Live feed path corresponding to an archive/generated feed path."""
+    path = feed_signals(feed).replace("\\", "/")
+    if path.endswith("_live.txt"):
+        return path
+    if path.endswith(".txt"):
+        return path[:-4] + "_live.txt"
+    return f"{path}_live.txt"
 
 
 # --------------------------------------------------------------------------
@@ -231,6 +256,20 @@ def _generate_command(feed: str) -> str:
     """
     out = feed_signals(feed)  # generated/adaptive_<feed>.txt
     cont = " `\n  "
+    if _feed_family(feed) == "scalper":
+        args = [
+            "--charts data/XAUUSD_M1_*_ELEV8.csv",
+            f"--output {out}",
+            "--start 2021-11-01",
+            "--session-start 0",
+            "--session-end 0",
+            "--signal-tz 7",
+        ]
+        args.extend(scalper_feed_args(feed) or [])
+        return (
+            f"# SC24 scalper signals for feed `{feed}` over ALL chart history.\n"
+            "python tools/generate_scalper_signals.py" + cont
+            + cont.join(args) + "\n")
     if feed == "breakout":
         return (
             "# ATR-adaptive breakout signals over ALL chart history (SL/TP scale\n"
@@ -269,6 +308,78 @@ def _generate_command(feed: str) -> str:
         ]) + "\n")
 
 
+def _feed_family(feed: str) -> str | None:
+    """Best live_feed_loop family for a champion feed label/path."""
+    norm = str(feed or "").strip().replace("\\", "/")
+    stem = Path(feed_signals(norm)).stem
+    if norm == "breakout" or stem == "adaptive_breakout":
+        return "breakout"
+    if norm == "meanrev" or stem == "adaptive_meanrev":
+        return "meanrev"
+    if norm in {"scalper24", "scalperwide24"} or stem.startswith("self_scalper"):
+        return "scalper"
+    if norm == "risk02allhours" or stem.startswith("self_risk02"):
+        return "risk02"
+    if stem.startswith("self_better"):
+        return "better"
+    if stem.startswith("live_provider") or stem.startswith("adaptive_"):
+        return "adaptive"
+    return None
+
+
+def render_live_feed_loop_cli(feed: str, *, output: str | None = None) -> str:
+    """A rolling feed-loop command that writes the file the executor reads."""
+    family = _feed_family(feed)
+    if not family:
+        return ""
+    output_path = output or live_feed_signals(feed)
+    cont = " `\n  "
+    args = [
+        f"--family {family}",
+        "--interval 30",
+        "--gen-start-days 7",
+        "--gen-recent-months 2",
+        "--mt5-symbol XAUUSD",
+        "--mt5-server-offset 3",
+        "--",
+    ]
+
+    if family == "scalper":
+        args.extend([
+            "--charts data/XAUUSD_M1_*_ELEV8.csv",
+            f"--output {output_path}",
+            "--session-start 0",
+            "--session-end 0",
+            "--signal-tz 7",
+        ])
+        args.extend(scalper_feed_args(feed) or [])
+    elif family == "risk02":
+        args.extend([
+            "--charts data/XAUUSD_M1_*_ELEV8.csv",
+            f"--output {output_path}",
+            "--execution-hours 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23",
+        ])
+    else:
+        args.extend([
+            "--m1-charts data/XAUUSD_M1_*_ELEV8.csv",
+            f"--output {output_path}",
+            "--source-tz-offset 7",
+        ])
+
+    return "python tools/live_feed_loop.py" + cont + cont.join(args) + "\n"
+
+
+def _bool_text(value) -> str:
+    return "true" if bool(value) else "false"
+
+
+def _cfg_default(cfg: dict, key: str):
+    from xauusd_trading import DEFAULT_CONFIG  # noqa: E402
+
+    value = cfg.get(key)
+    return getattr(DEFAULT_CONFIG, key) if value is None else value
+
+
 # Backtest-only flags dropped from the LIVE auto_explicit command: they have no
 # meaning for a live executor (no historical charts, no output workbook, no
 # drawdown-abort, no chart sync, no progress timer).
@@ -278,7 +389,8 @@ _LIVE_DROP_FLAGS = frozenset({
 })
 
 
-def render_live_cli(cfg: dict, *, regime: str, feed: str) -> str:
+def render_live_cli(cfg: dict, *, regime: str, feed: str,
+                    signals: str | None = None) -> str:
     """A ``tools/auto_explicit.py`` command with the same strategy/sizing flags.
 
     Reuses the backtest flag mapping (``baseline_explicit_args``) so the live
@@ -288,7 +400,7 @@ def render_live_cli(cfg: dict, *, regime: str, feed: str) -> str:
     Falls back to a minimal but runnable line when the orchestrator renderer is
     unavailable.
     """
-    signals = feed_signals(feed)
+    signals = signals or feed_signals(feed)
     cont = " \\\n  "
     live_tail = [
         f"--positions-json positions_{regime}.json",
@@ -319,20 +431,53 @@ def render_live_cli(cfg: dict, *, regime: str, feed: str) -> str:
             i += 2
         return "python tools/auto_explicit.py" + cont + cont.join(pairs) + "\n"
     except Exception:
-        def g(k, d):
-            v = cfg.get(k)
-            return d if v is None else v
+        pairs = [
+            f"--signals {signals}",
+            *live_tail,
+            f"--initial-capital {_cfg_default(cfg, 'initial_capital')}",
+            f"--sizing-mode {_cfg_default(cfg, 'sizing_mode')}",
+            f"--lot {_cfg_default(cfg, 'lot_per_entry')}",
+            f"--risk {_cfg_default(cfg, 'risk_per_signal')}",
+            f"--minimum-lot {_cfg_default(cfg, 'minimum_lot')}",
+            f"--lot-step {_cfg_default(cfg, 'lot_step')}",
+            f"--bonus-per-closed-lot {_cfg_default(cfg, 'bonus_per_closed_lot')}",
+            f"--entries {_cfg_default(cfg, 'entry_count')}",
+            f"--entry-ladder {_cfg_default(cfg, 'entry_ladder')}",
+            f"--entry-sl-gap {_cfg_default(cfg, 'entry_sl_gap')}",
+            f"--activation-delay {_cfg_default(cfg, 'activation_delay_minutes')}",
+            f"--pending-expiry {_cfg_default(cfg, 'pending_expiry_minutes')}",
+            f"--max-hold {_cfg_default(cfg, 'max_hold_minutes')}",
+            f"--sl-multiplier {_cfg_default(cfg, 'sl_multiplier')}",
+            f"--final-target {_cfg_default(cfg, 'final_target')}",
+            f"--lock-after-tp1 {_bool_text(_cfg_default(cfg, 'lock_after_tp1'))}",
+            f"--lock-after-tp2 {_bool_text(_cfg_default(cfg, 'lock_after_tp2'))}",
+            f"--tp1-lock-delay-minutes {_cfg_default(cfg, 'tp1_lock_delay_minutes')}",
+            f"--tp2-lock-delay-minutes {_cfg_default(cfg, 'tp2_lock_delay_minutes')}",
+            f"--profit-lock-mode {_cfg_default(cfg, 'profit_lock_mode')}",
+            f"--bep-trigger-distance {_cfg_default(cfg, 'bep_trigger_distance')}",
+            f"--tp1-lock-fraction {_cfg_default(cfg, 'tp1_lock_fraction')}",
+            f"--tp2-lock-target {_cfg_default(cfg, 'tp2_lock_target')}",
+            f"--runner-after-tp3 {_bool_text(_cfg_default(cfg, 'runner_after_tp3'))}",
+            f"--tp3-lock-target {_cfg_default(cfg, 'tp3_lock_target')}",
+            f"--trailing-open-distance {_cfg_default(cfg, 'trailing_open_distance')}",
+            f"--trailing-close-distance {_cfg_default(cfg, 'trailing_close_distance')}",
+            f"--trailing-close-min-step {_cfg_default(cfg, 'trailing_close_min_step')}",
+            f"--scale-out-at-tp1 {_bool_text(_cfg_default(cfg, 'scale_out_at_tp1'))}",
+            f"--scale-out-at-tp2 {_bool_text(_cfg_default(cfg, 'scale_out_at_tp2'))}",
+            f"--bep-after-tp1 {_bool_text(_cfg_default(cfg, 'bep_after_tp1'))}",
+            f"--bep-buffer {_cfg_default(cfg, 'bep_buffer')}",
+            f"--trailing-close-after-stage {_cfg_default(cfg, 'trailing_close_after_stage')}",
+            f"--runner-final-cap {'none' if _cfg_default(cfg, 'runner_no_final_cap') else 'tp3'}",
+            f"--shared-sl {_bool_text(_cfg_default(cfg, 'shared_sl'))}",
+            f"--bep-after-move {_cfg_default(cfg, 'bep_after_move')}",
+            f"--runner-trail-from {_cfg_default(cfg, 'runner_trail_from')}",
+        ]
+        targets = cfg.get("per_entry_targets")
+        if targets:
+            pairs.append("--entry-targets " + ",".join(str(t) for t in targets))
         return (
             "python tools/auto_explicit.py" + cont
-            + cont.join([f"--signals {signals}", *live_tail,
-                f"--sizing-mode risk",
-                f"--risk {g('risk_per_signal', 0.01)}",
-                f"--entries {int(g('entry_count', 6))}",
-                f"--sl-multiplier {g('sl_multiplier', 2.1)}",
-                f"--tp1-lock-delay-minutes {int(g('tp1_lock_delay_minutes', 24))}",
-                f"--final-target {g('final_target', 'TP3')}",
-                f"--initial-capital 50000",
-            ]) + "\n")
+            + cont.join(pairs) + "\n")
 
 
 def render_deployment_cli(cfg: dict, *, regime: str, feed: str,
@@ -368,12 +513,24 @@ def render_deployment_cli(cfg: dict, *, regime: str, feed: str,
     lines.append(f"# ===== 2. BACKTEST {regime} (regime slice only) =====")
     lines.append(render_champion_cli(cfg, regime=regime, feed=feed).rstrip("\n"))
     lines.append("")
-    lines.append(f"# ===== 3. LIVE AUTO EXECUTOR (places + manages orders for {regime}) =====")
-    lines.append("# Same strategy params as the backtest above. Note: there is no")
-    lines.append("# live_feed_loop --family for this feed yet, so regenerate the archive")
-    lines.append("# (section 1) on a schedule / before each session instead of a rolling")
-    lines.append("# live loop. Set --risk to your live sizing choice (e.g. 0.05).")
-    lines.append(render_live_cli(cfg, regime=regime, feed=feed).rstrip("\n"))
+    live_signals = live_feed_signals(feed)
+    feed_loop = render_live_feed_loop_cli(feed, output=live_signals)
+    if feed_loop:
+        lines.append(f"# ===== 3. LIVE FEED LOOP (keeps {live_signals} fresh) =====")
+        lines.append("# Run this in one terminal window; it refreshes only on new closed M1 bars.")
+        lines.append(feed_loop.rstrip("\n"))
+        lines.append("")
+        lines.append(f"# ===== 4. LIVE AUTO EXECUTOR (places + manages orders for {regime}) =====")
+        lines.append("# Run this in a second terminal window. Same strategy params as the backtest;")
+        lines.append("# --signals points at the rolling live feed above.")
+        lines.append(render_live_cli(
+            cfg, regime=regime, feed=feed, signals=live_signals).rstrip("\n"))
+    else:
+        lines.append(f"# ===== 3. LIVE AUTO EXECUTOR (places + manages orders for {regime}) =====")
+        lines.append("# Same strategy params as the backtest above. No rolling feed-loop family")
+        lines.append("# is known for this feed yet, so regenerate the archive (section 1) on a")
+        lines.append("# schedule / before each session. Set --risk to your live sizing choice.")
+        lines.append(render_live_cli(cfg, regime=regime, feed=feed).rstrip("\n"))
     return "\n".join(lines) + "\n"
 
 
@@ -428,17 +585,34 @@ def update_champion(out_dir: Path, regime: str, challenger: dict | None) -> dict
     stored champion when it STRICTLY beats the stored champion's net+bonus
     (tiebreak oos, edge) -- so the published deploy target is monotonic.
     """
+    def with_feed_metadata(record: dict | None) -> dict | None:
+        if not record:
+            return record
+        feed_name = record.get("feed") or record.get("_feed") or ""
+        if not feed_name:
+            return record
+        out = dict(record)
+        out["feed_file"] = feed_signals(feed_name)
+        out["feed_live_file"] = live_feed_signals(feed_name)
+        args = scalper_feed_args(feed_name)
+        if args is not None:
+            out["feed_generator"] = "tools/generate_scalper_signals.py"
+            out["feed_generator_args"] = args
+        return out
+
     path = out_dir / f"CHAMPION_{regime}.json"
-    stored = load_json(path)
+    stored_raw = load_json(path)
+    stored = with_feed_metadata(stored_raw)
+    if stored_raw is not None and stored != stored_raw:
+        path.write_text(json.dumps(stored, indent=2, sort_keys=True) + "\n")
 
     cand_record = None
     if challenger is not None:
         feed_name = challenger.get("_feed")
-        cand_record = {
+        cand_record = with_feed_metadata({
             "regime": regime,
             "kind": "champion",
             "feed": feed_name,
-            "feed_file": feed_signals(feed_name or ""),
             "edge": _edge(challenger),
             "oos": _oos(challenger),
             "dd": _dd(challenger),
@@ -447,7 +621,7 @@ def update_champion(out_dir: Path, regime: str, challenger: dict | None) -> dict
             "config_json": challenger.get(
                 "config_json",
                 json.dumps(challenger.get("config") or {}, sort_keys=True)),
-        }
+        })
 
     if stored is None:
         if cand_record is not None:

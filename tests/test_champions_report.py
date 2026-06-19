@@ -15,6 +15,7 @@ No network, no MT5 -- pure render/decision logic.
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -147,8 +148,43 @@ def test_render_hold_and_switch(tmp_path):
 
 def test_feed_name_resolves_to_archive_path():
     assert cr.feed_signals("adE_farTP") == "generated/adaptive_adE_farTP.txt"
+    assert cr.feed_signals("scalper24") == "generated/self_scalper24.txt"
+    assert cr.feed_signals("base") == "generated/self_scalper24.txt"
+    assert cr.feed_signals("rsi70_sqz6_rr08") == (
+        "generated/self_scalper24_rsi70_sqz6_rr08.txt")
+    assert cr.feed_signals("risk02allhours") == "generated/self_risk02_allhours.txt"
     # An already-resolved path round-trips unchanged.
     assert cr.feed_signals("generated/self_better.txt") == "generated/self_better.txt"
+    assert cr.live_feed_signals("breakout") == "generated/adaptive_breakout_live.txt"
+    assert cr.live_feed_signals("generated/self_better_live.txt") == "generated/self_better_live.txt"
+
+
+def test_live_feed_loop_cli_routes_known_feed_families():
+    breakout = cr.render_live_feed_loop_cli("breakout")
+    assert "tools/live_feed_loop.py" in breakout
+    assert "--family breakout" in breakout
+    assert "--m1-charts data/XAUUSD_M1_*_ELEV8.csv" in breakout
+    assert "--output generated/adaptive_breakout_live.txt" in breakout
+
+    meanrev = cr.render_live_feed_loop_cli("meanrev")
+    assert "--family meanrev" in meanrev
+    assert "--output generated/adaptive_meanrev_live.txt" in meanrev
+
+    adf = cr.render_live_feed_loop_cli("adF_tightSL_closeTP")
+    assert "--family adaptive" in adf
+    assert "--output generated/adaptive_adF_tightSL_closeTP_live.txt" in adf
+
+    scalper = cr.render_live_feed_loop_cli("scalperwide24")
+    assert "--family scalper" in scalper
+    assert "--output generated/self_scalper_widerr24_live.txt" in scalper
+    assert "--rr1 1.5" in scalper
+
+    rbr = cr.render_live_feed_loop_cli("rsi70_sqz6_rr08")
+    assert "--family scalper" in rbr
+    assert "--output generated/self_scalper24_rsi70_sqz6_rr08_live.txt" in rbr
+    assert "--rsi-buy-max 70" in rbr
+    assert "--bb-bandwidth-min 0.0006" in rbr
+    assert "--rr1 0.8" in rbr
 
 
 def test_rendered_cli_is_runnable_backtest_explicit():
@@ -204,15 +240,27 @@ def test_render_deployment_cli_full_format():
     assert ("tools/backtest_explicit.py" in text
             or "xauusd_trading.cli backtest" in text)
     assert "data/XAUUSD_M1_2026*_ELEV8.csv" in text
-    # Section 3 LIVE: auto_explicit with the live tail; backtest-only flags gone.
-    assert "3. LIVE AUTO EXECUTOR" in text
+    # Section 3 LIVE FEED LOOP: rolling feed writes the file the executor reads.
+    assert "3. LIVE FEED LOOP" in text
+    assert "tools/live_feed_loop.py" in text
+    assert "--family breakout" in text
+    assert "--output generated/adaptive_breakout_live.txt" in text
+    # Section 4 LIVE: auto_explicit with the live tail; backtest-only flags gone.
+    assert "4. LIVE AUTO EXECUTOR" in text
     assert "tools/auto_explicit.py" in text
+    assert "--signals generated/adaptive_breakout_live.txt" in text
     assert "--positions-json positions_R4parab.json" in text
     assert "--reopen-missing-positions true" in text
     assert "--watch-interval 15" in text
-    assert "--charts" not in text.split("3. LIVE")[1]
-    assert "--output-dir" not in text.split("3. LIVE")[1]
-    assert "--max-drawdown-limit-pct" not in text.split("3. LIVE")[1]
+    executor = text.split("4. LIVE AUTO EXECUTOR", 1)[1]
+    assert "--charts" not in executor
+    assert "--output-dir" not in executor
+    assert "--max-drawdown-limit-pct" not in executor
+    import tools.auto_explicit as ae
+    auto = "python tools/auto_explicit.py" + text.split("python tools/auto_explicit.py", 1)[1]
+    flat = " ".join(line.strip().rstrip("\\").rstrip("`") for line in auto.splitlines())
+    tokens = shlex.split(flat)
+    ae.build_parser().parse_args(tokens[tokens.index("tools/auto_explicit.py") + 1:])
 
 
 def test_render_deployment_cli_feed_routes_to_generator():
@@ -221,14 +269,43 @@ def test_render_deployment_cli_feed_routes_to_generator():
         {"entry_count": 6}, regime="R3strong", feed="meanrev",
         edge=100.0, oos=50.0, dd=20.0)
     assert "tools/generate_meanrev_signals.py" in mr
+    assert "--family meanrev" in mr
     assert "generated/adaptive_meanrev.txt" in mr
+    assert "generated/adaptive_meanrev_live.txt" in mr
     assert "R3strong" in mr
 
     adf = cr.render_deployment_cli(
         {"entry_count": 6}, regime="R3strong", feed="adF_tightSL_closeTP",
         edge=13331.0, oos=2242.0, dd=29.7)
     assert "tools/generate_adaptive_self_signals.py" in adf
+    assert "--family adaptive" in adf
     assert "generated/adaptive_adF_tightSL_closeTP.txt" in adf
+    assert "generated/adaptive_adF_tightSL_closeTP_live.txt" in adf
+
+    rbr = cr.render_deployment_cli(
+        {"entry_count": 5}, regime="R3strong", feed="rsi70_sqz6_rr08",
+        edge=200.0, oos=100.0, dd=19.0)
+    assert "tools/generate_scalper_signals.py" in rbr
+    assert "generated/self_scalper24_rsi70_sqz6_rr08.txt" in rbr
+    assert "generated/self_scalper24_rsi70_sqz6_rr08_live.txt" in rbr
+    assert "--rsi-buy-max 70" in rbr
+    assert "--rsi-sell-min 30" in rbr
+    assert "--bb-bandwidth-min 0.0006" in rbr
+    assert "--rr1 0.8" in rbr
+
+
+def test_update_champion_stores_scalper_feed_manifest(tmp_path):
+    row = _chrow("rsi75_sqz6_rr40", 2000.0, 500.0, 31.0, {"entry_count": 5},
+                 net=3000.0)
+    champ = cr.update_champion(tmp_path, "R4parab", row)
+    assert champ["feed_file"] == "generated/self_scalper24_rsi75_sqz6_rr40.txt"
+    assert champ["feed_live_file"] == "generated/self_scalper24_rsi75_sqz6_rr40_live.txt"
+    assert champ["feed_generator"] == "tools/generate_scalper_signals.py"
+    assert champ["feed_generator_args"] == [
+        "--rsi-buy-max 75", "--rsi-sell-min 25",
+        "--bb-bandwidth-min 0.0006",
+        "--rr1 1.0", "--rr2 2.0", "--rr3 4.0",
+    ]
 
 
 def test_write_deployment_cli_files_champion_and_placeholder(tmp_path):
@@ -245,6 +322,7 @@ def test_write_deployment_cli_files_champion_and_placeholder(tmp_path):
 
     r4 = (cli_dir / "best_R4parab.txt").read_text()
     assert "tools/auto_explicit.py" in r4
+    assert "tools/live_feed_loop.py" in r4
     assert "feed=breakout" in r4
 
     r3 = (cli_dir / "best_R3strong.txt").read_text()

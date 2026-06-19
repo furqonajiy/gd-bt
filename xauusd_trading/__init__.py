@@ -224,7 +224,12 @@ from .strategy.regime import (
     read_current_regime,
     trend_score,
 )
-from .strategy.regime_adaptive import champion_config, make_regime_config_resolver
+from .strategy.regime_adaptive import (
+    champion_config,
+    champion_live_feed,
+    champion_record,
+    make_regime_config_resolver,
+)
 
 # 8. strategy.backtest
 from .strategy.backtest import (
@@ -297,7 +302,7 @@ __all__ = [
     "decide", "format_replay_outcome", "render_report",
     "DEFAULT_LIVE_REGIME", "RegimeReading", "detect_regime", "m15_atr",
     "read_current_regime", "trend_score",
-    "champion_config", "make_regime_config_resolver",
+    "champion_config", "champion_live_feed", "champion_record", "make_regime_config_resolver",
     "position_status", "replay_signal", "run_backtest", "write_backtest_outputs",
     "GeneratedSignal", "RejectionSignalConfig", "format_generated_signals", "generate_rejection_signals",
     "MomentumSignalConfig", "generate_momentum_signals",

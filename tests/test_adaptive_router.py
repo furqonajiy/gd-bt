@@ -12,7 +12,9 @@ import numpy as np
 import pandas as pd
 
 from xauusd_trading import DEFAULT_CONFIG, StrategyConfig
-from xauusd_trading.cli import _adaptive_enabled, _maybe_adaptive_config
+from pathlib import Path
+
+from xauusd_trading.cli import _adaptive_enabled, _maybe_adaptive_config, _maybe_adaptive_context
 
 
 def _chart(price: float, wiggle: float, drift: float = 0.0, minutes: int = 60 * 24 * 3):
@@ -65,15 +67,52 @@ def test_adaptive_detection_failure_keeps_incumbent():
 # --- shared champion-config resolver (live + backtest) -----------------------
 
 def test_champion_config_loads_and_falls_back(tmp_path):
-    from xauusd_trading import champion_config
-    champ = {"config": {**asdict(DEFAULT_CONFIG), "entry_count": 7}}
+    from xauusd_trading import champion_config, champion_live_feed, champion_record
+    champ = {
+        "config": {**asdict(DEFAULT_CONFIG), "entry_count": 7},
+        "feed_live_file": "generated/r3_live.txt",
+    }
     (tmp_path / "CHAMPION_R3strong.json").write_text(json.dumps(champ))
     # present -> loaded
     cfg = champion_config("R3strong", tmp_path, DEFAULT_CONFIG)
     assert cfg.entry_count == 7
+    assert champion_record("R3strong", tmp_path)["feed_live_file"] == "generated/r3_live.txt"
+    assert champion_live_feed("R3strong", tmp_path, "base.txt") == Path("generated/r3_live.txt")
     # absent / bad dir -> fallback (same object)
     assert champion_config("R4parab", tmp_path, DEFAULT_CONFIG) is DEFAULT_CONFIG
     assert champion_config("R3strong", "no/such/dir", DEFAULT_CONFIG) is DEFAULT_CONFIG
+    assert champion_live_feed("R4parab", tmp_path, "base.txt") == Path("base.txt")
+
+
+def test_adaptive_context_switches_to_champion_live_feed(tmp_path):
+    feed = tmp_path / "r4_live.txt"
+    feed.write_text("2026-01-03 GMT+3\n")
+    champ = {
+        "config": {**asdict(DEFAULT_CONFIG), "entry_count": 8},
+        "feed_live_file": str(feed),
+    }
+    (tmp_path / "CHAMPION_R4parab.json").write_text(json.dumps(champ))
+    args = SimpleNamespace(adaptive="true", champions_dir=str(tmp_path),
+                           adaptive_window_days=20, signals="base.txt")
+    cfg, signals = _maybe_adaptive_context(
+        args, DEFAULT_CONFIG, Path("base.txt"), _chart(4500.0, 6.0), {})
+    assert cfg.entry_count == 8
+    assert signals == feed
+
+
+def test_adaptive_context_missing_champion_feed_uses_incumbent(tmp_path):
+    champ = {
+        "config": {**asdict(DEFAULT_CONFIG), "entry_count": 8},
+        "feed_live_file": str(tmp_path / "missing_live.txt"),
+    }
+    (tmp_path / "CHAMPION_R4parab.json").write_text(json.dumps(champ))
+    args = SimpleNamespace(adaptive="true", champions_dir=str(tmp_path),
+                           adaptive_window_days=20, signals="base.txt")
+    base = StrategyConfig(entry_count=6)
+    cfg, signals = _maybe_adaptive_context(
+        args, base, Path("base.txt"), _chart(4500.0, 6.0), {})
+    assert cfg is base
+    assert signals == Path("base.txt")
 
 
 def test_regime_config_resolver_maps_signal_to_champion(tmp_path):

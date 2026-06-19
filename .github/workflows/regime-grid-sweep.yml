@@ -6,11 +6,11 @@ name: regime-grid-sweep
 # regime at once, so the coarse stage of a coarse-to-fine search can compare
 # stop/target sizings head-to-head within each regime slice.
 #
-# Matrix: feed (12) x regime (1, the ACTIVE regime) independent ubuntu-latest
-# jobs. The 12 feeds are 7 ATR-multiplier adaptive variants + breakout + meanrev
+# Matrix: feed (45) x regime (1, the ACTIVE regime) independent ubuntu-latest
+# jobs. The feeds are 7 ATR-multiplier adaptive variants + breakout + meanrev
 # + THREE HIGH-FREQUENCY self-scalper archives (scalper24, scalperwide24,
-# risk02allhours) -- the dense intraday family that earns more $3/lot bonus and
-# compounds faster, the same character as the live incumbent. The grid sweeps
+# risk02allhours) + 33 SC24 RSI/Bollinger/R:R variants. The dense intraday family
+# earns more $3/lot bonus and compounds faster, the same character as the live incumbent. The grid sweeps
 # ONE regime at a time, in volatility order R4 -> R3 -> R2 -> R1 (re-sweep at $5k capital):
 # repoint `matrix.regime` AND the chain step's ACTIVE_REGIME together per phase.
 # Each job runs FOUR tools/sweep_self_limit.py shards (seeds 42..45) in parallel
@@ -41,7 +41,7 @@ name: regime-grid-sweep
 # Why this is collision-free (same contract as self-regime-sweep.yml):
 #   * Each grid job only ever WRITES its own shard*/results.jsonl files and
 #     uploads them as an artifact (res-<feed>__<regime>); it never pushes.
-#   * The aggregate job downloads all 28 artifacts, copies them into the
+#   * The aggregate job downloads all feed artifacts, copies them into the
 #     sweep_regime_out_grid/<feed>__<regime>/shard<N>/ tree, writes the
 #     per-regime BEST/CLI snapshots + LEADERBOARD + CHAMPIONS.md, and is the only
 #     job that commits + pushes. The `incumbent` job is the one exception: it
@@ -54,7 +54,7 @@ name: regime-grid-sweep
 # aggregate can overwrite-copy each one safely.
 #
 # Self-terminating: the aggregate marks a (feed,regime) cell DONE once all 4 of
-# its shards have >= 120 result lines; when all 36 cells are DONE it disables
+# its shards have >= 120 result lines; when all active-regime cells are DONE it disables
 # this workflow, otherwise it re-dispatches itself for the next pass. A sparse
 # 3-hourly schedule is only a safety net. schedule/workflow_dispatch fire only
 # from the default branch, so this file lives on main; it operates on the
@@ -63,7 +63,7 @@ name: regime-grid-sweep
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "0 */3 * * *"   # safety net; self-disables once all 36 cells are DONE
+    - cron: "0 */3 * * *"   # safety net; self-disables once all 180 cells are DONE
 
 permissions:
   contents: write   # aggregate pushes sweep checkpoints to the research branch
@@ -83,7 +83,52 @@ jobs:
       fail-fast: false
       max-parallel: 20   # GitHub free public concurrency cap
       matrix:
-        feed: [adA_base, adB_tightSL, adC_wideSL, adD_closeTP, adE_farTP, adF_tightSL_closeTP, adG_wideSL_farTP, breakout, meanrev, scalper24, scalperwide24, risk02allhours]
+        feed:
+          - adA_base
+          - adB_tightSL
+          - adC_wideSL
+          - adD_closeTP
+          - adE_farTP
+          - adF_tightSL_closeTP
+          - adG_wideSL_farTP
+          - breakout
+          - meanrev
+          - scalper24
+          - scalperwide24
+          - risk02allhours
+          - rr08
+          - rr40
+          - pctb80
+          - pctb80_rr08
+          - pctb80_rr40
+          - sqz6
+          - sqz6_rr08
+          - sqz6_rr40
+          - rsi70
+          - rsi70_rr08
+          - rsi70_rr40
+          - rsi70_pctb80
+          - rsi70_pctb80_rr08
+          - rsi70_pctb80_rr40
+          - rsi70_sqz6
+          - rsi70_sqz6_rr08
+          - rsi70_sqz6_rr40
+          - rsi75
+          - rsi75_rr08
+          - rsi75_rr40
+          - rsi75_pctb80
+          - rsi75_pctb80_rr08
+          - rsi75_pctb80_rr40
+          - rsi75_sqz6
+          - rsi75_sqz6_rr08
+          - rsi75_sqz6_rr40
+          - rsi70_rr25
+          - rsi70_pctb80_rr25
+          - rsi70_sqz6_rr25
+          - rsi70_pbsqz_rr08
+          - rsi70_pbsqz_rr40
+          - rsi70_pctb85_rr08
+          - rsi70_sqz10_rr08
         regime: [R1quiet]
     runs-on: ubuntu-latest
     timeout-minutes: 70   # ~55-min shard box + headroom: commit progress EVERY
@@ -123,6 +168,17 @@ jobs:
         if: steps.guard.outputs.done != 'true'
         run: pip install -r requirements.txt
 
+      - name: Refresh sweep tool scripts from main
+        if: steps.guard.outputs.done != 'true'
+        run: |
+          git fetch --depth=1 origin main
+          git checkout FETCH_HEAD -- \
+            tools/resolve_regime_feed.py \
+            tools/scalper_feed_variants.py \
+            tools/champions_report.py \
+            tools/generate_scalper_signals.py \
+            tools/slice_signals.py
+
       - name: Resolve this regime's chart month-glob
         if: steps.guard.outputs.done != 'true'
         id: charts
@@ -153,44 +209,15 @@ jobs:
         if: steps.guard.outputs.done != 'true'
         id: feed
         run: |
-          # Most feeds are generated/adaptive_<feed>.txt (pullback was dropped --
-          # byte-identical to adA_base). The HIGH-FREQUENCY self-scalper feeds use
-          # their own dense archives; map their labels to the real files here. This
-          # mapping mirrors tools/champions_report.py:_FEED_FILE_OVERRIDES so the
-          # swept feed and the published champion CLI point at the same archive.
-          case "${{ matrix.feed }}" in
-            scalper24)      FEED="generated/self_scalper24.txt" ;;
-            scalperwide24)  FEED="generated/self_scalper_widerr24.txt" ;;
-            risk02allhours) FEED="generated/self_risk02_allhours.txt" ;;
-            *)              FEED="generated/adaptive_${{ matrix.feed }}.txt" ;;
-          esac
-          if [ ! -f "$FEED" ]; then
-            echo "feed file $FEED is missing"; exit 1
-          fi
-          # The archive feed spans the FULL 2021-2026 history, but each regime is
-          # fit on its own chart slice. tools/sweep.py:split_train_validate() picks
-          # the OOS validate set as the last 2 SIGNAL-months of whatever feed it is
-          # handed -- so feeding the full feed with regime-restricted charts puts the
-          # held-out tail (2026-05/06) OUTSIDE every non-R4 regime's charts, yielding
-          # $0 OOS for every candidate. Filter the feed to THIS regime's signal
-          # months first so the OOS tail lands inside the regime window. The regex is
-          # matched against the YYYY-MM at the start of each `... GMT` date header;
-          # a header (and its signal lines) is kept only while its month matches.
-          case "${{ matrix.regime }}" in
-            R1quiet)  SIG_RE='^(2021-1[12]|2022-|2023-0[1-9])' ;;
-            R2bull)   SIG_RE='^(2023-1[012]|2024-)' ;;
-            R3strong) SIG_RE='^2025-' ;;
-            R4parab)  SIG_RE='^2026-' ;;
-            *) echo "unknown regime ${{ matrix.regime }}"; exit 1 ;;
-          esac
           FILTERED="/tmp/feed_${{ matrix.feed }}_${{ matrix.regime }}.txt"
-          awk -v re="$SIG_RE" '
-            /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] GMT/ { keep = (substr($0,1,7) ~ re); if (keep) print; next }
-            keep
-          ' "$FEED" > "$FILTERED"
-          test -s "$FILTERED" || { echo "ERROR: filtered feed empty for ${{ matrix.regime }}"; exit 1; }
+          python tools/resolve_regime_feed.py \
+            --feed "${{ matrix.feed }}" \
+            --regime "${{ matrix.regime }}" \
+            --output "$FILTERED" \
+            --charts $CHARTS
+          test -s "$FILTERED" || { echo "ERROR: materialized feed empty for ${{ matrix.regime }}"; exit 1; }
           echo "FEED=${FILTERED}" >> "$GITHUB_ENV"
-          echo "feed ${{ matrix.feed }} archive: ${FEED} -> regime-filtered ${FILTERED} ($(grep -cE '^[0-9]+\. ' "$FILTERED") signals for ${{ matrix.regime }})"
+          echo "feed ${{ matrix.feed }} -> ${FILTERED} ($(grep -cE '^[0-9]+\. ' "$FILTERED") signals for ${{ matrix.regime }})"
 
       - name: Run 4 shards in parallel (use all 4 runner cores, resumable, time-boxed)
         if: steps.guard.outputs.done != 'true'
@@ -356,6 +383,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Refresh sweep tool scripts from main
+        run: |
+          git fetch --depth=1 origin main
+          git checkout FETCH_HEAD -- \
+            tools/resolve_regime_feed.py \
+            tools/scalper_feed_variants.py \
+            tools/champions_report.py \
+            tools/generate_scalper_signals.py \
+            tools/slice_signals.py
+
       - name: Download all cell artifacts
         uses: actions/download-artifact@v4
         with:
@@ -401,27 +438,22 @@ jobs:
       - name: Write per-regime BEST + CLI snapshots + LEADERBOARD (ranked across feeds)
         run: |
           python - <<'PY'
-          import json, pathlib
+          import json, pathlib, sys
+          sys.path.insert(0, ".")
+          import tools.champions_report as cr
+          from tools.scalper_feed_variants import SCALPER_RBR_VARIANTS
+
           OUT = pathlib.Path("sweep_regime_out_grid")
-          FEEDS = ["adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
-                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP", "breakout", "meanrev",
-                   "scalper24", "scalperwide24", "risk02allhours"]
+          CORE_FEEDS = ["adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
+                        "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP",
+                        "breakout", "meanrev", "scalper24", "scalperwide24",
+                        "risk02allhours"]
+          FEEDS = CORE_FEEDS + [v for v in SCALPER_RBR_VARIANTS if v != "base"]
           REGIMES = ["R1quiet", "R2bull", "R3strong", "R4parab"]
           DD_GATE = 40.0
 
-          # High-frequency feeds map to their own dense archives (mirror of
-          # tools/champions_report.py:_FEED_FILE_OVERRIDES); everything else is an
-          # adaptive_<feed> file.
-          _FEED_FILE_OVERRIDES = {
-              "scalper24": "generated/self_scalper24.txt",
-              "scalperwide24": "generated/self_scalper_widerr24.txt",
-              "risk02allhours": "generated/self_risk02_allhours.txt",
-          }
-
           def feed_signals(feed):
-              if feed in _FEED_FILE_OVERRIDES:
-                  return _FEED_FILE_OVERRIDES[feed]
-              return f"generated/adaptive_{feed}.txt"
+              return cr.feed_signals(feed)
 
           def load_cell(feed, regime):
               """All result rows for one (feed,regime) cell, tagged with feed."""
@@ -546,11 +578,14 @@ jobs:
           import json, pathlib, sys
           sys.path.insert(0, ".")
           import tools.champions_report as cr
+          from tools.scalper_feed_variants import SCALPER_RBR_VARIANTS
 
           OUT = pathlib.Path("sweep_regime_out_grid")
-          FEEDS = ["adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
-                   "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP", "breakout", "meanrev",
-                   "scalper24", "scalperwide24", "risk02allhours"]
+          CORE_FEEDS = ["adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
+                        "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP",
+                        "breakout", "meanrev", "scalper24", "scalperwide24",
+                        "risk02allhours"]
+          FEEDS = CORE_FEEDS + [v for v in SCALPER_RBR_VARIANTS if v != "base"]
           REGIMES = ["R1quiet", "R2bull", "R3strong", "R4parab"]
 
           def load_cell(feed, regime):
@@ -616,7 +651,17 @@ jobs:
 
       - name: Mark cells DONE (all 4 shards have >= 120 lines)
         run: |
-          FEEDS="adA_base adB_tightSL adC_wideSL adD_closeTP adE_farTP adF_tightSL_closeTP adG_wideSL_farTP breakout meanrev scalper24 scalperwide24 risk02allhours"
+          FEEDS="$(python - <<'PY'
+          from tools.scalper_feed_variants import SCALPER_RBR_VARIANTS
+          core = [
+              "adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
+              "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP",
+              "breakout", "meanrev", "scalper24", "scalperwide24",
+              "risk02allhours",
+          ]
+          print(" ".join(core + [v for v in SCALPER_RBR_VARIANTS if v != "base"]))
+          PY
+          )"
           REGIMES="R1quiet R2bull R3strong R4parab"
           for feed in $FEEDS; do
             for regime in $REGIMES; do
@@ -643,6 +688,7 @@ jobs:
           git add -f CHAMPIONS.md 2>/dev/null || true
           git add -A generated 2>/dev/null || true
           git add -f cli 2>/dev/null || true
+          git add -f tools/resolve_regime_feed.py tools/scalper_feed_variants.py tools/champions_report.py tools/generate_scalper_signals.py tools/slice_signals.py 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "Nothing to commit."
           else
@@ -662,9 +708,9 @@ jobs:
         run: |
           # The grid runs ONE regime at a time (R4 -> R3 -> R2 -> R1). Keep
           # ACTIVE_REGIME in sync with the matrix `regime:`.
-          #   * If EVERY regime's cells are done (4 regimes x 12 feeds = 48), the
+          #   * If EVERY regime's cells are done (4 regimes x 45 feeds = 180), the
           #     whole sweep is finished -> disable the workflow.
-          #   * Else if the ACTIVE regime's 12 cells are done, STOP dispatching but
+          #   * Else if the ACTIVE regime's 45 cells are done, STOP dispatching but
           #     stay ENABLED, so the maintainer advances to the next regime with
           #     only a matrix + ACTIVE_REGIME edit and a dispatch -- no re-enable
           #     dance (a disabled workflow cannot be workflow_dispatch'd).
@@ -672,8 +718,8 @@ jobs:
           # The 3-hourly cron stays a cheap safety net: between regimes it fires a
           # no-op pass (all active cells guard-skip) and stops at the branch above.
           ACTIVE_REGIME=R1quiet
-          FEED_CELLS=12
-          ALL_CELLS=48
+          FEED_CELLS=45
+          ALL_CELLS=180
           done=$(ls -d sweep_regime_out_grid/*__${ACTIVE_REGIME}/DONE 2>/dev/null | wc -l)
           all_done=$(ls -d sweep_regime_out_grid/*/DONE 2>/dev/null | wc -l)
           echo "${ACTIVE_REGIME} cells DONE: ${done}/${FEED_CELLS}; all regimes: ${all_done}/${ALL_CELLS}"
