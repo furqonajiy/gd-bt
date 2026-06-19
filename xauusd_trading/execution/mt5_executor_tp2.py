@@ -188,8 +188,8 @@ class Mt5Executor(_BaseMt5Executor):
                 wait_min = (activation_at - now_chart).total_seconds() / 60.0
                 log.actions.append(
                     f"Signal {signal.signal_key}: waiting for activation "
-                    f"(activates {activation_at:%Y-%m-%d %H:%M} GMT+3, "
-                    f"now {now_chart:%Y-%m-%d %H:%M} GMT+3, "
+                    f"(activates {chart_tz.to_log_tz(activation_at):%Y-%m-%d %H:%M} GMT+7, "
+                    f"now {chart_tz.to_log_tz(now_chart):%Y-%m-%d %H:%M} GMT+7, "
                     f"{wait_min:.0f} min remaining)."
                 )
                 self._session_skipped_inactive_signal_keys.add(signal.signal_key)
@@ -201,8 +201,8 @@ class Mt5Executor(_BaseMt5Executor):
                 minutes_past = (now_chart - expires_at).total_seconds() / 60.0
                 log.actions.append(
                     f"Signal {signal.signal_key}: skipped expired by wall-clock "
-                    f"(expired {expires_at:%Y-%m-%d %H:%M} GMT+3, "
-                    f"now {now_chart:%Y-%m-%d %H:%M} GMT+3, "
+                    f"(expired {chart_tz.to_log_tz(expires_at):%Y-%m-%d %H:%M} GMT+7, "
+                    f"now {chart_tz.to_log_tz(now_chart):%Y-%m-%d %H:%M} GMT+7, "
                     f"{minutes_past:.0f} min past expiry)."
                 )
                 self._session_skipped_expired_signal_keys.add(signal.signal_key)
@@ -627,7 +627,7 @@ class Mt5Executor(_BaseMt5Executor):
                 log.actions.append(
                     f"  Reconciled #{idx} ({signal_key}): MT5 fill at "
                     f"{actual_price:g} lot={actual_lot:.2f} at "
-                    f"{fill_time_chart:%Y-%m-%d %H:%M:%S} GMT+3 "
+                    f"{chart_tz.to_log_tz(fill_time_chart):%Y-%m-%d %H:%M:%S} GMT+7 "
                     f"(engine had {before_status} at {before_price:g})"
                 )
             if self.forensic is not None:
@@ -1143,9 +1143,9 @@ class Mt5Executor(_BaseMt5Executor):
                             f"  {nc_key}: replay still holds this leg OPEN but it is "
                             f"missing from MT5, price moved past entry {entry_price:g}, "
                             f"and the pending window closed at "
-                            f"{engine_pos.expiry_time:%Y-%m-%d %H:%M} GMT+3 "
+                            f"{chart_tz.to_log_tz(engine_pos.expiry_time):%Y-%m-%d %H:%M} GMT+7 "
                             f"({mins_past:.0f} min ago, now "
-                            f"{wall_clock_now:%H:%M} GMT+3); not chasing (logged once)"
+                            f"{chart_tz.to_log_tz(wall_clock_now):%H:%M} GMT+7); not chasing (logged once)"
                         )
                         self._session_skipped_no_chase.add(nc_key)
                     continue

@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Optional
 
 from xauusd_trading import StrategyConfig
+from xauusd_trading.core import chart_tz
 from xauusd_trading import NewSignalPlan
 from xauusd_trading import Mt5Connection
 from xauusd_trading import Position, advance_bars
@@ -471,7 +472,7 @@ class Mt5Executor:
             log.actions.append(
                 f"  Reconciled #{i} ({signal_key}): "
                 f"MT5 fill at {actual_price:g} lot={actual_lot:.2f} at "
-                f"{fill_time_chart:%Y-%m-%d %H:%M:%S} GMT+3 "
+                f"{chart_tz.to_log_tz(fill_time_chart):%Y-%m-%d %H:%M:%S} GMT+7 "
                 f"(engine had PENDING at planned {planned_price:g})"
             )
             if self.forensic is not None:

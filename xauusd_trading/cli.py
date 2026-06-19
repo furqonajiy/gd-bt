@@ -16,6 +16,7 @@ from typing import Any
 
 from . import cli_orig as _orig
 from .cli_orig import *  # noqa: F401,F403 - preserve the original public CLI surface
+from xauusd_trading.core import chart_tz
 from xauusd_trading import ManualPositionSource, StrategyConfig
 from xauusd_trading import parse_signals_file as _default_parse_signals_file
 from xauusd_trading import decide as _default_decide
@@ -528,8 +529,8 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         if rec.new_signal.action == "SKIP_EXPIRED":
             status = (
                 f"Signal {signal.signal_key}: pending window already closed at "
-                f"{rec.new_signal.pending_expires_at:%Y-%m-%d %H:%M} GMT+3 "
-                f"(now {replay_end:%H:%M}). Skipped."
+                f"{chart_tz.to_log_tz(rec.new_signal.pending_expires_at):%Y-%m-%d %H:%M} GMT+7 "
+                f"(now {chart_tz.to_log_tz(replay_end):%H:%M} GMT+7). Skipped."
             )
             # The 'now HH:MM' clock changes every minute, so dedupe on a stable
             # per-signal key; expiry is terminal and only needs announcing once.
