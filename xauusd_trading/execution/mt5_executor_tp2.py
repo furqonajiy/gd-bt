@@ -32,6 +32,7 @@ from xauusd_trading.core.trend_runner import should_skip_time_exit
 from .mt5_executor import (
     ExecutionLog,
     Mt5Executor as _BaseMt5Executor,
+    mt5_close_comment,
     mt5_entry_comment,
     round_lot,
     signal_entry_key,
@@ -752,7 +753,7 @@ class Mt5Executor(_BaseMt5Executor):
             "type":         close_type,
             "price":        price,
             "magic":        magic,
-            "comment":      f"{signal_key}/{action_name}"[:31],
+            "comment":      mt5_close_comment(signal_key, action_name),
             "deviation":    self.CLOSE_DEVIATION_POINTS,
             "type_filling": self._market_fill_mode(),
         }
