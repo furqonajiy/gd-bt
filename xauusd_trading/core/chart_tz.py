@@ -74,3 +74,14 @@ def from_chart_tz(local: datetime, target_offset: int) -> datetime:
     """Convert a naive chart-local time to a naive clock in ``target_offset``
     (e.g. render a chart bar in GMT+7 for display), honouring EET/EEST."""
     return chart_to_utc(local) + timedelta(hours=target_offset)
+
+
+# Provider and self signals are authored in GMT+7, so live logs render chart-time
+# instants in that zone -- the operator reads the log against the signals (and a
+# GMT+7 wall clock), not the GMT+3 chart/server clock. DST-aware via from_chart_tz.
+LOG_DISPLAY_OFFSET = 7
+
+
+def to_log_tz(local: datetime) -> datetime:
+    """Chart-local datetime -> the GMT+7 display zone used in live logs."""
+    return from_chart_tz(local, LOG_DISPLAY_OFFSET)
