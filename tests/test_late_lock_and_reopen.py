@@ -556,3 +556,58 @@ def test_partial_placement_places_fresh_legs_in_reopen_mode(monkeypatch):
         mt5_entry_comment(signal.signal_key, 4),
         mt5_entry_comment(signal.signal_key, 5),
     }
+
+
+# --- 4. time-exit deadline fallback when the replay never recorded a fill -----
+
+def _live_open_leg(pos, *, open_chart):
+    """A live BUY position whose broker open time maps to open_chart."""
+    key = pos.signal.signal_key
+    return _FakePos(
+        ticket=88, magic=signal_to_magic(key),
+        comment=mt5_entry_comment(key, 0),
+        type_=_FakeMt5.POSITION_TYPE_BUY, sl=pos.entries[0].initial_sl,
+        tp=pos.signal.tp3, price_open=pos.entries[0].entry_price,
+        time=_epoch_chart(open_chart),
+    )
+
+
+def test_time_exit_fires_via_deadline_fallback_when_replay_never_set_it(monkeypatch):
+    # Orphan case: a live position is open past max-hold but the replay never
+    # set time_exit_deadline (reconcile missed the fill / executor restarted).
+    # The fallback derives the deadline from the live position's own open time,
+    # so the leg still time-exits instead of sitting open forever.
+    _reset_executor_guards()
+    pos = _pos_with_open_leg()
+    pos.first_fill_time = None
+    pos.time_exit_deadline = None
+    now = pos.activation_time + timedelta(minutes=_CFG.max_hold_minutes + 30)
+    _freeze_wall_clock(monkeypatch, now)
+    open_chart = now - timedelta(minutes=_CFG.max_hold_minutes + 10)  # past max-hold
+    mt5 = _FakeMt5(bid=4212.00, ask=4212.30,
+                   positions=[_live_open_leg(pos, open_chart=open_chart)])
+
+    log = _executor(mt5).manage_position(pos, _CFG, now)
+
+    deals = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_DEAL]
+    assert len(deals) == 1  # the orphaned leg was timed out
+    assert any("Time-exit" in a for a in log.actions)
+
+
+def test_deadline_fallback_keeps_a_fresh_leg_open(monkeypatch):
+    # Same None-deadline state, but the live position opened well within max-hold:
+    # the fallback must NOT close it early.
+    _reset_executor_guards()
+    pos = _pos_with_open_leg()
+    pos.first_fill_time = None
+    pos.time_exit_deadline = None
+    now = pos.activation_time + timedelta(minutes=10)
+    _freeze_wall_clock(monkeypatch, now)
+    open_chart = now - timedelta(minutes=5)  # fresh
+    mt5 = _FakeMt5(bid=4212.00, ask=4212.30,
+                   positions=[_live_open_leg(pos, open_chart=open_chart)])
+
+    log = _executor(mt5).manage_position(pos, _CFG, now)
+
+    deals = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_DEAL]
+    assert deals == []  # not at max-hold yet -> leg stays open

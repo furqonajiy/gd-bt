@@ -1174,6 +1174,23 @@ class Mt5Executor(_BaseMt5Executor):
         digits = self.mt5.symbol_info(self.symbol).digits
         tolerance = 10 ** (-digits)
 
+        # Time-exit safety net (live-only). The deadline is normally set from the
+        # replay's first fill in reconcile_with_mt5. If a fill was never recorded
+        # there -- reconciliation missed it after a reopen, or the executor was
+        # restarted with positions already open -- the deadline stays None and the
+        # leg can sit open indefinitely (the legs that overran max-hold in the
+        # 2026-06-15..18 reconciliation). Fall back to the earliest LIVE position's
+        # broker open time + max_hold so a leg is always bounded by its real fill,
+        # never orphaned. Backtests drive the engine lifecycle (not this executor),
+        # so they never reach this path and parity is unchanged.
+        time_exit_deadline = engine_pos.time_exit_deadline
+        if time_exit_deadline is None:
+            opens = [self._broker_epoch_to_chart_time(int(getattr(p, "time", 0)))
+                     for p in self.find_positions(magic) if getattr(p, "time", 0)]
+            if opens:
+                time_exit_deadline = min(opens) + timedelta(
+                    minutes=config.max_hold_minutes)
+
         if effective_chart_now > engine_pos.expiry_time:
             log.merge(self._cancel_orders(
                 magic,
@@ -1302,8 +1319,8 @@ class Mt5Executor(_BaseMt5Executor):
         # past max-hold.  The paired timeout pending-cancel must be skipped too
         # so live and backtest keep the same signal lifecycle for this cycle.
         if (
-                engine_pos.time_exit_deadline is not None
-                and effective_chart_now >= engine_pos.time_exit_deadline
+                time_exit_deadline is not None
+                and effective_chart_now >= time_exit_deadline
                 and not should_skip_time_exit(engine_pos, config)
         ):
             timeout_closed: list[tuple[int, float]] = []
