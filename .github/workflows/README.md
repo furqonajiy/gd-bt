@@ -43,8 +43,9 @@ of their pinned version — a safe catch-all.
 ## Workflows in this folder
 - `regime-grid-sweep.yml` (renamed from `self-regime-grid.yml`) — the
   unattended parameter sweep. It sweeps **one regime at a time** (R4 → R3 → R2
-  → R1), risk 1–5%, and ranks DD‑≤‑40% champions on **compounded net P&L +
-  the $3/closed‑lot bonus** (with a positive held‑out OOS gate). See
+  → R1), risk 1–5%, and ranks DD‑≤‑40% champions on **fixed-lot edge +
+  the $3/closed‑lot bonus** (with a positive held‑out OOS gate; compounded
+  net+bonus is reported for context only). See
   `../../docs/SWEEP_RUNBOOK.md` for the methodology.
 - `self-scalper-rsi-bb-rr-sweep.yml` — the SC24 **RSI × Bollinger × R:R**
   combination sweep (R4/2026 only). Full cross of the best-of-each levels (34

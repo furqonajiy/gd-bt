@@ -17,8 +17,9 @@ name: regime-grid-sweep
 # on the runner's 4 cores against that regime's chart month-glob and that feed's
 # archive, then a single AGGREGATE job merges every shard's results back and is
 # the SOLE writer to research/regime-adaptive -- so there is no push collision
-# between the parallel jobs. Champions rank on compounded net + $3/lot bonus at
-# DD<=40% (tools/champions_report.best_challenger), so trade frequency counts.
+# between the parallel jobs. Champions rank on fixed-lot edge + $3/lot bonus at
+# DD<=40% (tools/champions_report.best_challenger), so trade frequency counts
+# without letting late-regime compounding decide the deploy target.
 #
 # CHAMPION/CHALLENGER deploy. The grid is the CHALLENGER. The user keeps trading
 # their INCUMBENT baseline = SC24 (R4 live champion SQZ6, cli_champion_R4_SQZ6_no_trailing:
@@ -402,6 +403,7 @@ jobs:
         run: |
           python - <<'PY'
           import json, pathlib
+          import tools.deploy_objective as dobj
           OUT = pathlib.Path("sweep_regime_out_grid")
           FEEDS = ["adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
                    "adE_farTP", "adF_tightSL_closeTP", "adG_wideSL_farTP", "breakout", "meanrev",
@@ -453,12 +455,7 @@ jobs:
               return r.get("concurrent_risk_max_dd_pct")
 
           def keyfn(r):
-              # Rank by net+bonus (deploy objective), then OOS, then edge.
-              return (
-                  r.get("risk_net_profit_with_bonus") or 0.0,
-                  r.get("oos_fixed_no_bonus_profit") or 0.0,
-                  r.get("fixed_no_bonus_profit") or 0.0,
-              )
+              return dobj.rank_key(r)
 
           def render_cli(cfg, *, regime, feed):
               # Mirror the 2021 orchestrator's renderer when importable so the
@@ -480,7 +477,7 @@ jobs:
                           % (exc, feed, signals, json.dumps(cfg, indent=2, sort_keys=True)))
 
           leaderboard = ["# feed x regime adaptive grid — best (feed,config) per regime",
-                         f"# DD gate <= {DD_GATE:.0f}%, ranked by OOS then edge", ""]
+                         f"# DD gate <= {DD_GATE:.0f}%, ranked by edge+bonus then OOS/edge", ""]
 
           for regime in REGIMES:
               rows = load_regime(regime)
@@ -498,6 +495,8 @@ jobs:
               for i, r in enumerate(survivors[:15], 1):
                   lines.append(
                       f"{i:>2}. feed={r.get('_feed')} "
+                      f"edge_bonus={dobj.fixed_with_bonus_profit(r)} "
+                      f"bonus={dobj.bonus_profit(r)} "
                       f"oos={r.get('oos_fixed_no_bonus_profit')} "
                       f"edge={r.get('fixed_no_bonus_profit')} "
                       f"dd={r.get('concurrent_risk_max_dd_pct')}% "
@@ -513,12 +512,16 @@ jobs:
                   best_feed = top.get("_feed")
                   header = (
                       f"# best {regime} config: feed={best_feed} "
+                      f"edge_bonus={dobj.fixed_with_bonus_profit(top)} "
+                      f"bonus={dobj.bonus_profit(top)} "
                       f"oos={top.get('oos_fixed_no_bonus_profit')} "
                       f"edge={top.get('fixed_no_bonus_profit')} "
                       f"dd={top.get('concurrent_risk_max_dd_pct')}%\n\n")
                   cli_path.write_text(header + render_cli(best_cfg, regime=regime, feed=best_feed))
                   leaderboard.append(
                       f"{regime}: feed={best_feed} "
+                      f"edge_bonus={dobj.fixed_with_bonus_profit(top)} "
+                      f"bonus={dobj.bonus_profit(top)} "
                       f"edge={top.get('fixed_no_bonus_profit')} "
                       f"oos={top.get('oos_fixed_no_bonus_profit')} "
                       f"dd={top.get('concurrent_risk_max_dd_pct')}% "
@@ -546,6 +549,7 @@ jobs:
           import json, pathlib, sys
           sys.path.insert(0, ".")
           import tools.champions_report as cr
+          import tools.deploy_objective as dobj
 
           OUT = pathlib.Path("sweep_regime_out_grid")
           FEEDS = ["adA_base", "adB_tightSL", "adC_wideSL", "adD_closeTP",
@@ -590,6 +594,8 @@ jobs:
               if champ:
                   header = (
                       f"# published champion {regime}: feed={champ.get('feed')} "
+                      f"edge_bonus={dobj.fixed_with_bonus_profit(champ)} "
+                      f"bonus={dobj.bonus_profit(champ)} "
                       f"edge={champ.get('edge')} oos={champ.get('oos')} "
                       f"dd={champ.get('dd')}%\n\n")
                   cli = cr.render_champion_cli(

@@ -17,9 +17,10 @@ FIXED self archive (``generated/self_better.txt`` by default): that is what the
 user actually trades live, so it is the honest baseline to beat.
 
 Emits ``INCUMBENT_<regime>.json`` with ``edge`` (fixed_no_bonus_profit),
-``oos`` (oos_fixed_no_bonus_profit) and ``dd`` (concurrent_risk_max_dd_pct),
-plus the config + feed it was scored on, so the aggregate can render the
-deploy file without recomputing anything.
+``edge_bonus`` (fixed_with_bonus_profit), ``bonus``, ``oos``
+(oos_fixed_no_bonus_profit) and ``dd`` (concurrent_risk_max_dd_pct), plus the
+config + feed it was scored on, so the aggregate can render the deploy file
+without recomputing anything.
 """
 from __future__ import annotations
 
@@ -108,9 +109,14 @@ def main(argv: list[str] | None = None) -> int:
         "feed": str(signals_path),
         "kind": "incumbent",
         "edge": row.get("fixed_no_bonus_profit"),
+        "bonus": row.get("bonus_contribution"),
+        "edge_bonus": row.get("fixed_with_bonus_profit"),
+        "fixed_with_bonus_profit": row.get("fixed_with_bonus_profit"),
+        "deploy_objective": row.get("fixed_with_bonus_profit"),
         "oos": row.get("oos_fixed_no_bonus_profit"),
         "dd": row.get("concurrent_risk_max_dd_pct"),
         "net_bonus": row.get("risk_net_profit_with_bonus"),
+        "compounded_net_bonus": row.get("risk_net_profit_with_bonus"),
         "config": cfg,
         "config_json": json.dumps(cfg, sort_keys=True),
     }
@@ -119,8 +125,9 @@ def main(argv: list[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"INCUMBENT_{args.regime}.json"
     out_path.write_text(json.dumps(out, indent=2, sort_keys=True) + "\n")
-    print(f"[incumbent] regime={args.regime} net_bonus={out['net_bonus']} "
-          f"edge={out['edge']} oos={out['oos']} dd={out['dd']}%", flush=True)
+    print(f"[incumbent] regime={args.regime} edge_bonus={out['edge_bonus']} "
+          f"edge={out['edge']} bonus={out['bonus']} oos={out['oos']} "
+          f"dd={out['dd']}% compounded={out['net_bonus']}", flush=True)
     print(f"[incumbent] wrote {out_path}", flush=True)
     return 0
 
