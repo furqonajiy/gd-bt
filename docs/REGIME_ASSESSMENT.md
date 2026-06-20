@@ -7,11 +7,18 @@
 **Question asked:** is the live 4‑regime scheme right, or should it be finer /
 defined differently ("maybe more than R4/R3/R2")?
 
-**Answer in one line:** the current scheme has the right *idea* (volatility tiers)
-but the wrong *metric* — it keys on **absolute** M15 ATR, which is biased by a
-2.6× price rise. Fixing the metric (price‑normalize) and splitting the overloaded
-top band gives a cleaner, more granular, price‑stable determination — and shows
-slippage should be a separate continuous axis, not bucketed by regime.
+**Answer in one line:** the current scheme keys on **absolute** M15 ATR, which is
+biased by a 2.6× price rise — the *labels* are inconsistent across price eras.
+**BUT a validation backtest shows the deployed champion is volatility‑scale‑
+invariant, so the mislabelling does NOT warrant tuning the regime/champion
+mapping.** The metric flaw matters for exactly one thing — **slippage** (and the
+report's regime column) — which is handled by a separate continuous abs‑ATR
+scaler, not by re‑drawing regimes.
+
+> **Recheck verdict (this update): do NOT tune the regime strategy.** The metric
+> is imperfect but the strategy already self‑normalizes to volatility through its
+> ATR‑derived geometry + risk sizing, so finer/normalized regimes would not change
+> which champion wins. See Finding 5.
 
 ---
 
@@ -105,36 +112,74 @@ absolute ATR still varies by price era (e.g. V3 holds 2025‑04 abs $7.73 and
 2026‑04 abs $11.05), so slippage should scale on the *live absolute ATR reading*,
 **not** be bucketed by the regime label.
 
+## Finding 5 — validation: does the relabelling change strategy behaviour? **NO**
+
+The assessment above proves the *metric* is biased, but not that fixing it changes
+*outcomes*. To test that, run the deployed R4 champion (SQZ6 = `rsi75_sqz6_rr40`)
+separately on the two halves of 2026 — which today share one label (R4parab) but
+are very different markets:
+
+| 2026 half | abs ATR | %‑ATR | trend | proposed tier |
+|---|---|---|---|---|
+| Jan–Mar | $16.13 | 0.325% | **+7.8%** | V4 extreme |
+| Apr–Jun | $10.23 | 0.223% | **−11.1%** | V3 high |
+
+1.6× volatility apart and **opposite trend**. Champion backtest, fixed 0.01 lot
+(clean per‑trade edge), slippage 2.0/1.0:
+
+| half | signals | edge $ | **$/signal** | DD | win rate |
+|---|---|---|---|---|---|
+| V4 extreme (Jan–Mar) | 4,995 | $31,729 | **$6.4** | 7.3% | 55% |
+| V3 high (Apr–Jun) | 4,768 | $30,624 | **$6.4** | 8.8% | 57% |
+
+**The per‑trade edge is identical** ($6.4/sig) and win rate within 2 pts, across a
+1.6× volatility gap and an inverted trend. The per‑*month* spread is much larger
+and **uncorrelated with volatility** — the single most extreme month (2026‑02,
+0.344%) had the *best* edge ($11.7/sig); the next most extreme (2026‑01) the
+*worst* ($2.5/sig). So the variation is idiosyncratic (path/news), not a
+volatility‑tier signal.
+
+**Why:** the strategy is volatility‑scale‑invariant *by construction*. Entries,
+SL and TP are all ATR‑derived, and risk sizing scales the lot to the stop
+distance — so a higher‑vol month has proportionally bigger stops/targets/moves and
+the *relative* (R‑multiple) edge is preserved. Splitting R4 into High/Extreme
+would therefore not produce different champions; it would fit month‑level noise
+(which is larger than the tier signal). The strategy is also two‑sided, so the
+opposite trends didn't matter either. *(Reproduce:
+`python tools/regime_split_validation.py`.)*
+
 ---
 
 ## Recommended determination
 
-**Two decoupled axes** instead of one absolute‑ATR metric:
+Given Finding 5 (the champion is scale‑invariant), the recommendation is **scoped
+to where the metric flaw actually bites — NOT a re‑draw of the live regimes**:
 
-1. **Volatility tier — from price‑normalized M15 ATR (% of price), 4 tiers:**
-   Normal (< 0.15%), Elevated (0.15–0.20%), High (0.20–0.26%), Extreme (≥ 0.26%).
-   *(A 5th "Dead" < 0.10% exists but is behaviourally close to Normal — keep it as
-   a sub‑label, not a separate champion.)* This is price‑stable: it won't
-   re‑label the market just because gold rose.
-2. **Direction split** (quiet vs bull) on the **Normal** tier via the trend score,
-   exactly as today (R1/R2 differ by direction, not volatility).
-3. **Slippage** as a **continuous** function of the live **absolute** ATR
-   (`scaler = abs_ATR / R4_anchor`, R4 lock slip 2.0/1.0), independent of the tier
-   label — so it is correct in every price era.
-
-Populated regimes over the archive become: Normal‑quiet, Normal‑bull, Elevated,
-High, Extreme — **more granular than today (the current single R4 splits into
-High + Extreme) and price‑stable**, which is exactly the "maybe more than
-R4/R3/R2" the question anticipated.
+1. **Do NOT split R4 / add champion tiers.** The validation shows it wouldn't
+   change champion selection — V3‑high and V4‑extreme deliver the same per‑trade
+   edge under SQZ6. Re‑sweeping per finer tier would fit noise. Keep the live
+   `R1/R2/R3/R4 → champion` mapping as‑is.
+2. **Fix slippage (the one thing that does NOT self‑normalize).** A locked‑exit
+   give‑back is a fixed *dollar* cost, so it scales with **absolute** ATR while the
+   strategy's edge does not. Make the sweep/backtest slippage a **continuous**
+   function of the live absolute ATR (`scaler = abs_ATR / R4_anchor`, anchored on
+   the measured R4 lock slip 2.0/1.0) instead of the flat global 2.0/1.0. This is
+   backtest‑realism only (never a live order) and is the actionable item from the
+   original R3‑vs‑R4 slippage thread.
+3. **Optional — price‑normalize the report's regime *label*.** The Monthly
+   Breakdown's regime column is biased by price era (2025‑04 'R3' is more volatile
+   in %‑terms than three 2026 'R4' months). Switching the *display* metric to
+   %‑ATR makes the labels price‑stable. Cosmetic — it does not affect any trade.
 
 ## Caveats / what this assessment is NOT
 
-- 56 months; the **Extreme** tier is only 3 months (all 2026) and **Elevated**
-  6 — thresholds there are indicative, re‑validate as data accrues.
-- This re‑defines the **metric**; it does **not** re‑pick champions. Implementing
-  it means re‑labelling history and **re‑running the per‑regime sweeps** under the
-  new tiers (especially splitting the current R4 sweep into High vs Extreme) to
-  see whether each tier wants a different champion. That is the next step, not
-  done here.
-- Live `strategy/regime.py` is **unchanged** by this assessment (it is the live
-  contract; changing it is a separate, sign‑off‑gated step with a full re‑sweep).
+- 56 months; the **Extreme** tier is only 3 months (all 2026). The scale‑
+  invariance (Finding 5) is the robust result; the exact %‑tier thresholds are
+  indicative.
+- Finding 5 tests the *deployed* champion's stability across tiers; it does not
+  exhaustively prove no per‑tier champion could ever edge it out — but the
+  identical per‑trade edge plus the noise dominating the tier signal make a
+  per‑tier re‑sweep low‑value.
+- Live `strategy/regime.py` and the champion mapping are **unchanged** — the
+  verdict is that they should stay that way. Only the **slippage model** (backtest
+  realism) is worth changing, and that is independent of the regime determination.
