@@ -26,7 +26,7 @@ Backtest reference (2025–26, fixed-lot, no-bonus): **+$2,898 net, 79.9% win, 2
 Run in order. **The same generated feed file must drive both the live runner and the parity backtest — this is the seam that keeps them comparable.**
 
 1. **Listener** — `telegram_listener.py` → writes raw `signals.txt`
-2. **Filter** — `live_provider_signal_filter.py --preset high_growth_hour_side` → writes the filtered feed `generated/live_provider_high_growth_hour_side.txt`
+2. **Filter** — `live_provider_signal_filter.py --preset high_growth_hour_side` → writes the filtered feed `signals/live_provider_high_growth_hour_side.txt`
 3. **Runner** — `auto_explicit.py` (command below), reads that filtered feed
 4. **(later) Parity** — `backtest_explicit.py` on the *same* feed + freshly-fetched bars (Section 5)
 
@@ -40,7 +40,7 @@ Set `--initial-capital` to your actual demo balance so risk-sizing matches.
 
 ```powershell
 python tools/auto_explicit.py `
-  --signals generated/live_provider_high_growth_hour_side.txt `
+  --signals signals/live_provider_high_growth_hour_side.txt `
   --positions-json positions_demo.json `
   --watch-interval 5 `
   --mt5-symbol XAUUSD `
@@ -110,7 +110,7 @@ Then:
 
 ```powershell
 python tools/backtest_explicit.py `
-  --signals generated/live_provider_high_growth_hour_side.txt `
+  --signals signals/live_provider_high_growth_hour_side.txt `
   --all-signals signals.txt `
   --filter-preset high_growth_hour_side `
   --charts data/XAUUSD_M1_<DEMO_MONTHS>_ELEV8.csv `

@@ -15,7 +15,7 @@
 # with M15 ATR, so they auto-size to the regime). Refresh before each run.
 python tools/generate_breakout_signals.py `
   --m1-charts data/XAUUSD_M1_*_ELEV8.csv `
-  --output generated/adaptive_breakout.txt `
+  --output signals/adaptive_breakout.txt `
   --start-date 2021-11-01 `
   --source-tz-offset 7
 
@@ -48,7 +48,7 @@ python tools/backtest_explicit.py \
   --trailing-open-distance 0.0 \
   --trailing-close-distance 0.0 \
   --trailing-close-after-stage 0 \
-  --signals generated/adaptive_breakout.txt \
+  --signals signals/adaptive_breakout.txt \
   --charts data/XAUUSD_M1_2026*_ELEV8.csv \
   --start-date 2026-01-01 \
   --output-dir reports/CHAMPION_R4parab \
@@ -63,7 +63,7 @@ python tools/backtest_explicit.py \
 # (section 1) on a schedule / before each session instead of a rolling
 # live loop. Set --risk to your live sizing choice (e.g. 0.05).
 python tools/auto_explicit.py \
-  --signals generated/adaptive_breakout.txt \
+  --signals signals/adaptive_breakout.txt \
   --positions-json positions_R4parab.json \
   --watch-interval 15 \
   --mt5-symbol XAUUSD \

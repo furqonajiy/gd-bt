@@ -192,7 +192,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Self-archive LIMIT-only sweep: fixed-lot edge ranking, "
                     "concurrent-DD gate, monthly-consistency gate, fixed-lot OOS.")
-    p.add_argument("--signals", default="generated/self_m15_archive.txt",
+    p.add_argument("--signals", default="signals/self_m15_archive.txt",
                    help="Self-generated signal archive (parsed directly; no provider filter).")
     p.add_argument("--charts", nargs="+", default=["data/XAUUSD_M1_*.csv"])
     p.add_argument("--output-dir", required=True)

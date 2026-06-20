@@ -16,7 +16,7 @@ provider feed unchanged (modulo the --preset hour/side filter, default "all").
 
 Usage (one variant):
   python tools/filter_provider_signals_by_indicator.py \
-    --input victor_signals.txt --output generated/victor_rsi.txt \
+    --input victor_signals.txt --output signals/victor_rsi.txt \
     --charts "data/XAUUSD_M1_2026*_ELEV8.csv" --rsi-buy-max 70 --rsi-sell-min 30
 """
 from __future__ import annotations

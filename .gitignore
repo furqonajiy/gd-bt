@@ -233,3 +233,6 @@ data/XAUUSD_M15_*_ELEV8.csv
 /_sweep_self.py
 /_orchestrate.py
 /_final_verdict.py
+
+# Generated signal feeds (runtime output)
+/signals/

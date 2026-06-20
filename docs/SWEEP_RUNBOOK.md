@@ -136,18 +136,18 @@ the incumbent's feed — always include it):
 
 ```bash
 python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv \
-  --output generated/self_scalper24.txt --start <START> --session-start 0 --session-end 0 --signal-tz 7
+  --output signals/self_scalper24.txt --start <START> --session-start 0 --session-end 0 --signal-tz 7
 
 python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv \
-  --output generated/self_scalper_widerr24.txt --start <START> --session-start 0 --session-end 0 --signal-tz 7 \
+  --output signals/self_scalper_widerr24.txt --start <START> --session-start 0 --session-end 0 --signal-tz 7 \
   --rr1 1.5 --rr2 2.5 --rr3 4.0
 
 python tools/generate_aggressive_limit_risk02.py --charts data/XAUUSD_M1_*_ELEV8.csv \
-  --output generated/self_risk02_allhours.txt --start-date <START> \
+  --output signals/self_risk02_allhours.txt --start-date <START> \
   --execution-hours "0,1,2,...,23"
 
 python tools/generate_better_self_signals.py --m15-charts data/XAUUSD_M15_*_ELEV8.csv \
-  --m1-charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_better.txt --start-date <START>
+  --m1-charts data/XAUUSD_M1_*_ELEV8.csv --output signals/self_better.txt --start-date <START>
 ```
 
 ---
@@ -189,7 +189,7 @@ alone beat, the baseline. The champion's `d24` (tp1‑lock‑delay = 24), `e6/e8
 
 ```bash
 python tools/sweep_self_limit.py \
-  --signals generated/self_<feed>.txt \
+  --signals signals/self_<feed>.txt \
   --charts data/XAUUSD_M1_*_ELEV8.csv \      # = the full real-M1 span
   --output-dir <out>/sweep_<feed> \
   --max-candidates 300 \                     # sample size per feed

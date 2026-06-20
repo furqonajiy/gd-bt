@@ -96,7 +96,7 @@ OOS>0 and DD≤40% are non-negotiable.
 ## 3. Deploy a winner
 
 The Victor executor is `cli/champion_victor.txt` (tag **VIC**, feed
-`generated/victor_live.txt`, positions `positions_victor.json`). Plug the winning
+`signals/victor_live.txt`, positions `positions_victor.json`). Plug the winning
 config's flags into its BACKTEST + AUTO commands (entries, sl_multiplier, lock
 delays, max-hold, final-target, …). If the winner uses the signal policy
 (`signal_min_rr`, `rewrite_tp*_rr`, `sl_source=atr`, …), note these are

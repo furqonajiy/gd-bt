@@ -30,7 +30,7 @@ A signal looks like:
 | `trading/btcusd/` | BTC pair package: a self-rejection backtest runner that imports the shared `trading.engine`. |
 | `tools/` | Research/ops scripts: parameter sweeps, signal generators, explicit-config live/backtest runners, `live_feed_loop.py` (live self-signal feed loop), forensic dumper, tick tooling, `reconcile_report_html.py` (live↔backtest reconcile), `regime_granularity_assessment.py` / `regime_split_validation.py`. |
 | `tools/generate_scalper_signals.py` | The self-feed (scalper24) generator. Optional entry filters: RSI, Bollinger (%B + bandwidth squeeze), R:R geometry (`--rr1/2/3`), Support/Resistance (prior-day H/L + round levels), and Supply/Demand (Rally-Base-Rally / Drop-Base-Drop zones, `--sd-mode rbr_dbd`). |
-| `listener/` | `telegram_listener.py` — ingests Victor's Telegram channel into `signals.txt` (override with `--signals-file`, e.g. `victor_signals.txt`). New and edited messages pass a logic-only typo fixer first (wrong-side SL/TP, TP order, extra-zero / wrong-hundreds, and a directionally-valid but implausibly-far SL like `4214`→`4314`). The feed tracks the channel's latest state: edits amend the line in place, deletions remove it (each journalled to `signal_overrides.jsonl`), and startup catch-up reconciles changes made while the listener was down. `auto --apply-signal-edits` consumes that journal so the live executor follows the corrected feed (edit = flatten + re-place corrected; delete = flatten + untrack). |
+| `listeners/` | Per-platform signal-source listeners (one subfolder per source: `telegram/`, future `whatsapp/`, …). `listeners/telegram/telegram_listener.py` — ingests Victor's Telegram channel into `signals.txt` (override with `--signals-file`, e.g. `victor_signals.txt`). New and edited messages pass a logic-only typo fixer first (wrong-side SL/TP, TP order, extra-zero / wrong-hundreds, and a directionally-valid but implausibly-far SL like `4214`→`4314`). The feed tracks the channel's latest state: edits amend the line in place, deletions remove it (each journalled to `signal_overrides.jsonl`), and startup catch-up reconciles changes made while the listener was down. `auto --apply-signal-edits` consumes that journal so the live executor follows the corrected feed (edit = flatten + re-place corrected; delete = flatten + untrack). |
 | `champions/` | `CHAMPION_<regime>.json` — the deployable config per volatility regime, read by `auto --adaptive`. |
 | `tests/` | `pytest` suite (live/backtest parity, reconcile, sizing, listener, etc.). |
 | `docs/` | Setup and operations guides (see below). |
@@ -215,8 +215,8 @@ names for *all four* artifacts — `--strategy-tag`, `--positions-json`, the
 generated signal/feed `.txt`, and the backtest report (Excel) dir — all keyed off
 the same short tag, so nothing collides and every file traces to one strategy at
 a glance. The R4 champion is tag `SQZ6` → `positions_sqz6.json`,
-`generated/sqz6.txt` / `generated/sqz6_live.txt`, `reports/SQZ6_2026xx`; Victor is
-`VIC` → `positions_victor.json`, `generated/victor_live.txt`.
+`signals/sqz6.txt` / `signals/sqz6_live.txt`, `reports/SQZ6_2026xx`; Victor is
+`VIC` → `positions_victor.json`, `signals/victor_live.txt`.
 
 Two live modes:
 
@@ -235,7 +235,7 @@ per new signal. Point `auto`'s `--signals` at its `*_live.txt` output:
 # window 1 — generate (rolls start + narrows charts internally; logs each new signal)
 python tools/live_feed_loop.py --family scalper --interval 30 `
   --gen-start-days 3 --gen-recent-months 2 --mt5-symbol XAUUSD --mt5-server-offset 3 `
-  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/sqz6_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/sqz6_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0
 
 # window 2 — execute that feed (auto_explicit.py with the strategy flags)
 ```

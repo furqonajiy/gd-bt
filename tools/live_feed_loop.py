@@ -34,7 +34,7 @@ Usage (champion no-trailing config):
       --mt5-symbol XAUUSD --mt5-server-offset 3 \\
       -- \\
       --charts "data/XAUUSD_M1_*_ELEV8.csv" \\
-      --output generated/self_scalper24_live.txt \\
+      --output signals/self_scalper24_live.txt \\
       --start 2026-06-10 --session-start 0 --session-end 0
 
 Everything after ``--`` is passed verbatim to the generator's own argparse.

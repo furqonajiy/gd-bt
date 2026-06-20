@@ -13,7 +13,7 @@ very function each sweep cell runs per candidate -- and calls it once on the
 incumbent config.
 
 Unlike the adaptive feeds the grid sweeps, the incumbent is evaluated on the
-FIXED self archive (``generated/self_better.txt`` by default): that is what the
+FIXED self archive (``signals/self_better.txt`` by default): that is what the
 user actually trades live, so it is the honest baseline to beat.
 
 Emits ``INCUMBENT_<regime>.json`` with ``edge`` (fixed_no_bonus_profit),
@@ -57,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "regime, reusing the sweep's own metric definitions.")
     p.add_argument("--regime", required=True,
                    help="Regime label, used only for the output filename.")
-    p.add_argument("--signals", default="generated/self_better.txt",
+    p.add_argument("--signals", default="signals/self_better.txt",
                    help="FIXED incumbent feed (what the user trades live).")
     p.add_argument("--charts", nargs="+", required=True,
                    help="This regime's chart month-glob (same as the shard job).")

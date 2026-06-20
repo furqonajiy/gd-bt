@@ -210,7 +210,7 @@ def write_signal_file(signals: list[GeneratedSignal], output: Path) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate aggressive plain-LIMIT XAUUSD signals from M1 chart data.")
     parser.add_argument("--charts", nargs="+", required=True)
-    parser.add_argument("--output", default="generated/aggressive_limit_risk02.txt")
+    parser.add_argument("--output", default="signals/aggressive_limit_risk02.txt")
     parser.add_argument("--start-date", default="2025-01-01")
     parser.add_argument("--end-date", default=None)
     parser.add_argument("--execution-hours", default="5,8,10,11,12,13,15,16,18,19,21")

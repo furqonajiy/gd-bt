@@ -19,7 +19,7 @@ Typical run:
       --seed 42
 
 Outputs:
-- generated/live_provider_<preset>.txt files used for every run with that preset.
+- signals/live_provider_<preset>.txt files used for every run with that preset.
 - results.jsonl checkpoint, safe to resume.
 - leaderboard.csv and leaderboard.xlsx.
 - top_configs/*.json with verbatim config dictionaries and suggested live command.
@@ -881,7 +881,7 @@ def write_leaderboards(rows: list[dict[str, Any]], output_dir: Path, top_n: int)
 def live_command(row: dict[str, Any]) -> str:
     cfg = row.get("config") or json.loads(row.get("config_json", "{}"))
     preset = row.get("filter_preset", "high_growth_hour_side")
-    signals = f"generated/live_provider_{preset}.txt"
+    signals = f"signals/live_provider_{preset}.txt"
     # auto_explicit.py reads no environment variables and requires the trailing
     # distances as explicit flags (0.0 disables). The old XAUUSD_* env prefix is
     # dead: config.py ignores it, so emitting it produced a command that either

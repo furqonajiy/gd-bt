@@ -77,7 +77,7 @@ def feed_signals(feed: str) -> str:
         return feed
     if "/" in feed or feed.endswith(".txt"):
         return feed
-    return f"generated/adaptive_{feed}.txt"
+    return f"signals/adaptive_{feed}.txt"
 
 
 # --------------------------------------------------------------------------
@@ -229,7 +229,7 @@ def _generate_command(feed: str) -> str:
     one-line pointer is enough -- the exact ATR-multiplier args live in the
     generator's defaults / the archive itself.
     """
-    out = feed_signals(feed)  # generated/adaptive_<feed>.txt
+    out = feed_signals(feed)  # signals/adaptive_<feed>.txt
     cont = " `\n  "
     if feed == "breakout":
         return (
