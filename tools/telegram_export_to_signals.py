@@ -46,7 +46,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "listener"))
+sys.path.insert(0, str(REPO_ROOT / "listeners" / "telegram"))
 
 from listener import (  # noqa: E402
     DATE_HEADER_RE,
