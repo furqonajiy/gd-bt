@@ -26,6 +26,17 @@ def test_listener_imports_without_telethon():
     assert callable(tl.write_notification_offset)
 
 
+def test_listener_repo_root_resolves_to_repo_root():
+    # REPO_ROOT is computed from __file__, so the listener writes its runtime
+    # files (signals.txt, victor_signals.txt, signal_overrides.jsonl, ...) to the
+    # real repo root regardless of CWD. The folder move to listeners/telegram/
+    # deepened the path by one level; pin the resolution so a future move can't
+    # silently point it at listeners/ (or anywhere else) again.
+    tl = importlib.import_module("listener")
+    assert tl.REPO_ROOT == REPO
+    assert tl.SIGNALS_PATH == REPO / "signals.txt"
+
+
 def test_require_telethon_raises_clearly_when_absent():
     tl = importlib.import_module("listener")
     if tl.TelegramClient is not None:

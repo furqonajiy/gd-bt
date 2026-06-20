@@ -55,10 +55,11 @@ def _require_telethon() -> None:
 # paths and constants
 # ---------------------------------------------------------------------------
 
-# Script lives at <repo-root>/listeners/telegram/listener.py — walk up two
-# levels to find the repo root where all runtime files live. The rest of
-# the module uses REPO_ROOT exclusively, so CWD doesn't matter.
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# Script lives at <repo-root>/listeners/telegram/listener.py — walk up three
+# levels (telegram -> listeners -> repo root) to find the repo root where all
+# runtime files live. The rest of the module uses REPO_ROOT exclusively, so
+# CWD doesn't matter.
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SIGNALS_PATH = REPO_ROOT / "signals.txt"
 STATE_PATH = REPO_ROOT / "telegram_state.json"
 QUARANTINE_PATH = REPO_ROOT / "telegram_quarantine.txt"
