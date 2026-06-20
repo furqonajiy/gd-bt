@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from trading.xauusd import DEFAULT_CONFIG, MomentumSignalConfig, RejectionSignalConfig, SymbolSpec
+from trading.engine import DEFAULT_CONFIG, MomentumSignalConfig, RejectionSignalConfig, SymbolSpec
 
 BTC_SPEC_CONFIGURED = True
 

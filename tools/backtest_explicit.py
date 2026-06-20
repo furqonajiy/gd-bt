@@ -26,8 +26,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from trading.xauusd import CsvChartSource, StrategyConfig, parse_signals_file, run_backtest, write_backtest_outputs  # noqa: E402
-from trading.xauusd.strategy.provider_filter import decide_provider_signal_filter  # noqa: E402
+from trading.engine import CsvChartSource, StrategyConfig, parse_signals_file, run_backtest, write_backtest_outputs  # noqa: E402
+from trading.engine.strategy.provider_filter import decide_provider_signal_filter  # noqa: E402
 
 
 def _positive_int(raw: str) -> int:
@@ -59,7 +59,7 @@ def _sync_charts_from_mt5(symbol: str, server_offset: int, months_back: int) -> 
     data/<symbol>_M1_*.csv`` glob.
     """
     try:
-        from trading.xauusd import (
+        from trading.engine import (
             Mt5Connection, archive_m1_by_month, render_archive_summary,
         )
     except Exception as e:
@@ -556,7 +556,7 @@ def main(argv: list[str] | None = None) -> int:
     # Regime-adaptive: replay each signal under its regime's champion config.
     resolver = None
     if getattr(args, "adaptive", False):
-        from trading.xauusd import make_regime_config_resolver
+        from trading.engine import make_regime_config_resolver
         resolver = make_regime_config_resolver(
             chart.dataframe, champions_dir=args.champions_dir,
             base_config=config, window_days=args.adaptive_window_days)
@@ -574,7 +574,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Merge real MT5 fills (matched by Comment == entry_key) into the entry rows.
     if args.mt5_history:
-        from trading.xauusd.reporting.mt5_history import attach_live_history, parse_mt5_history
+        from trading.engine.reporting.mt5_history import attach_live_history, parse_mt5_history
         live = parse_mt5_history(args.mt5_history)
         info = attach_live_history(result, live)
         print(f"[mt5-history] matched {info['matched']} live position(s) to backtest entries; "

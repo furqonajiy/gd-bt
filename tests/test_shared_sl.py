@@ -11,11 +11,11 @@ import importlib.util
 from dataclasses import replace
 from pathlib import Path
 
-from trading.xauusd import (
+from trading.engine import (
     CONTRACT_SIZE_OZ, DEFAULT_CONFIG, compute_lot, entry_stop_levels,
     open_position, parse_one_signal,
 )
-from trading.xauusd.strategy.engine import _build_new_signal_plan
+from trading.engine.strategy.engine import _build_new_signal_plan
 
 ROOT = Path(__file__).resolve().parents[1]
 

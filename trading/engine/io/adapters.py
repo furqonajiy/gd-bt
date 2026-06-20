@@ -11,8 +11,8 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
-from trading.xauusd import Bar, POINT_VALUE, latest_bar, load_chart, slice_bars, iter_bars
-from trading.xauusd import Position
+from trading.engine import Bar, POINT_VALUE, latest_bar, load_chart, slice_bars, iter_bars
+from trading.engine import Position
 
 
 # ---------------------------------------------------------------------------

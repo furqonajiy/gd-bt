@@ -40,7 +40,7 @@ if str(ROOT) not in sys.path:
 # Reuse the validated sweep machinery (concurrent backtest, gates, leaderboard).
 sweep = importlib.import_module("tools.sweep")
 
-from trading.xauusd import CsvChartSource, parse_signals_file  # noqa: E402
+from trading.engine import CsvChartSource, parse_signals_file  # noqa: E402
 
 
 def _cast(value: str, default):

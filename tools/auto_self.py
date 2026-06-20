@@ -28,7 +28,7 @@ if str(TOOLS) not in sys.path:
 import auto_explicit  # noqa: E402
 import generate_self_signals as selfgen  # noqa: E402
 
-from trading.xauusd import (  # noqa: E402
+from trading.engine import (  # noqa: E402
     Mt5ChartSource,
     Mt5Connection,
     SignalRegistry,
@@ -37,7 +37,7 @@ from trading.xauusd import (  # noqa: E402
     parse_signals_file,
     render_archive_summary,
 )
-from trading.xauusd.cli import (  # noqa: E402
+from trading.engine.cli import (  # noqa: E402
     ARCHIVE_DIR,
     ARCHIVE_MONTHS,
     AUTO_HEARTBEAT_SECONDS,

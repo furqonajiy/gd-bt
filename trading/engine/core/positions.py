@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from .triggers import initial_stop_for_entry, target_trigger
-from trading.xauusd import CONTRACT_SIZE_OZ, Signal, StrategyConfig, compute_entries
+from trading.engine import CONTRACT_SIZE_OZ, Signal, StrategyConfig, compute_entries
 
 
 TERMINAL = {

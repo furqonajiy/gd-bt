@@ -18,12 +18,12 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import timedelta
 
-from trading.xauusd import (
+from trading.engine import (
     DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, PlannedOrder,
     open_position, parse_one_signal, signal_to_magic,
 )
-from trading.xauusd.execution import mt5_executor_tp2
-from trading.xauusd.execution.mt5_executor import mt5_close_comment, mt5_entry_comment
+from trading.engine.execution import mt5_executor_tp2
+from trading.engine.execution.mt5_executor import mt5_close_comment, mt5_entry_comment
 
 
 def test_close_comment_fits_broker_limit():

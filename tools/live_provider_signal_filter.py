@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from trading.xauusd.strategy.provider_filter import decide_provider_signal_filter  # noqa: E402
+from trading.engine.strategy.provider_filter import decide_provider_signal_filter  # noqa: E402
 
 HEADER_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\s+GMT\s*([+-]\d+)")
 SIGNAL_RE = re.compile(

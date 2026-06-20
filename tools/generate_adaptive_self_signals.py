@@ -15,7 +15,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from trading.xauusd.core import chart_tz
+from trading.engine.core import chart_tz
 
 
 CHART_TZ_OFFSET = 3

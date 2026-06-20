@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from trading.xauusd.strategy.regime import detect_regime, m15_atr, trend_score  # noqa: E402
+from trading.engine.strategy.regime import detect_regime, m15_atr, trend_score  # noqa: E402
 
 # Price-normalized volatility tiers (M15 ATR as % of price). Bands chosen from the
 # k-means breaks below; the two calmest are direction-split (quiet vs bull).

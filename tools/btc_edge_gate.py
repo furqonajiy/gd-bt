@@ -47,7 +47,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from trading.xauusd import (  # noqa: E402
+from trading.engine import (  # noqa: E402
     CsvChartSource,
     generate_momentum_signals,
     generate_rejection_signals,

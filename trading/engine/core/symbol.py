@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from trading.xauusd.core.config import CONTRACT_SIZE_OZ, POINT_VALUE
+from trading.engine.core.config import CONTRACT_SIZE_OZ, POINT_VALUE
 
 
 @dataclass(frozen=True)

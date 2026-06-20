@@ -10,10 +10,10 @@ from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 
-from trading.xauusd.reporting.mt5_history import (
+from trading.engine.reporting.mt5_history import (
     attach_live_history, parse_mt5_history,
 )
-from trading.xauusd.reporting.excel_report import write_excel_report
+from trading.engine.reporting.excel_report import write_excel_report
 
 
 # MT5 "Positions" history layout: Time/Price appear twice (open then close).

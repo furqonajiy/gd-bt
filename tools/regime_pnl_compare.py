@@ -39,14 +39,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from trading.xauusd import (
+from trading.engine import (
     CONTRACT_SIZE_OZ,
     DEFAULT_CONFIG,
     StrategyConfig,
     CsvChartSource,
     parse_signals_file,
 )
-from trading.xauusd.strategy.backtest import run_backtest, replay_signal, position_status
+from trading.engine.strategy.backtest import run_backtest, replay_signal, position_status
 
 
 def _load_classifier():

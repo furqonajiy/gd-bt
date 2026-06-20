@@ -235,7 +235,7 @@ def _mt5_comment(signal_key: str, entry_index: int, max_len: int = 31) -> str:
     """MT5-safe per-entry comment (delegates to the executor's canonical builder
     so live-history matching uses the exact compact ``[TAG]#DD.N`` form that the
     executor stamped on the order)."""
-    from trading.xauusd.execution.mt5_executor import mt5_entry_comment
+    from trading.engine.execution.mt5_executor import mt5_entry_comment
     return mt5_entry_comment(signal_key, entry_index, max_len)
 
 

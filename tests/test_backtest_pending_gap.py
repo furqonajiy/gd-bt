@@ -10,8 +10,8 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from trading.xauusd import DEFAULT_CONFIG, parse_one_signal
-from trading.xauusd.strategy.backtest import position_status, replay_signal
+from trading.engine import DEFAULT_CONFIG, parse_one_signal
+from trading.engine.strategy.backtest import position_status, replay_signal
 
 
 def _bar(t: datetime, *, open_: float, high: float, low: float, close: float):

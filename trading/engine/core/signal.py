@@ -21,11 +21,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from trading.xauusd import CHART_TIMEZONE_OFFSET
-from trading.xauusd.core import chart_tz
+from trading.engine import CHART_TIMEZONE_OFFSET
+from trading.engine.core import chart_tz
 
 if TYPE_CHECKING:
-    from trading.xauusd import StrategyConfig
+    from trading.engine import StrategyConfig
 
 
 _DATE_RE = re.compile(

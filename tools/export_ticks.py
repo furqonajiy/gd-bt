@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from trading.xauusd import Mt5Connection, POINT_VALUE  # noqa: E402
+from trading.engine import Mt5Connection, POINT_VALUE  # noqa: E402
 
 
 UTC = timezone.utc

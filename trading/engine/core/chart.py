@@ -21,7 +21,7 @@ from typing import Iterable, Iterator, Optional
 
 import pandas as pd
 
-from trading.xauusd import POINT_VALUE
+from trading.engine import POINT_VALUE
 
 
 SOURCE_PRIORITY = {

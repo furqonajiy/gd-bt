@@ -11,7 +11,7 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from trading.xauusd.core.config import POINT_VALUE
+from trading.engine.core.config import POINT_VALUE
 
 
 @dataclass(frozen=True)

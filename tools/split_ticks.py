@@ -36,7 +36,7 @@ from tools.export_ticks import (  # noqa: E402
     _is_header_only_tick_file,
     _last_tick_msc,
 )
-from trading.xauusd import Mt5Connection  # noqa: E402
+from trading.engine import Mt5Connection  # noqa: E402
 
 # Days 1-15 -> H1, 16-end -> H2. Fixed boundary so part membership is stable across
 # re-syncs (see module docstring); it is not a tunable.

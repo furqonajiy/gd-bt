@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from trading.xauusd import DEFAULT_CONFIG, RejectionSignalConfig, SymbolSpec
+from trading.engine import DEFAULT_CONFIG, RejectionSignalConfig, SymbolSpec
 
 import trading.btcusd.backtest as bt
 

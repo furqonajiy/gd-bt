@@ -7,7 +7,7 @@ reconciliation). The reader now sniffs the BOM; UTF-8 exports keep working.
 """
 from __future__ import annotations
 
-from trading.xauusd.reporting.mt5_history import _read_html_rows, parse_mt5_history
+from trading.engine.reporting.mt5_history import _read_html_rows, parse_mt5_history
 
 _HTML = """<html><body><table>
 <tr><th>Time</th><th>Comment</th><th>Price</th><th>Profit</th></tr>

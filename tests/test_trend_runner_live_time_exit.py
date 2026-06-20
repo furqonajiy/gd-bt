@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 
-from trading.xauusd import DEFAULT_CONFIG, ExecutionLog, Mt5Executor, open_position, parse_one_signal, signal_to_magic
+from trading.engine import DEFAULT_CONFIG, ExecutionLog, Mt5Executor, open_position, parse_one_signal, signal_to_magic
 
 
 class _Resp:

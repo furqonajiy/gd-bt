@@ -31,19 +31,19 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from trading.xauusd import CsvChartSource, ManualPositionSource
-from trading.xauusd import run_backtest, write_backtest_outputs
-from trading.xauusd import (
+from trading.engine import CsvChartSource, ManualPositionSource
+from trading.engine import run_backtest, write_backtest_outputs
+from trading.engine import (
     CHART_TIMEZONE_OFFSET, CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig,
 )
-from trading.xauusd import decide, format_replay_outcome, render_report
-from trading.xauusd.core import chart_tz
-from trading.xauusd import Position, advance_bars, open_position
-from trading.xauusd import parse_one_signal, parse_signals_file
-from trading.xauusd import (
+from trading.engine import decide, format_replay_outcome, render_report
+from trading.engine.core import chart_tz
+from trading.engine import Position, advance_bars, open_position
+from trading.engine import parse_one_signal, parse_signals_file
+from trading.engine import (
     DEFAULT_NOTIFICATIONS_PATH, Notifier, summarize_closed_position,
 )
-from trading.xauusd import DEFAULT_FORENSIC_PATH, ForensicLog
+from trading.engine import DEFAULT_FORENSIC_PATH, ForensicLog
 
 
 ARCHIVE_DIR = "data"
@@ -75,7 +75,7 @@ def _expand_chart_paths(patterns: list[str]) -> list[Path]:
 def _try_archive_from_mt5(symbol: str, server_offset: int) -> None:
     """Best-effort archive pull. Soft-fail (warn and continue) on errors."""
     try:
-        from trading.xauusd import (
+        from trading.engine import (
             Mt5Connection, archive_m1_by_month, render_archive_summary,
         )
     except Exception as e:
@@ -117,7 +117,7 @@ def _emit_per_signal_snapshots(forensic: ForensicLog, executor, tracked: list) -
     """For each tracked signal, capture engine state + MT5 footprint."""
     if not forensic.enabled:
         return
-    from trading.xauusd import signal_to_magic
+    from trading.engine import signal_to_magic
     for _ideal, actual, _exec_at in tracked:
         magic = signal_to_magic(actual.signal.signal_key)
         forensic.engine_snapshot(actual)
@@ -136,7 +136,7 @@ def _handle_closures(notifier: Notifier, forensic: ForensicLog,
     """For each tracked signal whose magic disappeared, emit notification
     and forensic event. Called BEFORE registry.prune so `tracked` still
     contains the soon-to-be-pruned signals."""
-    from trading.xauusd import signal_to_magic
+    from trading.engine import signal_to_magic
     for _ideal, actual, _exec_at in tracked:
         magic = signal_to_magic(actual.signal.signal_key)
         if magic in alive:
@@ -591,11 +591,11 @@ def cmd_decide(args: argparse.Namespace) -> int:
     ExecutionLog = None  # imported lazily; only available when use_mt5
 
     if use_mt5:
-        from trading.xauusd import (
+        from trading.engine import (
             Mt5ChartSource, Mt5Connection, mt5_equity,
             archive_m1_by_month, render_archive_summary,
         )
-        from trading.xauusd import Mt5Executor, ExecutionLog
+        from trading.engine import Mt5Executor, ExecutionLog
         conn = Mt5Connection(
             path=args.mt5_path, login=args.mt5_login,
             password=args.mt5_password, server=args.mt5_server,
@@ -686,7 +686,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
     )
 
     if args.execute:
-        from trading.xauusd import (
+        from trading.engine import (
             SignalRegistry, signal_to_magic, render_execution_log,
         )
 
@@ -789,7 +789,7 @@ def cmd_manage(args: argparse.Namespace) -> int:
             )
             print()
 
-    from trading.xauusd import (
+    from trading.engine import (
         Mt5ChartSource, Mt5Connection, archive_m1_by_month, render_archive_summary,
     )
 
@@ -829,8 +829,8 @@ def cmd_manage(args: argparse.Namespace) -> int:
 def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
                  conn, chart, iteration: int = 1) -> tuple[int, int]:
     """One manage cycle. Returns (exit_code, n_alive_on_mt5)."""
-    from trading.xauusd import mt5_equity
-    from trading.xauusd import (
+    from trading.engine import mt5_equity
+    from trading.engine import (
         Mt5Executor, SignalRegistry, signal_to_magic,
         render_execution_log, ExecutionLog,
     )
@@ -1188,7 +1188,7 @@ def cmd_auto(args: argparse.Namespace) -> int:
         print(f"signals file failed to parse: {e}", file=sys.stderr)
         return 2
 
-    from trading.xauusd import (
+    from trading.engine import (
         Mt5ChartSource, Mt5Connection,
         archive_m1_by_month, render_archive_summary,
     )
@@ -1257,8 +1257,8 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
 
 def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                conn, chart, signals_path: Path, iteration: int = 1) -> int:
-    from trading.xauusd import mt5_equity
-    from trading.xauusd import (
+    from trading.engine import mt5_equity
+    from trading.engine import (
         Mt5Executor, SignalRegistry, signal_to_magic,
         render_execution_log, ExecutionLog,
     )
@@ -1490,7 +1490,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
 # ---------------------------------------------------------------------------
 
 def cmd_mt5_info(args: argparse.Namespace) -> int:
-    from trading.xauusd import (
+    from trading.engine import (
         Mt5ChartSource, Mt5Connection, mt5_equity, mt5_open_positions_summary,
     )
     with Mt5Connection(
@@ -1524,7 +1524,7 @@ def cmd_mt5_info(args: argparse.Namespace) -> int:
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
-    from trading.xauusd import (
+    from trading.engine import (
         Mt5Connection, archive_m1_by_month, render_archive_summary,
     )
     with Mt5Connection(

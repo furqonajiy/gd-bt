@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 
-from trading.xauusd import Bar, DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, PlannedOrder
-from trading.xauusd import advance_bars, open_position, parse_one_signal
-from trading.xauusd.execution import mt5_executor_trailing
+from trading.engine import Bar, DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, PlannedOrder
+from trading.engine import advance_bars, open_position, parse_one_signal
+from trading.engine.execution import mt5_executor_trailing
 
 
 class _Resp:

@@ -233,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
 
     gen_module = importlib.import_module(GENERATOR_MODULES[args.family])
 
-    from trading.xauusd import Mt5ChartSource, Mt5Connection, archive_m1_by_month
+    from trading.engine import Mt5ChartSource, Mt5Connection, archive_m1_by_month
 
     conn = Mt5Connection(path=args.mt5_path, login=args.mt5_login,
                          password=args.mt5_password, server=args.mt5_server)

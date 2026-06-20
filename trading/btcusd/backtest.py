@@ -20,7 +20,7 @@ import tempfile
 from dataclasses import replace
 from pathlib import Path
 
-from trading.xauusd import (
+from trading.engine import (
     CsvChartSource,
     format_generated_signals,
     generate_rejection_signals,

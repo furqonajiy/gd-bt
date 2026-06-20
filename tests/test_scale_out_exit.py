@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from trading.xauusd import Bar, DEFAULT_CONFIG, advance_bars, open_position, parse_one_signal
-from trading.xauusd.core.positions import _scale_out_mode
+from trading.engine import Bar, DEFAULT_CONFIG, advance_bars, open_position, parse_one_signal
+from trading.engine.core.positions import _scale_out_mode
 
 ROOT = Path(__file__).resolve().parents[1]
 

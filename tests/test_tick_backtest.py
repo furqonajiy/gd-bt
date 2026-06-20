@@ -20,11 +20,11 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from tools.tick_backtest import MockMt5, _install_sim_clock  # noqa: E402
-from trading.xauusd import parse_signals_file  # noqa: E402
-from trading.xauusd.execution.mt5_executor import (  # noqa: E402
+from trading.engine import parse_signals_file  # noqa: E402
+from trading.engine.execution.mt5_executor import (  # noqa: E402
     signal_to_magic, mt5_entry_comment,
 )
-from trading.xauusd.execution.mt5_executor_trailing import Mt5Executor  # noqa: E402
+from trading.engine.execution.mt5_executor_trailing import Mt5Executor  # noqa: E402
 
 
 def _ticks(quotes):

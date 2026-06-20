@@ -23,7 +23,7 @@ for _p in (str(ROOT), str(ROOT / "tools")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from trading.xauusd import CsvChartSource, parse_signals_file, run_backtest  # noqa: E402
+from trading.engine import CsvChartSource, parse_signals_file, run_backtest  # noqa: E402
 from backtest_explicit import build_parser, config_from_args, _expand_chart_paths, filter_signals_by_date  # noqa: E402
 
 CONTRACT = 100.0

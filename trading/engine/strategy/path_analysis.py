@@ -15,7 +15,7 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
-from trading.xauusd import (
+from trading.engine import (
     CONTRACT_SIZE_OZ,
     DEFAULT_CONFIG,
     StrategyConfig,
