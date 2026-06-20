@@ -223,11 +223,29 @@ def build_parser() -> argparse.ArgumentParser:
                         "Run a base cell (no flag) and a bep cell (this flag) and "
                         "compare their winners on edge AND OOS.")
     p.add_argument("--progress-every", type=int, default=10)
+    # Per-run locked-exit slippage override (backtest-realism, scoring only). The
+    # sweep otherwise bakes the measured R4 value (2.0/1.0) into every candidate via
+    # sweep.base_config_dict(); for a per-regime sweep, pass that regime's realistic
+    # value (R3 0.9/0.45, R2 0.5/0.25, R1 0.4/0.2 from the volatility-scaled model).
+    # < 0 means "leave the baked-in default unchanged". Never affects live orders.
+    p.add_argument("--lock-tp1-slippage", type=float, default=-1.0,
+                   help="override LOCK_TP1 exit slippage (pt) for ALL candidates; <0 keeps the default 2.0")
+    p.add_argument("--lock-tp2-slippage", type=float, default=-1.0,
+                   help="override LOCK_TP2 exit slippage (pt) for ALL candidates; <0 keeps the default 1.0")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # Apply the per-regime locked-exit slippage override BEFORE candidates are
+    # built: sweep.base_config_dict() reads these module globals at call time, so
+    # every candidate (base, neighborhood, random) + the incumbent inherits it.
+    if args.lock_tp1_slippage >= 0:
+        sweep.SWEEP_LOCK_TP1_SLIPPAGE = args.lock_tp1_slippage
+    if args.lock_tp2_slippage >= 0:
+        sweep.SWEEP_LOCK_TP2_SLIPPAGE = args.lock_tp2_slippage
+    print(f"[self-limit] locked-exit slippage scored at "
+          f"TP1={sweep.SWEEP_LOCK_TP1_SLIPPAGE}/TP2={sweep.SWEEP_LOCK_TP2_SLIPPAGE} pt", flush=True)
     signals_path = Path(args.signals)
     if not signals_path.exists():
         raise SystemExit(f"signals file not found: {signals_path}")
