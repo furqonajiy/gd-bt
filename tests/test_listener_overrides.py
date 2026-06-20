@@ -13,7 +13,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "listeners" / "telegram"))
-import telegram_listener as tl  # noqa: E402
+import listener as tl  # noqa: E402
 
 _SECTION = (
     "2026-06-05 GMT+7\n"

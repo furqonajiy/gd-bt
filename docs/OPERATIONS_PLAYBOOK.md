@@ -208,7 +208,7 @@ rejected. (Before 2026-06: the catch-up always closed at market — the
 In window 1:
 
 ```powershell
-python listeners\telegram\telegram_listener.py
+python listeners\telegram\listener.py
 ```
 
 Leave it running. It auto-creates daily section headers in `signals.txt`

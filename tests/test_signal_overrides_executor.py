@@ -25,7 +25,7 @@ from trading.engine import (
     parse_one_signal, signal_to_magic,
 )
 from trading.engine.strategy.engine import NewSignalPlan, PlannedOrder
-from trading.engine.cli_orig import _consume_signal_overrides
+from trading.engine.cli_impl import _consume_signal_overrides
 
 
 # --- stub MT5 ---------------------------------------------------------------

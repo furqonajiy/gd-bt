@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from trading.engine import signal_to_magic
-from trading.engine.execution.mt5_executor_tp2 import _entry_index_from_comment
+from trading.engine.execution.mt5_executor_live import _entry_index_from_comment
 
 
 def _reason_label(mt5, code: Any) -> str:

@@ -3,7 +3,7 @@
 Executor hierarchy (base -> live wrapper -> public): this is the BASE class. The
 production ``Mt5Executor`` re-exported from the package root is the trailing
 subclass in ``mt5_executor_trailing.py``, which extends the live-parity wrapper
-``mt5_executor_tp2.py``, which extends this base. This base is never exported or
+``mt5_executor_live.py``, which extends this base. This base is never exported or
 instantiated directly.
 
 Used by `decide --execute` and `auto`. Places fresh signals as N LIMIT

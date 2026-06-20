@@ -12,7 +12,7 @@ from trading.engine import (
     DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, Notifier, PlannedOrder,
     open_position, parse_one_signal, signal_to_magic,
 )
-from trading.engine.execution import mt5_executor_tp2
+from trading.engine.execution import mt5_executor_live
 
 
 class _SpyNotifier:
@@ -135,7 +135,7 @@ def test_order_placed_fires_once_on_successful_limit_placement(monkeypatch):
     _reset_guards()
     signal = _signal()
     activation = signal.signal_time_chart + timedelta(minutes=DEFAULT_CONFIG.activation_delay_minutes)
-    monkeypatch.setattr(mt5_executor_tp2, "_wall_clock_chart_now",
+    monkeypatch.setattr(mt5_executor_live, "_wall_clock_chart_now",
                         lambda: activation + timedelta(minutes=1))
     plan = NewSignalPlan(
         signal=signal, action="FOLLOW", rationale="test",

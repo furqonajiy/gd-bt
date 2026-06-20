@@ -51,7 +51,7 @@ def test_replay_tracked_signal_recovers_tag_from_registry_key():
     # re-parsing the raw text -- which drops the tag unless recovered from the
     # stored signal_key. Without recovery the replayed Position computes the
     # UNTAGGED magic + comment, orphaning reopened legs (the 0615#48.1 bug).
-    from trading.engine.cli_orig import _tag_from_signal_key
+    from trading.engine.cli_impl import _tag_from_signal_key
 
     assert _tag_from_signal_key("SC24-2026-06-15#48") == "SC24"
     assert _tag_from_signal_key("VIC-2026-06-15#04") == "VIC"

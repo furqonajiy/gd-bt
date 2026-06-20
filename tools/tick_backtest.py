@@ -44,7 +44,7 @@ from trading.engine.strategy.trailing_engine import decide  # noqa: E402
 from trading.engine.strategy.backtest import replay_signal, position_status  # noqa: E402
 from trading.engine.execution.mt5_executor import signal_to_magic  # noqa: E402
 from trading.engine.execution.mt5_executor_trailing import Mt5Executor  # noqa: E402
-import trading.engine.execution.mt5_executor_tp2 as _tp2mod  # noqa: E402
+import trading.engine.execution.mt5_executor_live as _tp2mod  # noqa: E402
 import trading.engine.execution.mt5_executor_trailing as _trmod  # noqa: E402
 
 CONTRACT_SIZE_OZ = 100.0

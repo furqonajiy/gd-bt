@@ -1,4 +1,4 @@
-"""telegram_listener.py — VICTOR - GOLD PRIORITY signal listener.
+"""listener.py — VICTOR - GOLD PRIORITY signal listener.
 
 Watches one Telegram channel for new XAUUSD signals, parses them, and
 appends to `signals.txt` in the format `trading.engine` expects. Runs as
@@ -55,7 +55,7 @@ def _require_telethon() -> None:
 # paths and constants
 # ---------------------------------------------------------------------------
 
-# Script lives at <repo-root>/listeners/telegram/telegram_listener.py — walk up two
+# Script lives at <repo-root>/listeners/telegram/listener.py — walk up two
 # levels to find the repo root where all runtime files live. The rest of
 # the module uses REPO_ROOT exclusively, so CWD doesn't matter.
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -87,7 +87,7 @@ OVERRIDES_PATH = REPO_ROOT / "signal_overrides.jsonl"
 SIGNAL_SOURCE_TZ_OFFSET = 7
 SIGNAL_SOURCE_TZ = timezone(timedelta(hours=SIGNAL_SOURCE_TZ_OFFSET))
 
-log = logging.getLogger("telegram_listener")
+log = logging.getLogger("listener")
 
 
 # ---------------------------------------------------------------------------
@@ -1110,7 +1110,7 @@ class Listener:
         if not matches:
             raise RuntimeError(
                 f"No chat title contains {self.cfg.channel_title_pattern!r}. "
-                "Run `python listeners\\telegram\\telegram_listener.py list-chats` and "
+                "Run `python listeners\\telegram\\listener.py list-chats` and "
                 "put the numeric id into listener_config.json (repo root) "
                 "under `channel_id`."
             )
@@ -1603,7 +1603,7 @@ async def _cmd_list_chats(cfg: Config) -> int:
     print(
         "Copy the ID of the VICTOR channel into listener_config.json "
         "(repo root) under `channel_id`, then run "
-        "`python listeners\\telegram\\telegram_listener.py`."
+        "`python listeners\\telegram\\listener.py`."
     )
     return 0
 
@@ -1623,9 +1623,9 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples (run from repo root):\n"
-            "  python listeners\\telegram\\telegram_listener.py list-chats    # find channel id\n"
-            "  python listeners\\telegram\\telegram_listener.py               # start listening\n"
-            "  python listeners\\telegram\\telegram_listener.py --dry-run     # parse but don't write\n"
+            "  python listeners\\telegram\\listener.py list-chats    # find channel id\n"
+            "  python listeners\\telegram\\listener.py               # start listening\n"
+            "  python listeners\\telegram\\listener.py --dry-run     # parse but don't write\n"
         ),
     )
     sub = p.add_subparsers(dest="cmd")
