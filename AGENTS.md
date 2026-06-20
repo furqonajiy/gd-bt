@@ -406,10 +406,13 @@ the Windows-only `MetaTrader5` package and a running terminal — it cannot run
 in this Linux/CI environment. Validate engine changes through the backtest
 and `pytest`, which use CSV data and a stub MT5 layer. To resync the M1 archive
 from 2020, see the standalone `cli/resync_m1_from_2020.txt` (`fetch --months 80`,
-`--mt5-server-offset 3` keeps the broker EET/EEST clock verbatim). The repo-root
-`cli_*.txt` files are runnable deployment-command snapshots, each with the same
-sections (Signal Auto Generator live-loop / Backtest CLI / Auto CLI; Telegram
-Listener only for the Victor feed). The current R4 champion is
+`--mt5-server-offset 3` keeps the broker EET/EEST clock verbatim). The
+`cli/*.txt` files are runnable deployment-command snapshots, each with the same
+seven sections: (1) Telegram Listener (Victor feed only), (2) Live Loop Signal
+Generator, (3) Signal Generator (one-shot static archive, run before the
+backtests), (4) Backtest from 2026-06 (current month), (5) Backtest from 2026-01
+(current regime), (6) Backtest from 2021-01 (full history), and (7) Live Auto
+Executor. The current R4 champion is
 `cli/champion_R4_SQZ6_no_trailing` (tag **SQZ6**) — **`rsi75_sqz6_rr40`**
 (e8 / range_to_sl / slm2.1 / max_hold 240 / tp1_lock_delay 24 / lock_after_tp2 on /
 shared_sl off, on the **triple-filtered** scalper24 feed `--rsi-buy-max 75
