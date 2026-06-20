@@ -1,0 +1,616 @@
+name: self-scalper-5way-sweep-r3r2r1
+
+# SELF-SCALPER full 5-WAY combination sweep for R3 -> R2 -> R1 (chained), with
+# REALISTIC per-regime locked-exit slippage. Full cross-product of the five feed
+# dimensions (144 variants/regime): RSI {off,70/30,75/25} x Bollinger {off, %B
+# 0.80/0.20, sqz bw>=0.0006} x R:R {base, rr08, rr25, rr40} x S/R {off, prox0.5+
+# round10} x S&D {off, rbr_dbd prox0.5}. Each variant regenerates that regime's
+# feed and runs the full SC24-seeded strategy grid (tools/sweep_self_limit.py).
+#
+# Slippage is scored at each regime's volatility-scaled value (NOT the flat 2.0/1.0
+# the old sweeps baked in, which over-penalized locked exits 2-5x in calm regimes):
+#   R3 (2025)              -> 0.9 / 0.45   (median abs ATR $5.0 = 0.45x the R4 anchor)
+#   R2 (2023-10..2024)     -> 0.5 / 0.25   (0.26x)
+#   R1 (2021-11..2023-09)  -> 0.4 / 0.2    (0.20x)
+# Backtest-realism only; never a live order. Per-regime aggregate keeps a variant
+# only if it beats the unfiltered 'base' on BOTH edge AND OOS at DD<=40% (shared
+# .github/scripts/agg_entry_feature.sh, prefix self5r). Artifact-only; R4 keeps SQZ6.
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_candidates:
+        description: "candidates per shard"
+        default: "150"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-scalper-5way-sweep-r3r2r1
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  r3:
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include:
+          - { v: base,                    gen: "" }
+          - { v: sd,                      gen: "--sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sr,                      gen: "--sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sr_sd,                   gen: "--sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr08,                    gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rr08_sd,                 gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr08_sr,                 gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rr08_sr_sd,              gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr25,                    gen: "--rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rr25_sd,                 gen: "--rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr25_sr,                 gen: "--rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rr25_sr_sd,              gen: "--rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr40,                    gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rr40_sd,                 gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr40_sr,                 gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rr40_sr_sd,              gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80,                  gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: pctb80_sd,               gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_sr,               gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: pctb80_sr_sd,            gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr08,             gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: pctb80_rr08_sd,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr08_sr,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: pctb80_rr08_sr_sd,       gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr25,             gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: pctb80_rr25_sd,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr25_sr,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: pctb80_rr25_sr_sd,       gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr40,             gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: pctb80_rr40_sd,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr40_sr,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: pctb80_rr40_sr_sd,       gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6,                    gen: "--bb-bandwidth-min 0.0006" }
+          - { v: sqz6_sd,                 gen: "--bb-bandwidth-min 0.0006 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_sr,                 gen: "--bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sqz6_sr_sd,              gen: "--bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr08,               gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: sqz6_rr08_sd,            gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr08_sr,            gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sqz6_rr08_sr_sd,         gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr25,               gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: sqz6_rr25_sd,            gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr25_sr,            gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sqz6_rr25_sr_sd,         gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr40,               gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: sqz6_rr40_sd,            gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr40_sr,            gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sqz6_rr40_sr_sd,         gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70,                   gen: "--rsi-buy-max 70 --rsi-sell-min 30" }
+          - { v: rsi70_sd,                gen: "--rsi-buy-max 70 --rsi-sell-min 30 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sr,                gen: "--rsi-buy-max 70 --rsi-sell-min 30 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sr_sd,             gen: "--rsi-buy-max 70 --rsi-sell-min 30 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr08,              gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_rr08_sd,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr08_sr,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_rr08_sr_sd,        gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr25,              gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_rr25_sd,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr25_sr,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_rr25_sr_sd,        gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr40,              gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_rr40_sd,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr40_sr,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_rr40_sr_sd,        gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: rsi70_pctb80_sd,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_sr,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_pctb80_sr_sd,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr08,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_pctb80_rr08_sd,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr08_sr,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_pctb80_rr08_sr_sd, gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr25,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_pctb80_rr25_sd,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr25_sr,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_pctb80_rr25_sr_sd, gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr40,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_pctb80_rr40_sd,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr40_sr,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_pctb80_rr40_sr_sd, gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6,              gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006" }
+          - { v: rsi70_sqz6_sd,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_sr,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sqz6_sr_sd,        gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr08,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_sqz6_rr08_sd,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr08_sr,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sqz6_rr08_sr_sd,   gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr25,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_sqz6_rr25_sd,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr25_sr,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sqz6_rr25_sr_sd,   gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr40,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_sqz6_rr40_sd,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr40_sr,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sqz6_rr40_sr_sd,   gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75,                   gen: "--rsi-buy-max 75 --rsi-sell-min 25" }
+          - { v: rsi75_sd,                gen: "--rsi-buy-max 75 --rsi-sell-min 25 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sr,                gen: "--rsi-buy-max 75 --rsi-sell-min 25 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sr_sd,             gen: "--rsi-buy-max 75 --rsi-sell-min 25 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr08,              gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_rr08_sd,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr08_sr,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_rr08_sr_sd,        gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr25,              gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi75_rr25_sd,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr25_sr,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_rr25_sr_sd,        gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr40,              gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_rr40_sd,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr40_sr,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_rr40_sr_sd,        gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: rsi75_pctb80_sd,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_sr,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_pctb80_sr_sd,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr08,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_pctb80_rr08_sd,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr08_sr,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_pctb80_rr08_sr_sd, gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr25,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi75_pctb80_rr25_sd,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr25_sr,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_pctb80_rr25_sr_sd, gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr40,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_pctb80_rr40_sd,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr40_sr,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_pctb80_rr40_sr_sd, gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6,              gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006" }
+          - { v: rsi75_sqz6_sd,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_sr,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sqz6_sr_sd,        gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr08,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_sqz6_rr08_sd,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr08_sr,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sqz6_rr08_sr_sd,   gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr25,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi75_sqz6_rr25_sd,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr25_sr,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sqz6_rr25_sr_sd,   gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr40,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_sqz6_rr40_sd,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr40_sr,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sqz6_rr40_sr_sd,   gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate scalper24 feed (R3 2025) variant ${{ matrix.v }}
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py --charts "data/XAUUSD_M1_2025"*"_ELEV8.csv" \
+            --output feed.txt --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7 ${{ matrix.gen }}
+          echo "R3 ${{ matrix.v }} feed lines: $(wc -l < feed.txt)"
+      - name: Sweep 4 shards (realistic slippage 0.9/0.45)
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-150}"
+          CHARTS=""data/XAUUSD_M1_2025"*"_ELEV8.csv""
+          for N in 0 1 2 3; do
+            timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+              --charts $CHARTS --seed $((42 + N)) --max-candidates "$MC" \
+              --lock-tp1-slippage 0.9 --lock-tp2-slippage 0.45 \
+              --output-dir "out/${{ matrix.v }}_shard${N}" --validate-months 2 \
+              --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume &
+          done; wait
+      - uses: actions/upload-artifact@v4
+        with: { name: "self5r-R3-${{ matrix.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r3_agg:
+    needs: r3
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "self5r-R3-*", path: _artifacts }
+      - name: Aggregate R3 5-way variants + winner-vs-base
+        run: bash .github/scripts/agg_entry_feature.sh R3 self5r
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-5way-R3-results", path: "results/**", if-no-files-found: warn }
+
+  r2:
+    needs: r3_agg
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include:
+          - { v: base,                    gen: "" }
+          - { v: sd,                      gen: "--sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sr,                      gen: "--sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sr_sd,                   gen: "--sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr08,                    gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rr08_sd,                 gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr08_sr,                 gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rr08_sr_sd,              gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr25,                    gen: "--rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rr25_sd,                 gen: "--rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr25_sr,                 gen: "--rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rr25_sr_sd,              gen: "--rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr40,                    gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rr40_sd,                 gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr40_sr,                 gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rr40_sr_sd,              gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80,                  gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: pctb80_sd,               gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_sr,               gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: pctb80_sr_sd,            gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr08,             gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: pctb80_rr08_sd,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr08_sr,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: pctb80_rr08_sr_sd,       gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr25,             gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: pctb80_rr25_sd,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr25_sr,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: pctb80_rr25_sr_sd,       gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr40,             gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: pctb80_rr40_sd,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr40_sr,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: pctb80_rr40_sr_sd,       gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6,                    gen: "--bb-bandwidth-min 0.0006" }
+          - { v: sqz6_sd,                 gen: "--bb-bandwidth-min 0.0006 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_sr,                 gen: "--bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sqz6_sr_sd,              gen: "--bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr08,               gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: sqz6_rr08_sd,            gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr08_sr,            gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sqz6_rr08_sr_sd,         gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr25,               gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: sqz6_rr25_sd,            gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr25_sr,            gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sqz6_rr25_sr_sd,         gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr40,               gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: sqz6_rr40_sd,            gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr40_sr,            gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sqz6_rr40_sr_sd,         gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70,                   gen: "--rsi-buy-max 70 --rsi-sell-min 30" }
+          - { v: rsi70_sd,                gen: "--rsi-buy-max 70 --rsi-sell-min 30 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sr,                gen: "--rsi-buy-max 70 --rsi-sell-min 30 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sr_sd,             gen: "--rsi-buy-max 70 --rsi-sell-min 30 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr08,              gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_rr08_sd,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr08_sr,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_rr08_sr_sd,        gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr25,              gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_rr25_sd,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr25_sr,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_rr25_sr_sd,        gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr40,              gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_rr40_sd,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr40_sr,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_rr40_sr_sd,        gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: rsi70_pctb80_sd,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_sr,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_pctb80_sr_sd,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr08,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_pctb80_rr08_sd,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr08_sr,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_pctb80_rr08_sr_sd, gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr25,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_pctb80_rr25_sd,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr25_sr,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_pctb80_rr25_sr_sd, gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr40,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_pctb80_rr40_sd,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr40_sr,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_pctb80_rr40_sr_sd, gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6,              gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006" }
+          - { v: rsi70_sqz6_sd,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_sr,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sqz6_sr_sd,        gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr08,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_sqz6_rr08_sd,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr08_sr,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sqz6_rr08_sr_sd,   gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr25,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_sqz6_rr25_sd,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr25_sr,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sqz6_rr25_sr_sd,   gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr40,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_sqz6_rr40_sd,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr40_sr,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sqz6_rr40_sr_sd,   gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75,                   gen: "--rsi-buy-max 75 --rsi-sell-min 25" }
+          - { v: rsi75_sd,                gen: "--rsi-buy-max 75 --rsi-sell-min 25 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sr,                gen: "--rsi-buy-max 75 --rsi-sell-min 25 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sr_sd,             gen: "--rsi-buy-max 75 --rsi-sell-min 25 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr08,              gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_rr08_sd,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr08_sr,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_rr08_sr_sd,        gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr25,              gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi75_rr25_sd,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr25_sr,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_rr25_sr_sd,        gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr40,              gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_rr40_sd,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr40_sr,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_rr40_sr_sd,        gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: rsi75_pctb80_sd,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_sr,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_pctb80_sr_sd,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr08,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_pctb80_rr08_sd,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr08_sr,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_pctb80_rr08_sr_sd, gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr25,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi75_pctb80_rr25_sd,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr25_sr,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_pctb80_rr25_sr_sd, gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr40,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_pctb80_rr40_sd,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr40_sr,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_pctb80_rr40_sr_sd, gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6,              gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006" }
+          - { v: rsi75_sqz6_sd,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_sr,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sqz6_sr_sd,        gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr08,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_sqz6_rr08_sd,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr08_sr,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sqz6_rr08_sr_sd,   gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr25,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi75_sqz6_rr25_sd,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr25_sr,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sqz6_rr25_sr_sd,   gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr40,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_sqz6_rr40_sd,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr40_sr,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sqz6_rr40_sr_sd,   gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate scalper24 feed (R2 2023-10..2024) variant ${{ matrix.v }}
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_202310_ELEV8.csv data/XAUUSD_M1_202311_ELEV8.csv data/XAUUSD_M1_202312_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv \
+            --output feed.txt --start 2023-10-01 --session-start 0 --session-end 0 --signal-tz 7 ${{ matrix.gen }}
+          echo "R2 ${{ matrix.v }} feed lines: $(wc -l < feed.txt)"
+      - name: Sweep 4 shards (realistic slippage 0.5/0.25)
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-150}"
+          CHARTS="data/XAUUSD_M1_202310_ELEV8.csv data/XAUUSD_M1_202311_ELEV8.csv data/XAUUSD_M1_202312_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv"
+          for N in 0 1 2 3; do
+            timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+              --charts $CHARTS --seed $((42 + N)) --max-candidates "$MC" \
+              --lock-tp1-slippage 0.5 --lock-tp2-slippage 0.25 \
+              --output-dir "out/${{ matrix.v }}_shard${N}" --validate-months 2 \
+              --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume &
+          done; wait
+      - uses: actions/upload-artifact@v4
+        with: { name: "self5r-R2-${{ matrix.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r2_agg:
+    needs: r2
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "self5r-R2-*", path: _artifacts }
+      - name: Aggregate R2 5-way variants + winner-vs-base
+        run: bash .github/scripts/agg_entry_feature.sh R2 self5r
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-5way-R2-results", path: "results/**", if-no-files-found: warn }
+
+  r1:
+    needs: r2_agg
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include:
+          - { v: base,                    gen: "" }
+          - { v: sd,                      gen: "--sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sr,                      gen: "--sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sr_sd,                   gen: "--sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr08,                    gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rr08_sd,                 gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr08_sr,                 gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rr08_sr_sd,              gen: "--rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr25,                    gen: "--rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rr25_sd,                 gen: "--rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr25_sr,                 gen: "--rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rr25_sr_sd,              gen: "--rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr40,                    gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rr40_sd,                 gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rr40_sr,                 gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rr40_sr_sd,              gen: "--rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80,                  gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: pctb80_sd,               gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_sr,               gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: pctb80_sr_sd,            gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr08,             gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: pctb80_rr08_sd,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr08_sr,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: pctb80_rr08_sr_sd,       gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr25,             gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: pctb80_rr25_sd,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr25_sr,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: pctb80_rr25_sr_sd,       gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr40,             gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: pctb80_rr40_sd,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: pctb80_rr40_sr,          gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: pctb80_rr40_sr_sd,       gen: "--bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6,                    gen: "--bb-bandwidth-min 0.0006" }
+          - { v: sqz6_sd,                 gen: "--bb-bandwidth-min 0.0006 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_sr,                 gen: "--bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sqz6_sr_sd,              gen: "--bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr08,               gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: sqz6_rr08_sd,            gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr08_sr,            gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sqz6_rr08_sr_sd,         gen: "--bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr25,               gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: sqz6_rr25_sd,            gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr25_sr,            gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sqz6_rr25_sr_sd,         gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr40,               gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: sqz6_rr40_sd,            gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: sqz6_rr40_sr,            gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: sqz6_rr40_sr_sd,         gen: "--bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70,                   gen: "--rsi-buy-max 70 --rsi-sell-min 30" }
+          - { v: rsi70_sd,                gen: "--rsi-buy-max 70 --rsi-sell-min 30 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sr,                gen: "--rsi-buy-max 70 --rsi-sell-min 30 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sr_sd,             gen: "--rsi-buy-max 70 --rsi-sell-min 30 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr08,              gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_rr08_sd,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr08_sr,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_rr08_sr_sd,        gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr25,              gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_rr25_sd,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr25_sr,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_rr25_sr_sd,        gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr40,              gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_rr40_sd,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_rr40_sr,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_rr40_sr_sd,        gen: "--rsi-buy-max 70 --rsi-sell-min 30 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80,            gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: rsi70_pctb80_sd,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_sr,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_pctb80_sr_sd,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr08,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_pctb80_rr08_sd,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr08_sr,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_pctb80_rr08_sr_sd, gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr25,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_pctb80_rr25_sd,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr25_sr,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_pctb80_rr25_sr_sd, gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr40,       gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_pctb80_rr40_sd,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_pctb80_rr40_sr,    gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_pctb80_rr40_sr_sd, gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6,              gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006" }
+          - { v: rsi70_sqz6_sd,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_sr,           gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sqz6_sr_sd,        gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr08,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi70_sqz6_rr08_sd,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr08_sr,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sqz6_rr08_sr_sd,   gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr25,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi70_sqz6_rr25_sd,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr25_sr,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sqz6_rr25_sr_sd,   gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr40,         gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi70_sqz6_rr40_sd,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi70_sqz6_rr40_sr,      gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi70_sqz6_rr40_sr_sd,   gen: "--rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75,                   gen: "--rsi-buy-max 75 --rsi-sell-min 25" }
+          - { v: rsi75_sd,                gen: "--rsi-buy-max 75 --rsi-sell-min 25 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sr,                gen: "--rsi-buy-max 75 --rsi-sell-min 25 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sr_sd,             gen: "--rsi-buy-max 75 --rsi-sell-min 25 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr08,              gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_rr08_sd,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr08_sr,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_rr08_sr_sd,        gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr25,              gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi75_rr25_sd,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr25_sr,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_rr25_sr_sd,        gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr40,              gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_rr40_sd,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_rr40_sr,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_rr40_sr_sd,        gen: "--rsi-buy-max 75 --rsi-sell-min 25 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80,            gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20" }
+          - { v: rsi75_pctb80_sd,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_sr,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_pctb80_sr_sd,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr08,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_pctb80_rr08_sd,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr08_sr,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_pctb80_rr08_sr_sd, gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr25,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi75_pctb80_rr25_sd,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr25_sr,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_pctb80_rr25_sr_sd, gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr40,       gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_pctb80_rr40_sd,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_pctb80_rr40_sr,    gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_pctb80_rr40_sr_sd, gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-buy-pctb-max 0.80 --bb-sell-pctb-min 0.20 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6,              gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006" }
+          - { v: rsi75_sqz6_sd,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_sr,           gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sqz6_sr_sd,        gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr08,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0" }
+          - { v: rsi75_sqz6_rr08_sd,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr08_sr,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sqz6_rr08_sr_sd,   gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 0.8 --rr2 1.5 --rr3 3.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr25,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5" }
+          - { v: rsi75_sqz6_rr25_sd,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr25_sr,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sqz6_rr25_sr_sd,   gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 1.5 --rr3 2.5 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr40,         gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0" }
+          - { v: rsi75_sqz6_rr40_sd,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+          - { v: rsi75_sqz6_rr40_sr,      gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10" }
+          - { v: rsi75_sqz6_rr40_sr_sd,   gen: "--rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0 --sr-proximity-atr 0.5 --sr-round-step 10 --sd-mode rbr_dbd --sd-proximity-atr 0.5" }
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate scalper24 feed (R1 2021-11..2023-09) variant ${{ matrix.v }}
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_20211[12]_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_20230[1-9]_ELEV8.csv \
+            --output feed.txt --start 2021-11-01 --session-start 0 --session-end 0 --signal-tz 7 ${{ matrix.gen }}
+          echo "R1 ${{ matrix.v }} feed lines: $(wc -l < feed.txt)"
+      - name: Sweep 4 shards (realistic slippage 0.4/0.2)
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-150}"
+          CHARTS="data/XAUUSD_M1_20211[12]_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_20230[1-9]_ELEV8.csv"
+          for N in 0 1 2 3; do
+            timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+              --charts $CHARTS --seed $((42 + N)) --max-candidates "$MC" \
+              --lock-tp1-slippage 0.4 --lock-tp2-slippage 0.2 \
+              --output-dir "out/${{ matrix.v }}_shard${N}" --validate-months 2 \
+              --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume &
+          done; wait
+      - uses: actions/upload-artifact@v4
+        with: { name: "self5r-R1-${{ matrix.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r1_agg:
+    needs: r1
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "self5r-R1-*", path: _artifacts }
+      - name: Aggregate R1 5-way variants + winner-vs-base
+        run: bash .github/scripts/agg_entry_feature.sh R1 self5r
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-5way-R1-results", path: "results/**", if-no-files-found: warn }
