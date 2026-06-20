@@ -6,7 +6,7 @@ a separate process from `trading.engine.cli auto`; the two communicate
 only through `signals.txt` (atomically written so `auto` never reads a
 half-written file).
 
-Files (all at repo root, not in listener/):
+Files (all at repo root, not in telegram/):
     signals.txt              read + append (atomic via os.replace)
     telegram_state.json      message_id -> parsed status; dedup + edit handling
     telegram_quarantine.txt  raw text of every unparseable message
@@ -55,7 +55,7 @@ def _require_telethon() -> None:
 # paths and constants
 # ---------------------------------------------------------------------------
 
-# Script lives at <repo-root>/listener/telegram_listener.py — walk up two
+# Script lives at <repo-root>/telegram/telegram_listener.py — walk up two
 # levels to find the repo root where all runtime files live. The rest of
 # the module uses REPO_ROOT exclusively, so CWD doesn't matter.
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -1110,7 +1110,7 @@ class Listener:
         if not matches:
             raise RuntimeError(
                 f"No chat title contains {self.cfg.channel_title_pattern!r}. "
-                "Run `python listener\\telegram_listener.py list-chats` and "
+                "Run `python telegram\\telegram_listener.py list-chats` and "
                 "put the numeric id into listener_config.json (repo root) "
                 "under `channel_id`."
             )
@@ -1603,7 +1603,7 @@ async def _cmd_list_chats(cfg: Config) -> int:
     print(
         "Copy the ID of the VICTOR channel into listener_config.json "
         "(repo root) under `channel_id`, then run "
-        "`python listener\\telegram_listener.py`."
+        "`python telegram\\telegram_listener.py`."
     )
     return 0
 
@@ -1623,9 +1623,9 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples (run from repo root):\n"
-            "  python listener\\telegram_listener.py list-chats    # find channel id\n"
-            "  python listener\\telegram_listener.py               # start listening\n"
-            "  python listener\\telegram_listener.py --dry-run     # parse but don't write\n"
+            "  python telegram\\telegram_listener.py list-chats    # find channel id\n"
+            "  python telegram\\telegram_listener.py               # start listening\n"
+            "  python telegram\\telegram_listener.py --dry-run     # parse but don't write\n"
         ),
     )
     sub = p.add_subparsers(dest="cmd")

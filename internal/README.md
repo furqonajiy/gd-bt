@@ -117,7 +117,7 @@ implies `--mt5` and live equity — no confirmation prompt).
 | `manage`   | Manage tracked signals: lock SL to TP1, cancel expired pendings, time-close. `--watch` loops. |
 | `auto`     | Continuous live trading: read `signals.txt`, place orders, manage positions, append-only event log. `--replace-missing-entries` self-heals limit orders cancelled by hand; `--reopen-missing-positions` restores positions closed by hand while the replay still holds them OPEN (price-aware: market only at-or-better than the entry, else a LIMIT at the original entry — never chases) **and** places partially played-out signals per entry instead of skipping them. `--adaptive` auto-switches by **volatility regime**: each cycle it classifies the current market and runs that regime's published champion config (`CHAMPION_<regime>.json`), falling back to the incumbent when none exists. |
 | `mt5-info` | Diagnostic: latest bar, account equity, open MT5 positions/orders for the symbol. |
-| `fetch`    | Pull the last N months of M1 history into `data/` (per-month CSV archive; `--months`, default 2 — live feed loops use 1). Keep `--mt5-server-offset 3` year-round so the broker's EET/EEST server clock is stored verbatim (shift 0); do **not** drop to 2 in winter (that adds an hour and corrupts timestamps). To rebuild the M1 archive from 2020, see the standalone `cli_resync_m1_from_2020.txt` at the repo root (`fetch --months 80`). |
+| `fetch`    | Pull the last N months of M1 history into `data/` (per-month CSV archive; `--months`, default 2 — live feed loops use 1). Keep `--mt5-server-offset 3` year-round so the broker's EET/EEST server clock is stored verbatim (shift 0); do **not** drop to 2 in winter (that adds an hour and corrupts timestamps). To rebuild the M1 archive from 2020, see the standalone `cli/resync_m1_from_2020.txt` at the repo root (`fetch --months 80`). |
 
 Common flag groups (added to most subcommands):
 
@@ -244,7 +244,7 @@ python tools/live_feed_loop.py --family scalper --interval 30 `
 everything after `--` is passed verbatim to that generator, so the live feed is
 byte-identical to the backtest archive for the same bars. The repo-root
 `cli_*.txt` files are runnable deployment-command snapshots — the current R4
-champion is `cli_champion_R4_SQZ6_no_trailing.txt`; Victor is `cli_champion_victor.txt`.
+champion is `cli/champion_R4_SQZ6_no_trailing.txt`; Victor is `cli/champion_victor.txt`.
 
 Full procedures, sanity checks, and failure recovery are in
 [`../docs/OPERATIONS_PLAYBOOK.md`](../docs/OPERATIONS_PLAYBOOK.md). MT5 connection

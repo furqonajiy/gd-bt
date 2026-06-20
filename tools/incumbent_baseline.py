@@ -42,7 +42,7 @@ from trading.engine import CsvChartSource, parse_signals_file  # noqa: E402
 
 def incumbent_config() -> dict:
     """The sweep's incumbent baseline = **SC24** (the R4 live champion SQZ6, in
-    cli_champion_R4_SQZ6_no_trailing, builds on this scalper24 base):
+    cli/champion_R4_SQZ6_no_trailing, builds on this scalper24 base):
     the blessed DEFAULT_CONFIG + the SC24 overrides, defined once in
     ``sweep.sc24_config()`` and shared with the sweep's seeded staged grid so the
     "did a challenger beat the live champion?" verdict is exactly apples-to-apples

@@ -7,7 +7,7 @@ messages*.html) and run this tool over the HTML to regenerate the exact
 `signals.txt` / `victor_signals.txt` sections for those days.
 
 This deliberately reuses the live listener's pipeline
-(`listener/telegram_listener.py`): the same 🥇 new-signal marker, the same
+(`telegram/telegram_listener.py`): the same 🥇 new-signal marker, the same
 lenient field extraction (comma decimals like `SL 4515,50`), the same
 logic-only typo corrections, the same `N. SIDE XAUUSD R1 - R2 SL S TP1 ..`
 rendering, and the same content+time dedup. A backfilled section is therefore

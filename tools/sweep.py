@@ -450,7 +450,7 @@ def base_config_dict() -> dict[str, Any]:
 
 # --- SC24 incumbent + staged neighborhood --------------------------------
 # "SC24" is the sweep's incumbent baseline + R2/R3 champion family (the R4 live
-# champion SQZ6 in cli_champion_R4_SQZ6_no_trailing builds on this scalper24 base):
+# champion SQZ6 in cli/champion_R4_SQZ6_no_trailing builds on this scalper24 base):
 # the blessed DEFAULT_CONFIG with the overrides below. Single source of truth so the
 # sweep's incumbent baseline (tools/incumbent_baseline.incumbent_config) AND the
 # seeded staged grid (tools/sweep_self_limit.make_limit_candidates) share ONE

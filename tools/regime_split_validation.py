@@ -28,7 +28,7 @@ if str(ROOT) not in sys.path:
 import trading.engine as x  # noqa: E402
 
 # Deployed R4 champion (SQZ6), fixed 0.01 lot for a clean per-trade edge, with the
-# measured locked-exit slippage so fills are realistic (cli_champion_R4_SQZ6).
+# measured locked-exit slippage so fills are realistic (cli/champion_R4_SQZ6).
 CHAMPION = dict(
     sizing_mode="fixed", lot_per_entry=0.01, minimum_lot=0.01, lot_step=0.01,
     bonus_per_closed_lot=0.0, entry_count=8, entry_ladder="range_to_sl",

@@ -197,7 +197,7 @@ Sunday of March / October). `fetch` stores that clock **verbatim** — it does
   backtest aligns with what MT5 actually showed, with no manual adjustment.
 
 To **rebuild the whole M1 archive back to 2020**, use the standalone
-`cli_resync_m1_from_2020.txt` at the repo root (`fetch --months 80`); it
+`cli/resync_m1_from_2020.txt` at the repo root (`fetch --months 80`); it
 documents the broker-history limit and the connection flags.
 
 **Verify** a sync is timezone-correct two ways: (1) `mt5-info`'s "Latest bar"
