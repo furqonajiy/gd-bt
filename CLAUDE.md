@@ -33,7 +33,7 @@ pair is a thin package that imports it.
 - `tools/` — research/ops scripts (sweeps, signal generators, the explicit
   full-parameter runners `auto_explicit.py` / `backtest_explicit.py`,
   `dump_forensic.py`, tick tooling).
-- `listener/telegram_listener.py` — ingests Victor's Telegram channel into
+- `telegram/telegram_listener.py` — ingests Victor's Telegram channel into
   `signals.txt` (override the output feed with `--signals-file`, e.g.
   `victor_signals.txt`). New **and edited** messages pass
   `apply_signal_corrections` first — a logic-only typo fixer (wrong-side SL/TP,
@@ -397,12 +397,12 @@ Live MT5 (`mt5-info`, `decide --execute`, `manage`, `auto`, `fetch`) requires
 the Windows-only `MetaTrader5` package and a running terminal — it cannot run
 in this Linux/CI environment. Validate engine changes through the backtest
 and `pytest`, which use CSV data and a stub MT5 layer. To resync the M1 archive
-from 2020, see the standalone `cli_resync_m1_from_2020.txt` (`fetch --months 80`,
+from 2020, see the standalone `cli/resync_m1_from_2020.txt` (`fetch --months 80`,
 `--mt5-server-offset 3` keeps the broker EET/EEST clock verbatim). The repo-root
 `cli_*.txt` files are runnable deployment-command snapshots, each with the same
 sections (Signal Auto Generator live-loop / Backtest CLI / Auto CLI; Telegram
 Listener only for the Victor feed). The current R4 champion is
-`cli_champion_R4_SQZ6_no_trailing` (tag **SQZ6**) — **`rsi75_sqz6_rr40`**
+`cli/champion_R4_SQZ6_no_trailing` (tag **SQZ6**) — **`rsi75_sqz6_rr40`**
 (e8 / range_to_sl / slm2.1 / max_hold 240 / tp1_lock_delay 24 / lock_after_tp2 on /
 shared_sl off, on the **triple-filtered** scalper24 feed `--rsi-buy-max 75
 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0`;
@@ -410,10 +410,10 @@ shared_sl off, on the **triple-filtered** scalper24 feed `--rsi-buy-max 75
 Bollinger × R:R sweep (edge $63,940 / OOS $11,633 / DD 38.4%) — it superseded the
 e5 RSI champion, which had superseded SC24T24E8 for R4 after it breached the DD ≤
 40% gate on 2026 data (SC24T24E8 remains the R2bull/R3strong champion); the only
-other deployed feed is `cli_champion_victor` (Victor — feed
+other deployed feed is `cli/champion_victor` (Victor — feed
 `generated/victor_live.txt`, positions `positions_victor.json`, tag VIC).
-`cli_resync_m1_from_2020` is the M1-archive resync utility (not a strategy), and
-`cli_rr08x15x30` / `cli_rr10x20x40` are **backtest-only R:R research candidates** —
+`cli/resync_m1_from_2020` is the M1-archive resync utility (not a strategy), and
+`cli/rr08x15x30` / `cli/rr10x20x40` are **backtest-only R:R research candidates** —
 the two R4 signal-R:R sweep winners that beat the incumbent on edge AND OOS (TP1/
 TP2/TP3 rewritten via the generator's `--rr1/--rr2/--rr3` on the unfiltered
 scalper24 feed; **not deployed**, forward-validate before any live use). The
@@ -510,7 +510,7 @@ positions file, feed file, or report name**, so live executors stay isolated
 (disjoint magics) and every artifact traces to exactly one strategy at a glance.
 Example: the R4 champion is tag `SQZ6` → `positions_sqz6.json`,
 `generated/sqz6.txt` / `generated/sqz6_live.txt`, `reports/SQZ6_2026xx`, snapshot
-`cli_champion_R4_SQZ6_no_trailing.txt`; Victor is `VIC` →
+`cli/champion_R4_SQZ6_no_trailing.txt`; Victor is `VIC` →
 `positions_victor.json`, `generated/victor_live.txt`. When you add a strategy,
 mint a fresh tag and derive all four artifact names from it.
 </content>

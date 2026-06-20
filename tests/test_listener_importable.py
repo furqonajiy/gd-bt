@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "listener"))
+sys.path.insert(0, str(REPO / "telegram"))
 
 
 def test_listener_imports_without_telethon():

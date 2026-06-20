@@ -17,7 +17,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "listener"))
+sys.path.insert(0, str(REPO / "telegram"))
 import telegram_listener as tl  # noqa: E402
 
 
