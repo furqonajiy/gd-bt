@@ -33,6 +33,26 @@ give back a point or two. Everything below is how each live effect is handled.
 turns it on via `tools/sweep.base_config_dict` (2.0/1.0). Never set it on
 DEFAULT_CONFIG.
 
+**Slippage scales with volatility, not price — so it is era-matched.** The
+2.0/1.0 is the **R4 parabolic (2026)** give-back. The locked-exit slip tracks the
+regime's volatility (≈ the median absolute LOCK fill vs the level), which falls
+sharply in the quieter years, so a single value applied across 2021-2026 wrongly
+charges the parabolic give-back to the quiet era. The per-regime values
+(anchored on R4 = 1.0×):
+
+| Regime | Years | LOCK_TP1 / LOCK_TP2 slip | vs R4 anchor |
+|---|---|---|---|
+| **R4 parabolic** | 2026-01 → 2026-06 | **2.0 / 1.0** | 1.0× |
+| **R3 strong** | 2025 | **0.9 / 0.45** | ~0.45× |
+| **R2 bull** | 2023-10 → 2024 | **0.5 / 0.25** | ~0.26× |
+| **R1 quiet** | 2021-11 → 2023-09 | **0.4 / 0.2** | ~0.20× |
+
+The per-era 5-way sweep (`self-scalper-5way-sweep-r3r2r1.yml`) scores each regime
+with its own value, and the `cli/*.txt` backtest windows are split per era so each
+run uses the matched slip (sections 4–5 R4 2.0/1.0, 6 R3 0.9/0.45, 7 R2 0.5/0.25,
+8 R1 0.4/0.2). These remain **backtest-only** — live still places stops at the
+exact level and the broker adds the slip.
+
 ---
 
 ## 2. What you (the user) provide — and how
