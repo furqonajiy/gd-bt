@@ -20,8 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from xauusd_trading import Bar, POINT_VALUE, format_generated_signals  # noqa: E402
-from xauusd_trading.strategy.zone_signals import (  # noqa: E402
+from trading.xauusd import Bar, POINT_VALUE, format_generated_signals  # noqa: E402
+from trading.xauusd.strategy.zone_signals import (  # noqa: E402
     ZoneConfig,
     detect_zones,
     generate_zone_signals,

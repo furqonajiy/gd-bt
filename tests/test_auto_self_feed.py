@@ -17,8 +17,8 @@ for _p in (str(ROOT), str(TOOLS)):
         sys.path.insert(0, _p)
 
 import auto_self as A  # noqa: E402
-from xauusd_trading import parse_signals_file  # noqa: E402
-from xauusd_trading.strategy.self_signals import GeneratedSignal  # noqa: E402
+from trading.xauusd import parse_signals_file  # noqa: E402
+from trading.xauusd.strategy.self_signals import GeneratedSignal  # noqa: E402
 
 
 def _mk(side: str, when: datetime, anchor: float, width: float = 2.0, sld: float = 5.0):
@@ -178,7 +178,7 @@ class _FakeMt5:
 
 
 def test_recent_closed_bars_drops_forming_bar():
-    from xauusd_trading.io.mt5_adapter import Mt5ChartSource
+    from trading.xauusd.io.mt5_adapter import Mt5ChartSource
 
     base = 1_700_000_000
     rates = [

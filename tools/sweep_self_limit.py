@@ -50,7 +50,7 @@ if str(ROOT) not in sys.path:
 # Reuse the validated sweep machinery (concurrent engine, draw, checkpoint, board).
 sweep = importlib.import_module("tools.sweep")
 
-from xauusd_trading import CsvChartSource, parse_signals_file  # noqa: E402
+from trading.xauusd import CsvChartSource, parse_signals_file  # noqa: E402
 
 FILTER_LABEL = "self_limit"  # stored in the row; not a provider filter
 

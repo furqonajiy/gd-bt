@@ -222,7 +222,7 @@ signal_overrides.jsonl.offset
 signal_overrides.jsonl.*.offset
 
 # BTC runtime state (positions, forensic) -- never commit
-btcusd_trading/runtime/
+trading/btcusd/runtime/
 
 # Research parameter-sweep scratch (this session) -- not part of the codebase
 /_sweep.py

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 
-from xauusd_trading import (
+from trading.xauusd import (
     Bar,
     DEFAULT_CONFIG,
     ManualPositionSource,
@@ -19,7 +19,7 @@ from xauusd_trading import (
     open_position,
     parse_one_signal,
 )
-from xauusd_trading.execution import mt5_executor_tp2
+from trading.xauusd.execution import mt5_executor_tp2
 
 
 DD40_COMMAND_CONFIG = replace(
@@ -210,12 +210,12 @@ def test_engine_replay_for_existing_position_matches_direct_backtest_replay():
         ),
     ])
     for bar in chart.bars_between(direct.activation_time, chart.last_time()):
-        from xauusd_trading import advance_one_bar
+        from trading.xauusd import advance_one_bar
         advance_one_bar(direct, bar, DD40_COMMAND_CONFIG)
 
     live_replay = open_position(signal, equity=1000.0, config=DD40_COMMAND_CONFIG)
     for bar in chart.bars_between(live_replay.activation_time, chart.last_time()):
-        from xauusd_trading import advance_one_bar
+        from trading.xauusd import advance_one_bar
         advance_one_bar(live_replay, bar, DD40_COMMAND_CONFIG)
 
     assert [(e.status, e.fill_time, e.exit_time, e.exit_price) for e in live_replay.entries] == [

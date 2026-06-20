@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from xauusd_trading.core import chart_tz
+from trading.xauusd.core import chart_tz
 
 
 def test_last_sunday_matches_eu_dst_dates():

@@ -31,7 +31,7 @@ for _p in (str(ROOT), str(ROOT / "tools")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from xauusd_trading import CsvChartSource  # noqa: E402
+from trading.xauusd import CsvChartSource  # noqa: E402
 import generate_scalper_signals as gen  # noqa: E402
 import live_provider_signal_filter as pf  # noqa: E402
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import timedelta
 
-from xauusd_trading import Bar, DEFAULT_CONFIG, advance_one_bar, open_position, parse_one_signal
+from trading.xauusd import Bar, DEFAULT_CONFIG, advance_one_bar, open_position, parse_one_signal
 
 
 CFG = replace(

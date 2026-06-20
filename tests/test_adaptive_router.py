@@ -11,8 +11,8 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
-from xauusd_trading import DEFAULT_CONFIG, StrategyConfig
-from xauusd_trading.cli import _adaptive_enabled, _maybe_adaptive_config
+from trading.xauusd import DEFAULT_CONFIG, StrategyConfig
+from trading.xauusd.cli import _adaptive_enabled, _maybe_adaptive_config
 
 
 def _chart(price: float, wiggle: float, drift: float = 0.0, minutes: int = 60 * 24 * 3):
@@ -65,7 +65,7 @@ def test_adaptive_detection_failure_keeps_incumbent():
 # --- shared champion-config resolver (live + backtest) -----------------------
 
 def test_champion_config_loads_and_falls_back(tmp_path):
-    from xauusd_trading import champion_config
+    from trading.xauusd import champion_config
     champ = {"config": {**asdict(DEFAULT_CONFIG), "entry_count": 7}}
     (tmp_path / "CHAMPION_R3strong.json").write_text(json.dumps(champ))
     # present -> loaded
@@ -77,7 +77,7 @@ def test_champion_config_loads_and_falls_back(tmp_path):
 
 
 def test_regime_config_resolver_maps_signal_to_champion(tmp_path):
-    from xauusd_trading import make_regime_config_resolver, parse_one_signal
+    from trading.xauusd import make_regime_config_resolver, parse_one_signal
     # Parabolic chart over the signal's window -> R4parab; its champion (entries=8).
     champ = {"config": {**asdict(DEFAULT_CONFIG), "entry_count": 8}}
     (tmp_path / "CHAMPION_R4parab.json").write_text(json.dumps(champ))
@@ -99,7 +99,7 @@ def test_regime_config_resolver_maps_signal_to_champion(tmp_path):
 def test_run_backtest_calls_config_resolver_per_signal(tmp_path):
     # run_backtest must invoke config_resolver once per surviving signal and use
     # the returned config (here a sentinel with entry_count=1 vs the base 3).
-    from xauusd_trading import (CsvChartSource, parse_signals_file, run_backtest,
+    from trading.xauusd import (CsvChartSource, parse_signals_file, run_backtest,
                                 StrategyConfig)
     import textwrap
     chart_csv = tmp_path / "XAUUSD_M1_202601_ELEV8.csv"

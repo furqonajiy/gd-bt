@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Configurable local backtest runner for generated XAUUSD signals.
 
-This is intentionally separate from ``xauusd_trading.cli`` so signal-generation
+This is intentionally separate from ``trading.xauusd.cli`` so signal-generation
 experiments can vary every StrategyConfig field without touching live MT5
 execution commands.
 
@@ -42,7 +42,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from xauusd_trading import (  # noqa: E402
+from trading.xauusd import (  # noqa: E402
     CsvChartSource,
     DEFAULT_CONFIG,
     StrategyConfig,

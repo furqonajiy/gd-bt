@@ -39,7 +39,7 @@ if str(ROOT) not in sys.path:
 # Reuse the validated sweep machinery (concurrent backtest, gates, leaderboard).
 sweep = importlib.import_module("tools.sweep")
 
-from xauusd_trading import CsvChartSource, parse_signals_file  # noqa: E402
+from trading.xauusd import CsvChartSource, parse_signals_file  # noqa: E402
 
 
 def make_limit_candidates(seed: int, max_candidates: int) -> list[dict]:
