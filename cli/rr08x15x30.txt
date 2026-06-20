@@ -6,13 +6,14 @@
 # max-hold 240 / TP3, lock-after-tp1 + lock-after-tp2, tp1-lock-delay 24 /
 # tp2-lock-delay 2 / tp1-lock-fraction 0.5, shared_sl OFF, NO trailing, risk 1%.
 #
-# SECTION MAP (same in every strategy CLI; copy-paste 3/4/5 for backtests):
+# SECTION MAP (same in every strategy CLI; copy-paste 4/5/6 for backtests):
 #   1. Telegram Listener            (N/A here -- self-generated feed)
 #   2. Live Loop Signal Generator   (continuous live feed)
-#   3. Signal Generator             (one-shot static archive, run before 4/5)
-#   4. Backtest from 2026-01        -> reports/RR08_202601.xlsx
-#   5. Backtest from 2021-01        -> reports/RR08_202101.xlsx  (full history)
-#   6. Live Auto Executor           (OPTIONAL -- validate before any live use)
+#   3. Signal Generator             (one-shot static archive, run before 4/5/6)
+#   4. Backtest from 2026-06        -> reports/RR08_202606.xlsx  (current month)
+#   5. Backtest from 2026-01        -> reports/RR08_202601.xlsx  (current regime)
+#   6. Backtest from 2021-01        -> reports/RR08_202101.xlsx  (full history)
+#   7. Live Auto Executor           (OPTIONAL -- validate before any live use)
 #
 # SWEEP RESULT (self-scalper-rr-sweep, R4 2026, slippage-aware 2.0/1.0, DD<=40%
 #   & OOS>0): the #1 variant. edge $54,660 / OOS $8,702 / DD 39.3% (13 survivors)
@@ -56,12 +57,56 @@ python tools/live_feed_loop.py `
   -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/self_scalper24_rr08x15x30_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rr1 0.8 --rr2 1.5 --rr3 3.0
 
 # ===== 3. SIGNAL GENERATOR (before backtest) =====
-# One-shot FULL static archive with this variant's R:R rewrite (run before 4/5).
+# One-shot FULL static archive with this variant's R:R rewrite (run before 4/5/6).
 # UNFILTERED (no --rsi-*): the R:R sweep ran on the base feed so the R:R effect is
 # isolated.
 python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/self_scalper24_rr08x15x30.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rr1 0.8 --rr2 1.5 --rr3 3.0
 
-# ===== 4. BACKTEST FROM 2026-01 (current regime) =====
+# ===== 4. BACKTEST FROM 2026-06 (current month) =====
+# --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
+#   give-back so the backtest matches live (the SAME values the sweep scored
+#   against). Backtest-only; never live.
+python tools/backtest_explicit.py `
+  --signals signals/self_scalper24_rr08x15x30.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --shared-sl false `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/RR08_202606 `
+  --initial-capital 50000 `
+  --start-date 2026-06-01
+
+# ===== 5. BACKTEST FROM 2026-01 (current regime) =====
 # --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
 #   give-back so the backtest matches live (the SAME values the sweep scored
 #   against). Backtest-only; never live.
@@ -105,7 +150,7 @@ python tools/backtest_explicit.py `
   --initial-capital 50000 `
   --start-date 2026-01-01
 
-# ===== 5. BACKTEST FROM 2021-01 (full history) =====
+# ===== 6. BACKTEST FROM 2021-01 (full history) =====
 python tools/backtest_explicit.py `
   --signals signals/self_scalper24_rr08x15x30.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -146,10 +191,10 @@ python tools/backtest_explicit.py `
   --initial-capital 50000 `
   --start-date 2021-01-01
 
-# ===== 6. LIVE AUTO EXECUTOR (OPTIONAL -- VALIDATE BEFORE USE) =====
+# ===== 7. LIVE AUTO EXECUTOR (OPTIONAL -- VALIDATE BEFORE USE) =====
 # RESEARCH CANDIDATE. Only run live after a clean forward/demo validation. The
 # tag RR08 + positions_sc24_rr08x15x30.json keep it isolated from SC24 and Victor.
-# Strategy params are byte-identical to sections 4/5.
+# Strategy params are byte-identical to sections 4/5/6.
 python tools/auto_explicit.py `
   --signals signals/self_scalper24_rr08x15x30_live.txt `
   --positions-json positions_sc24_rr08x15x30.json `

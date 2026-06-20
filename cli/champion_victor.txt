@@ -5,13 +5,14 @@
 #   final-target TP3 / locks on / tp1-lock-delay 24 / tp2-lock-delay 2,
 #   NO trailing, risk 2.5%, capital $50,000.
 #
-# SECTION MAP (same in every strategy CLI; copy-paste 3/4/5 for backtests):
+# SECTION MAP (same in every strategy CLI; copy-paste 4/5/6 for backtests):
 #   1. Telegram Listener            (ingests Victor's channel -> victor_signals.txt)
 #   2. Live Loop Signal Generator   (provider filter --watch -> victor_live.txt)
 #   3. Signal Generator             (N/A -- backtest reads victor_signals.txt direct)
-#   4. Backtest from 2026-01        -> reports/VIC_202601.xlsx
-#   5. Backtest from 2021-01        -> reports/VIC_202101.xlsx  (full Victor history)
-#   6. Live Auto Executor           (places + manages real orders)
+#   4. Backtest from 2026-06        -> reports/VIC_202606.xlsx  (current month)
+#   5. Backtest from 2026-01        -> reports/VIC_202601.xlsx  (current regime)
+#   6. Backtest from 2021-01        -> reports/VIC_202101.xlsx  (full Victor history)
+#   7. Live Auto Executor           (places + manages real orders)
 #
 # All artifacts are Victor-named so nothing is confused with the scalper executor:
 #   feed = signals/victor_live.txt (the filtered Victor signals the live auto
@@ -59,9 +60,51 @@ python tools/live_provider_signal_filter.py `
 # ===== 3. SIGNAL GENERATOR (before backtest) =====
 # N/A -- there is no generation step for Victor. The backtest reads
 # victor_signals.txt directly (the listener output IS the signal source); sections
-# 4/5 below pass it as --signals.
+# 4/5/6 below pass it as --signals.
 
-# ===== 4. BACKTEST FROM 2026-01 (current regime) =====
+# ===== 4. BACKTEST FROM 2026-06 (current month) =====
+# --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
+#   give-back so the backtest matches live. Backtest-only; never live. Strategy
+#   params are byte-identical to the auto runner (section 6).
+python tools/backtest_explicit.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.025 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0 `
+  --trailing-close-distance 0 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/VIC_202606 `
+  --initial-capital 50000 `
+  --start-date 2026-06-01
+
+# ===== 5. BACKTEST FROM 2026-01 (current regime) =====
 # --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
 #   give-back so the backtest matches live. Backtest-only; never live. Strategy
 #   params are byte-identical to the auto runner (section 6).
@@ -103,7 +146,7 @@ python tools/backtest_explicit.py `
   --initial-capital 50000 `
   --start-date 2026-01-01
 
-# ===== 5. BACKTEST FROM 2021-01 (full Victor history) =====
+# ===== 6. BACKTEST FROM 2021-01 (full Victor history) =====
 python tools/backtest_explicit.py `
   --signals victor_signals.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -142,9 +185,9 @@ python tools/backtest_explicit.py `
   --initial-capital 50000 `
   --start-date 2021-01-01
 
-# ===== 6. LIVE AUTO EXECUTOR =====
+# ===== 7. LIVE AUTO EXECUTOR =====
 # Reads the filtered feed (section 2), places + manages real orders on MT5.
-# Strategy parameters are byte-identical to the parity backtests (sections 4/5).
+# Strategy parameters are byte-identical to the parity backtests (sections 4/5/6).
 # Flags omitted because they do NOT affect live execution (auto_explicit defaults
 # them): --initial-capital (live sizes off REAL MT5 equity), --bonus-per-closed-lot
 # (backtest scoring only), --tp3-lock-target (only TP2). Also dropped the flag
