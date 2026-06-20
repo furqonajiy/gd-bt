@@ -5,9 +5,9 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from xauusd_trading import Bar, DEFAULT_CONFIG, advance_bars, open_position, parse_one_signal
-from xauusd_trading.core.chart import iter_bars, slice_bars
-from xauusd_trading.core.trend_runner import prewarm_indicators_from_dataframe
+from trading.xauusd import Bar, DEFAULT_CONFIG, advance_bars, open_position, parse_one_signal
+from trading.xauusd.core.chart import iter_bars, slice_bars
+from trading.xauusd.core.trend_runner import prewarm_indicators_from_dataframe
 
 
 def _bar(t: datetime, o: float, h: float, l: float, c: float, spread: float = 0.0) -> Bar:

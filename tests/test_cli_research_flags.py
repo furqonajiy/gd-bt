@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from xauusd_trading.cli_orig import build_parser, _config_from_args
-from xauusd_trading.core.config import DEFAULT_CONFIG, StrategyConfig
+from trading.xauusd.cli_orig import build_parser, _config_from_args
+from trading.xauusd.core.config import DEFAULT_CONFIG, StrategyConfig
 
 
 def _parse(argv):

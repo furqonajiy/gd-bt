@@ -1,10 +1,10 @@
-"""Tests for xauusd_trading.strategy.momentum_signals.generate_momentum_signals."""
+"""Tests for trading.xauusd.strategy.momentum_signals.generate_momentum_signals."""
 from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
 
-from xauusd_trading import Bar, MomentumSignalConfig, generate_momentum_signals
+from trading.xauusd import Bar, MomentumSignalConfig, generate_momentum_signals
 
 
 def _bar(t: str, open_: float, high: float, low: float, close: float, spread: int = 25) -> Bar:

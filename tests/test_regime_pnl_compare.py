@@ -96,7 +96,7 @@ SIGNALS_FILE = ROOT / "signals.txt"
 @pytest.mark.skipif(not CHART_FILES or not SIGNALS_FILE.exists(),
                     reason="no data/ charts or signals.txt in this checkout")
 def test_per_signal_risk_parity_with_run_backtest():
-    from xauusd_trading import DEFAULT_CONFIG, CsvChartSource, parse_signals_file, run_backtest
+    from trading.xauusd import DEFAULT_CONFIG, CsvChartSource, parse_signals_file, run_backtest
 
     signals = parse_signals_file(SIGNALS_FILE)[-500:]   # recent slice keeps the test quick
     chart = CsvChartSource(CHART_FILES)

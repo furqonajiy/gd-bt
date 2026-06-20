@@ -175,7 +175,7 @@ def test_rendered_cli_is_runnable_backtest_explicit():
     else:
         # Fallback path (sweep2021.orchestrate not importable in this tree): the
         # plain CLI line is still runnable and regime-targeted.
-        assert "python -m xauusd_trading.cli backtest" in cli
+        assert "python -m trading.xauusd.cli backtest" in cli
         assert "--entries 4" in cli
 
 
@@ -202,7 +202,7 @@ def test_render_deployment_cli_full_format():
     # Section 2 BACKTEST: reuses render_champion_cli (regime slice + charts).
     assert "2. BACKTEST" in text
     assert ("tools/backtest_explicit.py" in text
-            or "xauusd_trading.cli backtest" in text)
+            or "trading.xauusd.cli backtest" in text)
     assert "data/XAUUSD_M1_2026*_ELEV8.csv" in text
     # Section 3 LIVE: auto_explicit with the live tail; backtest-only flags gone.
     assert "3. LIVE AUTO EXECUTOR" in text

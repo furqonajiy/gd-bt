@@ -9,14 +9,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from xauusd_trading import (
+from trading.xauusd import (
     CONTRACT_SIZE_OZ,
     POINT_VALUE,
     SymbolSpec,
     XAU_SPEC,
     load_chart,
 )
-from xauusd_trading.io.mt5_adapter import _archive_filename, _normalize_file_symbol
+from trading.xauusd.io.mt5_adapter import _archive_filename, _normalize_file_symbol
 
 
 def test_xau_spec_matches_legacy_constants():

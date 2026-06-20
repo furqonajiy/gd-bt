@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import xauusd_trading.cli as cli
-from xauusd_trading import DEFAULT_CONFIG, ExecutionLog, parse_one_signal
+import trading.xauusd.cli as cli
+from trading.xauusd import DEFAULT_CONFIG, ExecutionLog, parse_one_signal
 
 
 class _FakeTick:
@@ -121,9 +121,9 @@ def patch_auto_dependencies(monkeypatch):
     monkeypatch.setattr(cli, "_make_notifier", lambda args: _NoopNotifier())
     monkeypatch.setattr(cli, "_make_forensic", lambda args: _FakeForensic())
     monkeypatch.setattr(cli, "_handle_closures", lambda *args, **kwargs: None)
-    monkeypatch.setattr("xauusd_trading.mt5_equity", lambda conn: 1000.0)
-    monkeypatch.setattr("xauusd_trading.SignalRegistry", _FakeRegistry)
-    monkeypatch.setattr("xauusd_trading.Mt5Executor", _FakeExecutor)
+    monkeypatch.setattr("trading.xauusd.mt5_equity", lambda conn: 1000.0)
+    monkeypatch.setattr("trading.xauusd.SignalRegistry", _FakeRegistry)
+    monkeypatch.setattr("trading.xauusd.Mt5Executor", _FakeExecutor)
 
 
 def _args(tmp_path: Path) -> SimpleNamespace:

@@ -10,9 +10,9 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from xauusd_trading import DEFAULT_CONFIG, RejectionSignalConfig, SymbolSpec
+from trading.xauusd import DEFAULT_CONFIG, RejectionSignalConfig, SymbolSpec
 
-import btcusd_trading.backtest as bt
+import trading.btcusd.backtest as bt
 
 
 _BTC_SPEC = SymbolSpec(symbol="BTCUSD", point_value=0.01, digits=2,
@@ -78,7 +78,7 @@ def test_assert_configured_guard_fires_when_unconfigured(monkeypatch):
     # The guard must raise when the flag is off, regardless of the shipped value
     # (strategy.py ships configured now that mt5-info values are filled).
     import pytest
-    import btcusd_trading.strategy as strat
+    import trading.btcusd.strategy as strat
     monkeypatch.setattr(strat, "BTC_SPEC_CONFIGURED", False)
     with pytest.raises(RuntimeError, match="unconfigured template"):
         strat.assert_configured()

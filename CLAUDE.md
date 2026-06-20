@@ -18,9 +18,9 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
 
 ## Layout
 
-- `xauusd_trading/` — the engine (parsing, lifecycle, backtest, MT5 adapter,
+- `trading/xauusd/` — the engine (parsing, lifecycle, backtest, MT5 adapter,
   executor, CLI). This is where almost all real logic lives.
-- `btcusd_trading/` — a BTC self-rejection backtest that reuses the XAUUSD
+- `trading/btcusd/` — a BTC self-rejection backtest that reuses the XAUUSD
   engine path; never mutate the blessed strategy config for a research run.
 - `tools/` — research/ops scripts (sweeps, signal generators, the explicit
   full-parameter runners `auto_explicit.py` / `backtest_explicit.py`,
@@ -122,17 +122,17 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
 ## Architecture conventions — follow these
 
 - **Import from the package root.** Everything is re-exported from
-  `xauusd_trading/__init__.py`. Internal modules, CLI, tests, and tools all
-  do `from xauusd_trading import X`, never `from xauusd_trading.core.foo
+  `trading/xauusd/__init__.py`. Internal modules, CLI, tests, and tools all
+  do `from trading.xauusd import X`, never `from trading.xauusd.core.foo
   import X`. The re-export block is dependency-ordered — when you move a
   symbol between files, update `__init__.py` and keep the ordering valid.
-- **CLI structure.** `xauusd_trading/cli.py` is a thin wrapper that
+- **CLI structure.** `trading/xauusd/cli.py` is a thin wrapper that
   `import *`s the historical implementation from `cli_orig.py` and overrides
   **only** the `auto` console presentation (append-only event log). New
   subcommands/flags go in `cli_orig.py`'s `build_parser()`; keep `cli.py`
-  delegating. Entry point is `python -m xauusd_trading.cli`.
+  delegating. Entry point is `python -m trading.xauusd.cli`.
 - **`decide` lives in `strategy.trailing_engine`** (re-exported as
-  `xauusd_trading.decide`). The wrapper preserves the legacy lifecycle when
+  `trading.xauusd.decide`). The wrapper preserves the legacy lifecycle when
   trailing distances are 0 and adds trailing behavior when enabled.
 - **Config.** `core/config.py` `DEFAULT_CONFIG` is the validated
   DD40-compatible provider contract. Trailing-open / trailing-close /
@@ -372,8 +372,8 @@ pip install -r requirements.txt        # pandas, openpyxl, pytest
 pytest                                  # full suite
 pytest tests/test_smoke.py             # quick strategy-baseline check
 
-python -m xauusd_trading.cli backtest --signals victor_signals.txt --charts "data/XAUUSD_M1_*.csv"
-python -m xauusd_trading.cli decide --signal "..." --signal-date 2026-05-07 --signal-tz 7 --charts "data/XAUUSD_M1_*.csv"
+python -m trading.xauusd.cli backtest --signals victor_signals.txt --charts "data/XAUUSD_M1_*.csv"
+python -m trading.xauusd.cli decide --signal "..." --signal-date 2026-05-07 --signal-tz 7 --charts "data/XAUUSD_M1_*.csv"
 ```
 
 `backtest`/`decide` default to **`DEFAULT_CONFIG.initial_capital = $50,000`** (was

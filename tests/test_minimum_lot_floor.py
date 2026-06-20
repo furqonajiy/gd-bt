@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from xauusd_trading import DEFAULT_CONFIG, compute_lot, parse_one_signal, round_lot
+from trading.xauusd import DEFAULT_CONFIG, compute_lot, parse_one_signal, round_lot
 
 
 # The exact signal + config from the bug report: 8 entries, $5000 @ 2% risk,

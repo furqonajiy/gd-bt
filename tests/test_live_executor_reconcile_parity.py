@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 
-from xauusd_trading import (
+from trading.xauusd import (
     Bar,
     DEFAULT_CONFIG,
     Mt5Executor,
@@ -12,7 +12,7 @@ from xauusd_trading import (
     open_position,
     parse_one_signal,
 )
-from xauusd_trading.execution import mt5_executor_tp2
+from trading.xauusd.execution import mt5_executor_tp2
 
 
 class _Resp:

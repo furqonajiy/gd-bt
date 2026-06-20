@@ -66,7 +66,7 @@ should match the time you see in MT5's chart window.
 ## 5. Test the connection
 
 ```powershell
-python -m xauusd_trading.cli mt5-info --mt5-symbol XAUUSD
+python -m trading.xauusd.cli mt5-info --mt5-symbol XAUUSD
 ```
 
 Expected output (your equity will differ):
@@ -129,7 +129,7 @@ cycle; inspect MT5 native trailing, other EAs, or manual SL edits.
 ## 8. Decide on a new signal using live MT5 data
 
 ```powershell
-python -m xauusd_trading.cli decide ^
+python -m trading.xauusd.cli decide ^
   --signal "1. BUY XAUUSD 4543 - 4541 SL 4536 TP1 4551 TP2 4561 TP3 4576 2:02 PM" ^
   --signal-date 2026-05-07 ^
   --signal-tz 7 ^
@@ -168,7 +168,7 @@ since fallen out of MT5's window) are **preserved**. This is the safe default.
 If you just want to pull data without running a decision:
 
 ```powershell
-python -m xauusd_trading.cli fetch --mt5-symbol XAUUSD
+python -m trading.xauusd.cli fetch --mt5-symbol XAUUSD
 # --months N limits how far back to refresh (default 2); live feed loops
 # use --months 1 since rolled-over months are immutable.
 ```
@@ -190,7 +190,7 @@ Sunday of March / October). `fetch` stores that clock **verbatim** — it does
   stored bar. The offset is *not* "the broker's current UTC offset" — it is the
   knob that keeps the stored clock equal to the broker clock, and `3` does that
   in both seasons.
-- **The engine is DST-aware** (`xauusd_trading/core/chart_tz.py`). Because the
+- **The engine is DST-aware** (`trading/xauusd/core/chart_tz.py`). Because the
   CSV is EET/EEST and the engine knows the EU DST schedule, a provider signal in
   GMT+7 (Victor, fixed Jakarta time) is matched to the correct chart bar
   automatically — shifted by −4h in summer and **−5h in winter** — so your
@@ -209,7 +209,7 @@ fingerprint of a correct EET/EEST feed.
 ### Using the archive for backtests
 
 ```powershell
-python -m xauusd_trading.cli backtest ^
+python -m trading.xauusd.cli backtest ^
   --signals my_signals.txt ^
   --charts data\XAUUSD_M1_*.csv
 ```
@@ -242,7 +242,7 @@ on, and remove them as they close.
 Then:
 
 ```powershell
-python -m xauusd_trading.cli decide ^
+python -m trading.xauusd.cli decide ^
   --signal "..." --signal-date 2026-05-07 --signal-tz 7 ^
   --mt5 --equity-from-mt5 ^
   --positions-json positions.json
@@ -261,7 +261,7 @@ max-hold deadline). Read-only diagnostic output without `--execute`; with
 `--execute`, real orders are sent.
 
 ```powershell
-python -m xauusd_trading.cli decide ^
+python -m trading.xauusd.cli decide ^
   --signal "..." --signal-date 2026-05-07 --signal-tz 7 ^
   --mt5 --equity-from-mt5 ^
   --positions-json positions.json ^

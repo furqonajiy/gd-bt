@@ -27,7 +27,7 @@ conda activate xauusd
 Confirm MT5 is connected and your account looks right:
 
 ```powershell
-python -m xauusd_trading.cli mt5-info --mt5-symbol XAUUSD
+python -m trading.xauusd.cli mt5-info --mt5-symbol XAUUSD
 ```
 
 What to check in the output:
@@ -111,7 +111,7 @@ cycle.
 Copy the signal exactly as it appears, including the leading number:
 
 ```powershell
-python -m xauusd_trading.cli decide `
+python -m trading.xauusd.cli decide `
     --signal "1. BUY XAUUSD 4717 - 4715 SL 4710 TP1 4725 TP2 4735 TP3 4750 6:24 PM" `
     --signal-date 2026-05-07 `
     --signal-tz 7 `
@@ -149,7 +149,7 @@ If the preview looks right, run the same command with `--execute` added
 (and drop `--mt5 --equity-from-mt5`, since `--execute` implies them):
 
 ```powershell
-python -m xauusd_trading.cli decide `
+python -m trading.xauusd.cli decide `
     --signal "1. BUY XAUUSD 4717 - 4715 SL 4710 TP1 4725 TP2 4735 TP3 4750 6:24 PM" `
     --signal-date 2026-05-07 `
     --signal-tz 7 `
@@ -186,7 +186,7 @@ or schedule `manage --execute` via Task Scheduler every minute:
 # manage.ps1 -- run every minute via Task Scheduler
 $ErrorActionPreference = 'Continue'
 Set-Location 'C:\path\to\your\repo'
-& conda run -n xauusd python -m xauusd_trading.cli manage `
+& conda run -n xauusd python -m trading.xauusd.cli manage `
     --execute --positions-json positions.json `
     *>> manage.log
 ```
@@ -251,7 +251,7 @@ orders.
 In window 2:
 
 ```powershell
-python -m xauusd_trading.cli auto `
+python -m trading.xauusd.cli auto `
     --signals signals.txt `
     --positions-json positions.json `
     --apply-signal-edits
@@ -319,7 +319,7 @@ a strategy, mint a fresh ≤ 4-char tag and derive all four names from it.
 Pass `--adaptive` (and `--champions-dir <dir>` if your `CHAMPION_<regime>.json`
 files live somewhere other than `sweep_regime_out_grid/`) to let `auto` pick the
 strategy by **volatility regime**. Each cycle it classifies the current market
-(`xauusd_trading.strategy.regime` — smoothed M15 ATR + trend → R1quiet / R2bull /
+(`trading.xauusd.strategy.regime` — smoothed M15 ATR + trend → R1quiet / R2bull /
 R3strong / R4parab) from a trailing window of M1 (`--adaptive-window-days`,
 default 20) and runs that regime's **published champion** config; when no
 champion exists for the detected regime it **falls back to the CLI/incumbent
@@ -403,7 +403,7 @@ LIMITs by hand, the engine will **not** re-place them by default: once the
 signal's magic has any MT5 footprint, placement is skipped (it manages instead).
 
 Run `auto` with `--replace-missing-entries true` (or `--replace-missing-entries`
-on `python -m xauusd_trading.cli auto`) to self-heal: each cycle it re-places any
+on `python -m trading.xauusd.cli auto`) to self-heal: each cycle it re-places any
 entry still **PENDING** in the replay (price hasn't reached it, window still
 open) whose per-entry comment is missing from MT5. It only acts when the signal
 still has ≥1 footprint on MT5, never re-places an entry price has already passed

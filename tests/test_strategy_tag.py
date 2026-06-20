@@ -7,8 +7,8 @@ keeps backtests byte-identical.
 """
 from __future__ import annotations
 
-from xauusd_trading import parse_one_signal, parse_signals_file
-from xauusd_trading.execution.mt5_executor import signal_to_magic, mt5_entry_comment
+from trading.xauusd import parse_one_signal, parse_signals_file
+from trading.xauusd.execution.mt5_executor import signal_to_magic, mt5_entry_comment
 
 LINE = "3. BUY XAUUSD 2030 - 2028 SL 2025 TP1 2035 TP2 2040 TP3 2050 2:00 PM"
 
@@ -51,7 +51,7 @@ def test_replay_tracked_signal_recovers_tag_from_registry_key():
     # re-parsing the raw text -- which drops the tag unless recovered from the
     # stored signal_key. Without recovery the replayed Position computes the
     # UNTAGGED magic + comment, orphaning reopened legs (the 0615#48.1 bug).
-    from xauusd_trading.cli_orig import _tag_from_signal_key
+    from trading.xauusd.cli_orig import _tag_from_signal_key
 
     assert _tag_from_signal_key("SC24-2026-06-15#48") == "SC24"
     assert _tag_from_signal_key("VIC-2026-06-15#04") == "VIC"

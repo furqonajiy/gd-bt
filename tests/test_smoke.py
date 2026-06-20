@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from xauusd_trading import (
+from trading.xauusd import (
     DEFAULT_CONFIG, CsvChartSource, parse_signals_file, run_backtest,
 )
 
@@ -113,7 +113,7 @@ def test_every_terminal_status_has_a_bucket():
     return must map to a counted bucket present in the bucket template. Runs
     without market data, so it always executes (the end-to-end test skips when the
     provider feed or charts are absent)."""
-    from xauusd_trading.strategy.backtest import _STATUS_TO_KEY, _new_bucket
+    from trading.xauusd.strategy.backtest import _STATUS_TO_KEY, _new_bucket
 
     terminal_statuses = {"WIN", "LOSS", "BREAKEVEN", "NO_FILL", "OPEN"}
     assert set(_STATUS_TO_KEY) == terminal_statuses

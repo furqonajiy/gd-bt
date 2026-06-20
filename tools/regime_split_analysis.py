@@ -40,21 +40,21 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from xauusd_trading import (
+from trading.xauusd import (
     DEFAULT_CONFIG,
     StrategyConfig,
     CsvChartSource,
     parse_signals_file,
     iter_bars,
 )
-from xauusd_trading.strategy.path_analysis import run_path_analysis
+from trading.xauusd.strategy.path_analysis import run_path_analysis
 
 
 # ---------------------------------------------------------------------------
 # regime classifier (pure, testable)
 # ---------------------------------------------------------------------------
 def _ema(prev: float | None, value: float, period: int) -> float:
-    # Mirrors xauusd_trading.core.trend_runner._ema exactly so regime labels use
+    # Mirrors trading.xauusd.core.trend_runner._ema exactly so regime labels use
     # the same EMA definition the engine's trend-runner uses (definition parity).
     if prev is None:
         return float(value)

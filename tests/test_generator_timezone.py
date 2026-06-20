@@ -18,7 +18,7 @@ from datetime import datetime
 
 import pytest
 
-from xauusd_trading import parse_signals_file
+from trading.xauusd import parse_signals_file
 
 GEN_MODULES = [
     "tools.generate_breakout_signals",

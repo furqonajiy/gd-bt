@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from xauusd_trading import (
+from trading.xauusd import (
     _MT5_EXPORT_COLUMNS, _merge_with_existing,
 )
 

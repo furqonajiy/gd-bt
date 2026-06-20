@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime
 
-from xauusd_trading import DEFAULT_CONFIG, Mt5Executor, open_position, parse_one_signal, signal_to_magic
+from trading.xauusd import DEFAULT_CONFIG, Mt5Executor, open_position, parse_one_signal, signal_to_magic
 
 
 DD40_COMMAND_CONFIG = replace(

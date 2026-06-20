@@ -7,9 +7,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from xauusd_trading import CsvChartSource, DEFAULT_CONFIG, parse_one_signal, run_backtest
-from xauusd_trading.strategy.backtest import _payoff_ratio, _planned_rr, _realized_rr
-from xauusd_trading.reporting.excel_report import (
+from trading.xauusd import CsvChartSource, DEFAULT_CONFIG, parse_one_signal, run_backtest
+from trading.xauusd.strategy.backtest import _payoff_ratio, _planned_rr, _realized_rr
+from trading.xauusd.reporting.excel_report import (
     _fmt_payoff, _fmt_rr_planned, _fmt_rr_realized,
 )
 
@@ -135,7 +135,7 @@ def test_summary_monthly_breakdown_shows_equity_end_of_month(tmp_path):
     # (mirroring the Daily sheet's Equity EoD), not just the month's P&L.
     from openpyxl import load_workbook
 
-    from xauusd_trading import write_backtest_outputs
+    from trading.xauusd import write_backtest_outputs
 
     sig = parse_one_signal(
         "1. BUY XAUUSD 100 - 100 SL 95 TP1 110 TP2 115 TP3 120 11:00 AM",

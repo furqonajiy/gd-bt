@@ -45,7 +45,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from xauusd_trading import POINT_VALUE  # noqa: E402
+from trading.xauusd import POINT_VALUE  # noqa: E402
 
 
 UTC = timezone.utc

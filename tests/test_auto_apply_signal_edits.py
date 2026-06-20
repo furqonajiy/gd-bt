@@ -15,8 +15,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import xauusd_trading.cli as cli
-from xauusd_trading import DEFAULT_CONFIG, ExecutionLog, SignalRegistry, parse_one_signal
+import trading.xauusd.cli as cli
+from trading.xauusd import DEFAULT_CONFIG, ExecutionLog, SignalRegistry, parse_one_signal
 
 
 class _Tick:
@@ -132,8 +132,8 @@ def harness(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_make_forensic", lambda args: _Forensic())
     monkeypatch.setattr(cli, "_handle_closures", lambda *a, **k: None)
     monkeypatch.setattr(cli, "report_entry_closures", lambda *a, **k: None)
-    monkeypatch.setattr("xauusd_trading.mt5_equity", lambda conn: 5000.0)
-    monkeypatch.setattr("xauusd_trading.Mt5Executor", _Exec)
+    monkeypatch.setattr("trading.xauusd.mt5_equity", lambda conn: 5000.0)
+    monkeypatch.setattr("trading.xauusd.Mt5Executor", _Exec)
     monkeypatch.setattr(cli, "decide", lambda *a, **k: _follow_rec())
     monkeypatch.setattr(cli, "parse_signals_file", lambda path, **kw: [_signal()])
     _Exec.last = None

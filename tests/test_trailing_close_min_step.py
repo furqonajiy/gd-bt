@@ -9,8 +9,8 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 
-from xauusd_trading import Bar, DEFAULT_CONFIG, Mt5Executor, advance_bars, open_position, parse_one_signal
-from xauusd_trading.execution.mt5_executor import mt5_entry_comment, signal_to_magic
+from trading.xauusd import Bar, DEFAULT_CONFIG, Mt5Executor, advance_bars, open_position, parse_one_signal
+from trading.xauusd.execution.mt5_executor import mt5_entry_comment, signal_to_magic
 
 
 class _Resp:

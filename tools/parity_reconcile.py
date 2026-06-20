@@ -35,14 +35,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from xauusd_trading import (  # noqa: E402
+from trading.xauusd import (  # noqa: E402
     CONTRACT_SIZE_OZ,
     CsvChartSource,
     DEFAULT_CONFIG,
     StrategyConfig,
     parse_signals_file,
 )
-from xauusd_trading.strategy.backtest import replay_signal  # noqa: E402
+from trading.xauusd.strategy.backtest import replay_signal  # noqa: E402
 
 
 # A live SL/TP fill landing within this many price points of the modeled level

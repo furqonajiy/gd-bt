@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.live_provider_signal_filter import ProviderSignal, write_filtered
-from xauusd_trading import parse_signals_file
+from trading.xauusd import parse_signals_file
 
 
 def _sig(source_id: int, hour: int) -> ProviderSignal:

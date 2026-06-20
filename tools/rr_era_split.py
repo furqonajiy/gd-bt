@@ -62,8 +62,8 @@ for _p in (str(ROOT), str(ROOT / "tools")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from xauusd_trading import CsvChartSource, parse_signals_file, run_backtest  # noqa: E402
-from xauusd_trading.core.positions import compute_entries, compute_lot  # noqa: E402
+from trading.xauusd import CsvChartSource, parse_signals_file, run_backtest  # noqa: E402
+from trading.xauusd.core.positions import compute_entries, compute_lot  # noqa: E402
 
 # Reuse the explicit (no-hidden-defaults) flag block and the validated concurrent
 # DD function verbatim -- no fork of the contract surface or the DD measurement.

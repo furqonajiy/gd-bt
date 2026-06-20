@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from xauusd_trading import parse_one_signal
+from trading.xauusd import parse_one_signal
 
 ROOT = Path(__file__).resolve().parents[1]
 

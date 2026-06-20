@@ -37,7 +37,7 @@ if str(ROOT) not in sys.path:
 sweep = importlib.import_module("tools.sweep")
 ssl = importlib.import_module("tools.sweep_self_limit")
 
-from xauusd_trading import CsvChartSource, parse_signals_file  # noqa: E402
+from trading.xauusd import CsvChartSource, parse_signals_file  # noqa: E402
 
 
 def incumbent_config() -> dict:

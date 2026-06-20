@@ -20,12 +20,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from xauusd_trading import (
+from trading.xauusd import (
     DEFAULT_CONFIG, ExecutionLog, Mt5Executor, SignalRegistry,
     parse_one_signal, signal_to_magic,
 )
-from xauusd_trading.strategy.engine import NewSignalPlan, PlannedOrder
-from xauusd_trading.cli_orig import _consume_signal_overrides
+from trading.xauusd.strategy.engine import NewSignalPlan, PlannedOrder
+from trading.xauusd.cli_orig import _consume_signal_overrides
 
 
 # --- stub MT5 ---------------------------------------------------------------
