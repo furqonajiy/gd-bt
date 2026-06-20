@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from trading.engine import DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, PlannedOrder, parse_one_signal
-from trading.engine.execution import mt5_executor_tp2
+from trading.engine.execution import mt5_executor_live
 
 
 class _Resp:
@@ -83,7 +83,7 @@ def _reset_executor_guards():
 
 
 def _freeze_wall_clock(monkeypatch, when):
-    monkeypatch.setattr(mt5_executor_tp2, "_wall_clock_chart_now", lambda: when)
+    monkeypatch.setattr(mt5_executor_live, "_wall_clock_chart_now", lambda: when)
 
 
 def _multi_leg_plan(signal, *, entries, initial_sl, target):

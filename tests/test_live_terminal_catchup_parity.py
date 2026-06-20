@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import timedelta
 
 from trading.engine import DEFAULT_CONFIG, Mt5Executor, open_position, parse_one_signal
-from trading.engine.execution import mt5_executor_tp2
+from trading.engine.execution import mt5_executor_live
 
 
 class _Resp:
@@ -125,7 +125,7 @@ def test_manage_closes_live_position_when_replay_entry_is_terminal():
     pos.first_fill_time = pos.activation_time
     pos.time_exit_deadline = pos.activation_time + timedelta(minutes=config.max_hold_minutes)
 
-    magic = mt5_executor_tp2.signal_to_magic(signal.signal_key)
+    magic = mt5_executor_live.signal_to_magic(signal.signal_key)
     mt5_pos = _Mt5Position(
         ticket=4001,
         magic=magic,

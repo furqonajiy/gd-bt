@@ -35,7 +35,7 @@ pair is a thin package that imports it.
   `dump_forensic.py`, tick tooling).
 - `listeners/` — per-platform signal-source listeners, one subfolder per source
   (`telegram/`, and future `whatsapp/`, etc.).
-  `listeners/telegram/telegram_listener.py` — ingests Victor's Telegram channel into
+  `listeners/telegram/listener.py` — ingests Victor's Telegram channel into
   `signals.txt` (override the output feed with `--signals-file`, e.g.
   `victor_signals.txt`). New **and edited** messages pass
   `apply_signal_corrections` first — a logic-only typo fixer (wrong-side SL/TP,
@@ -137,9 +137,9 @@ pair is a thin package that imports it.
   import X`. The re-export block is dependency-ordered — when you move a
   symbol between files, update `__init__.py` and keep the ordering valid.
 - **CLI structure.** `trading/engine/cli.py` is a thin wrapper that
-  `import *`s the historical implementation from `cli_orig.py` and overrides
+  `import *`s the historical implementation from `cli_impl.py` and overrides
   **only** the `auto` console presentation (append-only event log). New
-  subcommands/flags go in `cli_orig.py`'s `build_parser()`; keep `cli.py`
+  subcommands/flags go in `cli_impl.py`'s `build_parser()`; keep `cli.py`
   delegating. Entry point is `python -m trading.engine.cli`.
 - **`decide` lives in `strategy.trailing_engine`** (re-exported as
   `trading.engine.decide`). The wrapper preserves the legacy lifecycle when

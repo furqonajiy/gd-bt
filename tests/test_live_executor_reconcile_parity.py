@@ -12,7 +12,7 @@ from trading.engine import (
     open_position,
     parse_one_signal,
 )
-from trading.engine.execution import mt5_executor_tp2
+from trading.engine.execution import mt5_executor_live
 
 
 class _Resp:
@@ -176,7 +176,7 @@ def test_partial_broker_placement_is_rolled_back_and_not_reported_as_placed(monk
     )
     config = _fixed_config()
     plan = _plan_for_signal(signal, config)
-    monkeypatch.setattr(mt5_executor_tp2, "_wall_clock_chart_now", lambda: plan.pending_activates_at + timedelta(minutes=1))
+    monkeypatch.setattr(mt5_executor_live, "_wall_clock_chart_now", lambda: plan.pending_activates_at + timedelta(minutes=1))
     mt5 = _FakeMt5(bid=4490.0, ask=4490.2, fail_after=1)
     executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
 
@@ -196,7 +196,7 @@ def test_reconcile_maps_mt5_positions_by_entry_comment_suffix_not_fill_order():
     )
     config = _fixed_config()
     pos = open_position(signal, equity=1000.0, config=config)
-    magic = mt5_executor_tp2.signal_to_magic(signal.signal_key)
+    magic = mt5_executor_live.signal_to_magic(signal.signal_key)
 
     # Broker returns entry #2 first chronologically. The comment suffix must map
     # it to engine entry index 1, not to slot 0.

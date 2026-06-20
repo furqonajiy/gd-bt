@@ -40,9 +40,9 @@ git pull origin main
 # ===== 1. TELEGRAM LISTENER =====
 # Ingests Victor's Telegram channel into victor_signals.txt -- this IS this CLI's
 # live signal source.
-#    First-time setup only: `python listeners\telegram\telegram_listener.py list-chats`
+#    First-time setup only: `python listeners\telegram\listener.py list-chats`
 #    to find the channel id, then paste it into listener_config.json.
-python listeners\telegram\telegram_listener.py --signals-file victor_signals.txt
+python listeners\telegram\listener.py --signals-file victor_signals.txt
 
 # ===== 2. LIVE LOOP SIGNAL GENERATOR =====
 # Victor's "live loop" is the provider filter in --watch mode: it regenerates

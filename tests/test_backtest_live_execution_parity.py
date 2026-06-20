@@ -19,7 +19,7 @@ from trading.engine import (
     open_position,
     parse_one_signal,
 )
-from trading.engine.execution import mt5_executor_tp2
+from trading.engine.execution import mt5_executor_live
 
 
 DD40_COMMAND_CONFIG = replace(
@@ -165,7 +165,7 @@ def test_live_plan_uses_same_activation_expiry_entries_stops_and_target_as_backt
 
     # BUY LIMIT entries are below Ask, so all planned orders are broker-side valid.
     _freeze_time = now
-    monkeypatch.setattr(mt5_executor_tp2, "_wall_clock_chart_now", lambda: _freeze_time)
+    monkeypatch.setattr(mt5_executor_live, "_wall_clock_chart_now", lambda: _freeze_time)
     mt5 = _FakeMt5(bid=4519.80, ask=4520.00)
     executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
 

@@ -1,6 +1,6 @@
 """Regression: the listener must import without telethon installed.
 
-`telegram_listener` historically called ``sys.exit(1)`` at import when telethon
+`listener` historically called ``sys.exit(1)`` at import when telethon
 was missing. Because `test_notifications_forward.py` imports it at module scope,
 that turned a missing optional dependency into a ``SystemExit`` during pytest
 collection -> INTERNALERROR -> the ENTIRE suite refused to run on any env without
@@ -19,7 +19,7 @@ sys.path.insert(0, str(REPO / "listeners" / "telegram"))
 
 
 def test_listener_imports_without_telethon():
-    tl = importlib.import_module("telegram_listener")
+    tl = importlib.import_module("listener")
     # Pure helpers stay importable/callable regardless of telethon availability.
     assert callable(tl.read_new_notification_events)
     assert callable(tl.read_notification_offset)
@@ -27,7 +27,7 @@ def test_listener_imports_without_telethon():
 
 
 def test_require_telethon_raises_clearly_when_absent():
-    tl = importlib.import_module("telegram_listener")
+    tl = importlib.import_module("listener")
     if tl.TelegramClient is not None:
         pytest.skip("telethon installed in this env; runtime guard is a no-op by design")
     with pytest.raises(RuntimeError, match="telethon"):

@@ -1,6 +1,6 @@
 """Command-line interface wrapper.
 
-The full historical CLI implementation is preserved in ``cli_orig``.  This module
+The full historical CLI implementation is preserved in ``cli_impl``.  This module
 keeps every non-auto path delegated to that implementation and overrides only the
 ``auto`` console presentation so live auto mode is an append-only event log.
 """
@@ -14,8 +14,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import cli_orig as _orig
-from .cli_orig import *  # noqa: F401,F403 - preserve the original public CLI surface
+from . import cli_impl as _impl
+from .cli_impl import *  # noqa: F401,F403 - preserve the original public CLI surface
 from trading.engine.core import chart_tz
 from trading.engine import ManualPositionSource, StrategyConfig
 from trading.engine import parse_signals_file as _default_parse_signals_file
@@ -28,17 +28,17 @@ AUTO_HEARTBEAT_SECONDS = 3600.0
 # to the exact objects used by the original CLI.
 parse_signals_file = _default_parse_signals_file
 decide = _default_decide
-ARCHIVE_DIR = _orig.ARCHIVE_DIR
-ARCHIVE_MONTHS = _orig.ARCHIVE_MONTHS
-_config_from_args = _orig._config_from_args
-_make_notifier = _orig._make_notifier
-_make_forensic = _orig._make_forensic
-_print_reconcile_log = _orig._print_reconcile_log
-_emit_per_signal_snapshots = _orig._emit_per_signal_snapshots
-_handle_closures = _orig._handle_closures
-_replay_tracked_signal = _orig._replay_tracked_signal
-_is_partial_placement = _orig._is_partial_placement
-_chart_now = _orig._chart_now
+ARCHIVE_DIR = _impl.ARCHIVE_DIR
+ARCHIVE_MONTHS = _impl.ARCHIVE_MONTHS
+_config_from_args = _impl._config_from_args
+_make_notifier = _impl._make_notifier
+_make_forensic = _impl._make_forensic
+_print_reconcile_log = _impl._print_reconcile_log
+_emit_per_signal_snapshots = _impl._emit_per_signal_snapshots
+_handle_closures = _impl._handle_closures
+_replay_tracked_signal = _impl._replay_tracked_signal
+_is_partial_placement = _impl._is_partial_placement
+_chart_now = _impl._chart_now
 
 from .closure_report import report_entry_closures
 
@@ -492,7 +492,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     _ase = getattr(args, "apply_signal_edits", False)
     revoked_keys: set[str] = set()
     if _ase is True or str(_ase).lower() == "true":
-        revoked_keys = _orig._consume_signal_overrides(args, executor, registry, log=log)
+        revoked_keys = _impl._consume_signal_overrides(args, executor, registry, log=log)
 
     try:
         all_signals = parse_signals_file(signals_path, tag=getattr(args, "strategy_tag", "") or "")
@@ -649,14 +649,14 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
 
 
 def _patch_original_auto_entrypoints() -> None:
-    _orig.cmd_auto = cmd_auto
-    _orig._run_auto_watch = _run_auto_watch
-    _orig._auto_pass = _auto_pass
+    _impl.cmd_auto = cmd_auto
+    _impl._run_auto_watch = _run_auto_watch
+    _impl._auto_pass = _auto_pass
 
 
 def build_parser() -> argparse.ArgumentParser:
     _patch_original_auto_entrypoints()
-    return _orig.build_parser()
+    return _impl.build_parser()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -666,7 +666,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def __getattr__(name: str) -> Any:
-    return getattr(_orig, name)
+    return getattr(_impl, name)
 
 
 if __name__ == "__main__":

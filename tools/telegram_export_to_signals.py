@@ -7,7 +7,7 @@ messages*.html) and run this tool over the HTML to regenerate the exact
 `signals.txt` / `victor_signals.txt` sections for those days.
 
 This deliberately reuses the live listener's pipeline
-(`listeners/telegram/telegram_listener.py`): the same 🥇 new-signal marker, the same
+(`listeners/telegram/listener.py`): the same 🥇 new-signal marker, the same
 lenient field extraction (comma decimals like `SL 4515,50`), the same
 logic-only typo corrections, the same `N. SIDE XAUUSD R1 - R2 SL S TP1 ..`
 rendering, and the same content+time dedup. A backfilled section is therefore
@@ -48,7 +48,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "listener"))
 
-from telegram_listener import (  # noqa: E402
+from listener import (  # noqa: E402
     DATE_HEADER_RE,
     SIGNAL_SOURCE_TZ,
     SIGNAL_SOURCE_TZ_OFFSET,

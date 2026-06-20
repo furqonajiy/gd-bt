@@ -22,7 +22,7 @@ from trading.engine import (
     DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, PlannedOrder,
     open_position, parse_one_signal, signal_to_magic,
 )
-from trading.engine.execution import mt5_executor_tp2
+from trading.engine.execution import mt5_executor_live
 from trading.engine.execution.mt5_executor import mt5_close_comment, mt5_entry_comment
 
 
@@ -152,7 +152,7 @@ def _reset_executor_guards():
 
 
 def _freeze_wall_clock(monkeypatch, when):
-    monkeypatch.setattr(mt5_executor_tp2, "_wall_clock_chart_now", lambda: when)
+    monkeypatch.setattr(mt5_executor_live, "_wall_clock_chart_now", lambda: when)
 
 
 def _sig():

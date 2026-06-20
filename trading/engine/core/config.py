@@ -9,7 +9,7 @@ runs keep their current behaviour unless explicitly enabled.
 
 Research toggles are set explicitly per run via CLI flags (e.g.
 ``--trailing-open-distance``, ``--trailing-close-distance``, ``--trend-runner``;
-see ``_add_strategy_overrides`` in ``cli_orig.py``). They are deliberately NOT read
+see ``_add_strategy_overrides`` in ``cli_impl.py``). They are deliberately NOT read
 from the environment, so ``DEFAULT_CONFIG`` is always the DD40 contract regardless
 of shell state.
 """
