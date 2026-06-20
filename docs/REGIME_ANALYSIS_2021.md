@@ -39,4 +39,6 @@ in 2026. Average daily range went **$21 → $141 (~7×)**.
 6. **Infra:** the same 16-core Actions matrix, matrix over `(regime × shard)`.
 7. **Validate:** OOS split within each regime, smoke-test, lock.
 
-See `sweep2021/regime_chart.png` for price / daily-$ / per-minute-$ over time.
+_(The accompanying `regime_chart.png` — price / daily-$ / per-minute-$ over time —
+was a throwaway artifact generated in the since-removed `sweep2021/` working dir;
+recover it from git history if needed.)_

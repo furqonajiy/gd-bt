@@ -25,10 +25,10 @@ Backtest reference (2025–26, fixed-lot, no-bonus): **+$2,898 net, 79.9% win, 2
 
 Run in order. **The same generated feed file must drive both the live runner and the parity backtest — this is the seam that keeps them comparable.**
 
-1. **Listener** — `listener.py` → writes raw `signals.txt`
-2. **Filter** — `live_provider_signal_filter.py --preset high_growth_hour_side` → writes the filtered feed `signals/live_provider_high_growth_hour_side.txt`
-3. **Runner** — `auto_explicit.py` (command below), reads that filtered feed
-4. **(later) Parity** — `backtest_explicit.py` on the *same* feed + freshly-fetched bars (Section 5)
+1. **Listener** — `listeners/telegram/listener.py` → writes raw `signals.txt`
+2. **Filter** — `tools/live_provider_signal_filter.py --preset high_growth_hour_side` → writes the filtered feed `signals/live_provider_high_growth_hour_side.txt`
+3. **Runner** — `tools/auto_explicit.py` (command below), reads that filtered feed
+4. **(later) Parity** — `tools/backtest_explicit.py` on the *same* feed + freshly-fetched bars (Section 5)
 
 Use a demo-specific positions file (`positions_demo.json`) so no state collides with anything else.
 
