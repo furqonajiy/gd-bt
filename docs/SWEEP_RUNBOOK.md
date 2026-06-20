@@ -65,7 +65,7 @@ or ask the user to re‑explain.
   to push each champion against that 40% DD gate.
 - **Sweep one regime at a time, in volatility order R4 → R3 → R2 → R1.**
   Gold's dollar volatility scaled ~7× over 2021–2026, so no single fixed
-  config spans it (see `sweep2021/REGIME_ANALYSIS.md`). The grid runs each
+  config spans it (see `docs/REGIME_ANALYSIS_2021.md`). The grid runs each
   regime window independently and ranks DD‑≤‑40% champions per regime.
 - **Incumbent competes head‑to‑head.** The user's live "current CLI" — the
   **scalper24 config** (`entry_count 6`, `sl_multiplier 2.1`,
@@ -117,7 +117,7 @@ the engine treats each row as one minute, so a daily bar corrupts the backtest.
 | Regime order | **R4 → R3 → R2 → R1** (volatility order) | sweep one regime at a time |
 | Trailing | **OFF** (pinned 0) | proven to add no deployable edge (16‑feed sweep) |
 | Risk levels | **1–5%** | swept and pushed to the 40% DD gate |
-| Period | per‑regime window (see `sweep2021/REGIME_ANALYSIS.md`) | candidates **and** incumbent over the *same* window |
+| Period | per‑regime window (see `docs/REGIME_ANALYSIS_2021.md`) | candidates **and** incumbent over the *same* window |
 | OOS | held‑out tail | `--validate-months 6` for the long full‑history sweep; **`2` for the regime grid** (short regime windows — e.g. R4 is only 2026, so the OOS tail is its last 2 months). Used as the OOS > 0 gate **and** the promote‑decision metric. |
 | Feeds | scalper24, scalperwide24, risk02allhours (3 HIGH‑FREQ self‑scalpers) + adaptive / breakout / meanrev | high‑frequency, 24h, loose filters → more closed lots |
 | Candidates/feed | 300 (Phase 1) | **(ASK)** bump to 600 for denser coverage |
