@@ -1,7 +1,7 @@
 # Operations Playbook — daily live trading
 
 Quick reference for running the v2 engine against a live MT5 account.
-For full setup, see `MT5_SETUP.md`. For repo overview, see `../README.md`.
+For full setup, see `MT5_SETUP.md`. For repo overview, see `../internal/README.md`.
 
 ## Two ways to run live
 
