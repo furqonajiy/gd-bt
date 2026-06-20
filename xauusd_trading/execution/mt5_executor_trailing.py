@@ -1,5 +1,11 @@
 """Trailing-aware public MT5 executor.
 
+Executor hierarchy: this is the TOP layer and defines the public ``Mt5Executor``
+re-exported from the package root (``from xauusd_trading import Mt5Executor``). It
+extends the live-parity wrapper ``mt5_executor_tp2.py``, which extends the base
+``mt5_executor.py``. Trailing-open/close adds STOP-order virtual entries and
+executor-owned trailing stops on top of that base behavior.
+
 A broker BUY LIMIT cannot express the requested trailing-open rule: if the limit is
 4750 and Ask drops through 4750 on the way to 4740, MT5 fills immediately.
 When ``trailing_open_distance`` is enabled this executor therefore uses broker

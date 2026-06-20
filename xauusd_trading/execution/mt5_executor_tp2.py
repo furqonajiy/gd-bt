@@ -1,5 +1,12 @@
 """TP2-aware MT5 executor wrapper.
 
+Executor hierarchy: this is the MIDDLE layer -- it extends the base
+``mt5_executor.py`` and is in turn extended by the public trailing executor in
+``mt5_executor_trailing.py`` (the one re-exported as ``Mt5Executor``). The
+"TP2-aware" name is historical: this layer's real job is the live-only
+wall-clock / activation / expiry parity guards listed below, of which the TP2
+stop-lock is just one.
+
 The base MT5 executor places orders, reconciles fills, cancels expired pendings,
 locks to TP1, and handles time exit. This wrapper adds live-only parity safety
 checks used by the public executor:
