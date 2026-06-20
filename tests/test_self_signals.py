@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from trading.xauusd import (
+from trading.engine import (
     Bar,
     RejectionSignalConfig,
     format_generated_signals,

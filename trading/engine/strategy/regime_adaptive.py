@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from trading.xauusd.core.config import StrategyConfig
-from trading.xauusd.strategy.regime import detect_regime, m15_atr, read_current_regime, trend_score
+from trading.engine.core.config import StrategyConfig
+from trading.engine.strategy.regime import detect_regime, m15_atr, read_current_regime, trend_score
 
 
 def champion_config(regime: str, champions_dir: str | Path | None,

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from trading.xauusd.strategy.backtest import _backtest_output_path
+from trading.engine.strategy.backtest import _backtest_output_path
 
 
 def test_legacy_reports_dir_writes_default_file():

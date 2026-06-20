@@ -39,14 +39,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from trading.xauusd import StrategyConfig
-from trading.xauusd.core import chart_tz
-from trading.xauusd import NewSignalPlan
-from trading.xauusd import Mt5Connection
-from trading.xauusd import Position, advance_bars
-from trading.xauusd import Signal
-from trading.xauusd import Notifier
-from trading.xauusd import ForensicLog
+from trading.engine import StrategyConfig
+from trading.engine.core import chart_tz
+from trading.engine import NewSignalPlan
+from trading.engine import Mt5Connection
+from trading.engine import Position, advance_bars
+from trading.engine import Signal
+from trading.engine import Notifier
+from trading.engine import ForensicLog
 
 
 DEFAULT_MIN_LOT = 0.01

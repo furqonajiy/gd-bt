@@ -23,12 +23,12 @@ from __future__ import annotations
 from datetime import timedelta
 from types import SimpleNamespace
 
-from trading.xauusd import (
+from trading.engine import (
     DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, PlannedOrder,
     parse_one_signal, signal_to_magic,
 )
-from trading.xauusd.execution import mt5_executor_tp2
-from trading.xauusd.execution.mt5_executor import mt5_entry_comment
+from trading.engine.execution import mt5_executor_tp2
+from trading.engine.execution.mt5_executor import mt5_entry_comment
 
 
 class _Resp:

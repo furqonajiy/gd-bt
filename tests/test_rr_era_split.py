@@ -103,8 +103,8 @@ def test_summarize_edge_R_and_fill_accounting():
 # ---------------------------------------------------------------------------
 def test_intended_risk_matches_engine(tmp_path):
     from dataclasses import replace
-    from trading.xauusd import DEFAULT_CONFIG, parse_signals_file
-    from trading.xauusd.core.positions import compute_entries, compute_lot, initial_stop_for_entry
+    from trading.engine import DEFAULT_CONFIG, parse_signals_file
+    from trading.engine.core.positions import compute_entries, compute_lot, initial_stop_for_entry
 
     sig_file = tmp_path / "one.txt"
     sig_file.write_text(

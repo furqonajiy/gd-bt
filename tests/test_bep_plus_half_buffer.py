@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 
-from trading.xauusd import Bar, DEFAULT_CONFIG, advance_bars, open_position, parse_one_signal
+from trading.engine import Bar, DEFAULT_CONFIG, advance_bars, open_position, parse_one_signal
 
 
 def _bar(t: datetime, o: float, h: float, l: float, c: float) -> Bar:

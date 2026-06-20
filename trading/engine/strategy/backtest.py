@@ -18,12 +18,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from trading.xauusd import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
-from trading.xauusd import CsvChartSource
-from trading.xauusd import Position, advance_bars, open_position
-from trading.xauusd import Signal
-from trading.xauusd import iter_bars, slice_bars
-from trading.xauusd.core.trend_runner import prewarm_indicators_from_dataframe
+from trading.engine import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
+from trading.engine import CsvChartSource
+from trading.engine import Position, advance_bars, open_position
+from trading.engine import Signal
+from trading.engine import iter_bars, slice_bars
+from trading.engine.core.trend_runner import prewarm_indicators_from_dataframe
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +214,7 @@ def _classify_month_regimes(chart_df: pd.DataFrame,
     """Volatility regime (R1quiet/R2bull/R3strong/R4parab) for each YYYY-MM month,
     read from that month's own M1 bars -- so the Summary shows how XAUUSD behaved
     each month. Empty string when a month has too few bars to classify."""
-    from trading.xauusd.strategy.regime import read_current_regime
+    from trading.engine.strategy.regime import read_current_regime
     cols = ["time", "open", "high", "low", "close"]
     if not all(c in chart_df.columns for c in cols):
         return {}

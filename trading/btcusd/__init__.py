@@ -1,9 +1,9 @@
 """BTC self-rejection strategy layer.
 
 Reuses the shared engine, executor, parser, signal generator, notifications, and
-forensic from `trading.xauusd`. Only the BTC strategy -- its parameters and
+forensic from `trading.engine`. Only the BTC strategy -- its parameters and
 symbol constants -- lives here (see strategy.py). Import direction is one-way:
-trading.btcusd depends on trading.xauusd, never the reverse.
+trading.btcusd depends on trading.engine, never the reverse.
 """
 from .strategy import (
     BTC_MOMENTUM_CONFIG,

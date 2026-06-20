@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import trading.xauusd as x  # noqa: E402
+import trading.engine as x  # noqa: E402
 
 # Deployed R4 champion (SQZ6), fixed 0.01 lot for a clean per-trade edge, with the
 # measured locked-exit slippage so fills are realistic (cli_champion_R4_SQZ6).

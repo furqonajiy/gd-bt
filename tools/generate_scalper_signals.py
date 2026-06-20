@@ -41,8 +41,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from trading.xauusd import CsvChartSource, parse_signals_file  # noqa: E402
-from trading.xauusd.core import chart_tz  # noqa: E402
+from trading.engine import CsvChartSource, parse_signals_file  # noqa: E402
+from trading.engine.core import chart_tz  # noqa: E402
 
 
 @dataclass(frozen=True)

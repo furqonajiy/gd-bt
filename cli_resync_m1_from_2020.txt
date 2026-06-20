@@ -26,14 +26,14 @@
 #   schedule over time, accumulating months before they fall out of MT5's window.
 #
 # ===== RESYNC (run from the repo root) =====
-python -m trading.xauusd.cli fetch `
+python -m trading.engine.cli fetch `
   --months 80 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3
 
 # ----- If MT5 is NOT already running/logged in, pass connection details -----
 # (otherwise the command above attaches to the running terminal):
-# python -m trading.xauusd.cli fetch `
+# python -m trading.engine.cli fetch `
 #   --months 80 `
 #   --mt5-symbol XAUUSD `
 #   --mt5-server-offset 3 `
@@ -55,4 +55,4 @@ python -m trading.xauusd.cli fetch `
 #     Select-Object -First 1, -Last 1 Name
 
 # ===== Confirm MT5 connection / symbol / server clock first (optional) =====
-# python -m trading.xauusd.cli mt5-info --mt5-symbol XAUUSD
+# python -m trading.engine.cli mt5-info --mt5-symbol XAUUSD

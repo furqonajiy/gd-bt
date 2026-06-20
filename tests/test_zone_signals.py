@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from trading.xauusd import Bar, format_generated_signals, parse_signals_file
-from trading.xauusd.strategy.zone_signals import (
+from trading.engine import Bar, format_generated_signals, parse_signals_file
+from trading.engine.strategy.zone_signals import (
     ZoneConfig,
     detect_zones,
     generate_zone_signals,

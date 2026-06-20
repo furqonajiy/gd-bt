@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Live auto runner that requires every strategy parameter explicitly.
 
-Use this instead of ``python -m trading.xauusd.cli auto`` when running live.
+Use this instead of ``python -m trading.engine.cli auto`` when running live.
 The goal is safety: live execution must not silently depend on StrategyConfig
 or parser defaults that may change during research.
 
@@ -22,8 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from trading.xauusd import DEFAULT_CONFIG, StrategyConfig, parse_signals_file  # noqa: E402
-from trading.xauusd.cli import ARCHIVE_DIR, ARCHIVE_MONTHS, _run_auto_watch  # noqa: E402
+from trading.engine import DEFAULT_CONFIG, StrategyConfig, parse_signals_file  # noqa: E402
+from trading.engine.cli import ARCHIVE_DIR, ARCHIVE_MONTHS, _run_auto_watch  # noqa: E402
 
 
 def _positive_int(raw: str) -> int:
@@ -260,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.watch_interval < 1.0:
         raise SystemExit("--watch-interval must be >= 1.0")
 
-    from trading.xauusd import Mt5ChartSource, Mt5Connection, archive_m1_by_month, render_archive_summary
+    from trading.engine import Mt5ChartSource, Mt5Connection, archive_m1_by_month, render_archive_summary
 
     conn = Mt5Connection(
         path=args.mt5_path,

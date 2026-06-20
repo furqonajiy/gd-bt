@@ -26,15 +26,15 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Optional
 
-from trading.xauusd import (
+from trading.engine import (
     CHART_TIMEZONE_OFFSET,
     DEFAULT_CONFIG,
     Position,
     StrategyConfig,
     advance_bars,
 )
-from trading.xauusd.core import chart_tz
-from trading.xauusd.core.trend_runner import should_skip_time_exit
+from trading.engine.core import chart_tz
+from trading.engine.core.trend_runner import should_skip_time_exit
 
 from .mt5_executor import (
     ExecutionLog,

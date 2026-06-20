@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Iterable
 
-from trading.xauusd import Bar
-from trading.xauusd.core import chart_tz
+from trading.engine import Bar
+from trading.engine.core import chart_tz
 
 
 @dataclass(frozen=True)

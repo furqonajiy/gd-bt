@@ -8,11 +8,11 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 
-from trading.xauusd import (
+from trading.engine import (
     DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, Notifier, PlannedOrder,
     open_position, parse_one_signal, signal_to_magic,
 )
-from trading.xauusd.execution import mt5_executor_tp2
+from trading.engine.execution import mt5_executor_tp2
 
 
 class _SpyNotifier:

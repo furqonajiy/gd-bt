@@ -11,8 +11,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from trading.xauusd import ChartSource, PositionSource
-from trading.xauusd import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
+from trading.engine import ChartSource, PositionSource
+from trading.engine import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
 from .engine import Recommendation, decide as _decide
 
 

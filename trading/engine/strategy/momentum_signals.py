@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Iterable
 
-from trading.xauusd import Bar
+from trading.engine import Bar
 
 # Reuse the rejection module's geometry builder and gates so entry/SL/TP
 # construction and the session/zone logic stay identical across both signals.

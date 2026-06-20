@@ -36,16 +36,16 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from trading.xauusd import (  # noqa: E402
+from trading.engine import (  # noqa: E402
     CsvChartSource, ManualPositionSource, parse_signals_file,
 )
-from trading.xauusd.core.config import StrategyConfig  # noqa: E402
-from trading.xauusd.strategy.trailing_engine import decide  # noqa: E402
-from trading.xauusd.strategy.backtest import replay_signal, position_status  # noqa: E402
-from trading.xauusd.execution.mt5_executor import signal_to_magic  # noqa: E402
-from trading.xauusd.execution.mt5_executor_trailing import Mt5Executor  # noqa: E402
-import trading.xauusd.execution.mt5_executor_tp2 as _tp2mod  # noqa: E402
-import trading.xauusd.execution.mt5_executor_trailing as _trmod  # noqa: E402
+from trading.engine.core.config import StrategyConfig  # noqa: E402
+from trading.engine.strategy.trailing_engine import decide  # noqa: E402
+from trading.engine.strategy.backtest import replay_signal, position_status  # noqa: E402
+from trading.engine.execution.mt5_executor import signal_to_magic  # noqa: E402
+from trading.engine.execution.mt5_executor_trailing import Mt5Executor  # noqa: E402
+import trading.engine.execution.mt5_executor_tp2 as _tp2mod  # noqa: E402
+import trading.engine.execution.mt5_executor_trailing as _trmod  # noqa: E402
 
 CONTRACT_SIZE_OZ = 100.0
 

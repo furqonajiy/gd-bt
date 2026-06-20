@@ -10,11 +10,11 @@ import calendar
 from dataclasses import replace
 from datetime import datetime, timedelta
 
-from trading.xauusd import DEFAULT_CONFIG, parse_one_signal
-from trading.xauusd import Bar
-from trading.xauusd import POINT_VALUE
-from trading.xauusd import Mt5Executor, signal_to_magic
-from trading.xauusd import advance_bars, open_position
+from trading.engine import DEFAULT_CONFIG, parse_one_signal
+from trading.engine import Bar
+from trading.engine import POINT_VALUE
+from trading.engine import Mt5Executor, signal_to_magic
+from trading.engine import advance_bars, open_position
 
 
 DD40_COMMAND_CONFIG = replace(

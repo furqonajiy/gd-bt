@@ -1,8 +1,8 @@
 """telegram_listener.py — VICTOR - GOLD PRIORITY signal listener.
 
 Watches one Telegram channel for new XAUUSD signals, parses them, and
-appends to `signals.txt` in the format `trading.xauusd` expects. Runs as
-a separate process from `trading.xauusd.cli auto`; the two communicate
+appends to `signals.txt` in the format `trading.engine` expects. Runs as
+a separate process from `trading.engine.cli auto`; the two communicate
 only through `signals.txt` (atomically written so `auto` never reads a
 half-written file).
 
@@ -65,8 +65,8 @@ QUARANTINE_PATH = REPO_ROOT / "telegram_quarantine.txt"
 CONFIG_PATH = REPO_ROOT / "listener_config.json"
 SESSION_NAME = str(REPO_ROOT / "telegram")
 
-# Engine -> listener event bridge. `trading.xauusd.cli auto` appends one JSON
-# object per line to this file (see trading/xauusd/notifications.py); the
+# Engine -> listener event bridge. `trading.engine.cli auto` appends one JSON
+# object per line to this file (see trading/engine/notifications.py); the
 # listener tails it and forwards each event's pre-rendered `text` to Saved
 # Messages. The offset sidecar lets a restart resume mid-file without
 # replaying the backlog or skipping events.
@@ -146,7 +146,7 @@ TP2_RE = re.compile(rf"TP\s*2\s+({_NUM})", re.IGNORECASE)
 TP3_RE = re.compile(rf"TP\s*3\s+({_NUM})", re.IGNORECASE)
 
 # Strict canonical signals.txt line — validates manually-injected corrections
-# from Saved Messages. MUST match `signal._SIGNAL_RE` in trading.xauusd exactly.
+# from Saved Messages. MUST match `signal._SIGNAL_RE` in trading.engine exactly.
 STRICT_LINE_RE = re.compile(
     r"^\s*(?P<id>\d+)\.\s*"
     r"(?P<side>BUY|SELL)\s+XAUUSD\s+"

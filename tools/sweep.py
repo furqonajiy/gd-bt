@@ -43,7 +43,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from trading.xauusd import (  # noqa: E402
+from trading.engine import (  # noqa: E402
     CONTRACT_SIZE_OZ,
     DEFAULT_CONFIG,
     CsvChartSource,
@@ -52,9 +52,9 @@ from trading.xauusd import (  # noqa: E402
     open_position,
     parse_signals_file,
 )
-from trading.xauusd.core.chart import iter_bars  # noqa: E402
-from trading.xauusd.core.trend_runner import prewarm_indicators_from_dataframe  # noqa: E402
-from trading.xauusd.strategy.backtest import position_status  # noqa: E402
+from trading.engine.core.chart import iter_bars  # noqa: E402
+from trading.engine.core.trend_runner import prewarm_indicators_from_dataframe  # noqa: E402
+from trading.engine.strategy.backtest import position_status  # noqa: E402
 from tools.filter_provider_signals import keep_signal, parse_provider_signals, write_signals  # noqa: E402
 
 
@@ -895,7 +895,7 @@ def live_command(row: dict[str, Any]) -> str:
         warning = (
             "# WARNING: trend-runner is enabled in this config, but tools/auto_explicit.py\n"
             "# has no trend-runner flags. The command below runs WITHOUT the runner.\n"
-            "# Deploy via `python -m trading.xauusd.cli auto ... --trend-runner` instead\n"
+            "# Deploy via `python -m trading.engine.cli auto ... --trend-runner` instead\n"
             "# (with --trend-runner-ema-fast/-ema-slow/-atr-period/-atr-multiplier).\n"
         )
     return (

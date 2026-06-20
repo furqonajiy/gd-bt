@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Iterable, Optional
 
-from trading.xauusd import Bar
+from trading.engine import Bar
 
 
 @dataclass(frozen=True)

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
-from trading.xauusd import Bar
+from trading.engine import Bar
 
 
 def _load_tool(repo_root: Path):

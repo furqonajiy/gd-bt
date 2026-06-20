@@ -28,7 +28,7 @@ The runnable CLI reuses ``sweep2021.orchestrate.baseline_explicit_args`` (the
 2021 orchestrator's config->args renderer) when importable so the deploy command
 matches the project's blessed flag set, with charts/start-date/signals
 overridden to this regime's slice; otherwise it falls back to a
-``python -m trading.xauusd.cli backtest`` line per the workflow contract.
+``python -m trading.engine.cli backtest`` line per the workflow contract.
 """
 from __future__ import annotations
 
@@ -172,7 +172,7 @@ def render_champion_cli(cfg: dict, *, regime: str, feed: str) -> str:
     Prefers the 2021 orchestrator's ``baseline_explicit_args`` renderer (the
     blessed flag set), overriding charts/start-date/signals for the regime so the
     command actually targets this regime. Falls back to a plain
-    ``python -m trading.xauusd.cli backtest`` line if the renderer is unavailable.
+    ``python -m trading.engine.cli backtest`` line if the renderer is unavailable.
     """
     charts = REGIME_CHARTS.get(regime, "data/XAUUSD_M1_*_ELEV8.csv")
     start = REGIME_START.get(regime, "2021-11-01")
@@ -205,7 +205,7 @@ def render_champion_cli(cfg: dict, *, regime: str, feed: str) -> str:
             v = cfg.get(k)
             return d if v is None else v
         return (
-            "python -m trading.xauusd.cli backtest" + cont
+            "python -m trading.engine.cli backtest" + cont
             + cont.join([
                 f"--signals {signals}",
                 f"--charts {charts}",

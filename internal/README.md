@@ -23,10 +23,11 @@ A signal looks like:
 
 | Path | What it is |
 |------|------------|
-| `trading/xauusd/` | The engine. Signal parsing, position lifecycle, backtest, MT5 adapter, executor, CLI. |
-| `trading/xauusd/cli.py` | CLI entry point: `python -m trading.xauusd.cli <subcommand>`. |
-| `trading/xauusd/strategy/regime.py` | Volatility-regime detector (smoothed M15 ATR + trend → R1quiet/R2bull/R3strong/R4parab); labels report months and drives `auto --adaptive`. |
-| `trading/btcusd/` | BTC self-rejection backtest runner that reuses the XAUUSD engine path. |
+| `trading/engine/` | The shared, pair-agnostic engine. Signal parsing, position lifecycle, backtest, MT5 adapter, executor, CLI. Import from its root: `from trading.engine import X`. |
+| `trading/engine/cli.py` | CLI entry point: `python -m trading.engine.cli <subcommand>` (also reachable as `python -m trading.xauusd.cli`). |
+| `trading/engine/strategy/regime.py` | Volatility-regime detector (smoothed M15 ATR + trend → R1quiet/R2bull/R3strong/R4parab); labels report months and drives `auto --adaptive`. |
+| `trading/xauusd/` | XAUUSD pair package — a thin facade that re-exports `trading.engine` and provides the `trading.xauusd.cli` entry. |
+| `trading/btcusd/` | BTC pair package: a self-rejection backtest runner that imports the shared `trading.engine`. |
 | `tools/` | Research/ops scripts: parameter sweeps, signal generators, explicit-config live/backtest runners, `live_feed_loop.py` (live self-signal feed loop), forensic dumper, tick tooling, `reconcile_report_html.py` (live↔backtest reconcile), `regime_granularity_assessment.py` / `regime_split_validation.py`. |
 | `tools/generate_scalper_signals.py` | The self-feed (scalper24) generator. Optional entry filters: RSI, Bollinger (%B + bandwidth squeeze), R:R geometry (`--rr1/2/3`), Support/Resistance (prior-day H/L + round levels), and Supply/Demand (Rally-Base-Rally / Drop-Base-Drop zones, `--sd-mode rbr_dbd`). |
 | `listener/` | `telegram_listener.py` — ingests Victor's Telegram channel into `signals.txt` (override with `--signals-file`, e.g. `victor_signals.txt`). New and edited messages pass a logic-only typo fixer first (wrong-side SL/TP, TP order, extra-zero / wrong-hundreds, and a directionally-valid but implausibly-far SL like `4214`→`4314`). The feed tracks the channel's latest state: edits amend the line in place, deletions remove it (each journalled to `signal_overrides.jsonl`), and startup catch-up reconciles changes made while the listener was down. `auto --apply-signal-edits` consumes that journal so the live executor follows the corrected feed (edit = flatten + re-place corrected; delete = flatten + untrack). |
@@ -70,7 +71,7 @@ See [`../docs/MT5_SETUP.md`](../docs/MT5_SETUP.md) for the full live-data setup.
 ## Quick start — backtest
 
 ```bash
-python -m trading.xauusd.cli backtest \
+python -m trading.engine.cli backtest \
   --signals victor_signals.txt \
   --charts "data/XAUUSD_M1_*.csv"
 ```
@@ -95,7 +96,7 @@ Trade History HTML with `tools/reconcile_report_html.py`.
 ## Quick start — decide on one signal
 
 ```bash
-python -m trading.xauusd.cli decide \
+python -m trading.engine.cli decide \
   --signal "1. BUY XAUUSD 4543 - 4541 SL 4536 TP1 4551 TP2 4561 TP3 4576 2:02 PM" \
   --signal-date 2026-05-07 --signal-tz 7 \
   --charts "data/XAUUSD_M1_*.csv"
@@ -107,7 +108,7 @@ implies `--mt5` and live equity — no confirmation prompt).
 
 ## CLI subcommands
 
-`python -m trading.xauusd.cli <subcommand>` (prog name `xauusd`):
+`python -m trading.engine.cli <subcommand>` (prog name `xauusd`):
 
 | Subcommand | Purpose |
 |------------|---------|
@@ -160,7 +161,7 @@ trailing-open research config, see the explicit runners
 
 ## Default strategy config
 
-Defaults live in `trading/xauusd/core/config.py` (`DEFAULT_CONFIG`) — the
+Defaults live in `trading/engine/core/config.py` (`DEFAULT_CONFIG`) — the
 validated DD40-compatible provider contract. Headlines:
 
 | Setting | Default |

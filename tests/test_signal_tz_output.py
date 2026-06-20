@@ -13,7 +13,7 @@ for p in (str(ROOT), str(ROOT / "tools")):
 from datetime import datetime
 
 from generate_scalper_signals import GeneratedSignal, _write_signal_file  # noqa: E402
-from trading.xauusd import parse_signals_file  # noqa: E402
+from trading.engine import parse_signals_file  # noqa: E402
 
 
 def _sig(t, side="BUY"):

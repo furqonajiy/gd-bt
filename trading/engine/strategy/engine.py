@@ -21,12 +21,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional
 
-from trading.xauusd import ChartSource, PositionSource
-from trading.xauusd import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
-from trading.xauusd import (
+from trading.engine import ChartSource, PositionSource
+from trading.engine import CONTRACT_SIZE_OZ, DEFAULT_CONFIG, StrategyConfig
+from trading.engine import (
     Entry, Position, advance_bars, compute_lot, entry_stop_levels, open_position,
 )
-from trading.xauusd import Signal, compute_entries
+from trading.engine import Signal, compute_entries
 
 
 # ---------------------------------------------------------------------------

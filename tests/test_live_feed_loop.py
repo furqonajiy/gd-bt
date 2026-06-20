@@ -54,7 +54,7 @@ def test_all_generator_modules_importable():
 
 
 def test_fetch_months_flag():
-    from trading.xauusd.cli import build_parser as cli_parser
+    from trading.engine.cli import build_parser as cli_parser
     args = cli_parser().parse_args(["fetch", "--months", "1"])
     assert args.months == 1
     args = cli_parser().parse_args(["fetch"])

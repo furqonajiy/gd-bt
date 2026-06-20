@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import timedelta
 
-from trading.xauusd import (
+from trading.engine import (
     Bar,
     DEFAULT_CONFIG,
     advance_one_bar,

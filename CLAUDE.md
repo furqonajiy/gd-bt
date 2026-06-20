@@ -18,10 +18,18 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
 
 ## Layout
 
-- `trading/xauusd/` — the engine (parsing, lifecycle, backtest, MT5 adapter,
-  executor, CLI). This is where almost all real logic lives.
-- `trading/btcusd/` — a BTC self-rejection backtest that reuses the XAUUSD
-  engine path; never mutate the blessed strategy config for a research run.
+The engine is pair-agnostic and lives under a `trading/` namespace; each traded
+pair is a thin package that imports it.
+
+- `trading/engine/` — the shared engine (parsing, lifecycle, backtest, MT5
+  adapter, executor, CLI). This is where almost all real logic lives. Import
+  from its root: `from trading.engine import X`.
+- `trading/xauusd/` — the XAUUSD pair package: a **thin facade** that re-exports
+  `trading.engine` (so `from trading.xauusd import X` still works) and provides
+  the `python -m trading.xauusd.cli` entry. Home for any XAUUSD-specific config.
+- `trading/btcusd/` — a BTC self-rejection backtest that reuses the engine
+  (`from trading.engine import …`); never mutate the blessed strategy config for
+  a research run.
 - `tools/` — research/ops scripts (sweeps, signal generators, the explicit
   full-parameter runners `auto_explicit.py` / `backtest_explicit.py`,
   `dump_forensic.py`, tick tooling).
@@ -122,17 +130,17 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
 ## Architecture conventions — follow these
 
 - **Import from the package root.** Everything is re-exported from
-  `trading/xauusd/__init__.py`. Internal modules, CLI, tests, and tools all
-  do `from trading.xauusd import X`, never `from trading.xauusd.core.foo
+  `trading/engine/__init__.py`. Internal modules, CLI, tests, and tools all
+  do `from trading.engine import X`, never `from trading.engine.core.foo
   import X`. The re-export block is dependency-ordered — when you move a
   symbol between files, update `__init__.py` and keep the ordering valid.
-- **CLI structure.** `trading/xauusd/cli.py` is a thin wrapper that
+- **CLI structure.** `trading/engine/cli.py` is a thin wrapper that
   `import *`s the historical implementation from `cli_orig.py` and overrides
   **only** the `auto` console presentation (append-only event log). New
   subcommands/flags go in `cli_orig.py`'s `build_parser()`; keep `cli.py`
-  delegating. Entry point is `python -m trading.xauusd.cli`.
+  delegating. Entry point is `python -m trading.engine.cli`.
 - **`decide` lives in `strategy.trailing_engine`** (re-exported as
-  `trading.xauusd.decide`). The wrapper preserves the legacy lifecycle when
+  `trading.engine.decide`). The wrapper preserves the legacy lifecycle when
   trailing distances are 0 and adds trailing behavior when enabled.
 - **Config.** `core/config.py` `DEFAULT_CONFIG` is the validated
   DD40-compatible provider contract. Trailing-open / trailing-close /
@@ -372,8 +380,8 @@ pip install -r requirements.txt        # pandas, openpyxl, pytest
 pytest                                  # full suite
 pytest tests/test_smoke.py             # quick strategy-baseline check
 
-python -m trading.xauusd.cli backtest --signals victor_signals.txt --charts "data/XAUUSD_M1_*.csv"
-python -m trading.xauusd.cli decide --signal "..." --signal-date 2026-05-07 --signal-tz 7 --charts "data/XAUUSD_M1_*.csv"
+python -m trading.engine.cli backtest --signals victor_signals.txt --charts "data/XAUUSD_M1_*.csv"
+python -m trading.engine.cli decide --signal "..." --signal-date 2026-05-07 --signal-tz 7 --charts "data/XAUUSD_M1_*.csv"
 ```
 
 `backtest`/`decide` default to **`DEFAULT_CONFIG.initial_capital = $50,000`** (was

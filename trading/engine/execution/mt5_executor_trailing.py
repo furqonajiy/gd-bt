@@ -1,7 +1,7 @@
 """Trailing-aware public MT5 executor.
 
 Executor hierarchy: this is the TOP layer and defines the public ``Mt5Executor``
-re-exported from the package root (``from trading.xauusd import Mt5Executor``). It
+re-exported from the package root (``from trading.engine import Mt5Executor``). It
 extends the live-parity wrapper ``mt5_executor_tp2.py``, which extends the base
 ``mt5_executor.py``. Trailing-open/close adds STOP-order virtual entries and
 executor-owned trailing stops on top of that base behavior.
@@ -28,7 +28,7 @@ from __future__ import annotations
 from .mt5_executor_tp2 import Mt5Executor as _Tp2Mt5Executor, _wall_clock_chart_now
 from .mt5_executor import ExecutionLog, mt5_entry_comment, round_lot, signal_entry_key, signal_to_magic
 from .sl_safety import clamp_sltp_sl, prepare_sltp_modify_request
-from trading.xauusd.core.config import DEFAULT_CONFIG
+from trading.engine.core.config import DEFAULT_CONFIG
 
 
 class Mt5Executor(_Tp2Mt5Executor):

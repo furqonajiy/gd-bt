@@ -9,8 +9,8 @@ import importlib.util
 from dataclasses import replace
 from pathlib import Path
 
-from trading.xauusd import DEFAULT_CONFIG, CsvChartSource, parse_one_signal, run_backtest
-from trading.xauusd.core.positions import open_position, target_price_for_label
+from trading.engine import DEFAULT_CONFIG, CsvChartSource, parse_one_signal, run_backtest
+from trading.engine.core.positions import open_position, target_price_for_label
 
 ROOT = Path(__file__).resolve().parents[1]
 _HEADER = "<DATE>\t<TIME>\t<OPEN>\t<HIGH>\t<LOW>\t<CLOSE>\t<TICKVOL>\t<VOL>\t<SPREAD>"

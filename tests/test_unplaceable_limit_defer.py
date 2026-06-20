@@ -16,8 +16,8 @@ genuinely placeable leg in the same ladder still places.
 from __future__ import annotations
 from datetime import timedelta
 
-from trading.xauusd import DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, PlannedOrder, parse_one_signal
-from trading.xauusd.execution import mt5_executor_tp2
+from trading.engine import DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, PlannedOrder, parse_one_signal
+from trading.engine.execution import mt5_executor_tp2
 
 
 class _Resp:
