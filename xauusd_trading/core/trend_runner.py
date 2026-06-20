@@ -7,7 +7,6 @@ after activation.
 """
 from __future__ import annotations
 
-from datetime import timedelta
 from typing import Iterable
 
 from .chart import Bar, iter_bars
@@ -113,37 +112,6 @@ def prewarm_indicators_from_dataframe(
             & (chart_df["time"] < replay_start)
         ]
         prewarm_indicators(position, iter_bars(bridge), config)
-
-
-def prewarm_indicators_from_chart(
-        position: Position,
-        chart,
-        config: StrategyConfig,
-        *,
-        replay_start=None,
-) -> None:
-    """Warm up trend indicators from a ChartSource or dataframe-backed source."""
-    if not trend_runner_enabled(config):
-        return
-    replay_start = replay_start or position.activation_time
-    df = getattr(chart, "dataframe", None)
-    if df is not None:
-        prewarm_indicators_from_dataframe(position, df, config, replay_start=replay_start)
-        return
-
-    reset_indicators(position)
-    lookback = warmup_bar_count(config)
-    # ChartSource does not expose "previous N bars", so request a wide fixed
-    # window and keep the last N bars before activation.  Seven days is enough
-    # to cross normal XAUUSD weekend gaps while staying bounded for live MT5.
-    minutes = max(lookback * 10, 7 * 24 * 60)
-    start = position.activation_time - timedelta(minutes=minutes)
-    end = replay_start - timedelta(minutes=1)
-    bars = list(chart.bars_between(start, end)) if end >= start else []
-    before = [b for b in bars if b.time < position.activation_time][-lookback:]
-    bridge = [b for b in bars if position.activation_time <= b.time < replay_start]
-    prewarm_indicators(position, before, config)
-    prewarm_indicators(position, bridge, config)
 
 
 def trend_agrees(position: Position, config: StrategyConfig) -> bool:
