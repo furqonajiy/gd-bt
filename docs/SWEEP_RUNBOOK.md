@@ -225,6 +225,18 @@ only if it beats the unfiltered **`base`** feed on **BOTH edge AND OOS at DD ≤
 cross‑product** of all five (R4 only, prefix `selfsdr`) — its `rsi_sqz6_rr40` cell
 reproduces the current champion, and the `…_sr` / `…_sd` cells test whether adding
 S/R or S&D beats it.
+
+**Per‑regime realistic slippage.** Locked‑exit slippage scales with *absolute*
+ATR (it does not self‑normalize the way the edge does — see
+`docs/REGIME_ASSESSMENT.md`), so scoring every regime at the flat R4‑measured
+2.0/1.0 over‑penalizes locked exits 2–5× in calmer regimes.
+`tools/sweep_self_limit.py` takes `--lock-tp1-slippage` / `--lock-tp2-slippage`
+(default −1 = keep the baked‑in 2.0/1.0) to score each regime at its
+volatility‑scaled value: **R3 0.9/0.45, R2 0.5/0.25, R1 0.4/0.2** (median abs ATR /
+the R4 anchor × 2.0/1.0). `self-scalper-5way-sweep-r3r2r1.yml` runs the full
+**144‑variant** 5‑way cross (RSI{off,70,75} × BB{off,%B80,sqz6} × R:R{base,rr08,
+rr25,rr40} × S/R × S&D) for R3→R2→R1 chained (prefix `self5r`), each at its
+realistic slippage. Backtest‑realism only — never a live order.
 - Incumbent: run the live "current CLI" (scalper24 `e6 slm2.1 d24`, 1% risk)
   once via `tools/backtest_explicit.py` over the same charts/regime window →
   record compounded net + bonus, OOS, and DD as the "beat this" target.
