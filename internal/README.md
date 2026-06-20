@@ -15,17 +15,40 @@ A signal looks like:
 1. BUY XAUUSD 4543 - 4541 SL 4536 TP1 4551 TP2 4561 TP3 4576 2:02 PM
 ```
 
+> This overview lives under `internal/` (not the repo root) on purpose, so it
+> isn't auto-rendered on the public landing page. Doc links below are relative to
+> the repo root (`../`).
+
 ## Repository layout
 
 | Path | What it is |
 |------|------------|
 | `xauusd_trading/` | The engine. Signal parsing, position lifecycle, backtest, MT5 adapter, executor, CLI. |
 | `xauusd_trading/cli.py` | CLI entry point: `python -m xauusd_trading.cli <subcommand>`. |
+| `xauusd_trading/strategy/regime.py` | Volatility-regime detector (smoothed M15 ATR + trend → R1quiet/R2bull/R3strong/R4parab); labels report months and drives `auto --adaptive`. |
 | `btcusd_trading/` | BTC self-rejection backtest runner that reuses the XAUUSD engine path. |
-| `tools/` | Research/ops scripts: parameter sweeps, signal generators, explicit-config live/backtest runners, `live_feed_loop.py` (live self-signal feed loop), forensic dumper, tick tooling, Telegram-export backfill converter. |
+| `tools/` | Research/ops scripts: parameter sweeps, signal generators, explicit-config live/backtest runners, `live_feed_loop.py` (live self-signal feed loop), forensic dumper, tick tooling, `reconcile_report_html.py` (live↔backtest reconcile), `regime_granularity_assessment.py` / `regime_split_validation.py`. |
+| `tools/generate_scalper_signals.py` | The self-feed (scalper24) generator. Optional entry filters: RSI, Bollinger (%B + bandwidth squeeze), R:R geometry (`--rr1/2/3`), Support/Resistance (prior-day H/L + round levels), and Supply/Demand (Rally-Base-Rally / Drop-Base-Drop zones, `--sd-mode rbr_dbd`). |
 | `listener/` | `telegram_listener.py` — ingests Victor's Telegram channel into `signals.txt` (override with `--signals-file`, e.g. `victor_signals.txt`). New and edited messages pass a logic-only typo fixer first (wrong-side SL/TP, TP order, extra-zero / wrong-hundreds, and a directionally-valid but implausibly-far SL like `4214`→`4314`). The feed tracks the channel's latest state: edits amend the line in place, deletions remove it (each journalled to `signal_overrides.jsonl`), and startup catch-up reconciles changes made while the listener was down. `auto --apply-signal-edits` consumes that journal so the live executor follows the corrected feed (edit = flatten + re-place corrected; delete = flatten + untrack). |
+| `champions/` | `CHAMPION_<regime>.json` — the deployable config per volatility regime, read by `auto --adaptive`. |
 | `tests/` | `pytest` suite (live/backtest parity, reconcile, sizing, listener, etc.). |
 | `docs/` | Setup and operations guides (see below). |
+
+## Deployed champions (per regime)
+
+Champions live in `champions/CHAMPION_<regime>.json` and are picked by volatility
+regime. Current state:
+
+| Regime | Champion | Notes |
+|--------|----------|-------|
+| **R4parab** | **`rsi75_sqz6_rr40`** (tag **SQZ6**) | e8 / range_to_sl / slm2.1 / max_hold 240 / tp1_lock_delay 24 / lock_after_tp2, on a triple-filtered feed (RSI 75/25 + Bollinger squeeze `bw≥0.0006` + R:R 1.0/2.0/4.0). edge $63,940 / OOS $11,633 / DD 38.4%. |
+| **R3strong / R2bull** | **`SC24T24E8`** | SC24 + `entry_count 8`, `tp1_lock_delay 24`; #1 on edge AND OOS in both. |
+| **R1quiet** | **SC24** (seeded) | until the sweep advances to it. |
+
+A regime-determination assessment — including why the absolute-ATR metric is
+price-biased and why the deployed champion is volatility-scale-invariant (so finer
+regimes do **not** change champion selection) — is in
+[`../docs/REGIME_ASSESSMENT.md`](../docs/REGIME_ASSESSMENT.md).
 
 ## Install
 
@@ -42,7 +65,7 @@ For **live MT5 use**, additionally install the Windows-only MT5 package:
 pip install MetaTrader5
 ```
 
-See [`docs/MT5_SETUP.md`](docs/MT5_SETUP.md) for the full live-data setup.
+See [`../docs/MT5_SETUP.md`](../docs/MT5_SETUP.md) for the full live-data setup.
 
 ## Quick start — backtest
 
@@ -56,7 +79,7 @@ Writes an Excel report (`backtest_results*.xlsx`) with three sheets:
 
 - **Summary** — config, overall stats, entry-outcome counts (entries
   skipped / filled / TP / SL), realized risk:reward shown as `1:N` ratios,
-  and the monthly breakdown.
+  and the monthly breakdown (each month carries a **Regime** column).
 - **Daily Breakdown** — one row per traded day (pre-start padding excluded),
   with per-entry outcome counts and realized R per day.
 - **Per-Entry Detail** — one row per Entry slot, split into **ORIGINAL**
@@ -66,7 +89,8 @@ Charts are M1 OHLC CSVs in the broker's **Eastern European (EET/EEST)** chart
 timezone — UTC+2 winter / UTC+3 summer, EU rule (`core/chart_tz.py`). To compare
 a backtest against what really filled on MT5, overlay a native MT5 history
 export with the explicit runner's `--mt5-history FILE` (see
-[`docs/MT5_SETUP.md`](docs/MT5_SETUP.md)).
+[`../docs/MT5_SETUP.md`](../docs/MT5_SETUP.md)), or reconcile an exported MT5
+Trade History HTML with `tools/reconcile_report_html.py`.
 
 ## Quick start — decide on one signal
 
@@ -119,6 +143,9 @@ Common flag groups (added to most subcommands):
   `--runner-trail-from {TP1,TP2,TP3}` by `--trailing-close-distance`),
   `--bep-after-move` (per-leg break-even+ once a leg is N price units in
   favour), and `--sync-charts` (refetch M1 before a backtest, default on).
+  Live sizing uses the real MT5 equity, so `--initial-capital` /
+  `--bonus-per-closed-lot` / `--tp3-lock-target` are **optional** in
+  `auto_explicit.py` (they only feed the startup banner / backtest reports).
 - **MT5 connection:** `--mt5-symbol` (default `XAUUSD`),
   `--mt5-server-offset` (default `3`), `--mt5-history-bars` (default `5000`),
   `--mt5-path`, `--mt5-login`, `--mt5-password`, `--mt5-server`.
@@ -129,7 +156,7 @@ For the full strategy parameter surface (max-hold, pending-expiry,
 sl-multiplier, lock delays, profit-lock model, etc.) used in the
 trailing-open research config, see the explicit runners
 `tools/auto_explicit.py` and `tools/backtest_explicit.py`, documented in
-[`docs/demo_runbook_trailing_open.md`](docs/demo_runbook_trailing_open.md).
+[`../docs/demo_runbook_trailing_open.md`](../docs/demo_runbook_trailing_open.md).
 
 ## Default strategy config
 
@@ -138,6 +165,7 @@ validated DD40-compatible provider contract. Headlines:
 
 | Setting | Default |
 |---------|---------|
+| `initial_capital` | `50000` |
 | `sizing_mode` | `risk` |
 | `risk_per_signal` | `0.05575` |
 | `entry_count` | `3` |
@@ -153,6 +181,7 @@ validated DD40-compatible provider contract. Headlines:
 | `per_entry_targets` | `()` (single `final_target` for every leg) |
 | `bep_after_move` | `0.0` (disabled) |
 | `runner_trail_from` | `TP3` |
+| locked-exit slippage (`lock_*_exit_slippage_points`) | `0.0` live (backtest/sweep model only) |
 
 Trailing-open, trailing-close, trend-runner, shared-SL, per-entry-targets,
 and break-even-after-move are **off by default** and are enabled explicitly
@@ -205,18 +234,20 @@ per new signal. Point `auto`'s `--signals` at its `*_live.txt` output:
 # window 1 — generate (rolls start + narrows charts internally; logs each new signal)
 python tools/live_feed_loop.py --family scalper --interval 30 `
   --gen-start-days 3 --gen-recent-months 2 --mt5-symbol XAUUSD --mt5-server-offset 3 `
-  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/self_scalper_live.txt --session-start 0 --session-end 0
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/sqz6_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0
 
 # window 2 — execute that feed (auto_explicit.py with the strategy flags)
 ```
 
 `--family` selects the generator (`scalper`/`risk02`/`canonical`/`better`/`zones`);
 everything after `--` is passed verbatim to that generator, so the live feed is
-byte-identical to the backtest archive for the same bars.
+byte-identical to the backtest archive for the same bars. The repo-root
+`cli_*.txt` files are runnable deployment-command snapshots — the current R4
+champion is `cli_champion_R4_SQZ6_no_trailing.txt`; Victor is `cli_champion_victor.txt`.
 
 Full procedures, sanity checks, and failure recovery are in
-[`docs/OPERATIONS_PLAYBOOK.md`](docs/OPERATIONS_PLAYBOOK.md). MT5 connection
-setup is in [`docs/MT5_SETUP.md`](docs/MT5_SETUP.md).
+[`../docs/OPERATIONS_PLAYBOOK.md`](../docs/OPERATIONS_PLAYBOOK.md). MT5 connection
+setup is in [`../docs/MT5_SETUP.md`](../docs/MT5_SETUP.md).
 
 ## Tests
 
@@ -230,9 +261,12 @@ expiry, terminal catch-up, sizing, listener overrides).
 
 ## Documentation
 
-- [`docs/MT5_SETUP.md`](docs/MT5_SETUP.md) — connect the engine to a live MT5 terminal.
-- [`docs/OPERATIONS_PLAYBOOK.md`](docs/OPERATIONS_PLAYBOOK.md) — daily live-trading procedures (Modes A and B).
-- [`docs/demo_runbook_trailing_open.md`](docs/demo_runbook_trailing_open.md) — demo parity protocol for the trailing-open candidate config.
-- [`CLAUDE.md`](CLAUDE.md) — project instructions for Claude / Claude Code.
-- [`AGENTS.md`](AGENTS.md) — project instructions for coding agents (mirrors `CLAUDE.md`).
-</content>
+- [`../docs/MT5_SETUP.md`](../docs/MT5_SETUP.md) — connect the engine to a live MT5 terminal.
+- [`../docs/OPERATIONS_PLAYBOOK.md`](../docs/OPERATIONS_PLAYBOOK.md) — daily live-trading procedures (Modes A and B).
+- [`../docs/BACKTEST_REALISM.md`](../docs/BACKTEST_REALISM.md) — what the backtest models to match live (slippage, spread, swap, min-stop) and what the user provides to calibrate it.
+- [`../docs/SWEEP_RUNBOOK.md`](../docs/SWEEP_RUNBOOK.md) — parameter-sweep methodology (feed-filter combinations, per-regime realistic slippage).
+- [`../docs/VICTOR_SWEEP_RUNBOOK.md`](../docs/VICTOR_SWEEP_RUNBOOK.md) — the Victor-feed, per-regime, signal-R:R/ATR-policy sweep.
+- [`../docs/REGIME_ASSESSMENT.md`](../docs/REGIME_ASSESSMENT.md) — regime-determination assessment (price-normalized metric, scale-invariance verdict).
+- [`../docs/demo_runbook_trailing_open.md`](../docs/demo_runbook_trailing_open.md) — demo parity protocol for the trailing-open candidate config.
+- [`../CLAUDE.md`](../CLAUDE.md) — project instructions for Claude / Claude Code.
+- [`../AGENTS.md`](../AGENTS.md) — project instructions for coding agents (mirrors `CLAUDE.md`).

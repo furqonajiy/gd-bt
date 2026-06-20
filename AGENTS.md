@@ -113,7 +113,11 @@ optional virtual trailing-open entry and trailing-close exit / trend runner.
 - `tests/` — `pytest` suite, heavy on live/backtest parity.
 - `docs/` — `MT5_SETUP.md`, `OPERATIONS_PLAYBOOK.md`,
   `demo_runbook_trailing_open.md`, `SWEEP_RUNBOOK.md`,
-  `VICTOR_SWEEP_RUNBOOK.md`, and **`BACKTEST_REALISM.md`** — the single source of
+  `VICTOR_SWEEP_RUNBOOK.md`, `REGIME_ASSESSMENT.md` (the price-normalized
+  regime-determination assessment + the volatility-scale-invariance verdict:
+  the champion absorbs volatility, so finer regimes don't change champion
+  selection; the metric flaw matters only for slippage), and
+  **`BACKTEST_REALISM.md`** — the single source of
   truth for what the backtest must model to match live (LOCK_TP1/TP2 slippage
   2.0/1.0, spread, commission 0, swap, min-stop) and **what the user provides**
   to keep it calibrated (broker spec via `tools/dump_mt5_spec.py`, a clean
@@ -420,8 +424,9 @@ needed.
 ## Docs to keep in sync with code
 
 When you change CLI flags, config defaults, the lifecycle, or the
-`positions.json` shape, update the matching prose in `README.md`,
-`docs/MT5_SETUP.md`, `docs/OPERATIONS_PLAYBOOK.md`,
+`positions.json` shape, update the matching prose in `internal/README.md`
+(the repo overview, relocated out of root so it doesn't render on the public
+landing page), `docs/MT5_SETUP.md`, `docs/OPERATIONS_PLAYBOOK.md`,
 `docs/demo_runbook_trailing_open.md`, and — for the parameter-sweep
 methodology — `docs/SWEEP_RUNBOOK.md`. The docs are treated as part of the
 contract, not afterthoughts. **`AGENTS.md` and `CLAUDE.md` mirror each other —
