@@ -313,7 +313,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Generate volatility-adaptive (ATR-scaled) XAUUSD M15 mean-reversion signals.")
     p.add_argument("--m15-charts", nargs="+", default=["data/XAUUSD_M15_*_ELEV8.csv"])
     p.add_argument("--m1-charts", nargs="+", default=["data/XAUUSD_M1_*_ELEV8.csv"])
-    p.add_argument("--output", default="generated/adaptive_meanrev.txt")
+    p.add_argument("--output", default="signals/adaptive_meanrev.txt")
     p.add_argument("--alias-output", default=None)
     p.add_argument("--start-date", default="2021-11-01")
     p.add_argument("--end-date", default=None)

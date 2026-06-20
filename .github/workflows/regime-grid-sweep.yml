@@ -29,7 +29,7 @@ name: regime-grid-sweep
 # reproduce/beat the champion. Two additions make the grid drive that decision
 # from a single pulled file:
 #   * a one-time, CACHED `incumbent` job scores the incumbent config on the FIXED
-#     dense live feed (generated/self_scalper24.txt) per regime, writing
+#     dense live feed (signals/self_scalper24.txt) per regime, writing
 #     sweep_regime_out_grid/INCUMBENT_<regime>.json (committed once, then reused);
 #   * the aggregate publishes CHAMPIONS.md at the repo root each checkpoint:
 #     per-regime incumbent | best challenger | VERDICT (SWITCH w/ runnable CLI vs
@@ -153,16 +153,16 @@ jobs:
         if: steps.guard.outputs.done != 'true'
         id: feed
         run: |
-          # Most feeds are generated/adaptive_<feed>.txt (pullback was dropped --
+          # Most feeds are signals/adaptive_<feed>.txt (pullback was dropped --
           # byte-identical to adA_base). The HIGH-FREQUENCY self-scalper feeds use
           # their own dense archives; map their labels to the real files here. This
           # mapping mirrors tools/champions_report.py:_FEED_FILE_OVERRIDES so the
           # swept feed and the published champion CLI point at the same archive.
           case "${{ matrix.feed }}" in
-            scalper24)      FEED="generated/self_scalper24.txt" ;;
-            scalperwide24)  FEED="generated/self_scalper_widerr24.txt" ;;
-            risk02allhours) FEED="generated/self_risk02_allhours.txt" ;;
-            *)              FEED="generated/adaptive_${{ matrix.feed }}.txt" ;;
+            scalper24)      FEED="signals/self_scalper24.txt" ;;
+            scalperwide24)  FEED="signals/self_scalper_widerr24.txt" ;;
+            risk02allhours) FEED="signals/self_risk02_allhours.txt" ;;
+            *)              FEED="signals/adaptive_${{ matrix.feed }}.txt" ;;
           esac
           if [ ! -f "$FEED" ]; then
             echo "feed file $FEED is missing"; exit 1
@@ -302,7 +302,7 @@ jobs:
             awk -v re="$SIG_RE" '
               /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] GMT/ { keep = (substr($0,1,7) ~ re); if (keep) print; next }
               keep
-            ' generated/self_scalper24.txt > "$FILTERED"
+            ' signals/self_scalper24.txt > "$FILTERED"
             test -s "$FILTERED" || { echo "ERROR: filtered incumbent feed empty for ${regime}"; exit 1; }
             echo "incumbent ${regime}: computing on regime-filtered ${FILTERED} ($(grep -cE '^[0-9]+\. ' "$FILTERED") signals) ..."
             # Non-fatal per regime: a single regime's baseline failing must not red
@@ -413,15 +413,15 @@ jobs:
           # tools/champions_report.py:_FEED_FILE_OVERRIDES); everything else is an
           # adaptive_<feed> file.
           _FEED_FILE_OVERRIDES = {
-              "scalper24": "generated/self_scalper24.txt",
-              "scalperwide24": "generated/self_scalper_widerr24.txt",
-              "risk02allhours": "generated/self_risk02_allhours.txt",
+              "scalper24": "signals/self_scalper24.txt",
+              "scalperwide24": "signals/self_scalper_widerr24.txt",
+              "risk02allhours": "signals/self_risk02_allhours.txt",
           }
 
           def feed_signals(feed):
               if feed in _FEED_FILE_OVERRIDES:
                   return _FEED_FILE_OVERRIDES[feed]
-              return f"generated/adaptive_{feed}.txt"
+              return f"signals/adaptive_{feed}.txt"
 
           def load_cell(feed, regime):
               """All result rows for one (feed,regime) cell, tagged with feed."""

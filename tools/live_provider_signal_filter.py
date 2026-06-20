@@ -191,7 +191,7 @@ def run_once(input_path: Path, output_path: Path, preset: str) -> tuple[int, int
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Continuously filter provider signals for live execution.")
     p.add_argument("--input", default="signals.txt", help="Raw provider signal file written by Telegram listener.")
-    p.add_argument("--output", default="generated/live_provider_high_growth.txt", help="Filtered GMT+3 signal file for backtest/live auto.")
+    p.add_argument("--output", default="signals/live_provider_high_growth.txt", help="Filtered GMT+3 signal file for backtest/live auto.")
     p.add_argument("--preset", default="high_growth_hour_side", choices=["all", "no_bad_hours", "best_hours", "high_growth_hour_side", "research_month_hour_side"])
     p.add_argument("--watch", action="store_true", help="Keep filtering every --interval seconds.")
     p.add_argument("--interval", type=float, default=2.0)

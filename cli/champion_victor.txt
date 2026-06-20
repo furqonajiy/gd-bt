@@ -14,7 +14,7 @@
 #   6. Live Auto Executor           (places + manages real orders)
 #
 # All artifacts are Victor-named so nothing is confused with the scalper executor:
-#   feed = generated/victor_live.txt (the filtered Victor signals the live auto
+#   feed = signals/victor_live.txt (the filtered Victor signals the live auto
 #   trades) | positions = positions_victor.json | tag = VIC. The raw source is
 #   victor_signals.txt (the listener's output).
 #
@@ -40,18 +40,18 @@ git pull origin main
 # ===== 1. TELEGRAM LISTENER =====
 # Ingests Victor's Telegram channel into victor_signals.txt -- this IS this CLI's
 # live signal source.
-#    First-time setup only: `python telegram\telegram_listener.py list-chats`
+#    First-time setup only: `python listeners\telegram\telegram_listener.py list-chats`
 #    to find the channel id, then paste it into listener_config.json.
-python telegram\telegram_listener.py --signals-file victor_signals.txt
+python listeners\telegram\telegram_listener.py --signals-file victor_signals.txt
 
 # ===== 2. LIVE LOOP SIGNAL GENERATOR =====
 # Victor's "live loop" is the provider filter in --watch mode: it regenerates
-# generated/victor_live.txt from victor_signals.txt on every change.
+# signals/victor_live.txt from victor_signals.txt on every change.
 #    `--preset all` keeps EVERY Victor signal (no hour/side filtering), so the
 #    live feed is exactly Victor's signals and matches the backtest below.
 python tools/live_provider_signal_filter.py `
   --input victor_signals.txt `
-  --output generated/victor_live.txt `
+  --output signals/victor_live.txt `
   --preset all `
   --watch `
   --interval 2
@@ -152,7 +152,7 @@ python tools/backtest_explicit.py `
 # NON-default and Victor needs them: --replace-missing-entries / --reopen-missing-
 # positions / --apply-signal-edits / --signal-overrides-file.
 python tools/auto_explicit.py `
-  --signals generated/victor_live.txt `
+  --signals signals/victor_live.txt `
   --positions-json positions_victor.json `
   --strategy-tag VIC `
   --watch-interval 3 `

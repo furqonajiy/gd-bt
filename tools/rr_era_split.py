@@ -36,7 +36,7 @@ the fixed-lot pass for a clean capital-free reading.
 
 Example (TRAILING-0.5 flag block shown; swap in the DD40 block to test that):
   python tools/rr_era_split.py `
-    --signals generated/live_provider_high_growth_hour_side.txt `
+    --signals signals/live_provider_high_growth_hour_side.txt `
     --charts data/XAUUSD_M1_*_ELEV8.csv `
     --output-dir reports/rr_era_split `
     --max-drawdown-limit-pct 40 --progress-interval-seconds 30 `

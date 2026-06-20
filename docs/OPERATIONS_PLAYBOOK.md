@@ -208,7 +208,7 @@ rejected. (Before 2026-06: the catch-up always closed at market — the
 In window 1:
 
 ```powershell
-python telegram\telegram_listener.py
+python listeners\telegram\telegram_listener.py
 ```
 
 Leave it running. It auto-creates daily section headers in `signals.txt`
@@ -231,7 +231,7 @@ the line is amended in place (same `N.`, same signal_key/magic) and an
 one the line is removed and a `revoke` record is appended. When the Victor
 provider-filter is run (`tools/live_provider_signal_filter.py --watch`, as
 in `cli/champion_victor.txt`), it regenerates the filtered live feed
-(`generated/victor_live.txt`) from the raw feed on every change. Startup
+(`signals/victor_live.txt`) from the raw feed on every change. Startup
 catch-up applies the same reconciliation to the
 last 24 h, so edits/deletions made while the listener was down are not
 lost (see "Listener was down" below for longer gaps).
@@ -278,10 +278,10 @@ distinct **`--strategy-tag`** (e.g. `VIC` and `SC24`) and its own
 
 ```powershell
 # window A — Victor
-python tools/auto_explicit.py --signals generated/live_provider_all.txt `
+python tools/auto_explicit.py --signals signals/live_provider_all.txt `
     --positions-json positions_victor.json --strategy-tag VIC  ... (Victor strategy flags)
 # window B — scalper
-python tools/auto_explicit.py --signals generated/self_scalper24_live.txt `
+python tools/auto_explicit.py --signals signals/self_scalper24_live.txt `
     --positions-json positions_scalper.json --strategy-tag SC24 ... (scalper strategy flags)
 ```
 
@@ -307,7 +307,7 @@ tag, so nothing ever collides and every file traces to one strategy at a glance:
 |---|---|---|---|
 | Strategy tag | `--strategy-tag` | `SQZ6` | `VIC` |
 | Positions json | `--positions-json` | `positions_sqz6.json` | `positions_victor.json` |
-| Signal/feed txt | generator `--output` / `--signals` | `generated/sqz6.txt`, `generated/sqz6_live.txt` | `generated/victor_live.txt` |
+| Signal/feed txt | generator `--output` / `--signals` | `signals/sqz6.txt`, `signals/sqz6_live.txt` | `signals/victor_live.txt` |
 | Report (Excel) dir | `--output-dir` | `reports/SQZ6_202601` | `reports/VIC_202601` |
 
 No two strategies share a tag, positions file, feed file, or report name. The

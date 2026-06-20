@@ -46,8 +46,8 @@ def test_new_signal_appended_next_cycle_is_detected():
 
 
 def test_output_path_parsing():
-    assert _output_path(["--charts", "x.csv", "--output", "generated/f.txt",
-                         "--start", "2026-06-10"]) == "generated/f.txt"
+    assert _output_path(["--charts", "x.csv", "--output", "signals/f.txt",
+                         "--start", "2026-06-10"]) == "signals/f.txt"
     assert _output_path(["--charts", "x.csv"]) is None
 
 

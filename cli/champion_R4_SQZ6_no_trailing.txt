@@ -8,7 +8,7 @@
 # ONE IDENTITY PER STRATEGY (so live deployments never collide and stay easy to
 # track): this champion is keyed end-to-end off the short tag **SQZ6** —
 #   --strategy-tag SQZ6 · --positions-json positions_sqz6.json ·
-#   feed generated/sqz6.txt (static) + generated/sqz6_live.txt (live) ·
+#   feed signals/sqz6.txt (static) + signals/sqz6_live.txt (live) ·
 #   reports/SQZ6_2026xx (Excel). No other strategy reuses any of these names.
 #
 # SECTION MAP (same in every strategy CLI; copy-paste 3/4/5 for backtests):
@@ -62,21 +62,21 @@ python tools/live_feed_loop.py `
   --gen-recent-months 2 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
-  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/sqz6_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/sqz6_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0
 
 # ===== 3. SIGNAL GENERATOR (before backtest) =====
-# One-shot FULL static archive generated/sqz6.txt from ALL chart history (run
+# One-shot FULL static archive signals/sqz6.txt from ALL chart history (run
 # before sections 4/5). RSI + Bollinger-squeeze + R:R filtered to match live. The
 # ELEV8 archive begins 2021-11, so --start 2021-01-01 simply emits from the first
 # available bar.
-python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output generated/sqz6.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/sqz6.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0
 
 # ===== 4. BACKTEST FROM 2026-01 (current regime) =====
 # --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
 #   give-back so the backtest matches live (the SAME values the sweep scored
 #   against). Backtest-only; never live.
 python tools/backtest_explicit.py `
-  --signals generated/sqz6.txt `
+  --signals signals/sqz6.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
   --max-drawdown-limit-pct 50 `
   --progress-interval-seconds 30 `
@@ -117,7 +117,7 @@ python tools/backtest_explicit.py `
 
 # ===== 5. BACKTEST FROM 2021-01 (full history) =====
 python tools/backtest_explicit.py `
-  --signals generated/sqz6.txt `
+  --signals signals/sqz6.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
   --max-drawdown-limit-pct 50 `
   --progress-interval-seconds 30 `
@@ -166,7 +166,7 @@ python tools/backtest_explicit.py `
 # already at their default: --replace-missing-entries false (self feeds are
 # two-sided), --shared-sl false, --trailing-close-after-stage 0.
 python tools/auto_explicit.py `
-  --signals generated/sqz6_live.txt `
+  --signals signals/sqz6_live.txt `
   --positions-json positions_sqz6.json `
   --strategy-tag SQZ6 `
   --watch-interval 3 `

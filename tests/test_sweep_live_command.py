@@ -107,7 +107,7 @@ def test_config_json_fallback_is_supported():
     args = _parse(cmd)
     assert args.trailing_open_distance == 2.0
     assert args.trailing_close_distance == 3.0
-    assert "generated/live_provider_high_growth_hour_side.txt" in cmd
+    assert "signals/live_provider_high_growth_hour_side.txt" in cmd
 
 
 def test_trend_runner_config_warns_and_avoids_dead_env():

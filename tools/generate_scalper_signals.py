@@ -6,11 +6,11 @@ backtest/live engine, so the workflow is:
 
     python tools/generate_scalper_signals.py \
       --charts data/XAUUSD_M1_*.csv \
-      --output generated/scalper_pullback_v1.txt \
-      --diagnostics generated/scalper_pullback_v1.csv
+      --output signals/scalper_pullback_v1.txt \
+      --diagnostics signals/scalper_pullback_v1.csv
 
     python tools/backtest_configurable.py \
-      --signals generated/scalper_pullback_v1.txt \
+      --signals signals/scalper_pullback_v1.txt \
       --charts data/XAUUSD_M1_*.csv \
       --output-dir reports/scalper_pullback_v1 \
       --max-drawdown-limit-pct 40

@@ -42,7 +42,7 @@ DEFAULT_CONFIG.
 | **Broker symbol/account spec** | `python tools/dump_mt5_spec.py` on the Windows box → send `mt5_spec.json` | once; re-pull only if the broker changes specs |
 | **Clean multi-week `ReportHistory` HTML** | MT5 → History tab → right-click → Report → **HTML**, widest date range from a **STABLE** run | each recalibration (§3) |
 | **Fresh M1 charts** | `fetch` (Windows MT5), `--mt5-server-offset 3` keeps the EET/EEST clock | when new months exist |
-| **The Victor feed** `victor_signals.txt` | the Telegram listener (`telegram/telegram_listener.py`) | as it grows |
+| **The Victor feed** `victor_signals.txt` | the Telegram listener (`listeners/telegram/telegram_listener.py`) | as it grows |
 | *(optional)* tick data `time,bid,ask` | MT5 → Symbols → XAUUSD → Ticks → Export | only to refine **swap** on long holds |
 
 **That's the whole list.** I do **not** need: the spec again, full tick history,

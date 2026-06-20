@@ -4,8 +4,8 @@ Filter provider-style XAUUSD signal archive by side + signal hour.
 
 Usage:
   python tools/filter_signals_hour_side.py \
-    --input generated/self_m15_archive.txt \
-    --output generated/self_m15_tick_best_filtered_top_profit.txt \
+    --input signals/self_m15_archive.txt \
+    --output signals/self_m15_tick_best_filtered_top_profit.txt \
     --keys SELL_11 BUY_17 SELL_19 SELL_08 BUY_07 BUY_09 SELL_17 BUY_05 SELL_16 SELL_10 SELL_04 BUY_21 SELL_00 BUY_19 SELL_21 SELL_22 SELL_06 BUY_04 SELL_09
 
 The input must look like:

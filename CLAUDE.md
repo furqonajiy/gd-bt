@@ -33,7 +33,9 @@ pair is a thin package that imports it.
 - `tools/` — research/ops scripts (sweeps, signal generators, the explicit
   full-parameter runners `auto_explicit.py` / `backtest_explicit.py`,
   `dump_forensic.py`, tick tooling).
-- `telegram/telegram_listener.py` — ingests Victor's Telegram channel into
+- `listeners/` — per-platform signal-source listeners, one subfolder per source
+  (`telegram/`, and future `whatsapp/`, etc.).
+  `listeners/telegram/telegram_listener.py` — ingests Victor's Telegram channel into
   `signals.txt` (override the output feed with `--signals-file`, e.g.
   `victor_signals.txt`). New **and edited** messages pass
   `apply_signal_corrections` first — a logic-only typo fixer (wrong-side SL/TP,
@@ -45,7 +47,7 @@ pair is a thin package that imports it.
   (same `N.`/signal_key) and deletions remove it, each appending an
   `amend`/`revoke` record to `signal_overrides.jsonl`; a separate provider-filter
   (`tools/live_provider_signal_filter.py --watch`) regenerates the filtered live
-  feed (`generated/victor_live.txt`) from the raw feed on every change; startup
+  feed (`signals/victor_live.txt`) from the raw feed on every change; startup
   catch-up reconciles the 24 h lookback so downtime edits/deletions are applied
   too. **`auto --apply-signal-edits`** (opt-in) consumes that journal so
   the live executor follows the corrected feed: on `amend` it **flattens** the
@@ -411,7 +413,7 @@ Bollinger × R:R sweep (edge $63,940 / OOS $11,633 / DD 38.4%) — it superseded
 e5 RSI champion, which had superseded SC24T24E8 for R4 after it breached the DD ≤
 40% gate on 2026 data (SC24T24E8 remains the R2bull/R3strong champion); the only
 other deployed feed is `cli/champion_victor` (Victor — feed
-`generated/victor_live.txt`, positions `positions_victor.json`, tag VIC).
+`signals/victor_live.txt`, positions `positions_victor.json`, tag VIC).
 `cli/resync_m1_from_2020` is the M1-archive resync utility (not a strategy), and
 `cli/rr08x15x30` / `cli/rr10x20x40` are **backtest-only R:R research candidates** —
 the two R4 signal-R:R sweep winners that beat the incumbent on edge AND OOS (TP1/
@@ -509,9 +511,9 @@ short tag (≤ 4 chars, e.g. `SQZ6`, `VIC`). **No two strategies ever share a ta
 positions file, feed file, or report name**, so live executors stay isolated
 (disjoint magics) and every artifact traces to exactly one strategy at a glance.
 Example: the R4 champion is tag `SQZ6` → `positions_sqz6.json`,
-`generated/sqz6.txt` / `generated/sqz6_live.txt`, `reports/SQZ6_2026xx`, snapshot
+`signals/sqz6.txt` / `signals/sqz6_live.txt`, `reports/SQZ6_2026xx`, snapshot
 `cli/champion_R4_SQZ6_no_trailing.txt`; Victor is `VIC` →
-`positions_victor.json`, `generated/victor_live.txt`. When you add a strategy,
+`positions_victor.json`, `signals/victor_live.txt`. When you add a strategy,
 mint a fresh tag and derive all four artifact names from it.
 </content>
 

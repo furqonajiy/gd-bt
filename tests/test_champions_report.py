@@ -146,9 +146,9 @@ def test_render_hold_and_switch(tmp_path):
 
 
 def test_feed_name_resolves_to_archive_path():
-    assert cr.feed_signals("adE_farTP") == "generated/adaptive_adE_farTP.txt"
+    assert cr.feed_signals("adE_farTP") == "signals/adaptive_adE_farTP.txt"
     # An already-resolved path round-trips unchanged.
-    assert cr.feed_signals("generated/self_better.txt") == "generated/self_better.txt"
+    assert cr.feed_signals("signals/self_better.txt") == "signals/self_better.txt"
 
 
 def test_rendered_cli_is_runnable_backtest_explicit():
@@ -157,7 +157,7 @@ def test_rendered_cli_is_runnable_backtest_explicit():
     # Pass the matrix feed NAME; the renderer must resolve it to the archive path.
     cli = cr.render_champion_cli(cfg, regime="R3strong", feed="adE_farTP")
     assert cli.lstrip().startswith("python ")
-    assert "generated/adaptive_adE_farTP.txt" in cli
+    assert "signals/adaptive_adE_farTP.txt" in cli
     # This regime's charts are substituted, not the full-history glob.
     assert "data/XAUUSD_M1_2025*_ELEV8.csv" in cli
 
@@ -198,7 +198,7 @@ def test_render_deployment_cli_full_format():
     # Section 1 GENERATE: the breakout generator + its archive output.
     assert "1. GENERATE" in text
     assert "tools/generate_breakout_signals.py" in text
-    assert "generated/adaptive_breakout.txt" in text
+    assert "signals/adaptive_breakout.txt" in text
     # Section 2 BACKTEST: reuses render_champion_cli (regime slice + charts).
     assert "2. BACKTEST" in text
     assert ("tools/backtest_explicit.py" in text
@@ -221,14 +221,14 @@ def test_render_deployment_cli_feed_routes_to_generator():
         {"entry_count": 6}, regime="R3strong", feed="meanrev",
         edge=100.0, oos=50.0, dd=20.0)
     assert "tools/generate_meanrev_signals.py" in mr
-    assert "generated/adaptive_meanrev.txt" in mr
+    assert "signals/adaptive_meanrev.txt" in mr
     assert "R3strong" in mr
 
     adf = cr.render_deployment_cli(
         {"entry_count": 6}, regime="R3strong", feed="adF_tightSL_closeTP",
         edge=13331.0, oos=2242.0, dd=29.7)
     assert "tools/generate_adaptive_self_signals.py" in adf
-    assert "generated/adaptive_adF_tightSL_closeTP.txt" in adf
+    assert "signals/adaptive_adF_tightSL_closeTP.txt" in adf
 
 
 def test_write_deployment_cli_files_champion_and_placeholder(tmp_path):

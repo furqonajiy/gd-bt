@@ -49,7 +49,7 @@
   "dd": 35.94897808720906,
   "edge": 6031.224999999953,
   "feed": "breakout",
-  "feed_file": "generated/adaptive_breakout.txt",
+  "feed_file": "signals/adaptive_breakout.txt",
   "kind": "champion",
   "oos": 1742.8246000000267,
   "regime": "R4parab"

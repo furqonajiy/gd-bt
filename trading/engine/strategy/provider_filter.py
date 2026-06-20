@@ -4,7 +4,7 @@ The high-growth preset is intentionally aggressive. It was selected from the
 uploaded provider signal sample by filtering signal side by chart-time hour, then
 running the same backtest engine with risk sizing.
 
-Keep this module dependency-light so telegram/telegram_listener.py can import it
+Keep this module dependency-light so listeners/telegram/telegram_listener.py can import it
 without importing MT5 or pandas.
 """
 from __future__ import annotations
