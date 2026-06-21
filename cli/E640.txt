@@ -1,0 +1,334 @@
+# =========================================================================
+# CROSS-REGIME CONFIG -- SCALPER24 + R:R 1.0/2.0/4.0 (rr40), e6/slm2.3  | tag E640
+# "E640" = entry_count 6 + R:R 4.0. scalper24 feed (UNFILTERED), TPs rewritten to
+# TP1=1.0x / TP2=2.0x / TP3=4.0x of the posted risk (generator --rr1 1.0 --rr2 2.0
+# --rr3 4.0), traded with e6 / range_to_sl / slm2.3 / gap0.5 / activation-delay 2 /
+# pending-expiry 180 / max-hold 240 / TP3, lock-after-tp1 + lock-after-tp2,
+# tp1-lock-delay 24 / tp2-lock-delay 2 / tp1-lock-fraction 0.5, shared_sl OFF,
+# NO trailing, risk 1%. (Same config as the rr10x20x40 R4 sweep candidate; this is
+# its deployable cross-regime identity.)
+#
+# ONE IDENTITY PER STRATEGY: keyed end-to-end off tag **E640** --
+#   --strategy-tag E640 * --positions-json positions_e640.json *
+#   feed signals/e640.txt (static) + signals/e640_live.txt (live) *
+#   reports/E640_* (Excel). No other strategy reuses these names.
+#
+# SECTION MAP (same in every strategy CLI; copy-paste 4-8 for backtests):
+#   1. Telegram Listener            (N/A here -- self-generated feed)
+#   2. Live Loop Signal Generator   (continuous live feed)
+#   3. Signal Generator             (one-shot static archive, run before 4-8)
+#   4. Backtest from 2026-06         -> reports/E640_202606.xlsx  (R4 parabolic, current month; slip 2.0/1.0)
+#   5. Backtest from 2026-01         -> reports/E640_202601.xlsx  (R4 parabolic, current regime; slip 2.0/1.0)
+#   6. Backtest 2025 (R3 strong)     -> reports/E640_2025.xlsx  (slip 0.9/0.45)
+#   7. Backtest 2024 (R2 bull)       -> reports/E640_2024.xlsx  (slip 0.5/0.25)
+#   8. Backtest 2021-2023 (R1 quiet) -> reports/E640_2021_2023.xlsx  (slip 0.4/0.2)
+#   9. Live Auto Executor           (OPTIONAL -- validate before any live use)
+#
+# WHY THIS CONFIG (cross-regime): the same geometry holds strong, consistent edge
+#   in BOTH regimes on its era-matched slippage --
+#     R4 (2026): edge $51,253 / OOS $11,150 / DD 38.0% (gate-compliant <=40%)
+#     R3 (2025): edge $51,779 / OOS $10,253 / DD 48.1% (needs the 50% stretch gate)
+#   It is the single most regime-robust config, and the simplest (no RSI/BB/S-R/S-D
+#   filter). Trade-offs to accept: (a) in R4 the SQZ6 champion still beats it
+#   (edge $65,858 / OOS $13,551 at DD 38.4%), so this is the UNIFIED pick, not the
+#   R4-optimal one; (b) in R3 its drawdown runs ~48%, so it is only deployable there
+#   if you raise the DD ceiling to 50%.
+#
+# STATUS: cross-regime CANDIDATE -- forward/demo-validate before live, especially
+#   the R3 ~48% drawdown (it sits near the 50% ceiling and is in-sample 2025). The
+#   deployed R4 champion remains cli/champion_R4_SQZ6_no_trailing (SQZ6). Isolated
+#   by its own --strategy-tag E640 + positions_e640.json so it never touches the
+#   SQZ6 or Victor executors. (Same config as cli/rr10x20x40.txt, the R4 R:R sweep
+#   candidate -- E640 is its cross-regime deployment identity.)
+#
+# FEED/PARITY NOTE: the commands below load ALL charts so the indicator EMAs are
+#   warm across year boundaries. backtest_explicit reports compounded net + DD (not
+#   the sweep's fixed-lot edge/OOS, which come from sweep_self_limit). The ELEV8
+#   archive begins 2021-11, so --start 2021-01-01 emits from the first bar.
+# =========================================================================
+
+# ===== 1. TELEGRAM LISTENER =====
+# N/A -- this is a SELF-GENERATED feed (no Telegram source). The signals come
+# from the generator in sections 2 (live) and 3 (backtest archive).
+
+# ===== 2. LIVE LOOP SIGNAL GENERATOR =====
+# Rolling 3-day window; logs each new signal, like `auto`. UNFILTERED + this
+# variant's R:R rewrite. Only run live after a clean forward/demo validation.
+python tools/live_feed_loop.py `
+  --family scalper `
+  --interval 30 `
+  --gen-start-days 3 `
+  --gen-recent-months 2 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/e640_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rr1 1.0 --rr2 2.0 --rr3 4.0
+
+# ===== 3. SIGNAL GENERATOR (before backtest) =====
+# One-shot FULL static archive with this variant's R:R rewrite (run before 4-8).
+# UNFILTERED (no --rsi-*): the R:R sweep ran on the base feed so the R:R effect is
+# isolated.
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/e640.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rr1 1.0 --rr2 2.0 --rr3 4.0
+
+# ===== 4. BACKTEST FROM 2026-06 (current month) =====
+# --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
+#   give-back so the backtest matches live (the SAME values the sweep scored
+#   against). Backtest-only; never live.
+python tools/backtest_explicit.py `
+  --signals signals/e640.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --shared-sl false `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.3 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/E640_202606 `
+  --initial-capital 50000 `
+  --start-date 2026-06-01
+
+# ===== 5. BACKTEST FROM 2026-01 (current regime) =====
+# --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
+#   give-back so the backtest matches live (the SAME values the sweep scored
+#   against). Backtest-only; never live.
+python tools/backtest_explicit.py `
+  --signals signals/e640.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --shared-sl false `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.3 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/E640_202601 `
+  --initial-capital 50000 `
+  --start-date 2026-01-01
+
+# ===== 6. BACKTEST FROM 2025 (R3 strong) =====
+# Era-matched LOCKED-exit slippage 0.9 / 0.45 (R3 2025: ~0.45x the R4 2.0/1.0 anchor).
+#   Backtest-only realism knob; never sent live. Strategy geometry is unchanged.
+python tools/backtest_explicit.py `
+  --signals signals/e640.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --shared-sl false `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.3 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --lock-tp1-exit-slippage 0.9 `
+  --lock-tp2-exit-slippage 0.45 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/E640_2025 `
+  --initial-capital 50000 `
+  --start-date 2025-01-01 `
+  --end-date 2025-12-31
+
+# ===== 7. BACKTEST FROM 2024 (R2 bull) =====
+# Era-matched LOCKED-exit slippage 0.5 / 0.25 (R2 2024: ~0.26x the R4 anchor).
+#   Backtest-only realism knob; never sent live. Strategy geometry is unchanged.
+python tools/backtest_explicit.py `
+  --signals signals/e640.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --shared-sl false `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.3 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --lock-tp1-exit-slippage 0.5 `
+  --lock-tp2-exit-slippage 0.25 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/E640_2024 `
+  --initial-capital 50000 `
+  --start-date 2024-01-01 `
+  --end-date 2024-12-31
+
+# ===== 8. BACKTEST FROM 2021-2023 (R1 quiet) =====
+# Era-matched LOCKED-exit slippage 0.4 / 0.2 (R1 2021-2023 quiet: ~0.20x the R4 anchor).
+#   Backtest-only realism knob; never sent live. Strategy geometry is unchanged.
+python tools/backtest_explicit.py `
+  --signals signals/e640.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --shared-sl false `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.3 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --lock-tp1-exit-slippage 0.4 `
+  --lock-tp2-exit-slippage 0.2 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/E640_2021_2023 `
+  --initial-capital 50000 `
+  --start-date 2021-01-01 `
+  --end-date 2023-12-31
+
+# ===== 9. LIVE AUTO EXECUTOR (OPTIONAL -- VALIDATE BEFORE USE) =====
+# Cross-regime candidate -- forward/demo-validate before live (esp. the R3 ~48% drawdown). The
+# tag E640 + positions_e640.json keep it isolated from SQZ6 and Victor.
+# Strategy params are byte-identical to sections 4-8 (only the backtest-only locked-exit slippage varies by era there; never sent live).
+python tools/auto_explicit.py `
+  --signals signals/e640_live.txt `
+  --positions-json positions_e640.json `
+  --strategy-tag E640 `
+  --watch-interval 3 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --replace-missing-entries false `
+  --reopen-missing-positions true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --shared-sl false `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.3 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0 `
+  --trailing-close-after-stage 0 `
+  --initial-capital 50000

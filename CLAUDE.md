@@ -426,7 +426,13 @@ other deployed feed is `cli/champion_victor` (Victor — feed
 `cli/rr08x15x30` / `cli/rr10x20x40` are **backtest-only R:R research candidates** —
 the two R4 signal-R:R sweep winners that beat the incumbent on edge AND OOS (TP1/
 TP2/TP3 rewritten via the generator's `--rr1/--rr2/--rr3` on the unfiltered
-scalper24 feed; **not deployed**, forward-validate before any live use). The
+scalper24 feed; **not deployed**, forward-validate before any live use).
+`cli/E640` is the **cross-regime deployment identity** of that same `rr10x20x40`
+config (rr40 · e6/slm2.3/h240/d24; tag **E640** → `positions_e640.json`,
+`signals/e640*.txt`, `reports/E640_*`) — the single most regime-robust config:
+strong, consistent edge in both R4 (DD 38%, gate-compliant) and R3 (DD ~48%, needs
+the 50% stretch gate). It is the same config as `rr10x20x40`, kept under a distinct
+tag; still a candidate — forward-validate (esp. the R3 ~48% DD) before live. The
 superseded reference snapshots (`cli_R4_scalper24` / `_breakout` / `_scalperwide24`
 / `_bbsqueeze`, `cli_trailing_risk02allhours`, and `cli_adaptive_regime` — the
 `auto --adaptive` regime auto-switch, whose feature still lives in
