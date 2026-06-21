@@ -423,16 +423,16 @@ e5 RSI champion, which had superseded SC24T24E8 for R4 after it breached the DD 
 other deployed feed is `cli/champion_victor` (Victor — feed
 `signals/victor_live.txt`, positions `positions_victor.json`, tag VIC).
 `cli/resync_m1_from_2020` is the M1-archive resync utility (not a strategy), and
-`cli/rr08x15x30` / `cli/rr10x20x40` are **backtest-only R:R research candidates** —
-the two R4 signal-R:R sweep winners that beat the incumbent on edge AND OOS (TP1/
-TP2/TP3 rewritten via the generator's `--rr1/--rr2/--rr3` on the unfiltered
-scalper24 feed; **not deployed**, forward-validate before any live use).
-`cli/E640` is the **cross-regime deployment identity** of that same `rr10x20x40`
-config (rr40 · e6/slm2.3/h240/d24; tag **E640** → `positions_e640.json`,
-`signals/e640*.txt`, `reports/E640_*`) — the single most regime-robust config:
-strong, consistent edge in both R4 (DD 38%, gate-compliant) and R3 (DD ~48%, needs
-the 50% stretch gate). It is the same config as `rr10x20x40`, kept under a distinct
-tag; still a candidate — forward-validate (esp. the R3 ~48% DD) before live. The
+`cli/rr08x15x30` is a **backtest-only R:R research candidate** — the #1-by-edge R4
+signal-R:R sweep winner (TP1/TP2/TP3 rewritten via the generator's
+`--rr1/--rr2/--rr3` on the unfiltered scalper24 feed; **not deployed**,
+forward-validate before any live use). Its OOS-leader sibling — R:R 1.0/2.0/4.0 on
+e6/slm2.3 — was promoted to the cross-regime **`cli/E640`** identity (tag **E640** →
+`positions_e640.json`, `signals/e640*.txt`, `reports/E640_*`): the single most
+regime-robust config — strong, consistent edge in both R4 (DD 38%, gate-compliant)
+and R3 (DD ~48%, needs the 50% stretch gate); still a candidate, forward-validate
+(esp. the R3 ~48% DD) before live. The former `cli/rr10x20x40.txt` snapshot of this
+config was consolidated into E640. The
 superseded reference snapshots (`cli_R4_scalper24` / `_breakout` / `_scalperwide24`
 / `_bbsqueeze`, `cli_trailing_risk02allhours`, and `cli_adaptive_regime` — the
 `auto --adaptive` regime auto-switch, whose feature still lives in

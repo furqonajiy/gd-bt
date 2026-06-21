@@ -5,7 +5,7 @@
 # --rr3 4.0), traded with e6 / range_to_sl / slm2.3 / gap0.5 / activation-delay 2 /
 # pending-expiry 180 / max-hold 240 / TP3, lock-after-tp1 + lock-after-tp2,
 # tp1-lock-delay 24 / tp2-lock-delay 2 / tp1-lock-fraction 0.5, shared_sl OFF,
-# NO trailing, risk 1%. (Same config as the rr10x20x40 R4 sweep candidate; this is
+# NO trailing, risk 1%. (Formerly the rr10x20x40 R4 R:R sweep candidate, now consolidated here; this is
 # its deployable cross-regime identity.)
 #
 # ONE IDENTITY PER STRATEGY: keyed end-to-end off tag **E640** --
@@ -38,7 +38,7 @@
 #   the R3 ~48% drawdown (it sits near the 50% ceiling and is in-sample 2025). The
 #   deployed R4 champion remains cli/champion_R4_SQZ6_no_trailing (SQZ6). Isolated
 #   by its own --strategy-tag E640 + positions_e640.json so it never touches the
-#   SQZ6 or Victor executors. (Same config as cli/rr10x20x40.txt, the R4 R:R sweep
+#   SQZ6 or Victor executors. (Formerly cli/rr10x20x40.txt, the R4 R:R sweep
 #   candidate -- E640 is its cross-regime deployment identity.)
 #
 # FEED/PARITY NOTE: the commands below load ALL charts so the indicator EMAs are
