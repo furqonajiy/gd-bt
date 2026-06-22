@@ -540,15 +540,21 @@ file-writing code on the same convention.
 
 **One distinct identity per strategy.** Every deployed strategy gets its OWN
 names across the board — `--strategy-tag`, `--positions-json`, the generated
-signal/feed `.txt`, and the backtest report (Excel) dir — all keyed off the same
+signal/feed `.txt`, the backtest report (Excel) dir, **and the live
+`--forensic-log` / `--notifications` JSONL** — all keyed off the same
 short tag (≤ 4 chars, e.g. `SQZ6`, `VIC`). **No two strategies ever share a tag,
-positions file, feed file, or report name**, so live executors stay isolated
-(disjoint magics) and every artifact traces to exactly one strategy at a glance.
+positions file, feed file, report name, or log file**, so live executors stay
+isolated (disjoint magics) and every artifact traces to exactly one strategy at
+a glance. Sharing one forensic/notifications path between two `auto` processes
+interleaves their events and races the rotation, so each executor passes its own
+(the per-sink size cap + `.1` rotation then bounds each file independently).
 Example: the R4 champion is tag `SQZ6` → `positions_sqz6.json`,
-`signals/sqz6.txt` / `signals/sqz6_live.txt`, `reports/SQZ6_2026xx`, snapshot
+`signals/sqz6.txt` / `signals/sqz6_live.txt`, `reports/SQZ6_2026xx`,
+`forensic_sqz6.jsonl` / `notifications_sqz6.jsonl`, snapshot
 `cli/champion_R4_SQZ6_no_trailing.txt`; Victor is `VIC` →
-`positions_victor.json`, `signals/victor_live.txt`. When you add a strategy,
-mint a fresh tag and derive all four artifact names from it.
+`positions_victor.json`, `signals/victor_live.txt`, `forensic_victor.jsonl` /
+`notifications_victor.jsonl`. When you add a strategy, mint a fresh tag and
+derive all artifact names (positions, feed, report, logs) from it.
 </content>
 
 ## GitHub Actions / CI

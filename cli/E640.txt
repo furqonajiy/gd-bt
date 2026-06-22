@@ -65,12 +65,15 @@ python tools/live_feed_loop.py `
 
 # ===== 3. LIVE AUTO EXECUTOR (OPTIONAL -- VALIDATE BEFORE USE) =====
 # Cross-regime candidate -- forward/demo-validate before live (esp. the R3 ~48% drawdown). The
-# tag E640 + positions_e640.json keep it isolated from SQZ6 and Victor.
+# tag E640 + positions_e640.json + forensic_e640.jsonl / notifications_e640.jsonl
+# keep it isolated from SQZ6 and Victor (each log self-caps + rotates to a .1 backup).
 # Strategy params are byte-identical to sections 5-9 (only the backtest-only locked-exit slippage varies by era there; never sent live).
 python tools/auto_explicit.py `
   --signals signals/e640_live.txt `
   --positions-json positions_e640.json `
   --strategy-tag E640 `
+  --forensic-log forensic_e640.jsonl `
+  --notifications notifications_e640.jsonl `
   --watch-interval 3 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `

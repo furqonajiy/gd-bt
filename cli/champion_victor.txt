@@ -30,8 +30,10 @@
 #   - Victor only began posting in ~2024, so the 2021-2023 backtest barely emits
 #     (his first signals only); for current behaviour use the 2026 backtests.
 #   The other deployed feed is cli/champion_R4_SQZ6_no_trailing (SQZ6). Run THIS
-#   (Victor) alongside it -- distinct --strategy-tag (VIC vs SQZ6) + distinct
-#   positions json keep them isolated on one MT5 account.
+#   (Victor) alongside it -- distinct --strategy-tag (VIC vs SQZ6), positions json,
+#   and forensic/notifications logs (forensic_victor.jsonl / notifications_victor.jsonl)
+#   keep them isolated on one MT5 account (each log self-caps + rotates to a .1
+#   backup, so two executors never share or overgrow one file).
 #
 # Run blocks each in their own window, in order: listener -> filter -> auto -> backtest.
 
@@ -72,6 +74,8 @@ python tools/auto_explicit.py `
   --signals signals/victor_live.txt `
   --positions-json positions_victor.json `
   --strategy-tag VIC `
+  --forensic-log forensic_victor.jsonl `
+  --notifications notifications_victor.jsonl `
   --watch-interval 3 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `

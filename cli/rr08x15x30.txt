@@ -60,12 +60,16 @@ python tools/live_feed_loop.py `
 
 # ===== 3. LIVE AUTO EXECUTOR (OPTIONAL -- VALIDATE BEFORE USE) =====
 # RESEARCH CANDIDATE. Only run live after a clean forward/demo validation. The
-# tag RR08 + positions_sc24_rr08x15x30.json keep it isolated from SC24 and Victor.
+# tag RR08 + positions_sc24_rr08x15x30.json + forensic_sc24_rr08x15x30.jsonl /
+# notifications_sc24_rr08x15x30.jsonl keep it isolated from SC24 and Victor (each
+# log self-caps + rotates to a .1 backup).
 # Strategy params are byte-identical to sections 5-9 (only the backtest-only locked-exit slippage varies by era there; never sent live).
 python tools/auto_explicit.py `
   --signals signals/self_scalper24_rr08x15x30_live.txt `
   --positions-json positions_sc24_rr08x15x30.json `
   --strategy-tag RR08 `
+  --forensic-log forensic_sc24_rr08x15x30.jsonl `
+  --notifications notifications_sc24_rr08x15x30.jsonl `
   --watch-interval 3 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
