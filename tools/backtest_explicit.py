@@ -420,18 +420,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--filter-preset", default="high_growth_hour_side", choices=["all", "no_bad_hours", "best_hours", "high_growth_hour_side", "research_month_hour_side"])
     p.add_argument("--charts", required=True, nargs="+")
     p.add_argument("--start-date", default=None, metavar="YYYY-MM-DD",
-                   help="Only backtest signals on/after this date. Read in --date-tz "
-                        "(default chart time, EET/EEST ~GMT+3). Equity starts at "
+                   help="Only backtest signals on/after this date. By default the date "
+                        "is read in each signal's own feed zone (the GMT+7 signal-code "
+                        "dates, e.g. SQZ6-0623); see --date-tz. Equity starts at "
                         "--initial-capital on the first surviving signal.")
     p.add_argument("--end-date", default=None, metavar="YYYY-MM-DD",
-                   help="Only backtest signals on/before this date (read in --date-tz, "
+                   help="Only backtest signals on/before this date (read like --start-date, "
                         "inclusive of the whole day).")
     p.add_argument("--date-tz", type=int, default=None, metavar="N",
-                   help="GMT offset the --start-date/--end-date boundaries are expressed "
-                        "in. Pass 7 to match the GMT+7 signal-code dates (e.g. SQZ6-0623), "
-                        "since the feed's date headers are GMT+7. Default: the dates are "
-                        "read as chart-local time (EET/EEST, ~GMT+3) -- the legacy "
-                        "behaviour, so omitting it leaves existing runs unchanged.")
+                   help="Override how --start-date/--end-date are read. By default they "
+                        "are auto-detected from the feed: each signal is judged by its own "
+                        "source-zone (feed-label) date, so the window matches the GMT+7 "
+                        "signal codes (e.g. SQZ6-0623) with no flag. Pass an offset to force "
+                        "one zone instead -- --date-tz 3 reproduces the legacy chart-time "
+                        "(EET/EEST) window.")
     p.add_argument("--output-dir", required=True)
     p.add_argument("--mt5-history", default=None, metavar="FILE",
                    help="MT5 History export (.xlsx/.csv/.html). Matches live positions to "
@@ -520,42 +522,44 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
     )
 
 
-def _boundary_chart_time(value: str | None, date_tz: int | None,
-                         *, end: bool = False) -> datetime | None:
-    """A 'YYYY-MM-DD' boundary as a chart-local datetime for the date filter.
-
-    ``date_tz`` None means the date is already chart-local (EET/EEST, ~GMT+3) --
-    the legacy behaviour. Otherwise it is read in GMT+``date_tz`` (the signal
-    feed's zone: 7 for Victor/SQZ6, so the boundary lines up with the GMT+7
-    signal-code dates like SQZ6-0623) and converted to chart-local DST-aware via
-    ``chart_tz.to_chart_tz``. ``end`` adds a day so the whole boundary day is
-    inclusive. Both paths return a chart-time datetime, so the comparison against
-    ``signal_time_chart`` below is unchanged.
-    """
+def _parse_bound(value: str | None, *, end: bool = False) -> datetime | None:
+    """Parse a 'YYYY-MM-DD' boundary to a naive datetime; ``end`` adds a day so
+    the whole boundary day is inclusive."""
     if not value:
         return None
     dt = datetime.strptime(value, "%Y-%m-%d")
-    if end:
-        dt = dt + timedelta(days=1)
-    return to_chart_tz(dt, date_tz) if date_tz is not None else dt
+    return dt + timedelta(days=1) if end else dt
 
 
 def filter_signals_by_date(signals, start_date: str | None, end_date: str | None,
                            date_tz: int | None = None):
-    """Keep signals whose chart-time falls within [start_date 00:00, end_date 24:00).
+    """Keep signals whose date falls within [start_date 00:00, end_date 24:00).
 
     Boundaries are 'YYYY-MM-DD' or None; end_date includes the whole day.
-    ``date_tz`` None reads them as chart-local time (the legacy GMT+3 behaviour);
-    pass an offset (e.g. 7) to read them in that zone so the window matches the
-    signal-code dates (which are GMT+7). run_backtest then starts equity at
-    --initial-capital on the first surviving signal, so this is how a run begins
-    from a specific date.
+
+    By DEFAULT (``date_tz`` None) each signal is judged by its OWN feed-label date
+    -- i.e. its source-zone clock (GMT+7 for Victor/SQZ6) -- so --start-date /
+    --end-date line up with the signal codes (e.g. SQZ6-0623) automatically, with
+    no flag, and a feed that ever mixes source zones is handled per signal.
+    ``signal_time_source`` is the naive source-zone datetime, so the naive
+    boundary compares directly (no conversion, DST-safe).
+
+    Pass ``date_tz`` to OVERRIDE that: the bounds are read in GMT+``date_tz``,
+    converted to chart-local time DST-aware, and compared against
+    ``signal_time_chart``. Use ``--date-tz 3`` for the legacy chart-time window.
+
+    run_backtest then starts equity at --initial-capital on the first surviving
+    signal, so this is how a run begins from a specific date.
     """
-    start = _boundary_chart_time(start_date, date_tz)
-    end = _boundary_chart_time(end_date, date_tz, end=True)
+    start = _parse_bound(start_date)
+    end = _parse_bound(end_date, end=True)
+    use_source = date_tz is None
+    if not use_source:
+        start = to_chart_tz(start, date_tz) if start is not None else None
+        end = to_chart_tz(end, date_tz) if end is not None else None
     kept = []
     for s in signals:
-        t = s.signal_time_chart
+        t = s.signal_time_source if use_source else s.signal_time_chart
         if start is not None and t < start:
             continue
         if end is not None and t >= end:
