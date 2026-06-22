@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from trading.engine import CsvChartSource, StrategyConfig, parse_signals_file, run_backtest, write_backtest_outputs  # noqa: E402
+from trading.engine.core.chart_tz import to_chart_tz  # noqa: E402
 from trading.engine.strategy.provider_filter import decide_provider_signal_filter  # noqa: E402
 
 
@@ -419,11 +420,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--filter-preset", default="high_growth_hour_side", choices=["all", "no_bad_hours", "best_hours", "high_growth_hour_side", "research_month_hour_side"])
     p.add_argument("--charts", required=True, nargs="+")
     p.add_argument("--start-date", default=None, metavar="YYYY-MM-DD",
-                   help="Only backtest signals on/after this date (chart time GMT+3). "
-                        "Equity starts at --initial-capital on the first surviving signal.")
+                   help="Only backtest signals on/after this date. Read in --date-tz "
+                        "(default chart time, EET/EEST ~GMT+3). Equity starts at "
+                        "--initial-capital on the first surviving signal.")
     p.add_argument("--end-date", default=None, metavar="YYYY-MM-DD",
-                   help="Only backtest signals on/before this date (chart time GMT+3, "
+                   help="Only backtest signals on/before this date (read in --date-tz, "
                         "inclusive of the whole day).")
+    p.add_argument("--date-tz", type=int, default=None, metavar="N",
+                   help="GMT offset the --start-date/--end-date boundaries are expressed "
+                        "in. Pass 7 to match the GMT+7 signal-code dates (e.g. SQZ6-0623), "
+                        "since the feed's date headers are GMT+7. Default: the dates are "
+                        "read as chart-local time (EET/EEST, ~GMT+3) -- the legacy "
+                        "behaviour, so omitting it leaves existing runs unchanged.")
     p.add_argument("--output-dir", required=True)
     p.add_argument("--mt5-history", default=None, metavar="FILE",
                    help="MT5 History export (.xlsx/.csv/.html). Matches live positions to "
@@ -512,21 +520,39 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
     )
 
 
-def _parse_date(value: str | None) -> datetime | None:
-    return datetime.strptime(value, "%Y-%m-%d") if value else None
+def _boundary_chart_time(value: str | None, date_tz: int | None,
+                         *, end: bool = False) -> datetime | None:
+    """A 'YYYY-MM-DD' boundary as a chart-local datetime for the date filter.
+
+    ``date_tz`` None means the date is already chart-local (EET/EEST, ~GMT+3) --
+    the legacy behaviour. Otherwise it is read in GMT+``date_tz`` (the signal
+    feed's zone: 7 for Victor/SQZ6, so the boundary lines up with the GMT+7
+    signal-code dates like SQZ6-0623) and converted to chart-local DST-aware via
+    ``chart_tz.to_chart_tz``. ``end`` adds a day so the whole boundary day is
+    inclusive. Both paths return a chart-time datetime, so the comparison against
+    ``signal_time_chart`` below is unchanged.
+    """
+    if not value:
+        return None
+    dt = datetime.strptime(value, "%Y-%m-%d")
+    if end:
+        dt = dt + timedelta(days=1)
+    return to_chart_tz(dt, date_tz) if date_tz is not None else dt
 
 
-def filter_signals_by_date(signals, start_date: str | None, end_date: str | None):
+def filter_signals_by_date(signals, start_date: str | None, end_date: str | None,
+                           date_tz: int | None = None):
     """Keep signals whose chart-time falls within [start_date 00:00, end_date 24:00).
 
-    Dates are 'YYYY-MM-DD' (chart time GMT+3) or None; end_date includes the whole
-    day. run_backtest then starts equity at --initial-capital on the first
-    surviving signal, so this is how a run begins from a specific date.
+    Boundaries are 'YYYY-MM-DD' or None; end_date includes the whole day.
+    ``date_tz`` None reads them as chart-local time (the legacy GMT+3 behaviour);
+    pass an offset (e.g. 7) to read them in that zone so the window matches the
+    signal-code dates (which are GMT+7). run_backtest then starts equity at
+    --initial-capital on the first surviving signal, so this is how a run begins
+    from a specific date.
     """
-    start = _parse_date(start_date)
-    end = _parse_date(end_date)
-    if end is not None:
-        end = end + timedelta(days=1)
+    start = _boundary_chart_time(start_date, date_tz)
+    end = _boundary_chart_time(end_date, date_tz, end=True)
     kept = []
     for s in signals:
         t = s.signal_time_chart
@@ -548,7 +574,8 @@ def main(argv: list[str] | None = None) -> int:
         _sync_charts_from_mt5(args.mt5_symbol, args.mt5_server_offset, args.sync_months)
 
     signals = filter_signals_by_date(
-        parse_signals_file(Path(args.signals)), args.start_date, args.end_date
+        parse_signals_file(Path(args.signals)), args.start_date, args.end_date,
+        args.date_tz,
     )
     with Heartbeat("chart load", args.progress_interval_seconds, enabled=progress_enabled):
         chart = CsvChartSource(_expand_chart_paths(args.charts))
