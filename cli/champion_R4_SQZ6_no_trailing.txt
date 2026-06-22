@@ -45,8 +45,10 @@
 #   tagged compact comments SQZ6-MMDD#NN.N, per-entry partial placement, reopen-
 #   churn cooldown, freeze/stops-band deferral + reopen-at-market, and
 #   --watch-interval 3 (cuts LOCK_TP1/TP2 give-back). CUT OVER WHEN FLAT: SQZ6 uses
-#   its own positions json (positions_sqz6.json) + tag, so its e8 (240-min/8-entry)
-#   lifecycle never manages another strategy's (e.g. the old e5) positions.
+#   its own positions json (positions_sqz6.json) + tag + forensic/notifications
+#   logs (forensic_sqz6.jsonl / notifications_sqz6.jsonl), so its e8 (240-min/
+#   8-entry) lifecycle never manages another strategy's (e.g. the old e5) positions
+#   and never shares a log file (each self-caps + rotates to a .1 backup).
 # =========================================================================
 
 # ===== 1. TELEGRAM LISTENER =====
@@ -80,6 +82,8 @@ python tools/auto_explicit.py `
   --signals signals/sqz6_live.txt `
   --positions-json positions_sqz6.json `
   --strategy-tag SQZ6 `
+  --forensic-log forensic_sqz6.jsonl `
+  --notifications notifications_sqz6.jsonl `
   --watch-interval 3 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
