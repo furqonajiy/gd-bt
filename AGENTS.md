@@ -227,7 +227,14 @@ pair is a thin package that imports it.
   clock): `chart_tz.to_log_tz` (= `from_chart_tz(dt, LOG_DISPLAY_OFFSET=7)`)
   converts a chart-local instant to GMT+7 for the executor's activation / expiry /
   reconcile-fill / no-chase / `SKIP_EXPIRED` lines. Display only — internal/stored
-  times stay chart-local, so parity is unchanged.
+  times stay chart-local, so parity is unchanged. **Backtest `--start-date` /
+  `--end-date` auto-detect the feed zone**: `backtest_explicit.filter_signals_by_date`
+  judges each signal by its **own source-zone (feed-label) date** — the GMT+7
+  signal codes (`SQZ6-0623`) — so a window lines up with the codes with no flag,
+  comparing the naive boundary against `signal_time_source` (no conversion,
+  mixed-zone-safe). `--date-tz N` overrides it to force one zone (read in GMT+N →
+  chart-local → vs `signal_time_chart`); `--date-tz 3` reproduces the legacy
+  chart-time window.
 - **`positions.json`** is the tracked-signal registry (`SignalRegistry` in
   `execution/mt5_executor.py`). Entry shape:
   `{"signal_key", "signal", "date", "tz", "equity_at_open", "executed_at"?}`.

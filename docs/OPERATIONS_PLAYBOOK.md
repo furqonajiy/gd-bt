@@ -195,10 +195,15 @@ If you forget and a `LOCK_TP1` is missed, the Late TP1 catch-up now
 **protects the leg instead of flattening it**: the SL is moved to TP1 when
 price is still beyond it (the broker then exits at the modeled level, or the
 leg keeps running and beats the model); if price has already come back
-through TP1, the stop locks 0.5 below/above the live price and later cycles
-ratchet it toward TP1 as price recovers. The leg is only closed at current
-market as a last resort, when no broker-legal stop exists or the modify is
-rejected. (Before 2026-06: the catch-up always closed at market — the
+through TP1 **but the leg still locks profit**, the stop is parked ~0.5
+below/above the live price and later cycles ratchet it toward TP1 — so the leg
+**rides toward the model exit just like the backtest** (the 2026-06-22 #62 fix:
+a +1–8 pt noise bounce back through TP1 used to flatten legs the backtest rode
+for +23–33 pt). Only when the gain is too thin for any profit-locking stop (the
+stop would sit below entry) is the leg banked at current market now — the
+0618#04 give-back guard. An underwater leg is never market-dumped; the leg is
+closed at market only as a last resort, when no broker-legal stop exists or the
+modify is rejected. (Before 2026-06: the catch-up always closed at market — the
 2026-06-12 reconciliation measured −$468 vs model from that on one session.)
 
 ## Mode B — continuous `auto` flow

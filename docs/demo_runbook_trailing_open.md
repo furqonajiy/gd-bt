@@ -106,7 +106,7 @@ Then:
 
 **(a) Fetch the demo-period bars into `data/`.** `auto` reads MT5 history into memory and never writes the archive — only your `fetch` subcommand does. Run `fetch` for XAUUSD covering the demo dates so `backtest_explicit.py` has real bars to replay.
 
-**(b) Run the parity backtest — identical config to live**, on the same feed and the fetched bars. Fill in the demo months/dates:
+**(b) Run the parity backtest — identical config to live**, on the same feed and the fetched bars. Fill in the demo months/dates. `--start-date`/`--end-date` are read in the **signal's own feed zone** by default (the GMT+7 signal codes), so use the dates as they appear in the feed headers; add `--date-tz 3` only if you want chart-time (EET/EEST) bounds instead:
 
 ```powershell
 python tools/backtest_explicit.py `
