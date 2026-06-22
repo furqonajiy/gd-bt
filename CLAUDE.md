@@ -416,7 +416,14 @@ from 2020, see the standalone `cli/resync_m1_from_2020.txt` (`fetch --months 80`
 `--mt5-server-offset 3` keeps the broker EET/EEST clock verbatim). The
 `cli/*.txt` files are runnable deployment-command snapshots, each with the same
 nine sections — live order first, backtests last (copy-paste 4-9 to generate the
-archive + run all backtests): (1) Telegram Listener (Victor feed only), (2) Live
+archive + run all backtests). **`cli/run.py` makes them clickable**: it parses a
+snapshot, lists the numbered sections, and runs the chosen one **in the current
+terminal** (`python cli/run.py sqz6 3`, or a menu with no args; `cli\run …` via
+the run.bat/run.ps1 shims). It reconstructs each command byte-for-byte from the
+`.txt` (only joining the PowerShell `` ` `` continuations), so the `.txt` stay the
+single source of truth; the `cd`/`conda`/`git` preamble is intentionally not a
+runnable section (subprocess shell state doesn't persist). See `cli/README.md`.
+The nine sections: (1) Telegram Listener (Victor feed only), (2) Live
 Loop Signal Generator, (3) Live Auto Executor, (4) Signal Generator (one-shot
 static archive, run before the backtests), (5) Backtest from 2026-06 (R4
 parabolic, current month), (6) Backtest from 2026-01 (R4 parabolic, current
