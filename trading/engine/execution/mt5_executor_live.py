@@ -852,8 +852,15 @@ class Mt5Executor(_BaseMt5Executor):
           exact level; the broker then exits at model parity (or the leg keeps
           running and beats the model — accepted, profit is never given up);
         * price retraced to/through the level but the leg is STILL in profit ->
-          close at market NOW (a below-lock stop is the one that ran away in the
-          0618#04 give-back; taking the profit is certain and can't become a loss);
+          PARK the closest legal protective stop near the live price (it locks
+          that profit minus the buffer) and let the leg ride toward the model
+          exit — matching the backtest, which keeps the stop and rides. Market-
+          closing here was too eager: on 2026-06-22 #62 a +1-8 pt noise bounce
+          ticked back through TP1 and the profit-protect flattened legs the
+          backtest rode for +23-33 pt. The parked stop can only fill in profit,
+          so it can never run to a loss. ONLY when the gain is too thin for any
+          non-losing stop (< buffer in profit, so the stop would sit below entry)
+          is it banked at market now — the genuine 0618#04 give-back guard;
         * price already through the level AND underwater -> SL locks at the
           closest legal level (`LATE_LOCK_FALLBACK_BUFFER` off the live bid/ask)
           and later cycles ratchet it toward the true level as price recovers, in
@@ -880,24 +887,39 @@ class Mt5Executor(_BaseMt5Executor):
         else:
             desired = max(target, float(tick.ask) + LATE_LOCK_FALLBACK_BUFFER)
 
-        # If price has retraced to/through the lock level (the protective stop
-        # would have to sit BELOW it) but the leg is STILL in profit, take that
-        # profit at market now instead of parking a below-lock stop. A below-lock
-        # stop is the one that ran away in the 0618#04 give-back -- a +$8 lock the
-        # leg gave back to -$15 before any stop caught it. Closing while in profit
-        # can never crystallize a loss, so the 2026-06-12 "don't market-dump
-        # losers" rule still holds: an underwater leg (or one still beyond the
-        # lock, which keeps full parity) falls through to the stop logic below.
+        # Price has retraced to/through the lock level, so the protective stop can
+        # no longer sit at the lock; `desired` is the closest legal level near the
+        # live price. When the leg is STILL in profit there are two sub-cases:
+        #
+        #   * the parked stop would itself lock break-even-or-profit (`desired` on
+        #     the profitable side of entry, i.e. the leg is >= buffer in profit)
+        #     -> PARK it and let the leg ride toward the model exit (the stop logic
+        #     below). Market-closing here was the 2026-06-22 #62 bug: a +1-8 pt
+        #     noise bounce ticked back through TP1 and flattened legs that the
+        #     backtest rode on for +23-33 pt. A stop that fills in profit can never
+        #     run to a loss, so the 0618#04 fear does not apply once it locks
+        #     profit, and parking-then-riding matches the backtest.
+        #   * the gain is too thin for ANY non-losing stop (`desired` past entry on
+        #     the losing side, i.e. < buffer in profit) -> take that thin profit at
+        #     market now, because the only placeable stop would sit below entry and
+        #     could run to a loss (the genuine 0618#04 give-back). This is the one
+        #     case the market-close still guards.
+        #
+        # An underwater leg (gain <= 0) always falls through to the stop logic
+        # below -- never market-dumped (the 2026-06-12 lesson).
         entry_px = float(getattr(p, "price_open", 0.0) or 0.0)
         exit_px = float(tick.bid) if side == "BUY" else float(tick.ask)
         through_lock = (desired < target - tolerance if side == "BUY"
                         else desired > target + tolerance)
         gain = (exit_px - entry_px) if side == "BUY" else (entry_px - exit_px)
-        if through_lock and entry_px > 0 and gain > tolerance:
+        stop_locks_loss = (desired < entry_px if side == "BUY"
+                           else desired > entry_px)
+        if through_lock and entry_px > 0 and gain > tolerance and stop_locks_loss:
             log.actions.append(
-                f"  Late {label} on #{p.ticket}: price retraced to the lock but the "
-                f"leg is still +{gain:g} pt vs entry {entry_px:g}; closing at market "
-                f"{exit_px:g} now rather than parking a below-lock stop ({signal_key})"
+                f"  Late {label} on #{p.ticket}: price retraced through the lock and "
+                f"the leg is only +{gain:g} pt vs entry {entry_px:g} (too thin for a "
+                f"profit-locking stop); closing at market {exit_px:g} now rather than "
+                f"parking a below-entry stop ({signal_key})"
             )
             self._close_position(
                 p, magic, signal_key, f"late-{label.lower()}",
