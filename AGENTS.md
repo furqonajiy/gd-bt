@@ -408,11 +408,12 @@ and `pytest`, which use CSV data and a stub MT5 layer. To resync the M1 archive
 from 2020, see the standalone `cli/resync_m1_from_2020.txt` (`fetch --months 80`,
 `--mt5-server-offset 3` keeps the broker EET/EEST clock verbatim). The
 `cli/*.txt` files are runnable deployment-command snapshots, each with the same
-nine sections — live order first, backtests last: (1) Telegram Listener (Victor
-feed only), (2) Live Loop Signal Generator, (3) Signal Generator (one-shot static
-archive, run before the backtests), (4) Live Auto Executor, (5) Backtest from
-2026-06 (R4 parabolic, current month), (6) Backtest from 2026-01 (R4 parabolic,
-current regime), (7) Backtest 2025 (R3 strong), (8) Backtest 2024 (R2 bull), and
+nine sections — live order first, backtests last (copy-paste 4-9 to generate the
+archive + run all backtests): (1) Telegram Listener (Victor feed only), (2) Live
+Loop Signal Generator, (3) Live Auto Executor, (4) Signal Generator (one-shot
+static archive, run before the backtests), (5) Backtest from 2026-06 (R4
+parabolic, current month), (6) Backtest from 2026-01 (R4 parabolic, current
+regime), (7) Backtest 2025 (R3 strong), (8) Backtest 2024 (R2 bull), and
 (9) Backtest 2021-2023 (R1 quiet). Each backtest window carries **era-matched locked-exit slippage** —
 R4 2.0/1.0, R3 0.9/0.45, R2 0.5/0.25, R1 0.4/0.2 (the volatility-scaled give-back
 measured per regime; backtest-only realism, never sent live) — so a full-history

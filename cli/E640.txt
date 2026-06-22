@@ -13,11 +13,11 @@
 #   feed signals/e640.txt (static) + signals/e640_live.txt (live) *
 #   reports/E640_* (Excel). No other strategy reuses these names.
 #
-# SECTION MAP (same in every strategy CLI; copy-paste 5-9 for backtests):
+# SECTION MAP (same in every strategy CLI; copy-paste 4-9 to generate the archive + run the backtests):
 #   1. Telegram Listener            (N/A here -- self-generated feed)
 #   2. Live Loop Signal Generator   (continuous live feed)
-#   3. Signal Generator             (one-shot static archive, run before 5-9)
-#   4. Live Auto Executor           (OPTIONAL -- validate before any live use)
+#   3. Live Auto Executor           (OPTIONAL -- validate before any live use)
+#   4. Signal Generator             (one-shot static archive, run before 5-9)
 #   5. Backtest from 2026-06         -> reports/E640_202606.xlsx  (R4 parabolic, current month; slip 2.0/1.0)
 #   6. Backtest from 2026-01         -> reports/E640_202601.xlsx  (R4 parabolic, current regime; slip 2.0/1.0)
 #   7. Backtest 2025 (R3 strong)     -> reports/E640_2025.xlsx  (slip 0.9/0.45)
@@ -49,7 +49,7 @@
 
 # ===== 1. TELEGRAM LISTENER =====
 # N/A -- this is a SELF-GENERATED feed (no Telegram source). The signals come
-# from the generator in sections 2 (live) and 3 (backtest archive).
+# from the generator in sections 2 (live) and 4 (backtest archive).
 
 # ===== 2. LIVE LOOP SIGNAL GENERATOR =====
 # Rolling 3-day window; logs each new signal, like `auto`. UNFILTERED + this
@@ -63,13 +63,7 @@ python tools/live_feed_loop.py `
   --mt5-server-offset 3 `
   -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/e640_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rr1 1.0 --rr2 2.0 --rr3 4.0
 
-# ===== 3. SIGNAL GENERATOR (before backtest) =====
-# One-shot FULL static archive with this variant's R:R rewrite (run before 5-9).
-# UNFILTERED (no --rsi-*): the R:R sweep ran on the base feed so the R:R effect is
-# isolated.
-python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/e640.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rr1 1.0 --rr2 2.0 --rr3 4.0
-
-# ===== 4. LIVE AUTO EXECUTOR (OPTIONAL -- VALIDATE BEFORE USE) =====
+# ===== 3. LIVE AUTO EXECUTOR (OPTIONAL -- VALIDATE BEFORE USE) =====
 # Cross-regime candidate -- forward/demo-validate before live (esp. the R3 ~48% drawdown). The
 # tag E640 + positions_e640.json keep it isolated from SQZ6 and Victor.
 # Strategy params are byte-identical to sections 5-9 (only the backtest-only locked-exit slippage varies by era there; never sent live).
@@ -112,6 +106,12 @@ python tools/auto_explicit.py `
   --trailing-close-distance 0.0 `
   --trailing-close-after-stage 0 `
   --initial-capital 50000
+
+# ===== 4. SIGNAL GENERATOR (before backtest) =====
+# One-shot FULL static archive with this variant's R:R rewrite (run before 5-9).
+# UNFILTERED (no --rsi-*): the R:R sweep ran on the base feed so the R:R effect is
+# isolated.
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/e640.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rr1 1.0 --rr2 2.0 --rr3 4.0
 
 # ===== 5. BACKTEST FROM 2026-06 (current month) =====
 # --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
