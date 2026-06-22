@@ -308,10 +308,16 @@ pair is a thin package that imports it.
   so a finished signal can't trade twice. The late TP1/TP2 catch-up (a leg the
   replay already lock-exited but live still holds open) protects the leg: if price
   is still beyond the lock the stop moves to the lock level (parity); if price has
-  retraced **back through the lock but the leg is still in profit** it is **closed
-  at market now** rather than parked on a below-lock stop that can run to a loss
-  (the 2026-06-18 0618#04 give-back — a locked winner that gave back to a loss);
-  if it is **underwater** the closest legal protective stop is parked and ratcheted
+  retraced **back through the lock but the leg is still in profit** the closest
+  legal protective stop is **parked near the live price and the leg rides** toward
+  the model exit (matching the backtest, which keeps the stop and rides) — a stop
+  that fills in profit can never run to a loss, so flattening here was too eager
+  (the 2026-06-22 #62 give-back: a +1–8 pt noise bounce through TP1 flattened legs
+  the backtest rode for +23–33 pt); **only when the gain is too thin for any
+  non-losing stop** (< the fallback buffer in profit, so the stop would sit below
+  entry) is it **closed at market now** to bank that thin profit — the genuine
+  0618#04 give-back guard; if it is **underwater** the closest legal protective
+  stop is parked and ratcheted
   toward the level on recovery (never market-dumped — the 2026-06-12 lesson that
   flattening losers cost $468); market close is the last resort only when no legal
   stop exists.

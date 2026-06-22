@@ -204,10 +204,12 @@ def test_late_lock_moves_sl_to_tp1_when_price_still_beyond_it(monkeypatch):
     assert deals == []  # the old behavior (market close) must be gone
 
 
-def test_late_lock_closes_at_market_when_through_lock_but_in_profit(monkeypatch):
-    # Price retraced back through TP1 (4215.50) but the leg is still in profit
-    # vs its 4211 entry: take the profit at market now instead of parking a
-    # below-lock stop that could run to a loss (the 0618#04 give-back).
+def test_late_lock_parks_profit_stop_when_through_lock_but_in_profit(monkeypatch):
+    # Price retraced back through TP1 (4215.50) but the leg is still +2 pt vs its
+    # 4211 entry. The closest legal stop (bid-0.5 = 4212.50) sits ABOVE entry, so
+    # it locks profit: park it and let the leg ride toward the model exit, exactly
+    # as the backtest does. Market-closing here was the 2026-06-22 #62 bug -- a
+    # noise bounce flattened legs the backtest rode for +23-33 pt.
     pos = _pos_with_lock_exited_leg()
     live = _live_leg(pos, sl=pos.entries[0].initial_sl)
     mt5 = _FakeMt5(bid=4213.00, ask=4213.30, positions=[live])  # below TP1, above entry
@@ -216,8 +218,25 @@ def test_late_lock_closes_at_market_when_through_lock_but_in_profit(monkeypatch)
 
     sltp = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_SLTP]
     deals = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_DEAL]
-    assert sltp == []                       # no below-lock stop parked
-    assert len(deals) == 1                  # closed at market in profit
+    assert len(sltp) == 1 and sltp[0]["sl"] == round(4213.00 - 0.5, 2)  # bid-buffer, locks +1.5
+    assert deals == []                       # not flattened on the noise bounce
+
+
+def test_late_lock_banks_thin_profit_when_no_locking_stop_fits(monkeypatch):
+    # The leg is barely in profit (+0.3 pt vs its 4211 entry) and through the
+    # lock: the closest legal stop (bid-0.5 = 4210.80) sits BELOW entry, so it
+    # could run to a loss. Bank the thin profit at market now -- the one case the
+    # market-close still guards (the 0618#04 give-back).
+    pos = _pos_with_lock_exited_leg()
+    live = _live_leg(pos, sl=pos.entries[0].initial_sl)
+    mt5 = _FakeMt5(bid=4211.30, ask=4211.60, positions=[live])  # +0.3 vs entry, < buffer
+
+    _manage(monkeypatch, mt5, pos)
+
+    sltp = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_SLTP]
+    deals = [r for r in mt5.requests if r["action"] == mt5.TRADE_ACTION_DEAL]
+    assert sltp == []                       # no below-entry stop parked
+    assert len(deals) == 1                  # thin profit banked at market
     assert deals[0]["comment"].endswith("/late-tp1")
 
 
