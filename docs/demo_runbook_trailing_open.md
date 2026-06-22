@@ -86,8 +86,8 @@ python tools/auto_explicit.py `
 ## 4. What gets logged + what to watch daily
 
 Already emitted by the system — you don't add anything:
-- **`forensic.py` → per-cycle JSONL** — every manage cycle, per signal. Inspect with `tools/dump_forensic.py --signal <key> --summary` (also `--kind`, `--cycle`).
-- **`notifications.py` → `notifications.jsonl`** → forwarded to Telegram Saved Messages — your running live feed (placements, fills, locks, exits).
+- **`forensic.py` → per-cycle JSONL** — every manage cycle, per signal. Inspect with `tools/dump_forensic.py --signal <key> --summary` (also `--kind`, `--cycle`). Size-bounded: it rotates to a single `forensic.jsonl.1` backup at `--forensic-max-mb` (default 50 MB) so it can't fill the disk on a long-running executor; the newest events stay in the active file, the prior window is the `.1`.
+- **`notifications.py` → `notifications.jsonl`** → forwarded to Telegram Saved Messages — your running live feed (placements, fills, locks, exits). Also rotates to a `.1` backup at `--notifications-max-mb` (default 10 MB).
 
 Watch each day:
 - **Fills vs no-fills** — is the trailing-open STOP entry actually filling? (backtest fill rate ≈ 81%.)

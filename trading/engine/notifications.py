@@ -15,6 +15,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
+from .core.rotating_jsonl import DEFAULT_NOTIFICATIONS_MAX_BYTES, append_jsonl_line
+
 
 DEFAULT_NOTIFICATIONS_PATH = "notifications.jsonl"
 
@@ -132,8 +134,12 @@ class Notifier:
     and swallow errors -- notifications never break trading logic.
     """
 
-    def __init__(self, path: Optional[Path | str] = None):
+    def __init__(self, path: Optional[Path | str] = None,
+                 max_bytes: int | None = DEFAULT_NOTIFICATIONS_MAX_BYTES):
         self.path: Optional[Path] = Path(path) if path else None
+        # Cap on-disk size: rotate to a single `.1` backup at this many bytes so
+        # a long-running live executor can't fill the disk. None/<=0 = unbounded.
+        self.max_bytes = max_bytes
 
     def _emit(self, kind: str, signal_key: str, text: str, **details: Any) -> None:
         if self.path is None:
@@ -147,8 +153,8 @@ class Notifier:
         if details:
             event["details"] = details
         try:
-            with self.path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(event, default=str) + "\n")
+            line = json.dumps(event, default=str) + "\n"
+            append_jsonl_line(self.path, line, self.max_bytes)
         except Exception:
             # Never let a notification failure break trading.
             pass

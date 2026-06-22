@@ -151,7 +151,10 @@ Common flag groups (added to most subcommands):
   `--mt5-server-offset` (default `3`), `--mt5-history-bars` (default `5000`),
   `--mt5-path`, `--mt5-login`, `--mt5-password`, `--mt5-server`.
 - **Notifications / forensics:** `--notifications` / `--no-notifications`,
-  `--forensic-log` / `--no-forensic`.
+  `--forensic-log` / `--no-forensic`. Both JSONL sinks are **size-bounded** —
+  they rotate to a single `.1` backup at `--notifications-max-mb` (default 10)
+  / `--forensic-max-mb` (default 50), so a long-running `auto` can't fill the
+  disk (on-disk use is capped at ~2× the limit per sink); `0` = unbounded.
 
 For the full strategy parameter surface (max-hold, pending-expiry,
 sl-multiplier, lock delays, profit-lock model, etc.) used in the

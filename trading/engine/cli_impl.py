@@ -44,6 +44,7 @@ from trading.engine import (
     DEFAULT_NOTIFICATIONS_PATH, Notifier, summarize_closed_position,
 )
 from trading.engine import DEFAULT_FORENSIC_PATH, ForensicLog
+from trading.engine import DEFAULT_FORENSIC_MAX_BYTES, DEFAULT_NOTIFICATIONS_MAX_BYTES
 
 
 ARCHIVE_DIR = "data"
@@ -99,18 +100,30 @@ def _try_archive_from_mt5(symbol: str, server_offset: int) -> None:
 # observability helpers (notifier + forensic)
 # ---------------------------------------------------------------------------
 
+def _max_bytes(args: argparse.Namespace, attr: str, default: int) -> int | None:
+    """Resolve a --*-max-mb flag to bytes; <=0 means unbounded (None)."""
+    mb = getattr(args, attr, None)
+    if mb is None:
+        return default
+    return int(mb * 1024 * 1024) if mb > 0 else None
+
+
 def _make_notifier(args: argparse.Namespace) -> Notifier:
     if getattr(args, "no_notifications", False):
         return Notifier(path=None)
     path = getattr(args, "notifications", None) or DEFAULT_NOTIFICATIONS_PATH
-    return Notifier(path=path)
+    return Notifier(path=path,
+                    max_bytes=_max_bytes(args, "notifications_max_mb",
+                                         DEFAULT_NOTIFICATIONS_MAX_BYTES))
 
 
 def _make_forensic(args: argparse.Namespace) -> ForensicLog:
     if getattr(args, "no_forensic", False):
         return ForensicLog(path=None)
     path = getattr(args, "forensic_log", None) or DEFAULT_FORENSIC_PATH
-    return ForensicLog(path=path)
+    return ForensicLog(path=path,
+                       max_bytes=_max_bytes(args, "forensic_max_mb",
+                                            DEFAULT_FORENSIC_MAX_BYTES))
 
 
 def _emit_per_signal_snapshots(forensic: ForensicLog, executor, tracked: list) -> None:
@@ -1629,6 +1642,13 @@ def _add_notification_flags(p: argparse.ArgumentParser) -> None:
         "--no-notifications", action="store_true",
         help="Disable engine notifications entirely.",
     )
+    g.add_argument(
+        "--notifications-max-mb", type=float,
+        default=DEFAULT_NOTIFICATIONS_MAX_BYTES / (1024 * 1024),
+        help=("Cap the notifications JSONL at this many MB; it rotates to a "
+              "single .1 backup when exceeded, so disk use stays bounded on a "
+              "long-running executor (default %(default)g; 0 = unbounded)."),
+    )
 
 
 def _add_forensic_flags(p: argparse.ArgumentParser) -> None:
@@ -1642,6 +1662,14 @@ def _add_forensic_flags(p: argparse.ArgumentParser) -> None:
     g.add_argument(
         "--no-forensic", action="store_true",
         help="Disable forensic logging entirely.",
+    )
+    g.add_argument(
+        "--forensic-max-mb", type=float,
+        default=DEFAULT_FORENSIC_MAX_BYTES / (1024 * 1024),
+        help=("Cap the forensic JSONL at this many MB; it rotates to a single "
+              ".1 backup when exceeded, so the per-cycle per-signal snapshots "
+              "can't fill the disk on a long-running executor "
+              "(default %(default)g; 0 = unbounded)."),
     )
 
 
