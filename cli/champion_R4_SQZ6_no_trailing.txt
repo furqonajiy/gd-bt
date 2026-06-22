@@ -11,16 +11,16 @@
 #   feed signals/sqz6.txt (static) + signals/sqz6_live.txt (live) ·
 #   reports/SQZ6_2026xx (Excel). No other strategy reuses any of these names.
 #
-# SECTION MAP (same in every strategy CLI; copy-paste 4-8 for backtests):
+# SECTION MAP (same in every strategy CLI; copy-paste 5-9 for backtests):
 #   1. Telegram Listener            (N/A here -- self-generated feed)
 #   2. Live Loop Signal Generator   (continuous live feed)
-#   3. Signal Generator             (one-shot static archive, run before 4-8)
-#   4. Backtest from 2026-06         -> reports/SQZ6_202606.xlsx  (R4 parabolic, current month; slip 2.0/1.0)
-#   5. Backtest from 2026-01         -> reports/SQZ6_202601.xlsx  (R4 parabolic, current regime; slip 2.0/1.0)
-#   6. Backtest 2025 (R3 strong)     -> reports/SQZ6_2025.xlsx  (slip 0.9/0.45)
-#   7. Backtest 2024 (R2 bull)       -> reports/SQZ6_2024.xlsx  (slip 0.5/0.25)
-#   8. Backtest 2021-2023 (R1 quiet) -> reports/SQZ6_2021_2023.xlsx  (slip 0.4/0.2)
-#   9. Live Auto Executor           (places + manages real orders)
+#   3. Signal Generator             (one-shot static archive, run before 5-9)
+#   4. Live Auto Executor           (places + manages real orders)
+#   5. Backtest from 2026-06         -> reports/SQZ6_202606.xlsx  (R4 parabolic, current month; slip 2.0/1.0)
+#   6. Backtest from 2026-01         -> reports/SQZ6_202601.xlsx  (R4 parabolic, current regime; slip 2.0/1.0)
+#   7. Backtest 2025 (R3 strong)     -> reports/SQZ6_2025.xlsx  (slip 0.9/0.45)
+#   8. Backtest 2024 (R2 bull)       -> reports/SQZ6_2024.xlsx  (slip 0.5/0.25)
+#   9. Backtest 2021-2023 (R1 quiet) -> reports/SQZ6_2021_2023.xlsx  (slip 0.4/0.2)
 #
 # FEED FILTER: the generator commands carry
 #   --rsi-buy-max 75 --rsi-sell-min 25   (skip overbought BUYs / oversold SELLs)
@@ -41,7 +41,7 @@
 # CAPITAL NOTE: base is $50,000 so the 0.01-lot floor no longer distorts risk%.
 #   Live sizes off REAL equity, so fund ~$50k to match this base (else set
 #   --initial-capital to your actual equity for the DD base to be correct).
-# LIVE FIXES IN EFFECT (auto, via --reopen-missing-positions true in section 6):
+# LIVE FIXES IN EFFECT (auto, via --reopen-missing-positions true in section 4):
 #   tagged compact comments SQZ6-MMDD#NN.N, per-entry partial placement, reopen-
 #   churn cooldown, freeze/stops-band deferral + reopen-at-market, and
 #   --watch-interval 3 (cuts LOCK_TP1/TP2 give-back). CUT OVER WHEN FLAT: SQZ6 uses
@@ -69,12 +69,55 @@ python tools/live_feed_loop.py `
 
 # ===== 3. SIGNAL GENERATOR (before backtest) =====
 # One-shot FULL static archive signals/sqz6.txt from ALL chart history (run
-# before sections 4-8). RSI + Bollinger-squeeze + R:R filtered to match live. The
+# before sections 5-9). RSI + Bollinger-squeeze + R:R filtered to match live. The
 # ELEV8 archive begins 2021-11, so --start 2021-01-01 simply emits from the first
 # available bar.
 python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/sqz6.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0
 
-# ===== 4. BACKTEST FROM 2026-06 (current month) =====
+# ===== 4. LIVE AUTO EXECUTOR =====
+# Reads the live feed (section 2), places + manages real orders. Runs beside the
+# generator loop. --reopen-missing-positions true: MT5 mirrors the replay.
+# Strategy params are byte-identical to sections 5-9 (only the backtest-only locked-exit slippage varies by era there; never sent live).
+# Flags omitted because they do NOT affect live execution (auto_explicit defaults
+# them): --initial-capital (live sizes off REAL MT5 equity), --bonus-per-closed-lot
+# (backtest scoring only), --tp3-lock-target (only TP2). Also dropped the flags
+# already at their default: --replace-missing-entries false (self feeds are
+# two-sided), --shared-sl false, --trailing-close-after-stage 0.
+python tools/auto_explicit.py `
+  --signals signals/sqz6_live.txt `
+  --positions-json positions_sqz6.json `
+  --strategy-tag SQZ6 `
+  --watch-interval 3 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --reopen-missing-positions true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 240 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.0 `
+  --trailing-close-distance 0.0
+
+# ===== 5. BACKTEST FROM 2026-06 (current month) =====
 # --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
 #   give-back so the backtest matches live (the SAME values the sweep scored
 #   against). Backtest-only; never live.
@@ -118,7 +161,7 @@ python tools/backtest_explicit.py `
   --initial-capital 50000 `
   --start-date 2026-06-01
 
-# ===== 5. BACKTEST FROM 2026-01 (current regime) =====
+# ===== 6. BACKTEST FROM 2026-01 (current regime) =====
 # --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
 #   give-back so the backtest matches live (the SAME values the sweep scored
 #   against). Backtest-only; never live.
@@ -162,7 +205,7 @@ python tools/backtest_explicit.py `
   --initial-capital 50000 `
   --start-date 2026-01-01
 
-# ===== 6. BACKTEST FROM 2025 (R3 strong) =====
+# ===== 7. BACKTEST FROM 2025 (R3 strong) =====
 # Era-matched LOCKED-exit slippage 0.9 / 0.45 (R3 2025: ~0.45x the R4 2.0/1.0 anchor).
 #   Backtest-only realism knob; never sent live. Strategy geometry is unchanged.
 python tools/backtest_explicit.py `
@@ -206,7 +249,7 @@ python tools/backtest_explicit.py `
   --start-date 2025-01-01 `
   --end-date 2025-12-31
 
-# ===== 7. BACKTEST FROM 2024 (R2 bull) =====
+# ===== 8. BACKTEST FROM 2024 (R2 bull) =====
 # Era-matched LOCKED-exit slippage 0.5 / 0.25 (R2 2024: ~0.26x the R4 anchor).
 #   Backtest-only realism knob; never sent live. Strategy geometry is unchanged.
 python tools/backtest_explicit.py `
@@ -250,7 +293,7 @@ python tools/backtest_explicit.py `
   --start-date 2024-01-01 `
   --end-date 2024-12-31
 
-# ===== 8. BACKTEST FROM 2021-2023 (R1 quiet) =====
+# ===== 9. BACKTEST FROM 2021-2023 (R1 quiet) =====
 # Era-matched LOCKED-exit slippage 0.4 / 0.2 (R1 2021-2023 quiet: ~0.20x the R4 anchor).
 #   Backtest-only realism knob; never sent live. Strategy geometry is unchanged.
 python tools/backtest_explicit.py `
@@ -293,46 +336,3 @@ python tools/backtest_explicit.py `
   --initial-capital 50000 `
   --start-date 2021-01-01 `
   --end-date 2023-12-31
-
-# ===== 9. LIVE AUTO EXECUTOR =====
-# Reads the live feed (section 2), places + manages real orders. Runs beside the
-# generator loop. --reopen-missing-positions true: MT5 mirrors the replay.
-# Strategy params are byte-identical to sections 4-8 (only the backtest-only locked-exit slippage varies by era there; never sent live).
-# Flags omitted because they do NOT affect live execution (auto_explicit defaults
-# them): --initial-capital (live sizes off REAL MT5 equity), --bonus-per-closed-lot
-# (backtest scoring only), --tp3-lock-target (only TP2). Also dropped the flags
-# already at their default: --replace-missing-entries false (self feeds are
-# two-sided), --shared-sl false, --trailing-close-after-stage 0.
-python tools/auto_explicit.py `
-  --signals signals/sqz6_live.txt `
-  --positions-json positions_sqz6.json `
-  --strategy-tag SQZ6 `
-  --watch-interval 3 `
-  --mt5-symbol XAUUSD `
-  --mt5-server-offset 3 `
-  --mt5-history-bars 5000 `
-  --reopen-missing-positions true `
-  --sizing-mode risk `
-  --lot 0.01 `
-  --risk 0.01 `
-  --minimum-lot 0.01 `
-  --lot-step 0.01 `
-  --entries 8 `
-  --entry-ladder range_to_sl `
-  --entry-sl-gap 0.5 `
-  --activation-delay 2 `
-  --pending-expiry 180 `
-  --max-hold 240 `
-  --sl-multiplier 2.1 `
-  --final-target TP3 `
-  --lock-after-tp1 true `
-  --lock-after-tp2 true `
-  --tp1-lock-delay-minutes 24 `
-  --tp2-lock-delay-minutes 2 `
-  --profit-lock-mode tp_levels `
-  --bep-trigger-distance 3.0 `
-  --tp1-lock-fraction 0.5 `
-  --tp2-lock-target TP1 `
-  --runner-after-tp3 false `
-  --trailing-open-distance 0.0 `
-  --trailing-close-distance 0.0
