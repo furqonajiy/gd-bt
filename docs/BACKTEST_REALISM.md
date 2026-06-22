@@ -49,8 +49,8 @@ charges the parabolic give-back to the quiet era. The per-regime values
 
 The per-era 5-way sweep (`self-scalper-5way-sweep-r3r2r1.yml`) scores each regime
 with its own value, and the `cli/*.txt` backtest windows are split per era so each
-run uses the matched slip (sections 4–5 R4 2.0/1.0, 6 R3 0.9/0.45, 7 R2 0.5/0.25,
-8 R1 0.4/0.2). These remain **backtest-only** — live still places stops at the
+run uses the matched slip (sections 5–6 R4 2.0/1.0, 7 R3 0.9/0.45, 8 R2 0.5/0.25,
+9 R1 0.4/0.2). These remain **backtest-only** — live still places stops at the
 exact level and the broker adds the slip.
 
 ---
