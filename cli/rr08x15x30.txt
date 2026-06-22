@@ -6,11 +6,11 @@
 # max-hold 240 / TP3, lock-after-tp1 + lock-after-tp2, tp1-lock-delay 24 /
 # tp2-lock-delay 2 / tp1-lock-fraction 0.5, shared_sl OFF, NO trailing, risk 1%.
 #
-# SECTION MAP (same in every strategy CLI; copy-paste 5-9 for backtests):
+# SECTION MAP (same in every strategy CLI; copy-paste 4-9 to generate the archive + run the backtests):
 #   1. Telegram Listener            (N/A here -- self-generated feed)
 #   2. Live Loop Signal Generator   (continuous live feed)
-#   3. Signal Generator             (one-shot static archive, run before 5-9)
-#   4. Live Auto Executor           (OPTIONAL -- validate before any live use)
+#   3. Live Auto Executor           (OPTIONAL -- validate before any live use)
+#   4. Signal Generator             (one-shot static archive, run before 5-9)
 #   5. Backtest from 2026-06         -> reports/RR08_202606.xlsx  (R4 parabolic, current month; slip 2.0/1.0)
 #   6. Backtest from 2026-01         -> reports/RR08_202601.xlsx  (R4 parabolic, current regime; slip 2.0/1.0)
 #   7. Backtest 2025 (R3 strong)     -> reports/RR08_2025.xlsx  (slip 0.9/0.45)
@@ -27,7 +27,7 @@
 # STATUS: RESEARCH ONLY -- NOT a deployed champion. The live R4 champion stays
 #   cli/champion_R4_SQZ6_no_trailing (SQZ6 / rsi75_sqz6_rr40). This is
 #   in-sample on one 2026 path; forward/demo-validate before any live use. The
-#   live (section 4) block is provided for that validation, isolated by its own
+#   live (section 3) block is provided for that validation, isolated by its own
 #   --strategy-tag RR08 + positions_sc24_rr08x15x30.json so it never touches the
 #   SC24 or Victor executors.
 #
@@ -44,7 +44,7 @@
 
 # ===== 1. TELEGRAM LISTENER =====
 # N/A -- this is a SELF-GENERATED feed (no Telegram source). The signals come
-# from the generator in sections 2 (live) and 3 (backtest archive).
+# from the generator in sections 2 (live) and 4 (backtest archive).
 
 # ===== 2. LIVE LOOP SIGNAL GENERATOR =====
 # Rolling 3-day window; logs each new signal, like `auto`. UNFILTERED + this
@@ -58,13 +58,7 @@ python tools/live_feed_loop.py `
   --mt5-server-offset 3 `
   -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/self_scalper24_rr08x15x30_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rr1 0.8 --rr2 1.5 --rr3 3.0
 
-# ===== 3. SIGNAL GENERATOR (before backtest) =====
-# One-shot FULL static archive with this variant's R:R rewrite (run before 5-9).
-# UNFILTERED (no --rsi-*): the R:R sweep ran on the base feed so the R:R effect is
-# isolated.
-python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/self_scalper24_rr08x15x30.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rr1 0.8 --rr2 1.5 --rr3 3.0
-
-# ===== 4. LIVE AUTO EXECUTOR (OPTIONAL -- VALIDATE BEFORE USE) =====
+# ===== 3. LIVE AUTO EXECUTOR (OPTIONAL -- VALIDATE BEFORE USE) =====
 # RESEARCH CANDIDATE. Only run live after a clean forward/demo validation. The
 # tag RR08 + positions_sc24_rr08x15x30.json keep it isolated from SC24 and Victor.
 # Strategy params are byte-identical to sections 5-9 (only the backtest-only locked-exit slippage varies by era there; never sent live).
@@ -107,6 +101,12 @@ python tools/auto_explicit.py `
   --trailing-close-distance 0.0 `
   --trailing-close-after-stage 0 `
   --initial-capital 50000
+
+# ===== 4. SIGNAL GENERATOR (before backtest) =====
+# One-shot FULL static archive with this variant's R:R rewrite (run before 5-9).
+# UNFILTERED (no --rsi-*): the R:R sweep ran on the base feed so the R:R effect is
+# isolated.
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/self_scalper24_rr08x15x30.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rr1 0.8 --rr2 1.5 --rr3 3.0
 
 # ===== 5. BACKTEST FROM 2026-06 (current month) =====
 # --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
