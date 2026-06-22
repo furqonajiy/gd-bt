@@ -261,6 +261,11 @@ from .io.mt5_adapter import (
 )
 
 # 10. notifications (leaf -- engine -> listener Saved Messages stream)
+from .core.rotating_jsonl import (
+    DEFAULT_FORENSIC_MAX_BYTES,
+    DEFAULT_NOTIFICATIONS_MAX_BYTES,
+    append_jsonl_line,
+)
 from .notifications import (
     DEFAULT_NOTIFICATIONS_PATH,
     Notifier,
@@ -305,5 +310,6 @@ __all__ = [
     "mt5_open_positions_summary", "render_archive_summary",
     "DEFAULT_NOTIFICATIONS_PATH", "Notifier", "summarize_closed_position",
     "DEFAULT_FORENSIC_PATH", "ForensicLog",
+    "DEFAULT_FORENSIC_MAX_BYTES", "DEFAULT_NOTIFICATIONS_MAX_BYTES", "append_jsonl_line",
     "ExecutionLog", "Mt5Executor", "SignalRegistry", "render_execution_log", "round_lot", "signal_to_magic",
 ]

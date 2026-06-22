@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
+from .core.rotating_jsonl import DEFAULT_FORENSIC_MAX_BYTES, append_jsonl_line
+
 
 DEFAULT_FORENSIC_PATH = "forensic.jsonl"
 
@@ -61,9 +63,14 @@ def _serializable_response(res: Any) -> Optional[dict]:
 class ForensicLog:
     """Append-only JSONL event sink for post-mortem analysis."""
 
-    def __init__(self, path: Optional[Path | str] = None):
+    def __init__(self, path: Optional[Path | str] = None,
+                 max_bytes: int | None = DEFAULT_FORENSIC_MAX_BYTES):
         self.path: Optional[Path] = Path(path) if path else None
         self._cycle_id: Optional[str] = None
+        # Cap on-disk size: the log rotates to a single `.1` backup at this many
+        # bytes so a long-running live executor can't fill the disk. None/<=0
+        # keeps the legacy unbounded behaviour.
+        self.max_bytes = max_bytes
 
     @property
     def enabled(self) -> bool:
@@ -80,8 +87,8 @@ class ForensicLog:
             event["cycle_id"] = self._cycle_id
         event.update(fields)
         try:
-            with self.path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(event, default=str, ensure_ascii=False) + "\n")
+            line = json.dumps(event, default=str, ensure_ascii=False) + "\n"
+            append_jsonl_line(self.path, line, self.max_bytes)
         except Exception:
             pass  # never break trading
 
