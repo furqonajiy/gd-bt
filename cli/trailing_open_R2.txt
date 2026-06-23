@@ -1,0 +1,60 @@
+# ===== BEST TRAILING-OPEN RESEARCH CONFIG — R2 bull (2023-10..2024) (tag TO2) =====
+#
+# Source: self-scalper-trailing-sweep-r4r3r2r1.yml run 28009972567 (PARTIAL snapshot),
+#         cell selftrail-R2-to0p1_tc3  (trailing_open=0.1 / trailing_close=3.0).
+# Sweep metrics @ fixed 0.01 lot: edge $43,300 / OOS $7,684 / concurrent-risk DD 25.4% (gate <=40%).
+#
+# >>> RESEARCH ONLY — DO NOT DEPLOY LIVE WITHOUT FORWARD/DEMO VALIDATION. <<<
+# Trailing is LIVE-PARITY-FRAGILE: a small trailing-open (0.1-0.2) lets the backtest
+# fill entries on a favourable pullback that live cannot reproduce tick-accurately on
+# M1 bars, so this edge is very likely OPTIMISTIC vs live. The deployed champions
+# (SQZ6 / SC24T24E8) stay live until this is validated. Use this to REPRODUCE + STUDY
+# the sweep cell, and to run a parity/fill-realism check on the trailing-open entries.
+#
+# ===== 1. GENERATE THE BASE SCALPER24 FEED (this regime's window) =====
+python tools/generate_scalper_signals.py \
+  --charts data/XAUUSD_M1_202310_ELEV8.csv data/XAUUSD_M1_202311_ELEV8.csv data/XAUUSD_M1_202312_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv \
+  --output signals/to2.txt \
+  --start 2023-10-01 --session-start 0 --session-end 0 --signal-tz 7
+
+# ===== 2. BACKTEST THE BEST TRAILING-OPEN CONFIG =====
+python tools/backtest_explicit.py \
+  --signals signals/to2.txt \
+  --charts data/XAUUSD_M1_202310_ELEV8.csv data/XAUUSD_M1_202311_ELEV8.csv data/XAUUSD_M1_202312_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv \
+  --max-drawdown-limit-pct 50 \
+  --progress-interval-seconds 30 \
+  --sync-charts true \
+  --sizing-mode risk \
+  --lot 0.5 \
+  --risk 0.02 \
+  --minimum-lot 0.01 \
+  --lot-step 0.01 \
+  --bonus-per-closed-lot 3.0 \
+  --entries 8 \
+  --entry-ladder range_to_sl \
+  --entry-sl-gap 4.0 \
+  --shared-sl false \
+  --activation-delay 2 \
+  --pending-expiry 900 \
+  --max-hold 30 \
+  --sl-multiplier 2.2 \
+  --final-target TP2 \
+  --lock-after-tp1 true \
+  --lock-after-tp2 true \
+  --tp1-lock-delay-minutes 15 \
+  --tp2-lock-delay-minutes 0 \
+  --profit-lock-mode tp_levels \
+  --bep-trigger-distance 6.0 \
+  --tp1-lock-fraction 0.5 \
+  --tp2-lock-target TP2 \
+  --runner-after-tp3 false \
+  --tp3-lock-target TP2 \
+  --trailing-open-distance 0.1 \
+  --trailing-close-distance 3.0 \
+  --lock-tp1-exit-slippage 0.5 \
+  --lock-tp2-exit-slippage 0.25 \
+  --trailing-close-after-stage 0 \
+  --output-dir reports/TO2_2023 \
+  --initial-capital 50000 \
+  --start-date 2023-10-01
+
