@@ -1,0 +1,71 @@
+name: trailing-sweep-top20-snapshot
+
+# Snapshot the per-regime TOP-N of the trailing sweep
+# (self-scalper-trailing-sweep-r4r3r2r1.yml) and commit it to main. Downloads
+# every selftrail-* artifact that has finished in the given run, pools each
+# regime's cells, keeps DD<=gate & OOS>0 survivors, ranks by fixed-lot edge, and
+# writes sweep_reports/trailing_top20/{R4,R3,R2,R1}_topN.csv + a combined xlsx +
+# README. Works on a PARTIAL run, so it can be re-dispatched as more cells land.
+#
+# Trailing is live-parity-fragile -> these leaderboards RANK; they do not certify
+# for live (see the committed README's caveat).
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "workflow run id holding the selftrail-* artifacts"
+        required: true
+        default: "28009972567"
+      top_n:
+        description: "top N per regime"
+        default: "20"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: trailing-sweep-top20-snapshot
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with: { ref: main }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Download completed trailing-sweep cell artifacts
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ github.event.inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: "selftrail-*"
+          path: _artifacts
+      - name: Build per-regime top-N
+        run: |
+          set -euo pipefail
+          echo "cells downloaded: $(ls _artifacts | wc -l)"
+          python tools/trailing_sweep_top20.py --artifacts-dir _artifacts \
+            --out-dir sweep_reports/trailing_top20 --dd-gate 40 \
+            --top-n "${{ github.event.inputs.top_n }}" \
+            --run-id "${{ github.event.inputs.run_id }}"
+      - name: Commit snapshot to main
+        run: |
+          set -euo pipefail
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+          git add sweep_reports/trailing_top20
+          if git diff --cached --quiet; then
+            echo "no changes to commit"; exit 0
+          fi
+          git commit -m "Trailing sweep per-regime top-${{ github.event.inputs.top_n }} snapshot (run ${{ github.event.inputs.run_id }})"
+          git push origin HEAD:main
+      - uses: actions/upload-artifact@v4
+        with: { name: "trailing-top20-snapshot", path: "sweep_reports/trailing_top20/**", if-no-files-found: warn }
