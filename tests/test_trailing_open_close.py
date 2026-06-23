@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -494,3 +495,62 @@ def test_trailing_open_waiting_line_logs_once_across_cycles(monkeypatch):
     assert any("trailing-open waiting" in a for a in log1.actions)
     assert not any("trailing-open waiting" in a for a in log2.actions)
     assert log1.placed == 0 and log2.placed == 0
+
+def _partial_trailing_plan(signal, activation):
+    """A trailing-open plan whose replay holds 2 entries but only entry #0 is
+    still PENDING (the other already played out) -> a partial ladder."""
+    return NewSignalPlan(
+        signal=signal,
+        action="FOLLOW",
+        rationale="test",
+        orders=[PlannedOrder(0, signal.side, 4750.0, 4740.34, 0.10, 96.6)],
+        pending_expires_at=activation + timedelta(minutes=630),
+        final_target_label="TP3",
+        final_target_price=4780.0,
+        total_initial_risk_dollars=96.6,
+        pending_activates_at=activation,
+        trailing_open_distance=2.0,
+        replay_position=SimpleNamespace(entries=[object(), object()]),
+    )
+
+
+def test_trailing_open_partial_ladder_skipped_without_reopen(monkeypatch):
+    """Default (no --reopen-missing-positions): a partial trailing ladder is
+    skipped wholesale, as the live registry is signal-level."""
+    signal = parse_one_signal(
+        "1. BUY XAUUSD 4750 - 4748 SL 4744 TP1 4760 TP2 4770 TP3 4780 10:00 AM",
+        source_date="2026-06-01", source_offset=3,
+    )
+    activation = signal.signal_time_chart
+    monkeypatch.setattr(mt5_executor_trailing, "_wall_clock_chart_now",
+                        lambda: activation + timedelta(minutes=1))
+    mt5 = _FakeMt5(bid=4740.0, ask=4740.2)  # armed, but should still be skipped
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.place_signal(signal, _partial_trailing_plan(signal, activation))
+
+    assert log.placed == 0
+    assert len(mt5.requests) == 0
+    assert any("skipped partial placement" in a for a in log.actions)
+
+
+def test_trailing_open_partial_ladder_placed_under_reopen(monkeypatch):
+    """With --reopen-missing-positions, the still-PENDING trailing-open legs are
+    placed (entry-level), matching the backtest replay and the non-trailing path."""
+    signal = parse_one_signal(
+        "1. BUY XAUUSD 4750 - 4748 SL 4744 TP1 4760 TP2 4770 TP3 4780 10:00 AM",
+        source_date="2026-06-01", source_offset=3,
+    )
+    activation = signal.signal_time_chart
+    monkeypatch.setattr(mt5_executor_trailing, "_wall_clock_chart_now",
+                        lambda: activation + timedelta(minutes=1))
+    mt5 = _FakeMt5(bid=4740.0, ask=4740.2)  # armed -> BUY STOP placeable
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+    executor._allow_partial_placement = True  # set by --reopen-missing-positions
+
+    log = executor.place_signal(signal, _partial_trailing_plan(signal, activation))
+
+    assert log.placed == 1
+    assert len(mt5.requests) == 1
+    assert mt5.requests[0]["type"] == mt5.ORDER_TYPE_BUY_STOP
+    assert not any("skipped partial placement" in a for a in log.actions)
