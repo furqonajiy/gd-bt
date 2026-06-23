@@ -58,8 +58,10 @@ in-progress trailing sweep (run 28009972567). They are **backtest research
 only** — trailing-open is live-parity-fragile (a 0.1–0.2 trailing-open fills
 entries on a pullback the live executor can't reproduce on M1), so their large
 edge is likely optimistic. Reproduce/study them; do **not** deploy without
-forward/demo validation. They are 2-section snapshots (generate feed → backtest),
-not the full 9-section live runbook.
+forward/demo validation. They follow the full champion 9-section format
+(listener → live loop → auto executor → signal generator → 5 era backtests), but
+section 3 (live executor) is **demo/forward-validation only**, and each carries a
+high swept risk%/signal — size down before any real-money trial.
 
 The launcher reconstructs each command byte-for-byte from the `.txt` (it only
 joins the PowerShell `` ` `` line-continuations), so it never diverges from the
