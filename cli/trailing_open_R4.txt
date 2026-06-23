@@ -1,4 +1,4 @@
-# ===== BEST TRAILING-OPEN RESEARCH CONFIG — R4 parabolic (2026) (tag TO4) =====
+# ===== BEST TRAILING-OPEN RESEARCH CONFIG — R4 parabolic (2026) (tag TR40) =====
 #
 # Source: self-scalper-trailing-sweep-r4r3r2r1.yml run 28009972567 (PARTIAL snapshot),
 #         cell selftrail-R4-to0p2_tc2  (trailing_open=0.2 / trailing_close=2.0).
@@ -14,12 +14,12 @@
 # ===== 1. GENERATE THE BASE SCALPER24 FEED (this regime's window) =====
 python tools/generate_scalper_signals.py \
   --charts "data/XAUUSD_M1_2026"*"_ELEV8.csv" \
-  --output signals/to4.txt \
+  --output signals/tr40.txt \
   --start 2026-01-01 --session-start 0 --session-end 0 --signal-tz 7
 
 # ===== 2. BACKTEST THE BEST TRAILING-OPEN CONFIG =====
 python tools/backtest_explicit.py \
-  --signals signals/to4.txt \
+  --signals signals/tr40.txt \
   --charts "data/XAUUSD_M1_2026"*"_ELEV8.csv" \
   --max-drawdown-limit-pct 50 \
   --progress-interval-seconds 30 \
@@ -54,7 +54,7 @@ python tools/backtest_explicit.py \
   --lock-tp1-exit-slippage 2.0 \
   --lock-tp2-exit-slippage 1.0 \
   --trailing-close-after-stage 0 \
-  --output-dir reports/TO4_2026 \
+  --output-dir reports/TR40_2026 \
   --initial-capital 50000 \
   --start-date 2026-01-01
 
