@@ -154,7 +154,7 @@ python tools/backtest_explicit.py `
   --trailing-close-after-stage 0 `
   --output-dir reports/VIC_202606 `
   --initial-capital 12000 `
-  --start-date 2026-06-23
+  --start-date 2026-06-22
 
 # ===== 6. BACKTEST FROM 2026-01 (current regime) =====
 # --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
