@@ -34,6 +34,14 @@ from trading.engine.core.config import DEFAULT_CONFIG
 class Mt5Executor(_Tp2Mt5Executor):
     """MT5 executor with trailing-open and trailing-close parity helpers."""
 
+    # Process-local dedup guards (auto builds a fresh executor every cycle, so
+    # these class-level sets stop the trailing path from re-logging the same
+    # decision every watch interval -- mirrors the non-trailing executor's
+    # _session_skipped_* guards so the live console is an append-only event log,
+    # not a per-cycle repeat). Presentation-only: order placement is unchanged.
+    _session_skipped_partial_signal_keys: set[str] = set()
+    _session_trailing_open_waiting_keys: set[str] = set()
+
     @staticmethod
     def _plan_trailing_open_distance(plan) -> float:
         return float(getattr(plan, "trailing_open_distance", getattr(DEFAULT_CONFIG, "trailing_open_distance", 0.0)) or 0.0)
@@ -105,32 +113,39 @@ class Mt5Executor(_Tp2Mt5Executor):
 
         replay_pos = getattr(plan, "replay_position", None)
         if replay_pos is not None and len(plan.orders) < len(replay_pos.entries):
-            log.actions.append(
-                f"Signal {signal.signal_key}: skipped partial placement "
-                f"({len(plan.orders)} of {len(replay_pos.entries)} entries). "
-                f"Live registry is signal-level, so partial ladders are skipped "
-                f"to avoid managing unplaced entries."
-            )
+            # Logged once per signal per session (not every watch interval).
+            if signal.signal_key not in self._session_skipped_partial_signal_keys:
+                log.actions.append(
+                    f"Signal {signal.signal_key}: skipped partial placement "
+                    f"({len(plan.orders)} of {len(replay_pos.entries)} entries). "
+                    f"Live registry is signal-level, so partial ladders are skipped "
+                    f"to avoid managing unplaced entries."
+                )
+                self._session_skipped_partial_signal_keys.add(signal.signal_key)
             return log
 
         activation_at = getattr(plan, "pending_activates_at", None)
         if activation_at is None:
             activation_at = signal.signal_time_chart
         if now_chart < activation_at:
-            log.actions.append(
-                f"Signal {signal.signal_key}: waiting for activation "
-                f"(activates {activation_at:%Y-%m-%d %H:%M} GMT+3, "
-                f"now {now_chart:%Y-%m-%d %H:%M} GMT+3)."
-            )
+            if signal.signal_key not in self._session_skipped_inactive_signal_keys:
+                log.actions.append(
+                    f"Signal {signal.signal_key}: waiting for activation "
+                    f"(activates {activation_at:%Y-%m-%d %H:%M} GMT+3, "
+                    f"now {now_chart:%Y-%m-%d %H:%M} GMT+3)."
+                )
+                self._session_skipped_inactive_signal_keys.add(signal.signal_key)
             return log
 
         expires_at = getattr(plan, "pending_expires_at", None)
         if expires_at is not None and now_chart >= expires_at:
-            log.actions.append(
-                f"Signal {signal.signal_key}: skipped expired by wall-clock "
-                f"(expired {expires_at:%Y-%m-%d %H:%M} GMT+3, "
-                f"now {now_chart:%Y-%m-%d %H:%M} GMT+3)."
-            )
+            if signal.signal_key not in self._session_skipped_expired_signal_keys:
+                log.actions.append(
+                    f"Signal {signal.signal_key}: skipped expired by wall-clock "
+                    f"(expired {expires_at:%Y-%m-%d %H:%M} GMT+3, "
+                    f"now {now_chart:%Y-%m-%d %H:%M} GMT+3)."
+                )
+                self._session_skipped_expired_signal_keys.add(signal.signal_key)
             return log
 
         tick = self.mt5.symbol_info_tick(self.symbol)
@@ -181,9 +196,13 @@ class Mt5Executor(_Tp2Mt5Executor):
                 )
 
         if waiting:
-            log.actions.append(
-                self._trailing_open_waiting_line(signal, waiting, trailing_open_distance)
-            )
+            # Arm thresholds are stable across cycles, so log the "waiting" block
+            # once per signal per session instead of every watch interval.
+            if signal.signal_key not in self._session_trailing_open_waiting_keys:
+                log.actions.append(
+                    self._trailing_open_waiting_line(signal, waiting, trailing_open_distance)
+                )
+                self._session_trailing_open_waiting_keys.add(signal.signal_key)
             return log
 
         place_failures: list[tuple[int, float, str]] = []
