@@ -112,14 +112,24 @@ class Mt5Executor(_Tp2Mt5Executor):
         now_chart = _wall_clock_chart_now()
 
         replay_pos = getattr(plan, "replay_position", None)
-        if replay_pos is not None and len(plan.orders) < len(replay_pos.entries):
+        # In reopen/mirror mode (--reopen-missing-positions) a partially played-out
+        # ladder is NOT skipped: place the still-PENDING legs as trailing-open STOPs
+        # (e.g. entries 5-8 when 1-4 already played out in the replay), matching
+        # what the backtest replay holds and what the non-trailing LIMIT path
+        # already does. plan.orders is exactly that pending subset. Without the flag
+        # the live registry is signal-level, so partial ladders are skipped.
+        allow_partial = bool(getattr(self, "_allow_partial_placement", False))
+        if (replay_pos is not None
+                and len(plan.orders) < len(replay_pos.entries)
+                and not allow_partial):
             # Logged once per signal per session (not every watch interval).
             if signal.signal_key not in self._session_skipped_partial_signal_keys:
                 log.actions.append(
                     f"Signal {signal.signal_key}: skipped partial placement "
                     f"({len(plan.orders)} of {len(replay_pos.entries)} entries). "
                     f"Live registry is signal-level, so partial ladders are skipped "
-                    f"to avoid managing unplaced entries."
+                    f"to avoid managing unplaced entries (enable "
+                    f"--reopen-missing-positions to place the live legs instead)."
                 )
                 self._session_skipped_partial_signal_keys.add(signal.signal_key)
             return log
