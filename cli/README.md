@@ -47,10 +47,10 @@ back, so do them once yourself in the terminal before launching.)
 | `sqz6` | `champion_R4_SQZ6_no_trailing.txt` | R4 champion rsi75_sqz6_rr40 (tag SQZ6) — deployed |
 | `e640` | `E640.txt` | cross-regime candidate (tag E640) |
 | `rr08` | `rr08x15x30.txt` | R:R research candidate (tag RR08) |
-| `to4` | `trailing_open_R4.txt` | best trailing-open cell, R4 (tag TO4) — **research, parity-fragile** |
-| `to3` | `trailing_open_R3.txt` | best trailing-open cell, R3 (tag TO3) — **research, parity-fragile** |
-| `to2` | `trailing_open_R2.txt` | best trailing-open cell, R2 (tag TO2) — **research, parity-fragile** |
-| `to1` | `trailing_open_R1.txt` | best trailing-open cell, R1 (tag TO1) — **research, parity-fragile** |
+| `tr40` | `trailing_open_R4.txt` | best trailing-open cell, R4 (tag TR40) — **research, parity-fragile** |
+| `tr30` | `trailing_open_R3.txt` | best trailing-open cell, R3 (tag TR30) — **research, parity-fragile** |
+| `tr20` | `trailing_open_R2.txt` | best trailing-open cell, R2 (tag TR20) — **research, parity-fragile** |
+| `tr10` | `trailing_open_R1.txt` | best trailing-open cell, R1 (tag TR10) — **research, parity-fragile** |
 | `resync` | `resync_m1_from_2020.txt` | M1-archive resync utility |
 
 The `trailing_open_R*` snapshots are the best trailing-open cells from the
