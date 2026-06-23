@@ -1,0 +1,266 @@
+name: self-scalper-trailing-sweep-r4r3r2r1
+
+# SELF-SCALPER TRAILING re-sweep, split by regime (R4, R3, R2, R1), with REALISTIC
+# per-regime locked-exit slippage. The previous sweeps pinned trailing OFF
+# (trailing_open=0, trailing_close from the draw); this one enumerates the FULL
+# CROSS-PRODUCT of trailing_open x trailing_close as a per-regime matrix, scoring
+# the whole SC24-seeded strategy grid at each fixed trailing combo.
+#
+#   trailing_open  in {0, 0.1, 0.2, 1, 2, 3, 5}
+#   trailing_close in {0, 0.1, 0.2, 2, 3, 5, 8}
+#   -> 49 cells/regime; (0,0) is the no-trailing 'base'; (0,>0)=close-only,
+#      (>0,0)=open-only, the rest = both. tools/sweep_self_limit.py --trailing-open
+#      / --trailing-close pin that combo on every candidate.
+#
+# Per-regime realistic slippage (backtest-realism only; never a live order):
+#   R4 (2026)              -> 2.0 / 1.0
+#   R3 (2025)              -> 0.9 / 0.45
+#   R2 (2023-10..2024)     -> 0.5 / 0.25
+#   R1 (2021-11..2023-09)  -> 0.4 / 0.2
+#
+# Artifact-only (no push). The shared aggregator (.github/scripts/agg_entry_feature.sh,
+# prefix selftrail) keeps a trailing cell only if it beats the no-trailing 'base'
+# on BOTH edge AND OOS at DD<=40%. After it finishes, the Excel report is built
+# from the *-results artifacts and committed to sweep_reports/ on main (the same
+# 2-step flow as the other sweeps). Trailing is live-parity-fragile (LIMIT-fill /
+# M1-vs-tick), so a winner is RESEARCH until forward/demo-validated.
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_candidates:
+        description: "candidates per trailing cell (SC24 seeds first, then random)"
+        default: "120"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-scalper-trailing-sweep-r4r3r2r1
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  # ---- R4 (2026) ----------------------------------------------------------
+  r4:
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        topen: ["0", "0.1", "0.2", "1", "2", "3", "5"]
+        tclose: ["0", "0.1", "0.2", "2", "3", "5", "8"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Variant label
+        run: |
+          TO="${{ matrix.topen }}"; TC="${{ matrix.tclose }}"
+          v="to${TO//./p}_tc${TC//./p}"
+          if [ "$TO" = "0" ] && [ "$TC" = "0" ]; then v="base"; fi
+          echo "v=$v" >> "$GITHUB_ENV"
+      - name: Generate base scalper24 feed (R4 2026)
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py --charts "data/XAUUSD_M1_2026"*"_ELEV8.csv" \
+            --output feed.txt --start 2026-01-01 --session-start 0 --session-end 0 --signal-tz 7
+          echo "R4 ${{ env.v }} feed lines: $(wc -l < feed.txt)"
+      - name: Sweep trailing cell (slippage 2.0/1.0)
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-120}"
+          timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+            --charts "data/XAUUSD_M1_2026"*"_ELEV8.csv" --seed 42 --max-candidates "$MC" \
+            --trailing-open "${{ matrix.topen }}" --trailing-close "${{ matrix.tclose }}" \
+            --lock-tp1-slippage 2.0 --lock-tp2-slippage 1.0 \
+            --output-dir "out/${{ env.v }}_shard0" --validate-months 2 \
+            --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume
+      - uses: actions/upload-artifact@v4
+        with: { name: "selftrail-R4-${{ env.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r4_agg:
+    needs: r4
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "selftrail-R4-*", path: _artifacts }
+      - name: Aggregate R4 trailing cells + winner-vs-base
+        run: bash .github/scripts/agg_entry_feature.sh R4 selftrail
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-trail-R4-results", path: "results/**", if-no-files-found: warn }
+
+  # ---- R3 (2025) ----------------------------------------------------------
+  r3:
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        topen: ["0", "0.1", "0.2", "1", "2", "3", "5"]
+        tclose: ["0", "0.1", "0.2", "2", "3", "5", "8"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Variant label
+        run: |
+          TO="${{ matrix.topen }}"; TC="${{ matrix.tclose }}"
+          v="to${TO//./p}_tc${TC//./p}"
+          if [ "$TO" = "0" ] && [ "$TC" = "0" ]; then v="base"; fi
+          echo "v=$v" >> "$GITHUB_ENV"
+      - name: Generate base scalper24 feed (R3 2025)
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py --charts "data/XAUUSD_M1_2025"*"_ELEV8.csv" \
+            --output feed.txt --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7
+          echo "R3 ${{ env.v }} feed lines: $(wc -l < feed.txt)"
+      - name: Sweep trailing cell (slippage 0.9/0.45)
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-120}"
+          timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+            --charts "data/XAUUSD_M1_2025"*"_ELEV8.csv" --seed 42 --max-candidates "$MC" \
+            --trailing-open "${{ matrix.topen }}" --trailing-close "${{ matrix.tclose }}" \
+            --lock-tp1-slippage 0.9 --lock-tp2-slippage 0.45 \
+            --output-dir "out/${{ env.v }}_shard0" --validate-months 2 \
+            --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume
+      - uses: actions/upload-artifact@v4
+        with: { name: "selftrail-R3-${{ env.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r3_agg:
+    needs: r3
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "selftrail-R3-*", path: _artifacts }
+      - name: Aggregate R3 trailing cells + winner-vs-base
+        run: bash .github/scripts/agg_entry_feature.sh R3 selftrail
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-trail-R3-results", path: "results/**", if-no-files-found: warn }
+
+  # ---- R2 (2023-10 .. 2024) ----------------------------------------------
+  r2:
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        topen: ["0", "0.1", "0.2", "1", "2", "3", "5"]
+        tclose: ["0", "0.1", "0.2", "2", "3", "5", "8"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Variant label
+        run: |
+          TO="${{ matrix.topen }}"; TC="${{ matrix.tclose }}"
+          v="to${TO//./p}_tc${TC//./p}"
+          if [ "$TO" = "0" ] && [ "$TC" = "0" ]; then v="base"; fi
+          echo "v=$v" >> "$GITHUB_ENV"
+      - name: Generate base scalper24 feed (R2 2023-10..2024)
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_202310_ELEV8.csv data/XAUUSD_M1_202311_ELEV8.csv data/XAUUSD_M1_202312_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv \
+            --output feed.txt --start 2023-10-01 --session-start 0 --session-end 0 --signal-tz 7
+          echo "R2 ${{ env.v }} feed lines: $(wc -l < feed.txt)"
+      - name: Sweep trailing cell (slippage 0.5/0.25)
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-120}"
+          CHARTS="data/XAUUSD_M1_202310_ELEV8.csv data/XAUUSD_M1_202311_ELEV8.csv data/XAUUSD_M1_202312_ELEV8.csv data/XAUUSD_M1_2024*_ELEV8.csv"
+          timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+            --charts $CHARTS --seed 42 --max-candidates "$MC" \
+            --trailing-open "${{ matrix.topen }}" --trailing-close "${{ matrix.tclose }}" \
+            --lock-tp1-slippage 0.5 --lock-tp2-slippage 0.25 \
+            --output-dir "out/${{ env.v }}_shard0" --validate-months 2 \
+            --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume
+      - uses: actions/upload-artifact@v4
+        with: { name: "selftrail-R2-${{ env.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r2_agg:
+    needs: r2
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "selftrail-R2-*", path: _artifacts }
+      - name: Aggregate R2 trailing cells + winner-vs-base
+        run: bash .github/scripts/agg_entry_feature.sh R2 selftrail
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-trail-R2-results", path: "results/**", if-no-files-found: warn }
+
+  # ---- R1 (2021-11 .. 2023-09) -------------------------------------------
+  r1:
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        topen: ["0", "0.1", "0.2", "1", "2", "3", "5"]
+        tclose: ["0", "0.1", "0.2", "2", "3", "5", "8"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Variant label
+        run: |
+          TO="${{ matrix.topen }}"; TC="${{ matrix.tclose }}"
+          v="to${TO//./p}_tc${TC//./p}"
+          if [ "$TO" = "0" ] && [ "$TC" = "0" ]; then v="base"; fi
+          echo "v=$v" >> "$GITHUB_ENV"
+      - name: Generate base scalper24 feed (R1 2021-11..2023-09)
+        run: |
+          set -euo pipefail
+          python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_20211[12]_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_20230[1-9]_ELEV8.csv \
+            --output feed.txt --start 2021-11-01 --session-start 0 --session-end 0 --signal-tz 7
+          echo "R1 ${{ env.v }} feed lines: $(wc -l < feed.txt)"
+      - name: Sweep trailing cell (slippage 0.4/0.2)
+        run: |
+          set -uo pipefail
+          MC="${{ github.event.inputs.max_candidates }}"; MC="${MC:-120}"
+          CHARTS="data/XAUUSD_M1_20211[12]_ELEV8.csv data/XAUUSD_M1_2022*_ELEV8.csv data/XAUUSD_M1_20230[1-9]_ELEV8.csv"
+          timeout 18000 python tools/sweep_self_limit.py --signals feed.txt \
+            --charts $CHARTS --seed 42 --max-candidates "$MC" \
+            --trailing-open "${{ matrix.topen }}" --trailing-close "${{ matrix.tclose }}" \
+            --lock-tp1-slippage 0.4 --lock-tp2-slippage 0.2 \
+            --output-dir "out/${{ env.v }}_shard0" --validate-months 2 \
+            --max-concurrent-dd-pct 40 --fixed-lot 0.01 --resume
+      - uses: actions/upload-artifact@v4
+        with: { name: "selftrail-R1-${{ env.v }}", path: "out/**/results.jsonl", if-no-files-found: error }
+  r1_agg:
+    needs: r1
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "selftrail-R1-*", path: _artifacts }
+      - name: Aggregate R1 trailing cells + winner-vs-base
+        run: bash .github/scripts/agg_entry_feature.sh R1 selftrail
+      - uses: actions/upload-artifact@v4
+        with: { name: "self-trail-R1-results", path: "results/**", if-no-files-found: warn }
