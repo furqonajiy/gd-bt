@@ -512,6 +512,16 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     ]
     candidates.sort(key=lambda s: s.signal_time_chart)
 
+    # Magics of signals tracked for reopen DURING this candidate pass. The prune
+    # exemption below is built from `tracked` (the pre-loop registry state), so a
+    # signal added this cycle for reopen -- e.g. a trailing partial ladder the
+    # executor skips (placed=0, no MT5 footprint) but whose replay holds OPEN legs
+    # -- would otherwise be pruned the same cycle, re-detected next cycle, and
+    # re-added: an add/prune churn that re-logs its status every interval. Keeping
+    # its magic alive lets it survive to be mirrored, exactly like a pre-loop
+    # replay-OPEN signal.
+    reopen_added_magics: set[int] = set()
+
     for signal in candidates:
         positions_source = ManualPositionSource(
             equity=equity,
@@ -610,6 +620,10 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             executed_at = _chart_now()
             registry.add(signal, equity, executed_at=executed_at)
             candidate_console_state[signal.signal_key] = "PLACED"
+            if _track_for_reopen and getattr(plog, "placed", 0) == 0:
+                # No MT5 footprint this cycle -> protect it from the same-cycle
+                # prune so it isn't churned in/out of the registry.
+                reopen_added_magics.add(signal_to_magic(signal.signal_key))
 
     known_magics = {
         signal_to_magic(item.get("signal_key", "?"))
@@ -627,7 +641,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             signal_to_magic(actual.signal.signal_key)
             for _ideal, actual, _exec_at in tracked
             if any(e.status == "OPEN" for e in actual.entries)
-        }
+        } | reopen_added_magics
     report_entry_closures(
         executor, notifier, tracked,
         ledger_path=registry_path.with_name("closed_deals.json"),
