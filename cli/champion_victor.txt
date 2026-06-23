@@ -195,7 +195,7 @@ python tools/backtest_explicit.py `
   --lock-tp2-exit-slippage 1.0 `
   --trailing-close-after-stage 0 `
   --output-dir reports/VIC_202601 `
-  --initial-capital 50000 `
+  --initial-capital 12000 `
   --start-date 2026-01-01
 
 # ===== 7. BACKTEST FROM 2025 (R3 strong) =====
@@ -236,7 +236,7 @@ python tools/backtest_explicit.py `
   --lock-tp2-exit-slippage 0.45 `
   --trailing-close-after-stage 0 `
   --output-dir reports/VIC_2025 `
-  --initial-capital 50000 `
+  --initial-capital 12000 `
   --start-date 2025-01-01 `
   --end-date 2025-12-31
 
@@ -278,7 +278,7 @@ python tools/backtest_explicit.py `
   --lock-tp2-exit-slippage 0.25 `
   --trailing-close-after-stage 0 `
   --output-dir reports/VIC_2024 `
-  --initial-capital 50000 `
+  --initial-capital 12000 `
   --start-date 2024-01-01 `
   --end-date 2024-12-31
 
@@ -320,6 +320,6 @@ python tools/backtest_explicit.py `
   --lock-tp2-exit-slippage 0.2 `
   --trailing-close-after-stage 0 `
   --output-dir reports/VIC_2021_2023 `
-  --initial-capital 50000 `
+  --initial-capital 12000 `
   --start-date 2021-01-01 `
   --end-date 2023-12-31
