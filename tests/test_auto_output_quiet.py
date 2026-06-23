@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import trading.engine.cli as cli
-from trading.engine import DEFAULT_CONFIG, ExecutionLog, parse_one_signal
+from trading.engine import DEFAULT_CONFIG, ExecutionLog, parse_one_signal, signal_to_magic
 
 
 class _FakeTick:
@@ -337,3 +337,69 @@ def test_auto_expired_skip_dedupes_across_minute_change(tmp_path, monkeypatch, c
 
     captured = capsys.readouterr()
     assert captured.out.count("pending window already closed") == 1
+
+def test_auto_reopen_tracked_partial_survives_same_cycle_prune(tmp_path, monkeypatch):
+    """A trailing partial ladder (placed=0) whose replay still holds OPEN legs is
+    tracked for reopen; it must survive the SAME-cycle prune. Before the fix it was
+    added then pruned the same cycle (alive was built from the pre-loop registry),
+    so it churned in/out every interval and re-logged its 'partial placement' +
+    'Pruned' lines. Gated on --reopen-missing-positions, so default mode is
+    unchanged."""
+    signal = _signal()
+    signals_path = tmp_path / "signals.txt"
+    signals_path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda path, **kw: [signal])
+
+    def fake_decide(*a, **k):
+        plan = SimpleNamespace(
+            action="FOLLOW",
+            orders=[SimpleNamespace(entry_index=0, entry_price=4518.0,
+                                    lot=0.01, initial_sl=4511.0)],
+            replay_position=SimpleNamespace(entries=[
+                SimpleNamespace(status="OPEN"), SimpleNamespace(status="CLOSED")]),
+            rationale="",
+            pending_expires_at=datetime(2026, 6, 2, 14, 30),
+            pending_activates_at=datetime(2026, 6, 2, 6, 0),
+        )
+        return SimpleNamespace(new_signal=plan)
+    monkeypatch.setattr(cli, "decide", fake_decide)
+
+    class _PruneReg:
+        rows: list[dict] = []
+
+        def __init__(self, path):
+            pass
+
+        def load(self):
+            return list(_PruneReg.rows)
+
+        def add(self, sig, equity, executed_at=None):
+            if not any(r["signal_key"] == sig.signal_key for r in _PruneReg.rows):
+                _PruneReg.rows.append({"signal_key": sig.signal_key})
+
+        def prune(self, alive):
+            before = len(_PruneReg.rows)
+            _PruneReg.rows[:] = [r for r in _PruneReg.rows
+                                 if signal_to_magic(r["signal_key"]) in alive]
+            return before - len(_PruneReg.rows)
+    _PruneReg.rows = []
+
+    class _Exec(_FakeExecutor):
+        def reopen_missing_open_positions(self, actual, config):
+            return ExecutionLog()
+
+        def replace_missing_pending_entries(self, actual, config, replay_end):
+            return ExecutionLog()
+    monkeypatch.setattr("trading.engine.SignalRegistry", _PruneReg)
+    monkeypatch.setattr("trading.engine.Mt5Executor", _Exec)
+
+    args = _args(tmp_path)
+    args.reopen_missing_positions = "true"
+
+    rc = cli._auto_pass(
+        args, DEFAULT_CONFIG, _FakeConn(), _FakeChart(datetime(2026, 6, 2, 6, 0)),
+        signals_path, iteration=1, candidate_console_state={},
+    )
+    assert rc == 0
+    # Survived: still tracked after the cycle (no add/prune churn).
+    assert _PruneReg.rows == [{"signal_key": signal.signal_key}]
