@@ -3,9 +3,25 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 
+import pytest
+
 from trading.engine import Bar, DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, PlannedOrder
 from trading.engine import advance_bars, open_position, parse_one_signal
 from trading.engine.execution import mt5_executor_trailing
+
+
+@pytest.fixture(autouse=True)
+def _reset_trailing_dedup():
+    """Each test is a fresh 'session'. The executor's once-per-session log dedup
+    uses process-local class-level sets (so live ``auto`` doesn't re-log the same
+    decision every cycle); clear them between tests so a once-only line isn't
+    suppressed by a prior test that parsed the same signal_key."""
+    for name in ("_session_skipped_partial_signal_keys",
+                 "_session_trailing_open_waiting_keys",
+                 "_session_skipped_inactive_signal_keys",
+                 "_session_skipped_expired_signal_keys"):
+        getattr(Mt5Executor, name, set()).clear()
+    yield
 
 
 class _Resp:
@@ -443,3 +459,38 @@ def test_trailing_open_waiting_line_is_multiline_for_multiple_entries(monkeypatc
     assert lines[2].strip().startswith("#2 arms when Ask<=4747")
     assert lines[3].strip().startswith("#3 arms when Ask<=4746")
     assert "LIMIT" not in waiting
+
+
+def test_trailing_open_waiting_line_logs_once_across_cycles(monkeypatch):
+    """auto rebuilds the executor every watch interval; the 'waiting' block must
+    log once per session, not every cycle (mirrors the non-trailing dedup)."""
+    signal = parse_one_signal(
+        "1. BUY XAUUSD 4750 - 4746 SL 4742 TP1 4760 TP2 4770 TP3 4780 10:00 AM",
+        source_date="2026-06-01",
+        source_offset=3,
+    )
+    activation = signal.signal_time_chart
+    monkeypatch.setattr(mt5_executor_trailing, "_wall_clock_chart_now",
+                        lambda: activation + timedelta(minutes=1))
+    plan = NewSignalPlan(
+        signal=signal,
+        action="FOLLOW",
+        rationale="test",
+        orders=[PlannedOrder(0, signal.side, 4750.0, 4742.0, 0.10, 96.6)],
+        pending_expires_at=activation + timedelta(minutes=630),
+        final_target_label="TP3",
+        final_target_price=4780.0,
+        total_initial_risk_dollars=96.6,
+        pending_activates_at=activation,
+        trailing_open_distance=2.0,
+    )
+    mt5 = _FakeMt5(bid=4751.0, ask=4751.2)  # above arm threshold -> waiting
+
+    # Each cycle builds a FRESH executor (as auto does); the class-level dedup
+    # set persists across them, so only the first cycle logs the waiting block.
+    log1 = Mt5Executor(_FakeConn(mt5), "XAUUSD").place_signal(signal, plan)
+    log2 = Mt5Executor(_FakeConn(mt5), "XAUUSD").place_signal(signal, plan)
+
+    assert any("trailing-open waiting" in a for a in log1.actions)
+    assert not any("trailing-open waiting" in a for a in log2.actions)
+    assert log1.placed == 0 and log2.placed == 0
