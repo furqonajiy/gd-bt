@@ -1,0 +1,60 @@
+# ===== BEST TRAILING-OPEN RESEARCH CONFIG — R3 strong (2025) (tag TO3) =====
+#
+# Source: self-scalper-trailing-sweep-r4r3r2r1.yml run 28009972567 (PARTIAL snapshot),
+#         cell selftrail-R3-to0p1_tc0p2  (trailing_open=0.1 / trailing_close=0.2).
+# Sweep metrics @ fixed 0.01 lot: edge $252,660 / OOS $67,251 / concurrent-risk DD 38.1% (gate <=40%).
+#
+# >>> RESEARCH ONLY — DO NOT DEPLOY LIVE WITHOUT FORWARD/DEMO VALIDATION. <<<
+# Trailing is LIVE-PARITY-FRAGILE: a small trailing-open (0.1-0.2) lets the backtest
+# fill entries on a favourable pullback that live cannot reproduce tick-accurately on
+# M1 bars, so this edge is very likely OPTIMISTIC vs live. The deployed champions
+# (SQZ6 / SC24T24E8) stay live until this is validated. Use this to REPRODUCE + STUDY
+# the sweep cell, and to run a parity/fill-realism check on the trailing-open entries.
+#
+# ===== 1. GENERATE THE BASE SCALPER24 FEED (this regime's window) =====
+python tools/generate_scalper_signals.py \
+  --charts "data/XAUUSD_M1_2025"*"_ELEV8.csv" \
+  --output signals/to3.txt \
+  --start 2025-01-01 --session-start 0 --session-end 0 --signal-tz 7
+
+# ===== 2. BACKTEST THE BEST TRAILING-OPEN CONFIG =====
+python tools/backtest_explicit.py \
+  --signals signals/to3.txt \
+  --charts "data/XAUUSD_M1_2025"*"_ELEV8.csv" \
+  --max-drawdown-limit-pct 50 \
+  --progress-interval-seconds 30 \
+  --sync-charts true \
+  --sizing-mode risk \
+  --lot 0.5 \
+  --risk 0.065 \
+  --minimum-lot 0.01 \
+  --lot-step 0.01 \
+  --bonus-per-closed-lot 3.0 \
+  --entries 8 \
+  --entry-ladder signal_range_3 \
+  --entry-sl-gap 1.0 \
+  --shared-sl false \
+  --activation-delay 0 \
+  --pending-expiry 420 \
+  --max-hold 180 \
+  --sl-multiplier 1.15 \
+  --final-target TP2 \
+  --lock-after-tp1 false \
+  --lock-after-tp2 true \
+  --tp1-lock-delay-minutes 0 \
+  --tp2-lock-delay-minutes 5 \
+  --profit-lock-mode tp_levels \
+  --bep-trigger-distance 2.0 \
+  --tp1-lock-fraction 0.25 \
+  --tp2-lock-target TP1 \
+  --runner-after-tp3 false \
+  --tp3-lock-target TP2 \
+  --trailing-open-distance 0.1 \
+  --trailing-close-distance 0.2 \
+  --lock-tp1-exit-slippage 0.9 \
+  --lock-tp2-exit-slippage 0.45 \
+  --trailing-close-after-stage 0 \
+  --output-dir reports/TO3_2025 \
+  --initial-capital 50000 \
+  --start-date 2025-01-01
+
