@@ -130,6 +130,44 @@ def test_daily_breakdown_trims_pre_and_post_signal_days(tmp_path):
     assert day["entry_rr_avg"] == 2.0
 
 
+def _chart_gmt7(tmp_path):
+    # A GMT+7 signal at 2026-07-01 01:00 maps to chart-local 2026-06-30 21:00
+    # (summer EEST = UTC+3): 01:00 - 7h + 3h. So its chart day/month (06-30 /
+    # 2026-06) differ from its feed day/month (07-01 / 2026-07).
+    rows = [
+        _bar("2026.06.30", "21:00:00", 100, 100.2, 99.9, 100),
+        _bar("2026.06.30", "21:01:00", 100, 101.0, 98.0, 100),   # fill the BUY ~100
+        _bar("2026.06.30", "21:05:00", 105, 111.0, 104.0, 110),  # hit TP1 110
+    ]
+    p = tmp_path / "XAUUSD_M1_TEST.csv"
+    p.write_text("\n".join([_HEADER, *rows]) + "\n", encoding="utf-8")
+    return CsvChartSource([p])
+
+
+def test_daily_and_monthly_breakdown_use_signal_feed_zone_date(tmp_path):
+    # Regression: the Daily/Monthly breakdowns must group by the signal's own
+    # feed-zone (GMT+7) date, so a report day lines up with the signal codes
+    # (e.g. SQZ6-0623) -- not the chart (EET/EEST) day, which can be the day
+    # before for an early-morning GMT+7 signal.
+    sig = parse_one_signal(
+        "1. BUY XAUUSD 100 - 100 SL 95 TP1 110 TP2 115 TP3 120 1:00 AM",
+        source_date="2026-07-01", source_offset=7,
+    )
+    assert sig.signal_time_chart.date().isoformat() == "2026-06-30"   # chart day
+    assert sig.signal_time_source.date().isoformat() == "2026-07-01"  # feed day
+
+    result = run_backtest([sig], _chart_gmt7(tmp_path), _config())
+
+    # The single TP1 win is bucketed on the FEED day/month, not the chart's.
+    assert result["entry_rows"][0]["entry_status"] == "TP1"
+    assert [d["date"] for d in result["daily"]] == ["2026-07-01"]
+    assert [m["month"] for m in result["monthly"]] == ["2026-07"]
+    day = result["daily"][0]
+    assert day["signals"] == 1 and day["wins"] == 1
+    assert day["entry_total"] == 1
+    assert day["entry_status_counts"].get("TP1") == 1
+
+
 def test_summary_monthly_breakdown_shows_equity_end_of_month(tmp_path):
     # The Monthly Breakdown table must show the equity level at month end
     # (mirroring the Daily sheet's Equity EoD), not just the month's P&L.

@@ -83,7 +83,14 @@ pair is a thin package that imports it.
   Daily Breakdown / Per-Entry Detail; the Per-Entry sheet splits ORIGINAL
   signal vs EXECUTED result, realized risk:reward rendered as `1:N`). The
   Summary's Monthly Breakdown carries a **Regime** column — each month is
-  classified (R1quiet/R2bull/R3strong/R4parab) from its own M1 bars.
+  classified (R1quiet/R2bull/R3strong/R4parab) from its own M1 bars. The
+  **Daily and Monthly breakdowns group by each signal's own feed-zone
+  (source) date** — the GMT+7 signal-code day (`SQZ6-0623`), via
+  `rows[*].signal_time_source` — not the chart (EET/EEST) day, so a report row
+  lines up with the codes the same way `--start-date`/`--end-date` do (an
+  early-morning GMT+7 signal whose chart time is the prior evening still books
+  on its feed day). The Per-Entry sheet's `Date` is already the source date;
+  its `Time (chart EET/EEST)` column stays chart-time for reference.
 - `strategy/regime.py` — the **volatility-regime detector** (`detect_regime` /
   `read_current_regime` via smoothed M15 ATR + trend), re-exported from the
   package root. It labels months in the report and drives the **regime

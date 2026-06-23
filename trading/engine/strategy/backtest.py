@@ -309,7 +309,13 @@ def run_backtest(
         equity_after = equity if status == "OPEN" else equity + float(total_pnl or 0.0)
         rows.append({
             "global_id": sig.global_id, "signal_key": sig.signal_key,
-            "signal_time_chart": sig.signal_time_chart, "side": sig.side,
+            "signal_time_chart": sig.signal_time_chart,
+            # The signal's own feed-zone (source) clock -- e.g. GMT+7 for the
+            # Victor/SQZ6 feeds. The Daily/Monthly breakdowns group by THIS, so a
+            # report day lines up with the signal codes (SQZ6-0623) the same way
+            # --start-date/--end-date do, not the chart (EET/EEST) day.
+            "signal_time_source": sig.signal_time_source,
+            "side": sig.side,
             "status": status,
             "pnl": total_pnl,
             "trading_pnl": trading_pnl if status != "OPEN" else None,
@@ -404,7 +410,9 @@ def run_backtest(
 
     monthly: dict[str, dict] = {}
     for r in rows:
-        mk = r["signal_time_chart"].strftime("%Y-%m")
+        # Group by the signal's feed-zone month (see signal_time_source above),
+        # so the Monthly Breakdown matches the signal-code dates.
+        mk = r["signal_time_source"].strftime("%Y-%m")
         if mk not in monthly:
             monthly[mk] = _new_bucket("month", mk, r["equity_before"])
         bucket = monthly[mk]
@@ -429,7 +437,9 @@ def run_backtest(
     # both the Daily Breakdown and the Summary.
     daily_entry: dict[str, dict] = {}
     for er in entry_rows:
-        dk = er["signal_time_chart"].strftime("%Y-%m-%d")
+        # signal_date is the feed-zone (source) date string already (YYYY-MM-DD),
+        # so the per-entry day buckets match the signal-grouped day buckets below.
+        dk = er["signal_date"]
         de = daily_entry.setdefault(dk, {"statuses": Counter(), "rr": [], "rrp": [], "entries": 0})
         de["entries"] += 1
         de["statuses"][er["entry_status"]] += 1
@@ -440,7 +450,7 @@ def run_backtest(
 
     daily_by_key: dict[str, dict] = {}
     for r in rows:
-        dk = r["signal_time_chart"].strftime("%Y-%m-%d")
+        dk = r["signal_time_source"].strftime("%Y-%m-%d")
         if dk not in daily_by_key:
             daily_by_key[dk] = _new_bucket("date", dk, r["equity_before"])
         bucket = daily_by_key[dk]
@@ -466,8 +476,8 @@ def run_backtest(
     # so pre-start padding (e.g. 2024 days when the run starts 2025) is excluded.
     daily_rows: list[dict] = []
     if rows:
-        first_day: date = min(r["signal_time_chart"].date() for r in rows)
-        last_day: date = max(r["signal_time_chart"].date() for r in rows)
+        first_day: date = min(r["signal_time_source"].date() for r in rows)
+        last_day: date = max(r["signal_time_source"].date() for r in rows)
         cur = first_day
         running_equity = config.initial_capital
         while cur <= last_day:
