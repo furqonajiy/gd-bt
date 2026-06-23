@@ -57,7 +57,9 @@ FILTER_LABEL = "self_limit"  # stored in the row; not a provider filter
 
 def make_limit_candidates(seed: int, max_candidates: int,
                           *, signal_policy: bool = False,
-                          bep_policy: bool = False) -> list[dict]:
+                          bep_policy: bool = False,
+                          pin_trailing_open: float | None = None,
+                          pin_trailing_close: float | None = None) -> list[dict]:
     """sweep.candidate_config draws with trailing-open pinned to 0 (LIMIT).
 
     Pinning collapses configs that differed only in trailing_open, so we draw
@@ -68,13 +70,27 @@ def make_limit_candidates(seed: int, max_candidates: int,
     and draws bep_plus_half_tp1 candidates, so its leaderboard contains only
     early-floor configs and the per-variant aggregate compares it cleanly against
     the bep-OFF base cell. Without it the candidate space is byte-unchanged.
+
+    ``pin_trailing_open`` / ``pin_trailing_close`` force a FIXED trailing combo on
+    every candidate (a trailing-sweep cell): the whole SC24-seeded strategy grid
+    is then scored at that one (open, close) so the per-regime matrix enumerates
+    all trailing combinations. Both default ``None`` -> the legacy behaviour:
+    trailing_open pinned 0 (LIMIT entries) and trailing_close left to the draw, so
+    the existing no-trailing sweeps are byte-identical.
     """
     seen: set[str] = set()
     out: list[dict] = []
 
     def _add(cfg: dict) -> None:
         cfg = dict(cfg)
-        cfg["trailing_open_distance"] = 0.0
+        # trailing-open: legacy pins to 0 (plain LIMIT). A trailing sweep pins it
+        # to the cell's value so the strategy grid is scored at that trailing-open.
+        cfg["trailing_open_distance"] = (0.0 if pin_trailing_open is None
+                                         else pin_trailing_open)
+        # trailing-close: legacy leaves the candidate's drawn value; a trailing
+        # sweep pins it to the cell's value.
+        if pin_trailing_close is not None:
+            cfg["trailing_close_distance"] = pin_trailing_close
         h = sweep._json_hash(cfg)
         if h not in seen:
             seen.add(h)
@@ -232,6 +248,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="override LOCK_TP1 exit slippage (pt) for ALL candidates; <0 keeps the default 2.0")
     p.add_argument("--lock-tp2-slippage", type=float, default=-1.0,
                    help="override LOCK_TP2 exit slippage (pt) for ALL candidates; <0 keeps the default 1.0")
+    # Trailing-sweep cell: pin a fixed (open, close) trailing combo on every
+    # candidate so the per-regime matrix enumerates all trailing combinations.
+    # Both <0 => legacy no-trailing sweep (open pinned 0, close from the draw).
+    p.add_argument("--trailing-open", type=float, default=-1.0,
+                   help="pin trailing_open_distance on ALL candidates (a trailing-sweep cell); "
+                        "<0 keeps the legacy LIMIT pin (0).")
+    p.add_argument("--trailing-close", type=float, default=-1.0,
+                   help="pin trailing_close_distance on ALL candidates; <0 keeps the candidate draw.")
     return p
 
 
@@ -253,15 +277,22 @@ def main(argv: list[str] | None = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = output_dir / "results.jsonl"
 
+    pin_to = args.trailing_open if args.trailing_open >= 0 else None
+    pin_tc = args.trailing_close if args.trailing_close >= 0 else None
     candidates = make_limit_candidates(args.seed, args.max_candidates,
                                        signal_policy=args.signal_policy,
-                                       bep_policy=args.bep_policy)
+                                       bep_policy=args.bep_policy,
+                                       pin_trailing_open=pin_to,
+                                       pin_trailing_close=pin_tc)
     chart = CsvChartSource(sweep._expand_chart_paths(args.charts))
     signals = parse_signals_file(signals_path)
     train, validate = sweep.split_train_validate(signals, args.validate_months)
+    trail_label = (f"trailing_open={pin_to if pin_to is not None else 0} pinned"
+                   + (f", trailing_close={pin_tc} pinned" if pin_tc is not None
+                      else ", trailing_close from draw"))
     print(f"[self-limit] candidates={len(candidates)} signals={len(signals)} "
           f"train={len(train)} validate={len(validate)} "
-          f"(trailing_open pinned 0; DD<= {args.max_concurrent_dd_pct}% concurrent; "
+          f"({trail_label}; DD<= {args.max_concurrent_dd_pct}% concurrent; "
           f"consistency>= {args.min_stable_month_fraction})", flush=True)
 
     eval_args = SimpleNamespace(

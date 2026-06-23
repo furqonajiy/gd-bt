@@ -115,7 +115,7 @@ the engine treats each row as one minute, so a daily bar corrupts the backtest.
 | Objective | **max compounded net P&L + $3/closed‑lot bonus** at DD ≤ 40% | OOS > 0 sanity gate; edge as cross‑check |
 | DD gate | **40%** | `--max-concurrent-dd-pct 40`; push risk up to this gate |
 | Regime order | **R4 → R3 → R2 → R1** (volatility order) | sweep one regime at a time |
-| Trailing | **OFF** (pinned 0) | proven to add no deployable edge (16‑feed sweep) |
+| Trailing | **OFF** (pinned 0) by default | proven to add no deployable edge (16‑feed sweep). To **re‑test trailing**, run `self-scalper-trailing-sweep-r4r3r2r1.yml`: a per‑regime matrix over the full cross‑product of `trailing_open {0,0.1,0.2,1,2,3,5}` × `trailing_close {0,0.1,0.2,2,3,5,8}` (49 cells/regime; `(0,0)`=base), via `sweep_self_limit.py --trailing-open/--trailing-close` which pin a fixed combo on every candidate while the SC24 grid varies. Artifact‑only, per‑regime realistic slippage; a cell wins only if it beats `base` on edge AND OOS at DD≤40%. Trailing is live‑parity‑fragile → research until forward‑validated. |
 | Risk levels | **1–5%** | swept and pushed to the 40% DD gate |
 | Period | per‑regime window (see `docs/REGIME_ANALYSIS_2021.md`) | candidates **and** incumbent over the *same* window |
 | OOS | held‑out tail | `--validate-months 6` for the long full‑history sweep; **`2` for the regime grid** (short regime windows — e.g. R4 is only 2026, so the OOS tail is its last 2 months). Used as the OOS > 0 gate **and** the promote‑decision metric. |
@@ -178,7 +178,10 @@ alone beat, the baseline. The champion's `d24` (tp1‑lock‑delay = 24), `e6/e8
    OOS+edge and got promoted; the `tp1_lock_delay 15` neighbor "SC24T15E6" led R4
    only on the compounded net+bonus mirage and was superseded. R4parab later moved
    to `rsi75_sqz6_rr40` once SC24T24E8 breached the DD gate on 2026 data.)
-3. Keep **trailing pinned 0** (no‑trailing sweep).
+3. Keep **trailing pinned 0** for the standard sweep. To deliberately re‑test
+   trailing, use the dedicated `self-scalper-trailing-sweep-r4r3r2r1.yml`
+   (per‑regime trailing‑open × trailing‑close cross‑product) instead of widening
+   the default grid — that keeps the no‑trailing champion comparison stable.
 
 > The previous "best" only beat ~6 seeds + a few hundred random draws — it is
 > **not proven optimal**. A widened + re‑seeded sweep can genuinely beat it.
