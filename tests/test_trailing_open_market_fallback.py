@@ -169,8 +169,8 @@ def test_rejected_buy_stop_does_not_market_fill_when_trigger_not_passed(monkeypa
 
     assert log.placed == 0
     assert [r["action"] for r in mt5.requests] == [mt5.TRADE_ACTION_PENDING]
-    assert any("FAILED" in a for a in log.actions)
-    assert any("no registry entry" in a for a in log.actions)
+    assert any("rejected" in a for a in log.actions)
+    assert any("No order placed" in a for a in log.actions)
 
 
 def test_market_fallback_failure_keeps_legacy_all_or_nothing(monkeypatch):
@@ -191,7 +191,7 @@ def test_market_fallback_failure_keeps_legacy_all_or_nothing(monkeypatch):
     assert log.placed == 0
     assert [r["action"] for r in mt5.requests] == [mt5.TRADE_ACTION_PENDING, mt5.TRADE_ACTION_DEAL]
     assert any("also FAILED" in a for a in log.actions)
-    assert any("no registry entry" in a for a in log.actions)
+    assert any("No order placed" in a for a in log.actions)
 
 
 def test_rejected_sell_stop_falls_back_to_market_when_trigger_passed(monkeypatch):
@@ -233,3 +233,48 @@ def test_rejected_sell_stop_falls_back_to_market_when_trigger_passed(monkeypatch
     assert deal_req["price"] == 4757.0
     # Planned stop distance 4756 - 4750 = 6.0 above the actual fill.
     assert deal_req["sl"] == 4763.0
+
+
+class _SymWithStops:
+    digits = 2
+    filling_mode = 2
+    trade_stops_level = 50  # 50 points * 0.01 = 0.5 pt broker minimum stop distance
+
+
+def test_failure_message_explains_distance_below_broker_min_stop(monkeypatch):
+    """A trailing-open distance below the broker's minimum stop distance (the TS01
+    0.1/0.1 case) is rejected with 10015 on every cycle; the log must name the
+    cause -- planned entry, current price, and 'distance below broker min-stop'."""
+    signal = _buy_signal()
+    activation = signal.signal_time_chart
+    monkeypatch.setattr(
+        mt5_executor_trailing, "_wall_clock_chart_now",
+        lambda: activation + timedelta(minutes=1),
+    )
+    # Single tick: Ask 4749.0 arms the entry (planned 4750 - 0.1), trigger 4749.1.
+    # The fresh re-read is the same tick, so Ask 4749.0 < 4749.1 -> no market
+    # fallback, and the STOP reject (10015) falls through to the FAILED log.
+    mt5 = _FakeMt5(ticks=[_Tick(4748.8, 4749.0)])
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+    executor._sym_info = _SymWithStops()
+    plan = NewSignalPlan(
+        signal=signal,
+        action="FOLLOW",
+        rationale="test",
+        orders=[PlannedOrder(0, signal.side, 4750.0, 4740.34, 0.10, 96.6)],
+        pending_expires_at=activation + timedelta(minutes=630),
+        final_target_label="TP3",
+        final_target_price=4780.0,
+        total_initial_risk_dollars=96.6,
+        pending_activates_at=activation,
+        trailing_open_distance=0.1,  # below the 0.5 pt broker minimum stop distance
+    )
+
+    log = executor.place_signal(signal, plan)
+
+    assert log.placed == 0
+    blob = "\n".join(log.actions)
+    assert "rejected" in blob                       # per-entry line is human-readable
+    assert "trailing-open placement FAILED" in blob  # signal-level summary
+    assert "minimum stop distance" in blob           # the actual diagnosis
+    assert "Raise --trailing-open-distance" in blob  # the fix to apply
