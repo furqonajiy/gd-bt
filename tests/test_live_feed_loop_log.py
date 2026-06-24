@@ -51,6 +51,89 @@ def test_output_path_parsing():
     assert _output_path(["--charts", "x.csv"]) is None
 
 
+def test_generator_progress_noise_is_suppressed(monkeypatch, tmp_path, capsys):
+    """One regenerate pass must NOT leak the generator's progress block.
+
+    The generator prints its progress ([chart load], Loaded chart rows,
+    [generate] scanning..., Writing signals) to STDERR and its summary
+    ("Generated signals: N") to STDOUT. The loop redirects both, so the console
+    shows only the loop's own header + "Add Signal" lines. Regression guard for
+    the stderr leak that flooded the console every cycle.
+    """
+    import importlib
+    import sys as _sys
+    import types
+    from datetime import datetime
+
+    import live_feed_loop as lfl
+    import trading.engine as te
+
+    class _Bar:
+        def __init__(self, t):
+            self.time = t
+
+    class _Chart:
+        def __init__(self, *a, **k):
+            pass
+
+        def recent_closed_bars(self, n):
+            return [_Bar(datetime(2026, 6, 24, 12, 16))]
+
+    class _Conn:
+        def __init__(self, *a, **k):
+            pass
+
+        def initialize(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    monkeypatch.setattr(te, "Mt5Connection", _Conn, raising=False)
+    monkeypatch.setattr(te, "Mt5ChartSource", _Chart, raising=False)
+    monkeypatch.setattr(te, "archive_m1_by_month", lambda *a, **k: None, raising=False)
+
+    feed = tmp_path / "feed.txt"
+    feed.write_text(
+        "2026-06-24 GMT+3\n"
+        "1. BUY XAUUSD 4000 - 3998 SL 3990 TP1 4010 TP2 4020 TP3 4030 1:00 PM\n"
+    )
+
+    fake_gen = types.ModuleType("fake_gen")
+
+    def _gen_main(argv):
+        # progress noise -> stderr; summary -> stdout (exactly as the real one)
+        print("[ts] [chart load] started", file=_sys.stderr)
+        print("[ts] Loaded chart rows: 52,682", file=_sys.stderr)
+        print("[ts] [generate] scanning 52,682 candles...", file=_sys.stderr)
+        print("[ts] Writing signals to feed.txt", file=_sys.stderr)
+        print("Generated signals: 1")
+        return 0
+
+    fake_gen.main = _gen_main
+    monkeypatch.setattr(importlib, "import_module", lambda name: fake_gen)
+
+    # Break out of the otherwise-infinite loop after the first sleep.
+    def _stop(_sec):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(lfl.time, "sleep", _stop)
+
+    rc = lfl.main(["--family", "scalper", "--interval", "60",
+                   "--", "--charts", "x.csv", "--output", str(feed)])
+    assert rc == 0
+
+    captured = capsys.readouterr()
+    blob = captured.out + captured.err
+    # the loop's own output is present...
+    assert "live feed loop started" in blob
+    assert "existing signal(s)" in blob
+    # ...but none of the generator's progress noise leaked through.
+    for noise in ("[chart load]", "Loaded chart rows", "[generate] scanning",
+                  "Writing signals", "Generated signals:"):
+        assert noise not in blob, f"generator noise leaked: {noise!r}"
+
+
 def test_effective_gen_argv_rolls_start_and_narrows_charts(tmp_path, monkeypatch):
     from datetime import datetime
     from live_feed_loop import _effective_gen_argv, _recent_month_charts
