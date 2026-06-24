@@ -6,10 +6,10 @@ Gate: DD <= 40%% AND OOS > 0, ranked by fixed-lot edge (`fixed_no_bonus_profit`)
 
 ## Coverage (completed cells per regime, of 49 in the full grid)
 
-- **R4** (R4 parabolic (2026)): 34/49 cells, 20 gate-passing in top-20.
-- **R3** (R3 strong (2025)): 21/49 cells, 20 gate-passing in top-20.
-- **R2** (R2 bull (2023-10..2024)): 20/49 cells, 20 gate-passing in top-20.
-- **R1** (R1 quiet (2021-11..2023-09)): 11/49 cells, 20 gate-passing in top-20.
+- **R4** (R4 parabolic (2026)): 29/49 cells, 20 gate-passing in top-20.
+- **R3** (R3 strong (2025)): 30/49 cells, 20 gate-passing in top-20.
+- **R2** (R2 bull (2023-10..2024)): 23/49 cells, 20 gate-passing in top-20.
+- **R1** (R1 quiet (2021-11..2023-09)): 18/49 cells, 20 gate-passing in top-20.
 
 ## ⚠️ Read before acting
 
