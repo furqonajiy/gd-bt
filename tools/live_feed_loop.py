@@ -271,9 +271,14 @@ def main(argv: list[str] | None = None) -> int:
                         recent_months=args.gen_recent_months,
                         today=datetime.now(),
                         start_flag=GENERATOR_START_FLAG.get(args.family, "--start"))
-                    # Silence the generator's own stdout ("Generated signals: N");
-                    # the loop owns user-facing output.
-                    with contextlib.redirect_stdout(io.StringIO()):
+                    # Silence the generator's own output: "Generated signals: N"
+                    # goes to stdout, but all its progress noise ([chart load],
+                    # Loaded chart rows, [generate] scanning..., Writing signals)
+                    # goes to stderr -- redirect BOTH so the loop owns user-facing
+                    # output (header + one "Add Signal" line per new signal). Without
+                    # the stderr redirect the full progress block leaked every cycle.
+                    with contextlib.redirect_stdout(io.StringIO()), \
+                            contextlib.redirect_stderr(io.StringIO()):
                         rc = gen_module.main(list(eff_argv))
                     if rc != 0:
                         print(f"[{_stamp()}] generator returned rc={rc}; "
