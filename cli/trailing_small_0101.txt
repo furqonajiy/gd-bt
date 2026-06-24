@@ -1,0 +1,298 @@
+# =========================================================================
+# to0p1_tc0p1 — #1 TRAILING CELL IN ALL FOUR REGIMES (RESEARCH) | tag TS01
+# trailing-open 0.1 / trailing-close 0.1 on the base scalper24 feed, e8 /
+# signal_range_3 / gap1.0 / slm1.15 / max-hold 180 / TP2 / tp1-lock-delay 0 /
+# lock-after-tp2 ON / risk 6.5%. Identical config is #1 by edge in R4/R3/R2/R1.
+# Sweep @ fixed 0.01 lot (run 28009972567):
+#   R4 edge $311,936 / OOS $79,215 / DD  9.7%
+#   R3 edge $265,671 / OOS $69,679 / DD 37.0%
+#   R2 edge  $99,647 / OOS $16,391 / DD 31.1%
+#   R1 edge $116,028 / OOS  $3,467 / DD 27.4%
+#
+# >>> RESEARCH ONLY — STRONGEST ARTIFACT SUSPICION, DO NOT DEPLOY. <<<
+# This is the TINIEST trailing cell (0.1/0.1) and it tops every regime with a
+# huge edge at very low DD -- the classic signature of a backtest FILL ARTIFACT:
+# a 0.1 trailing lets the M1 backtest grab near-perfect entries/exits that LIVE
+# CANNOT reproduce (fills happen between M1 bars, on ticks). The edge here is
+# almost certainly optimistic vs live. Use this to REPRODUCE + STUDY the cell and
+# to run the live/demo fill-realism calibration; it is NOT a deployable champion.
+# Section 3 (live executor) is DEMO / forward-validation only; risk 6.5%/signal
+# is far above the 1% live default -- size down before any real money.
+#
+# ONE IDENTITY: --strategy-tag TS01 / positions_ts01.json / signals/ts01.txt
+#   (static) + signals/ts01_live.txt (live) / reports/TS01_* / forensic_ts01.jsonl
+#   / notifications_ts01.jsonl. SECTION MAP (copy-paste 4-9 for the archive + backtests):
+#   1. Telegram Listener (N/A, self-feed)   2. Live Loop Generator
+#   3. Live Auto Executor (DEMO only)        4. Signal Generator (static archive)
+#   5-9. Backtests 2026-06 / 2026-01 / 2025 / 2024 / 2021-2023 (era-matched slippage)
+# =========================================================================
+
+# ===== 1. TELEGRAM LISTENER =====
+# N/A -- self-generated feed (signals from the generator in sections 2 + 4).
+
+# ===== 2. LIVE LOOP SIGNAL GENERATOR =====
+python tools/live_feed_loop.py `
+  --family scalper `
+  --interval 30 `
+  --gen-start-days 3 `
+  --gen-recent-months 2 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/ts01_live.txt --session-start 0 --session-end 0 --signal-tz 7
+
+# ===== 3. LIVE AUTO EXECUTOR (DEMO / FORWARD-VALIDATION ONLY) =====
+# --trailing-live-entry places the entry off live price (the broker fills the STOP +
+# exits on the SL); --reopen-missing-positions mirrors any replay-OPEN leg at market.
+python tools/auto_explicit.py `
+  --signals signals/ts01_live.txt `
+  --positions-json positions_ts01.json `
+  --strategy-tag TS01 `
+  --forensic-log forensic_ts01.jsonl `
+  --notifications notifications_ts01.jsonl `
+  --watch-interval 3 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --reopen-missing-positions true `
+  --trailing-live-entry true `
+  --sizing-mode risk `
+  --lot 0.5 `
+  --risk 0.065 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --entries 8 `
+  --entry-ladder signal_range_3 `
+  --entry-sl-gap 1.0 `
+  --activation-delay 0 `
+  --pending-expiry 420 `
+  --max-hold 180 `
+  --sl-multiplier 1.15 `
+  --final-target TP2 `
+  --lock-after-tp1 false `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 0 `
+  --tp2-lock-delay-minutes 5 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 2.0 `
+  --tp1-lock-fraction 0.25 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.1 `
+  --trailing-close-distance 0.1
+
+# ===== 4. SIGNAL GENERATOR (before backtest) =====
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/ts01.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7
+
+# ===== 5. BACKTEST FROM 2026-06 (current month) =====
+# R4 parabolic; slip 2.0/1.0. Backtest-only realism; never sent live. Geometry unchanged.
+python tools/backtest_explicit.py `
+  --signals signals/ts01.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.5 `
+  --risk 0.065 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder signal_range_3 `
+  --entry-sl-gap 1.0 `
+  --shared-sl false `
+  --activation-delay 0 `
+  --pending-expiry 420 `
+  --max-hold 180 `
+  --sl-multiplier 1.15 `
+  --final-target TP2 `
+  --lock-after-tp1 false `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 0 `
+  --tp2-lock-delay-minutes 5 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 2.0 `
+  --tp1-lock-fraction 0.25 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.1 `
+  --trailing-close-distance 0.1 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/TS01_202606 `
+  --initial-capital 12000 `
+  --start-date 2026-06-22
+
+# ===== 6. BACKTEST FROM 2026-01 (current regime) =====
+# R4 parabolic; slip 2.0/1.0. Backtest-only realism; never sent live. Geometry unchanged.
+python tools/backtest_explicit.py `
+  --signals signals/ts01.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.5 `
+  --risk 0.065 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder signal_range_3 `
+  --entry-sl-gap 1.0 `
+  --shared-sl false `
+  --activation-delay 0 `
+  --pending-expiry 420 `
+  --max-hold 180 `
+  --sl-multiplier 1.15 `
+  --final-target TP2 `
+  --lock-after-tp1 false `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 0 `
+  --tp2-lock-delay-minutes 5 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 2.0 `
+  --tp1-lock-fraction 0.25 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.1 `
+  --trailing-close-distance 0.1 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/TS01_202601 `
+  --initial-capital 12000 `
+  --start-date 2026-01-01
+
+# ===== 7. BACKTEST FROM 2025 (R3 strong) =====
+# Era slip 0.9/0.45. Backtest-only realism; never sent live. Geometry unchanged.
+python tools/backtest_explicit.py `
+  --signals signals/ts01.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.5 `
+  --risk 0.065 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder signal_range_3 `
+  --entry-sl-gap 1.0 `
+  --shared-sl false `
+  --activation-delay 0 `
+  --pending-expiry 420 `
+  --max-hold 180 `
+  --sl-multiplier 1.15 `
+  --final-target TP2 `
+  --lock-after-tp1 false `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 0 `
+  --tp2-lock-delay-minutes 5 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 2.0 `
+  --tp1-lock-fraction 0.25 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.1 `
+  --trailing-close-distance 0.1 `
+  --lock-tp1-exit-slippage 0.9 `
+  --lock-tp2-exit-slippage 0.45 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/TS01_2025 `
+  --initial-capital 12000 `
+  --start-date 2025-01-01 `
+  --end-date 2025-12-31
+
+# ===== 8. BACKTEST FROM 2024 (R2 bull) =====
+# Era slip 0.5/0.25. Backtest-only realism; never sent live. Geometry unchanged.
+python tools/backtest_explicit.py `
+  --signals signals/ts01.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.5 `
+  --risk 0.065 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder signal_range_3 `
+  --entry-sl-gap 1.0 `
+  --shared-sl false `
+  --activation-delay 0 `
+  --pending-expiry 420 `
+  --max-hold 180 `
+  --sl-multiplier 1.15 `
+  --final-target TP2 `
+  --lock-after-tp1 false `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 0 `
+  --tp2-lock-delay-minutes 5 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 2.0 `
+  --tp1-lock-fraction 0.25 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.1 `
+  --trailing-close-distance 0.1 `
+  --lock-tp1-exit-slippage 0.5 `
+  --lock-tp2-exit-slippage 0.25 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/TS01_2024 `
+  --initial-capital 12000 `
+  --start-date 2024-01-01 `
+  --end-date 2024-12-31
+
+# ===== 9. BACKTEST FROM 2021-2023 (R1 quiet) =====
+# Era slip 0.4/0.2. Backtest-only realism; never sent live. Geometry unchanged.
+python tools/backtest_explicit.py `
+  --signals signals/ts01.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.5 `
+  --risk 0.065 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder signal_range_3 `
+  --entry-sl-gap 1.0 `
+  --shared-sl false `
+  --activation-delay 0 `
+  --pending-expiry 420 `
+  --max-hold 180 `
+  --sl-multiplier 1.15 `
+  --final-target TP2 `
+  --lock-after-tp1 false `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 0 `
+  --tp2-lock-delay-minutes 5 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 2.0 `
+  --tp1-lock-fraction 0.25 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0.1 `
+  --trailing-close-distance 0.1 `
+  --lock-tp1-exit-slippage 0.4 `
+  --lock-tp2-exit-slippage 0.2 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/TS01_2021_2023 `
+  --initial-capital 12000 `
+  --start-date 2021-01-01 `
+  --end-date 2023-12-31
+
