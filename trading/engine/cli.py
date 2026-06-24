@@ -522,6 +522,13 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     # replay-OPEN signal.
     reopen_added_magics: set[int] = set()
 
+    # One-time startup feed scan (printed on the first cycle): how many recent,
+    # not-yet-tracked feed signals are still actionable vs already resolved. Makes
+    # a cold start read "0 placeable right now" instead of looking broken -- a
+    # fast-exit (e.g. trailing) strategy often has every recent signal already
+    # played out by launch, and a restart never back-fills resolved signals.
+    _startup_placeable = _startup_played_out = _startup_expired = 0
+
     for signal in candidates:
         positions_source = ManualPositionSource(
             equity=equity,
@@ -535,6 +542,14 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             rationale=getattr(rec.new_signal, "rationale", "") or "",
             is_partial=_is_partial_placement(rec),
         )
+
+        _act = rec.new_signal.action
+        if _act == "SKIP_INVALIDATED":
+            _startup_played_out += 1
+        elif _act == "SKIP_EXPIRED":
+            _startup_expired += 1
+        elif _act == "FOLLOW":
+            _startup_placeable += 1
 
         if rec.new_signal.action == "SKIP_EXPIRED":
             status = (
@@ -624,6 +639,17 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                 # No MT5 footprint this cycle -> protect it from the same-cycle
                 # prune so it isn't churned in/out of the registry.
                 reopen_added_magics.add(signal_to_magic(signal.signal_key))
+
+    if iteration == 1 and candidates:
+        log.actions.append(
+            f"Startup feed scan: {len(candidates)} recent untracked signal(s) -> "
+            f"{_startup_placeable} placeable (pending/open), "
+            f"{_startup_played_out} already played out, "
+            f"{_startup_expired} expired. Only placeable signals produce live "
+            f"orders; a restart never back-fills resolved signals. If this is a "
+            f"fast-exit strategy, keep the feed loop + executor running so new "
+            f"signals are caught while still pending."
+        )
 
     known_magics = {
         signal_to_magic(item.get("signal_key", "?"))
