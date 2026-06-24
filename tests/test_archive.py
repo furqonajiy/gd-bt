@@ -8,7 +8,6 @@ from trading.engine import (
     _MT5_EXPORT_COLUMNS, _merge_with_existing,
 )
 
-
 def _row(date: str, time: str, value: float = 1.0) -> dict:
     return {
         "<DATE>": date, "<TIME>": time, "<OPEN>": value, "<HIGH>": value + 0.5,
@@ -58,3 +57,26 @@ def test_columns_match_mt5_export_format(tmp_path: Path):
     new = pd.DataFrame([_row("2026.04.01", "10:00:00")])
     result = _merge_with_existing(new, tmp_path / "x.csv")
     assert list(result.columns) == _MT5_EXPORT_COLUMNS
+
+
+def test_count_columns_render_as_integers(tmp_path: Path):
+    """TICKVOL/VOL/SPREAD must serialize as 100/0/25, not 100.0/0.0/25.0 --
+    matching a manual MT5 'Save As CSV' -- even when the existing file (or the
+    MT5 build) carried them as floats."""
+    p = tmp_path / "month.csv"
+    existing = pd.DataFrame([_row("2026.04.01", "10:00:00", 4500.0)])
+    for col in ("<TICKVOL>", "<VOL>", "<SPREAD>"):
+        existing[col] = existing[col].astype(float)   # the float source
+    existing.to_csv(p, sep="\t", index=False)
+    assert "\t100.0\t0.0\t25.0" in p.read_text()       # confirm the problem pre-merge
+
+    new = pd.DataFrame([_row("2026.04.02", "10:00:00", 4510.0)])
+    result = _merge_with_existing(new, p)
+
+    for col in ("<TICKVOL>", "<VOL>", "<SPREAD>"):
+        assert str(result[col].dtype) == "int64"
+    out = tmp_path / "out.csv"
+    result.to_csv(out, sep="\t", index=False)
+    text = out.read_text()
+    assert "\t100\t0\t25" in text                       # integer rendering
+    assert "\t100.0\t" not in text and "\t0.0\t" not in text
