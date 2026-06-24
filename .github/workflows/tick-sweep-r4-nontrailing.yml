@@ -1,0 +1,153 @@
+name: tick-sweep-r4-nontrailing
+
+# R4 (2026) NON-TRAILING re-sweep decided on REAL TICK DATA, not the M1 engine.
+#
+# Motivation: reconciling live vs backtest on the committed June ticks showed the
+# M1 backtest over-states P&L by 3-4x (optimistic lock/fill modelling the real
+# Mt5Executor never achieves). So this sweep scores every cell with
+# tools/tick_backtest.py -- the REAL executor replayed against the committed
+# June tick archive (data/ticks/XAUUSD_TICK_202606_p*_ELEV8.csv) -- and ranks on
+# the tick P&L. Trailing stays OFF (trailing_open=trailing_close=0); this re-tunes
+# the deployed non-trailing R4 champion (rsi75_sqz6_rr40 feed, e8 geometry).
+#
+# Grid (the tick-relevant levers, BRACKETING the champion so it isn't on a
+# boundary -- a local June tick read clustered sl 1.9/2.1/2.5 within ~$4k with 2.1
+# leading and 3.0 clearly worse, so we bracket 2.1 rather than cut at it):
+#   sl_multiplier  in {1.7, 1.9, 2.1, 2.3, 2.5}   (2.1 = current champion)
+#   max_hold       in {180, 240, 300}             (240 = champion)
+#   tp1_lock_frac  in {0.25, 0.5}                  (0.5 = champion)
+#   -> 30 cells; (2.1, 240, 0.5) is the champion reference point.
+#
+# Feasible + free: the repo is PUBLIC (unlimited Actions minutes) and the June
+# ticks are committed, so each matrix job's checkout already has the data; a
+# ubuntu-latest runner (4 vCPU / 16 GB) loads a month of ticks comfortably.
+# Artifact-only per cell; the agg job builds the tick-P&L leaderboard and commits
+# it to sweep_reports/. Tick fills are broker-driven -- a winner is RESEARCH until
+# forward/demo-validated.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tp1_lock_delay:
+        description: "tp1_lock_delay_minutes pinned on every cell (champion=24)"
+        default: "24"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tick-sweep-r4-nontrailing
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  sweep:
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        slm: ["1.7", "1.9", "2.1", "2.3", "2.5"]
+        mh: ["180", "240", "300"]
+        frac: ["0.25", "0.5"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate scalper24 feed (R4 2026, champion filter)
+        run: |
+          python tools/generate_scalper_signals.py \
+            --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --output feed.txt --start 2026-06-01 \
+            --session-start 0 --session-end 0 --signal-tz 7 \
+            --rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 \
+            --rr1 1.0 --rr2 2.0 --rr3 4.0
+      - name: Tick backtest cell (sl=${{ matrix.slm }} mh=${{ matrix.mh }} frac=${{ matrix.frac }})
+        run: |
+          set -o pipefail
+          CELL="sl${slm//./}_mh${mh}_f${frac//./}"
+          echo "cell=$CELL"
+          timeout 3000 python tools/tick_backtest.py \
+            --signals feed.txt \
+            --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_202606_p*_ELEV8.csv \
+            --watch-seconds 3 --initial-capital 50000 --sizing-mode risk \
+            --lot 0.01 --risk 0.01 --minimum-lot 0.01 --lot-step 0.01 --bonus-per-closed-lot 3.0 \
+            --entries 8 --entry-ladder range_to_sl --entry-sl-gap 0.5 \
+            --activation-delay 2 --pending-expiry 180 --max-hold ${mh} --sl-multiplier ${slm} \
+            --final-target TP3 --lock-after-tp1 true --lock-after-tp2 true \
+            --tp1-lock-delay-minutes ${TP1_DELAY} --tp2-lock-delay-minutes 2 \
+            --profit-lock-mode tp_levels --bep-trigger-distance 3.0 \
+            --tp1-lock-fraction ${frac} --tp2-lock-target TP1 \
+            --runner-after-tp3 false --tp3-lock-target TP2 \
+            --trailing-open-distance 0.0 --trailing-close-distance 0.0 \
+            | tee run.txt
+          mkdir -p out
+          python tools/parse_tick_run.py run.txt \
+            --config "{\"cell\":\"$CELL\",\"sl_multiplier\":${slm},\"max_hold\":${mh},\"tp1_lock_fraction\":${frac},\"tp1_lock_delay\":${TP1_DELAY},\"entry_count\":8,\"trailing\":false}" \
+            > "out/${CELL}.json"
+          cat "out/${CELL}.json"
+        env:
+          slm: ${{ matrix.slm }}
+          mh: ${{ matrix.mh }}
+          frac: ${{ matrix.frac }}
+          TP1_DELAY: ${{ github.event.inputs.tp1_lock_delay }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "tick-r4-${{ matrix.slm }}-${{ matrix.mh }}-${{ matrix.frac }}"
+          path: "out/*.json"
+          if-no-files-found: error
+
+  aggregate:
+    needs: sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - uses: actions/download-artifact@v4
+        with: { path: cells }
+      - name: Build tick-P&L leaderboard
+        run: |
+          python - <<'PY'
+          import glob, json, csv, os
+          rows=[]
+          for f in glob.glob("cells/**/*.json", recursive=True):
+              try: rows.append(json.load(open(f)))
+              except Exception as e: print("skip", f, e)
+          for r in rows:
+              c=json.loads(r["config"]) if isinstance(r.get("config"),str) else r.get("config",{})
+              r.update(c)
+          rows.sort(key=lambda r: r.get("tick_pnl",-1e18), reverse=True)
+          os.makedirs("sweep_reports/tick_r4_nontrailing", exist_ok=True)
+          cols=["cell","sl_multiplier","max_hold","tp1_lock_fraction","tp1_lock_delay",
+                "tick_pnl","m1_pnl","gap","max_drawdown_pct","n_signals","n_nofill"]
+          out="sweep_reports/tick_r4_nontrailing/leaderboard.csv"
+          with open(out,"w",newline="") as fh:
+              w=csv.writer(fh); w.writerow(["rank"]+cols)
+              for i,r in enumerate(rows,1):
+                  w.writerow([i]+[r.get(c,"") for c in cols])
+          print(open(out).read())
+          # README with the verdict
+          with open("sweep_reports/tick_r4_nontrailing/README.md","w") as fh:
+              fh.write("# R4 non-trailing TICK sweep (decided on committed June ticks)\n\n")
+              fh.write(f"{len(rows)} cells, ranked by **tick P&L** (real Mt5Executor on June ticks).\n")
+              fh.write("Champion reference: sl_multiplier 2.1 / max_hold 240 / tp1_lock_fraction 0.5.\n\n")
+              fh.write("Tick fills are broker-driven -- a winner is RESEARCH until forward/demo-validated.\n")
+          PY
+      - name: Commit leaderboard
+        run: |
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+          git add sweep_reports/tick_r4_nontrailing
+          git commit -m "tick-sweep: R4 non-trailing leaderboard (decided on June ticks)" || echo "nothing to commit"
+          git push || echo "push failed"
+      - uses: actions/upload-artifact@v4
+        with: { name: "tick-r4-leaderboard", path: "sweep_reports/tick_r4_nontrailing/**", if-no-files-found: warn }
