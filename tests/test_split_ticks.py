@@ -127,8 +127,8 @@ def test_path_naming(tmp_path):
     full = split_ticks._full_path(str(tmp_path), "BTCUSD", 2026, 1)
     h1, h2 = split_ticks._half_paths(str(tmp_path), "BTCUSD", 2026, 1)
     assert full.name == "BTCUSD_TICK_202601_ELEV8.csv"
-    assert h1.name == "BTCUSD_TICK_202601_H1_ELEV8.csv"
-    assert h2.name == "BTCUSD_TICK_202601_H2_ELEV8.csv"
+    assert h1.name == "BTCUSD_TICK_202601_1_ELEV8.csv"
+    assert h2.name == "BTCUSD_TICK_202601_2_ELEV8.csv"
 
 
 def test_iter_months_crosses_year_boundary():

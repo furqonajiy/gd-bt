@@ -2,8 +2,10 @@
 """Split monthly tick files into half-month parts, fetching missing months first.
 
 Each month's full tick file (the one tools/export_ticks.py writes) is split into
-two by-date parts -- H1 = days 1-15, H2 = days 16-end -- so a ~600 MB month becomes
-two roughly-300 MB files. A month with no full file yet is fetched from MT5 first
+two by-date parts -- part _1 = days 1-15, part _2 = days 16-end -- so a ~600 MB
+month becomes two roughly-300 MB files
+(``XAUUSD_TICK_YYYYMM_1_ELEV8.csv`` / ``..._2_ELEV8.csv``). A month with no full
+file yet is fetched from MT5 first
 (by delegating to export_ticks, so the on-disk schema and the GMT+3<->epoch handling
 stay identical) and then split.
 
@@ -38,8 +40,8 @@ from tools.export_ticks import (  # noqa: E402
 )
 from trading.engine import Mt5Connection  # noqa: E402
 
-# Days 1-15 -> H1, 16-end -> H2. Fixed boundary so part membership is stable across
-# re-syncs (see module docstring); it is not a tunable.
+# Days 1-15 -> part _1, 16-end -> part _2. Fixed boundary so part membership is
+# stable across re-syncs (see module docstring); it is not a tunable.
 _HALF_BOUNDARY_DAY = 15
 
 
@@ -74,7 +76,7 @@ def _full_path(output_dir: str, symbol: str, year: int, month: int) -> Path:
 def _half_paths(output_dir: str, symbol: str, year: int, month: int) -> tuple[Path, Path]:
     stem = f"{symbol}_TICK_{year:04d}{month:02d}"
     base = Path(output_dir)
-    return base / f"{stem}_H1_ELEV8.csv", base / f"{stem}_H2_ELEV8.csv"
+    return base / f"{stem}_1_ELEV8.csv", base / f"{stem}_2_ELEV8.csv"
 
 
 def _needs_fetch(full_path: Path) -> bool:
@@ -175,8 +177,8 @@ def _fetch_full_month(conn, args: argparse.Namespace, year: int, month: int) -> 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Split monthly MT5 tick files into H1 (days 1-15) and H2 (days 16-end); "
-                    "fetch missing months from MT5 first."
+        description="Split monthly MT5 tick files into part _1 (days 1-15) and "
+                    "part _2 (days 16-end); fetch missing months from MT5 first."
     )
     p.add_argument("--symbol", default="BTCUSD")
     p.add_argument("--from", dest="from_ym", required=True, help="First month, YYYYMM, e.g. 202401")
@@ -185,7 +187,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-fetch", action="store_true",
                    help="Split only full files already on disk; do not fetch missing months from MT5.")
     p.add_argument("--overwrite", action="store_true",
-                   help="Rebuild the H1/H2 parts from scratch (default appends only newer ticks).")
+                   help="Rebuild the _1/_2 parts from scratch (default appends only newer ticks).")
     p.add_argument("--remove-source", action="store_true",
                    help="Delete each full monthly file after it is split (prevents double-counting "
                         "if a glob ever matches both the full file and its parts).")
@@ -243,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
 
             h1_path, h2_path = _half_paths(args.output_dir, args.symbol, year, month)
             w1, w2 = split_month_file(full, h1_path, h2_path, overwrite=args.overwrite)
-            print(f"[split] {year:04d}{month:02d}: H1 +{w1:,}  H2 +{w2:,}")
+            print(f"[split] {year:04d}{month:02d}: part_1 +{w1:,}  part_2 +{w2:,}")
 
             if args.remove_source:
                 full.unlink()
