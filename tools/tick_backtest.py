@@ -339,10 +339,19 @@ def run_signal(signal, cfg: StrategyConfig, m1: CsvChartSource, ticks: pd.DataFr
                 "window": (sim_start, sim_end)}
 
     T, B, A = _slice_ms(ticks, sim_start - timedelta(minutes=5), sim_end)
+    # Decide at the signal's activation, not sim_end: decide() gates on `now`,
+    # so calling it hours later (sim_end) returns SKIP_EXPIRED with no
+    # replay_position. We want the FOLLOW plan (the placeable orders) as the
+    # live executor would see it the moment the signal arrives.
     rec = decide(signal, m1, ManualPositionSource(equity=cfg.initial_capital, positions=[]),
-                 cfg, now=sim_end)
+                 cfg, now=sim_start)
     plan = rec.new_signal
-    engine_pos = plan.replay_position
+    # The executor manages off the M1 engine position (live does the same --
+    # manage_position takes engine_pos). Use the full replay; fall back to it
+    # whenever decide didn't attach one (e.g. a non-FOLLOW plan).
+    engine_pos = getattr(plan, "replay_position", None)
+    if engine_pos is None:
+        engine_pos = replay_signal(signal, m1.dataframe, cfg.initial_capital, cfg)
 
     mock = MockMt5(T, B, A, symbol=symbol, equity=cfg.initial_capital,
                    contract=CONTRACT_SIZE_OZ)
