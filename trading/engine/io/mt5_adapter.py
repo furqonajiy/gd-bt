@@ -286,6 +286,25 @@ _MT5_EXPORT_COLUMNS = [
     "<CLOSE>", "<TICKVOL>", "<VOL>", "<SPREAD>",
 ]
 
+# MT5's "Save As CSV" writes the count columns (tick/real volume, spread) as
+# plain integers -- e.g. 597, 0, 25 -- not floats. Reading a legacy
+# float-formatted file or concatenating frames can promote these to float64,
+# which then serializes back with a trailing ".0" (597.0). These columns are
+# the ones to keep integer so every fetched file is byte-compatible with a
+# manual export and consistent across fresh and merged writes.
+_MT5_INTEGER_COLUMNS = ("<TICKVOL>", "<VOL>", "<SPREAD>")
+
+
+def _coerce_export_integers(df):
+    """Render the MT5 count columns as integers (597, not 597.0)."""
+    import pandas as pd
+    if len(df) == 0:
+        return df
+    for col in _MT5_INTEGER_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").round().astype("int64")
+    return df
+
 
 def _rates_to_export_df(rates, server_offset_hours: int):
     """Convert an MT5 numpy rates array to an MT5-export-format DataFrame
@@ -297,7 +316,7 @@ def _rates_to_export_df(rates, server_offset_hours: int):
     df = pd.DataFrame(rates)
     shift_hours = 3 - server_offset_hours
     times = pd.to_datetime(df["time"], unit="s") + pd.Timedelta(hours=shift_hours)
-    return pd.DataFrame({
+    out = pd.DataFrame({
         "<DATE>":    times.dt.strftime("%Y.%m.%d"),
         "<TIME>":    times.dt.strftime("%H:%M:%S"),
         "<OPEN>":    df["open"],
@@ -306,8 +325,9 @@ def _rates_to_export_df(rates, server_offset_hours: int):
         "<CLOSE>":   df["close"],
         "<TICKVOL>": df["tick_volume"],
         "<VOL>":     df["real_volume"],
-        "<SPREAD>":  df["spread"].astype(int),
+        "<SPREAD>":  df["spread"],
     })
+    return _coerce_export_integers(out)
 
 
 def _merge_with_existing(new_df, existing_path):
@@ -326,7 +346,10 @@ def _merge_with_existing(new_df, existing_path):
     combined = pd.concat([existing[_MT5_EXPORT_COLUMNS], new_df], ignore_index=True)
     combined = combined.drop_duplicates(subset=["<DATE>", "<TIME>"], keep="last")
     combined = combined.sort_values(["<DATE>", "<TIME>"]).reset_index(drop=True)
-    return combined
+    # read_csv parses a legacy "597.0" as float64, and concat can promote the
+    # count columns; re-render them as integers so the merged file matches a
+    # manual MT5 export (597, not 597.0).
+    return _coerce_export_integers(combined)
 
 
 def _month_iter(until: datetime, months_back: int):
