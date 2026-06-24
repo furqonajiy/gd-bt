@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from .mt5_executor_live import Mt5Executor as _Tp2Mt5Executor, _wall_clock_chart_now
 from .mt5_executor import ExecutionLog, mt5_entry_comment, round_lot, signal_entry_key, signal_to_magic
-from .sl_safety import clamp_sltp_sl, prepare_sltp_modify_request
+from .sl_safety import clamp_sltp_sl, min_stop_distance_for, prepare_sltp_modify_request
 from trading.engine.core.config import DEFAULT_CONFIG
 
 
@@ -230,6 +230,11 @@ class Mt5Executor(_Tp2Mt5Executor):
                 self._session_trailing_open_waiting_keys.add(signal.signal_key)
             return log
 
+        # Broker minimum stop/freeze distance: a STOP order must rest at least this
+        # far from the live price. A trailing-open distance below it is rejected with
+        # retcode 10015 ('Invalid price') on every cycle, so surface it in the log.
+        min_stop = min_stop_distance_for(self)
+
         place_failures: list[tuple[int, float, str]] = []
         placed_tickets: list[int] = []
         armed_details: list[dict] = []
@@ -279,7 +284,12 @@ class Mt5Executor(_Tp2Mt5Executor):
                     log.placed += 1
                     log.placed_entry_indices.append(order.entry_index)
                     continue
-                log.actions.append(f"  #{order.entry_index}: FAILED {reason}")
+                price_now = ask if signal.side == "BUY" else bid
+                log.actions.append(
+                    f"  #{order.entry_index}: trailing-open STOP rejected -- wanted to "
+                    f"{signal.side} at {trigger:g} (planned entry {float(order.entry_price):g}), "
+                    f"price now {price_now:g} (bid {bid:g} / ask {ask:g}). Broker said: {reason}."
+                )
                 place_failures.append((order.entry_index, trigger, reason))
                 break
             ticket = int(res.order)
@@ -322,7 +332,23 @@ class Mt5Executor(_Tp2Mt5Executor):
                     f"and will be managed; un-filled pending STOPs were rolled back."
                 )
             else:
-                log.actions.append(f"Signal {signal.signal_key}: trailing-open placement failed; no registry entry should be recorded.")
+                price_now = ask if signal.side == "BUY" else bid
+                planned = "/".join(f"{float(o.entry_price):g}" for o in plan.orders)
+                msg = (
+                    f"Signal {signal.signal_key}: trailing-open placement FAILED. "
+                    f"Activated {activation_at:%Y-%m-%d %H:%M} GMT+3, expected entry {planned}, "
+                    f"price now {price_now:g} (bid {bid:g} / ask {ask:g}). No order placed."
+                )
+                # The usual cause: the trailing-open distance is closer to price than
+                # the broker allows a STOP to rest, so every STOP is rejected (10015).
+                if min_stop > 0 and trailing_open_distance < min_stop:
+                    msg += (
+                        f" Cause: the {trailing_open_distance:g}-pt trailing-open distance is "
+                        f"below this broker's minimum stop distance ({min_stop:g} pt), so the "
+                        f"STOP can't rest that close to price. Raise --trailing-open-distance "
+                        f"above {min_stop:g} to trade this signal live."
+                    )
+                log.actions.append(msg)
         return log
 
     def _market_fill_passed_trailing_open(self, signal, order, trigger: float, lot: float,
