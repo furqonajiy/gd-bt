@@ -28,7 +28,10 @@ permissions:
   contents: write
 
 concurrency:
-  group: tick-sweep-victor-mayjune
+  # Intentionally SHARES the SQZ6 sweep's group so a dispatch QUEUES behind a
+  # running tick-sweep-r4-full and only starts once SQZ6 finishes (no interleaving
+  # / stealing its 20 runner slots). cancel-in-progress:false = wait, don't cancel.
+  group: tick-sweep-r4-full
   cancel-in-progress: false
 
 env:
