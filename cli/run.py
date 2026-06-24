@@ -43,6 +43,7 @@ ALIASES = {
     "rr08": "rr08x15x30", "resync": "resync_m1_from_2020",
     "tr40": "trailing_open_R4", "tr30": "trailing_open_R3",
     "tr20": "trailing_open_R2", "tr10": "trailing_open_R1",
+    "ts01": "trailing_small_0101",
 }
 
 

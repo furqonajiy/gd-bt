@@ -51,6 +51,7 @@ back, so do them once yourself in the terminal before launching.)
 | `tr30` | `trailing_open_R3.txt` | best trailing-open cell, R3 (tag TR30) — **research, parity-fragile** |
 | `tr20` | `trailing_open_R2.txt` | best trailing-open cell, R2 (tag TR20) — **research, parity-fragile** |
 | `tr10` | `trailing_open_R1.txt` | best trailing-open cell, R1 (tag TR10) — **research, parity-fragile** |
+| `ts01` | `trailing_small_0101.txt` | `to0p1_tc0p1` (0.1/0.1) — #1 cell in ALL regimes (tag TS01) — **research, strongest fill-artifact suspicion** |
 | `resync` | `resync_m1_from_2020.txt` | M1-archive resync utility |
 
 The `trailing_open_R*` snapshots are the best trailing-open cells from the
