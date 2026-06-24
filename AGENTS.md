@@ -319,7 +319,15 @@ pair is a thin package that imports it.
   carries the same tagged magic + `[TAG-]MMDD#DD.N` comment `place_signal` used.
   Fresh
   placement is history-gated: a magic with closed deals is never re-placed,
-  so a finished signal can't trade twice. The late TP1/TP2 catch-up (a leg the
+  so a finished signal can't trade twice (the trailing-open executor now carries
+  this same history gate as the LIMIT path). **`auto --trailing-live-entry`**
+  (trailing-open only, opt-in) places the entry off the **live price** instead of
+  the M1 backtest replay: a signal the replay marks *already played out* is still
+  placed when LIVE never traded it (history gate clear) and the pending window is
+  open, so fast-exit trailing signals can trade live — the broker fills the STOP +
+  exits on the SL, and the history gate blocks re-entry once it trades and closes.
+  Default OFF → backtests/parity unchanged; these fills are broker/tick-driven, so
+  demo-validate + calibrate before trusting trailing live↔backtest parity. The late TP1/TP2 catch-up (a leg the
   replay already lock-exited but live still holds open) protects the leg: if price
   is still beyond the lock the stop moves to the lock level (parity); if price has
   retraced **back through the lock but the leg is still in profit** the closest

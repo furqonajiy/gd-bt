@@ -176,6 +176,21 @@ class Mt5Executor(_Tp2Mt5Executor):
             )
             return log
 
+        # History gate: a magic with closed deals has already traded live, so it
+        # is never re-placed (a finished signal can't trade twice). Mirrors the
+        # non-trailing executor; essential for --trailing-live-entry, which can
+        # re-meet a signal the replay marks played-out -- LIVE history, not the
+        # replay, decides whether it already traded. Best-effort on a stub.
+        if not getattr(plan, "force_replace", False) and self._magic_already_traded(
+                magic, signal.signal_time_chart):
+            if signal.signal_key not in self._session_skipped_traded_signal_keys:
+                log.actions.append(
+                    f"Signal {signal.signal_key} already traded this session "
+                    f"(closed deals in MT5 history for its magic); skipping."
+                )
+                self._session_skipped_traded_signal_keys.add(signal.signal_key)
+            return log
+
         sym = self._sym_info if self._sym_info is not None else self.mt5.symbol_info(self.symbol)
         digits = sym.digits
         order_type = self._pending_stop_type(signal.side)

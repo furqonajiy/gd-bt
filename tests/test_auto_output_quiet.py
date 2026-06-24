@@ -430,3 +430,54 @@ def test_auto_startup_feed_scan_prints_once_on_first_cycle(tmp_path, monkeypatch
 
     assert run(2) == 0
     assert "Startup feed scan:" not in capsys.readouterr().out
+
+
+def _skip_invalidated_rec(exp=datetime(2026, 6, 2, 14, 30)):
+    plan = SimpleNamespace(
+        action="SKIP_INVALIDATED",
+        orders=[SimpleNamespace(entry_index=0)],
+        replay_position=None,
+        rationale="",
+        pending_expires_at=exp,
+        pending_activates_at=datetime(2026, 6, 2, 6, 0),
+    )
+    return SimpleNamespace(new_signal=plan)
+
+
+def test_trailing_live_entry_places_a_replay_played_out_signal(tmp_path, monkeypatch, capsys):
+    """--trailing-live-entry: a trailing-open signal the replay marks played-out is
+    still placed off the live price (executor decides arm/skip); no 'played out' line."""
+    signal = _signal()
+    sp = tmp_path / "signals.txt"; sp.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda p, **k: [signal])
+    monkeypatch.setattr(cli, "decide", lambda *a, **k: _skip_invalidated_rec())
+    cfg = replace(DEFAULT_CONFIG, trailing_open_distance=0.2)
+    _FakeExecutor.place_log = ExecutionLog(actions=["  placed trailing-open STOP #0"], placed=1)
+    args = _args(tmp_path); args.trailing_live_entry = "true"
+
+    rc = cli._auto_pass(args, cfg, _FakeConn(), _FakeChart(datetime(2026, 6, 2, 6, 0)),
+                        sp, iteration=2, candidate_console_state={})
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "placed trailing-open STOP" in out
+    assert "already played out" not in out
+    assert _FakeRegistry.entries  # tracked after a live placement
+
+
+def test_trailing_live_entry_off_keeps_replay_played_out_skip(tmp_path, monkeypatch, capsys):
+    """Default (flag off): the replay verdict stands -- played-out signal is skipped,
+    place_signal is not called."""
+    signal = _signal()
+    sp = tmp_path / "signals.txt"; sp.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda p, **k: [signal])
+    monkeypatch.setattr(cli, "decide", lambda *a, **k: _skip_invalidated_rec())
+    cfg = replace(DEFAULT_CONFIG, trailing_open_distance=0.2)
+    _FakeExecutor.place_log = ExecutionLog(actions=["  placed trailing-open STOP #0"], placed=1)
+    args = _args(tmp_path)  # no trailing_live_entry -> off
+
+    rc = cli._auto_pass(args, cfg, _FakeConn(), _FakeChart(datetime(2026, 6, 2, 6, 0)),
+                        sp, iteration=2, candidate_console_state={})
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "already played out" in out
+    assert "placed trailing-open STOP" not in out

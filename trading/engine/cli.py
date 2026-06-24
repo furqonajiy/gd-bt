@@ -484,6 +484,16 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         for _ideal, actual, _exec_at in tracked:
             log.merge(executor.reopen_missing_open_positions(actual, config))
 
+    # Optional trailing-open LIVE entry: place the entry off the live price
+    # instead of trusting the M1 replay's "already played out" verdict. Only for
+    # trailing-open configs; the live-history gate (inside place_signal) keeps it
+    # to one live trade per signal. Bool / "true"/"false" tolerant.
+    _tle = getattr(args, "trailing_live_entry", False)
+    trailing_live_entry = (
+        (_tle is True or str(_tle).lower() == "true")
+        and float(getattr(config, "trailing_open_distance", 0.0) or 0.0) > 0
+    )
+
     # Optional provider edit/delete bridge: consume the listener's
     # signal_overrides journal so live MT5 follows the corrected feed. revoke =
     # flatten; amend = flatten + re-place corrected (close-and-reopen). Run before
@@ -569,6 +579,32 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             continue
 
         if rec.new_signal.action == "SKIP_INVALIDATED":
+            # Trailing-open LIVE entry: the replay says every leg already played
+            # out, but if LIVE never traded this signal and its pending window is
+            # still open, place the trailing-open ladder off the live price and
+            # let the broker run it. The history gate inside place_signal keeps it
+            # to one live trade; the trailing-open arm logic only fills when the
+            # live price is actually in the entry's pullback zone (no chasing).
+            if trailing_live_entry:
+                _magic = signal_to_magic(signal.signal_key)
+                _exp = getattr(rec.new_signal, "pending_expires_at", None)
+                _window_open = _exp is None or replay_end < _exp
+                if (_window_open
+                        and not executor.find_orders(_magic)
+                        and not executor.find_positions(_magic)):
+                    plog = executor.place_signal(signal, rec.new_signal)
+                    if (getattr(plog, "placed", 0) > 0 or getattr(plog, "modified", 0) > 0
+                            or getattr(plog, "cancelled", 0) > 0 or getattr(plog, "closed", 0) > 0):
+                        log.merge(plog)
+                    else:
+                        for action in getattr(plog, "actions", []):
+                            _auto_record_candidate_action(
+                                log, candidate_console_state, signal.signal_key, action)
+                        log.warnings.extend(getattr(plog, "warnings", []))
+                    if getattr(plog, "placed", 0) > 0:
+                        registry.add(signal, equity, executed_at=_chart_now())
+                        candidate_console_state[signal.signal_key] = "PLACED"
+                    continue
             header = _auto_skip_invalidated_status_line(signal.signal_key, rec)
             detail = _auto_skip_invalidated_detail_lines(signal.signal_key, rec)
             console_status = "\n".join([header, *detail]) if detail else header
