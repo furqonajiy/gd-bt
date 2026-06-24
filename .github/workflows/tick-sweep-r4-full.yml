@@ -7,18 +7,23 @@ name: tick-sweep-r4-full
 # stated edge lever) AND the strategy/geometry levers (sl_multiplier, entries,
 # entry_sl_gap, max_hold, tp1_lock_delay, tp1_lock_fraction, lock_after_tp2,
 # final_target) -- and scores every candidate with tools/tick_backtest.py (the
-# REAL Mt5Executor replayed against the committed June ticks). Ranked on tick
+# REAL Mt5Executor replayed against the committed MAY+JUNE ticks). Ranked on tick
 # P&L, so the new champion is chosen on real-executor fills, not the M1 engine
-# that over-states 3-4x.
+# that over-states.
+#
+# R4 = Jan 2026 onward (the regime detector classifies EVERY 2026 month as
+# R4parab). Ticks only exist back to May 5 (broker retention), so May+June is the
+# FULL R4 tick window -- scoring on both avoids overfitting to a single R4 month
+# (the champion wins June but lost May on ticks, an in-regime fragility).
 #
 #   gen   -> tools/gen_tick_sweep_candidates.py emits ~200 candidates (champion =
 #            c000) as a dynamic matrix (<=256, the GitHub limit).
 #   score -> one job per candidate: regenerate that candidate's feed, tick
-#            backtest it on June ticks, parse to a score JSON. max-parallel 20.
+#            backtest it on May+June ticks, parse to a score JSON. max-parallel 20.
 #   agg   -> tick-P&L leaderboard -> sweep_reports/tick_r4_full/, committed.
 #
-# Free: public repo (unlimited Actions minutes) + committed June ticks (checkout
-# has them). ~200 cells x ~14 min / 20 parallel ~= 2.5 h wall-clock.
+# Free: public repo (unlimited Actions minutes) + committed May+June ticks (checkout
+# has them). ~200 cells x ~25 min / 20 parallel ~= 4 h wall-clock.
 # Tick fills are broker-driven -- the winner is RESEARCH until forward/demo-
 # validated; confirm its concurrent-risk DD with backtest_explicit before deploy.
 
@@ -63,14 +68,14 @@ jobs:
       max-parallel: 20
       matrix: ${{ fromJSON(needs.gen.outputs.matrix) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@v5
         with: { fetch-depth: 1 }
       - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
       - run: pip install -r requirements.txt
-      - name: Score candidate ${{ matrix.id }} on TICK + M1 (same June window)
+      - name: Score candidate ${{ matrix.id }} on TICK + M1 (same May+June R4 window)
         env:
           slm: ${{ matrix.slm }}
           entries: ${{ matrix.entries }}
@@ -89,17 +94,20 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p out
-          # 1) candidate feed (June), filtered to the tick-COVERED days so TICK and
-          #    M1 score the IDENTICAL signal set (apples-to-apples).
+          # 1) candidate feed (May+June R4, Apr warmup), filtered to the tick-COVERED
+          #    days so TICK and M1 score the IDENTICAL signal set (apples-to-apples).
+          #    R4 = Jan 2026 onward (detector: every 2026 month is R4parab); ticks only
+          #    exist back to May 5 (broker retention), so May+June is the full R4 tick window.
           python tools/generate_scalper_signals.py \
-            --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
-            --output feed_full.txt --start 2026-06-01 \
+            --charts data/XAUUSD_M1_202604_ELEV8.csv data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --output feed_full.txt --start 2026-05-05 \
             --session-start 0 --session-end 0 --signal-tz 7 \
             --rsi-buy-max "$rsi_buy" --rsi-sell-min "$rsi_sell" --bb-bandwidth-min "$bb" \
             --rr1 "$rr1" --rr2 "$rr2" --rr3 "$rr3"
           python - <<'PY'
           import re
-          covered=set("2026-06-01 2026-06-02 2026-06-03 2026-06-04 2026-06-05 2026-06-08 2026-06-12 2026-06-15 2026-06-16 2026-06-17 2026-06-18 2026-06-19 2026-06-22 2026-06-23 2026-06-24".split())
+          covered=set(("2026-05-05 2026-05-11 2026-05-13 2026-05-14 2026-05-15 2026-05-18 2026-05-19 2026-05-20 2026-05-21 2026-05-22 2026-05-25 2026-05-26 2026-05-27 2026-05-28 2026-05-29 "
+                       "2026-06-01 2026-06-02 2026-06-03 2026-06-04 2026-06-05 2026-06-08 2026-06-12 2026-06-15 2026-06-16 2026-06-17 2026-06-18 2026-06-19 2026-06-22 2026-06-23 2026-06-24").split())
           keep=False; out=[]
           for line in open("feed_full.txt"):
               m=re.match(r"(\d{4}-\d{2}-\d{2}) GMT", line)
@@ -108,7 +116,7 @@ jobs:
           open("feed.txt","w").writelines(out)
           PY
           # shared strategy contract (the cell's geometry); only sizing/slippage differ per run
-          M1="--charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+          M1="--charts data/XAUUSD_M1_202604_ELEV8.csv data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
             --max-drawdown-limit-pct 50 --progress-interval-seconds 0 --initial-capital 50000 --sync-charts false \
             --minimum-lot 0.01 --lot-step 0.01 --bonus-per-closed-lot 3.0 \
             --entries $entries --entry-ladder range_to_sl --entry-sl-gap $slgap --activation-delay 2 --pending-expiry 180 \
@@ -123,10 +131,10 @@ jobs:
           # 3) M1 fixed 0.01 lot (capital-independent edge)
           python tools/backtest_explicit.py --signals feed.txt $M1 --sizing-mode fixed --lot 0.01 --risk 0.01 \
             --output-dir m1fixed > m1fixed.json 2>/dev/null || echo '{}' > m1fixed.json
-          # 4) TICK (real executor, risk 1%, June ticks)
-          timeout 3000 python tools/tick_backtest.py --signals feed.txt \
-            --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
-            --ticks data/ticks/XAUUSD_TICK_202606_p*_ELEV8.csv \
+          # 4) TICK (real executor, risk 1%, May+June R4 ticks)
+          timeout 5400 python tools/tick_backtest.py --signals feed.txt \
+            --charts data/XAUUSD_M1_202604_ELEV8.csv data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_202605_p*_ELEV8.csv data/ticks/XAUUSD_TICK_202606_p*_ELEV8.csv \
             --watch-seconds 3 --initial-capital 50000 --sizing-mode risk --lot 0.01 --risk 0.01 \
             --minimum-lot 0.01 --lot-step 0.01 --bonus-per-closed-lot 3.0 \
             --entries $entries --entry-ladder range_to_sl --entry-sl-gap $slgap --activation-delay 2 --pending-expiry 180 \
@@ -186,9 +194,9 @@ jobs:
                       f"d{r.get('delay')} lock2={r.get('lock2')} {r.get('final')} | "
                       f"rr {r.get('rr1')}/{r.get('rr2')}/{r.get('rr3')} bb{r.get('bb')} rsi{r.get('rsi_buy')}/{r.get('rsi_sell')}")
           with open("sweep_reports/tick_r4_full/README.md","w") as fh:
-              fh.write("# R4 non-trailing FULL sweep -- TICK vs M1 (June 2026)\n\n")
-              fh.write(f"{len(rows)} candidates, scored on the SAME tick-covered June window three ways:\n")
-              fh.write("- **TICK** net (risk 1%) -- real Mt5Executor on committed June ticks (the rank key)\n")
+              fh.write("# R4 non-trailing FULL sweep -- TICK vs M1 (May+June 2026, full R4 tick window)\n\n")
+              fh.write(f"{len(rows)} candidates, scored on the SAME tick-covered May+June window three ways:\n")
+              fh.write("- **TICK** net (risk 1%) -- real Mt5Executor on committed May+June ticks (the rank key)\n")
               fh.write("- **M1** net (risk 1%, slippage 2.0/1.0) -- compounded net + bonus, concurrent-risk DD\n")
               fh.write("- **edge(fixed)** -- M1 at fixed 0.01 lot (capital-independent)\n")
               fh.write("- **disc** = M1 net - TICK net (how much the backtest over-states)\n\n")
@@ -210,7 +218,7 @@ jobs:
           git config user.name "C - Furqon Aji Yudhistira"
           git config user.email "furqonajiy@gmail.com"
           git add sweep_reports/tick_r4_full
-          git commit -m "tick-sweep: R4 non-trailing FULL leaderboard (decided on June ticks)" || echo "nothing to commit"
+          git commit -m "tick-sweep: R4 non-trailing FULL leaderboard (decided on May+June ticks)" || echo "nothing to commit"
           git pull --rebase origin main || true
           git push || echo "push failed"
       - uses: actions/upload-artifact@v4
