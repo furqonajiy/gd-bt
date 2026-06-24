@@ -248,6 +248,22 @@ def _export_month(conn: Mt5Connection, args: argparse.Namespace, month_start: da
     return total
 
 
+def _split_exported(output_dir: str, symbol: str, months: list[tuple[int, int]],
+                    max_mb: float) -> int:
+    """Split each exported month's file into <= max_mb MiB parts, removing the
+    full file. Reuses split_ticks_by_size so the _pN naming and line-aligned
+    cutting are identical; imported lazily to avoid a load-time dependency.
+    Returns the number of parts written."""
+    from tools.split_ticks_by_size import split_file
+    max_bytes = int(max_mb * 1024 * 1024)
+    written = 0
+    for year, month in months:
+        src = Path(output_dir) / f"{symbol}_TICK_{year:04d}{month:02d}_ELEV8.csv"
+        if src.exists():
+            written += len(split_file(src, max_bytes, remove_source=True))
+    return written
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Export real MT5 tick data into monthly tab-separated CSV files.")
     p.add_argument("--symbol", default="XAUUSD")
@@ -266,6 +282,14 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Delete and re-fetch the whole month (loses ticks aged out of the broker window).")
     mode.add_argument("--merge", action="store_true",
                       help="Append ticks newer than the last recorded one to an existing monthly file.")
+
+    p.add_argument("--split-mb", type=float, default=None,
+                   help="After fetching, split each month's file into parts of at most "
+                        "this many MiB and delete the full file, so every part fits under "
+                        "GitHub's 100 MiB limit (parts: XAUUSD_TICK_YYYYMM_p1_ELEV8.csv, "
+                        "_p2, ...). NOTE: with the full file removed, a later --merge "
+                        "re-fetches the window instead of resuming -- use it as a final "
+                        "packaging step, not for an incrementally-grown archive.")
 
     p.add_argument("--mt5-path", default=None)
     p.add_argument("--mt5-login", type=int, default=None)
@@ -298,10 +322,15 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"Symbol {args.symbol!r} not found in MT5 Market Watch.")
 
         grand_total = 0
+        months: list[tuple[int, int]] = []
         for month_start, month_end in _iter_months(start, end):
             grand_total += _export_month(conn, args, month_start, month_end)
+            months.append((month_start.year, month_start.month))
 
         print(f"[all done] exported {grand_total:,} ticks")
+        if args.split_mb:
+            parts = _split_exported(args.output_dir, args.symbol, months, args.split_mb)
+            print(f"[split] wrote {parts} size-capped part(s) (<= {args.split_mb:g} MiB each)")
         return 0
     finally:
         conn.shutdown()
