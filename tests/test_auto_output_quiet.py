@@ -403,3 +403,30 @@ def test_auto_reopen_tracked_partial_survives_same_cycle_prune(tmp_path, monkeyp
     assert rc == 0
     # Survived: still tracked after the cycle (no add/prune churn).
     assert _PruneReg.rows == [{"signal_key": signal.signal_key}]
+
+
+def test_auto_startup_feed_scan_prints_once_on_first_cycle(tmp_path, monkeypatch, capsys):
+    """First cycle prints a one-line feed scan (placeable vs played-out) so a cold
+    start reads clearly; later cycles don't repeat it, and an idle (no-candidate)
+    start stays silent."""
+    signal = _signal()
+    signals_path = tmp_path / "signals.txt"
+    signals_path.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda path, **kw: [signal])
+    monkeypatch.setattr(cli, "decide", lambda *a, **k: _follow_rec())
+    state: dict[str, str] = {}
+
+    def run(it):
+        return cli._auto_pass(
+            _args(tmp_path), DEFAULT_CONFIG, _FakeConn(),
+            _FakeChart(datetime(2026, 6, 2, 6, 0)), signals_path,
+            iteration=it, candidate_console_state=state,
+        )
+
+    assert run(1) == 0
+    out1 = capsys.readouterr().out
+    assert "Startup feed scan:" in out1
+    assert "1 placeable" in out1
+
+    assert run(2) == 0
+    assert "Startup feed scan:" not in capsys.readouterr().out
