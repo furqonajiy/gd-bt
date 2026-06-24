@@ -146,3 +146,56 @@ def test_real_place_signal_arms_into_mock_then_fills_and_takes_profit(tmp_path):
     assert len(m.history) == 1
     h = m.history[0]
     assert h["reason"] == "TP" and h["pnl"] > 0
+
+def test_run_signal_survives_expired_decide(tmp_path):
+    """run_signal calls decide() relative to the signal window; the plan it
+    returns may carry no replay_position (e.g. a non-FOLLOW plan). It must then
+    fall back to replay_signal and still produce a TICK-vs-M1 result, not crash
+    on a None engine position (the regression that broke every real signal)."""
+    import json
+    from datetime import datetime, timedelta
+
+    import pandas as pd
+
+    from trading.engine import CsvChartSource, parse_signals_file
+    from trading.engine.core.config import StrategyConfig
+    from tools.tick_backtest import load_ticks, run_signal
+
+    cfg_d = json.load(open(_REPO_ROOT / "champions/CHAMPION_R4parab.json"))["config"]
+    cfg_d.update(entry_count=3, pending_expiry_minutes=5, max_hold_minutes=15)
+    cfg = StrategyConfig(**cfg_d)
+
+    # ~40 one-minute bars near 2001.5 so the SELL legs (2000-2002) fill and ride.
+    start = datetime(2026, 6, 4, 7, 0)
+    bar_cols = ["<DATE>", "<TIME>", "<OPEN>", "<HIGH>", "<LOW>", "<CLOSE>",
+                "<TICKVOL>", "<VOL>", "<SPREAD>"]
+    tick_cols = ["<DATE>", "<TIME>", "<TIME_MSC>", "<BID>", "<ASK>", "<LAST>",
+                 "<VOLUME>", "<VOLUME_REAL>", "<FLAGS>", "<SPREAD>"]
+    bars, ticks = [], []
+    for i in range(40):
+        t = start + timedelta(minutes=i)
+        d, hms = t.strftime("%Y.%m.%d"), t.strftime("%H:%M:%S")
+        o, h, l, c = 2001.5, 2001.8, 2001.2, 2001.5
+        bars.append((d, hms, o, h, l, c, 100, 0, 20))
+        for off, price in zip(("000", "015", "030", "045"), (o, l, h, c)):
+            ticks.append((d, f"{hms}.{off}", 0, round(price, 2), round(price + 0.20, 2),
+                          0, 0, 0, 0, 20))
+    mcsv, tcsv = tmp_path / "m1.csv", tmp_path / "tick.csv"
+    pd.DataFrame(bars, columns=bar_cols).to_csv(mcsv, sep="\t", index=False)
+    pd.DataFrame(ticks, columns=tick_cols).to_csv(tcsv, sep="\t", index=False)
+
+    sig_file = tmp_path / "sig.txt"
+    sig_file.write_text("2026-06-04 GMT+3\n"
+                        "1. SELL XAUUSD 2000.00 - 2002.00 SL 2003.00 "
+                        "TP1 1997.00 TP2 1994.00 TP3 1988.00 7:01 AM\n")
+    signal = parse_signals_file(sig_file)[0]
+
+    m1 = CsvChartSource([str(mcsv)])
+    ticks_df = load_ticks([str(tcsv)])
+    clock = _install_sim_clock()
+
+    res = run_signal(signal, cfg, m1, ticks_df, "XAUUSD", 5, clock)
+
+    assert res["key"] == signal.signal_key
+    assert not res.get("no_ticks")
+    assert "total" in res and "m1_pnl" in res   # both sides of the comparison present
