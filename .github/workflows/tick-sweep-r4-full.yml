@@ -1,0 +1,225 @@
+name: tick-sweep-r4-full
+
+# FULL R4 (2026) non-trailing sweep DECIDED ON REAL TICK DATA -- the run that
+# determines the new champion. Unlike tick-sweep-r4-nontrailing.yml (30 cells,
+# sl x max_hold x frac only), this samples the FULL non-trailing search space --
+# BOTH the scalper24 FEED levers (R:R, Bollinger bandwidth, RSI -- the champion's
+# stated edge lever) AND the strategy/geometry levers (sl_multiplier, entries,
+# entry_sl_gap, max_hold, tp1_lock_delay, tp1_lock_fraction, lock_after_tp2,
+# final_target) -- and scores every candidate with tools/tick_backtest.py (the
+# REAL Mt5Executor replayed against the committed MAY+JUNE ticks). Ranked on tick
+# P&L, so the new champion is chosen on real-executor fills, not the M1 engine
+# that over-states.
+#
+# R4 = Jan 2026 onward (the regime detector classifies EVERY 2026 month as
+# R4parab). Ticks only exist back to May 5 (broker retention), so May+June is the
+# FULL R4 tick window -- scoring on both avoids overfitting to a single R4 month
+# (the champion wins June but lost May on ticks, an in-regime fragility).
+#
+#   gen   -> tools/gen_tick_sweep_candidates.py emits ~200 candidates (champion =
+#            c000) as a dynamic matrix (<=256, the GitHub limit).
+#   score -> one job per candidate: regenerate that candidate's feed, tick
+#            backtest it on May+June ticks, parse to a score JSON. max-parallel 20.
+#   agg   -> tick-P&L leaderboard -> sweep_reports/tick_r4_full/, committed.
+#
+# Free: public repo (unlimited Actions minutes) + committed May+June ticks (checkout
+# has them). ~200 cells x ~25 min / 20 parallel ~= 4 h wall-clock.
+# Tick fills are broker-driven -- the winner is RESEARCH until forward/demo-
+# validated; confirm its concurrent-risk DD with backtest_explicit before deploy.
+
+on:
+  workflow_dispatch:
+    inputs:
+      n_candidates:
+        description: "candidates incl. champion (<=256)"
+        default: "200"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tick-sweep-r4-full
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  gen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 1 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - id: gen
+        run: |
+          M=$(python tools/gen_tick_sweep_candidates.py --n ${{ github.event.inputs.n_candidates }})
+          echo "matrix=$M" >> "$GITHUB_OUTPUT"
+          echo "$M" | python -c "import json,sys; print('candidates:', len(json.load(sys.stdin)['include']))"
+
+  score:
+    needs: gen
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.gen.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 1 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Score candidate ${{ matrix.id }} on TICK + M1 (same May+June R4 window)
+        env:
+          slm: ${{ matrix.slm }}
+          entries: ${{ matrix.entries }}
+          slgap: ${{ matrix.slgap }}
+          maxhold: ${{ matrix.maxhold }}
+          delay: ${{ matrix.delay }}
+          frac: ${{ matrix.frac }}
+          lock2: ${{ matrix.lock2 }}
+          final: ${{ matrix.final }}
+          rsi_buy: ${{ matrix.rsi_buy }}
+          rsi_sell: ${{ matrix.rsi_sell }}
+          bb: ${{ matrix.bb }}
+          rr1: ${{ matrix.rr1 }}
+          rr2: ${{ matrix.rr2 }}
+          rr3: ${{ matrix.rr3 }}
+        run: |
+          set -o pipefail
+          mkdir -p out
+          # 1) candidate feed (May+June R4, Apr warmup), filtered to the tick-COVERED
+          #    days so TICK and M1 score the IDENTICAL signal set (apples-to-apples).
+          #    R4 = Jan 2026 onward (detector: every 2026 month is R4parab); ticks only
+          #    exist back to May 5 (broker retention), so May+June is the full R4 tick window.
+          python tools/generate_scalper_signals.py \
+            --charts data/XAUUSD_M1_202604_ELEV8.csv data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --output feed_full.txt --start 2026-05-05 \
+            --session-start 0 --session-end 0 --signal-tz 7 \
+            --rsi-buy-max "$rsi_buy" --rsi-sell-min "$rsi_sell" --bb-bandwidth-min "$bb" \
+            --rr1 "$rr1" --rr2 "$rr2" --rr3 "$rr3"
+          python - <<'PY'
+          import re
+          covered=set(("2026-05-05 2026-05-11 2026-05-13 2026-05-14 2026-05-15 2026-05-18 2026-05-19 2026-05-20 2026-05-21 2026-05-22 2026-05-25 2026-05-26 2026-05-27 2026-05-28 2026-05-29 "
+                       "2026-06-01 2026-06-02 2026-06-03 2026-06-04 2026-06-05 2026-06-08 2026-06-12 2026-06-15 2026-06-16 2026-06-17 2026-06-18 2026-06-19 2026-06-22 2026-06-23 2026-06-24").split())
+          keep=False; out=[]
+          for line in open("feed_full.txt"):
+              m=re.match(r"(\d{4}-\d{2}-\d{2}) GMT", line)
+              if m: keep=m.group(1) in covered
+              if keep: out.append(line)
+          open("feed.txt","w").writelines(out)
+          PY
+          # shared strategy contract (the cell's geometry); only sizing/slippage differ per run
+          M1="--charts data/XAUUSD_M1_202604_ELEV8.csv data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --max-drawdown-limit-pct 50 --progress-interval-seconds 0 --initial-capital 50000 --sync-charts false \
+            --minimum-lot 0.01 --lot-step 0.01 --bonus-per-closed-lot 3.0 \
+            --entries $entries --entry-ladder range_to_sl --entry-sl-gap $slgap --activation-delay 2 --pending-expiry 180 \
+            --max-hold $maxhold --sl-multiplier $slm --final-target $final \
+            --lock-after-tp1 true --lock-after-tp2 $lock2 --tp1-lock-delay-minutes $delay --tp2-lock-delay-minutes 2 \
+            --profit-lock-mode tp_levels --bep-trigger-distance 3.0 --tp1-lock-fraction $frac --tp2-lock-target TP1 \
+            --runner-after-tp3 false --tp3-lock-target TP2 --trailing-open-distance 0.0 --trailing-close-distance 0.0 \
+            --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0"
+          # 2) M1 risk 1% (compounded net + bonus, concurrent-risk DD)
+          python tools/backtest_explicit.py --signals feed.txt $M1 --sizing-mode risk --lot 0.01 --risk 0.01 \
+            --output-dir m1risk > m1risk.json 2>/dev/null || echo '{}' > m1risk.json
+          # 3) M1 fixed 0.01 lot (capital-independent edge)
+          python tools/backtest_explicit.py --signals feed.txt $M1 --sizing-mode fixed --lot 0.01 --risk 0.01 \
+            --output-dir m1fixed > m1fixed.json 2>/dev/null || echo '{}' > m1fixed.json
+          # 4) TICK (real executor, risk 1%, May+June R4 ticks)
+          timeout 5400 python tools/tick_backtest.py --signals feed.txt \
+            --charts data/XAUUSD_M1_202604_ELEV8.csv data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_202605_p*_ELEV8.csv data/ticks/XAUUSD_TICK_202606_p*_ELEV8.csv \
+            --watch-seconds 3 --initial-capital 50000 --sizing-mode risk --lot 0.01 --risk 0.01 \
+            --minimum-lot 0.01 --lot-step 0.01 --bonus-per-closed-lot 3.0 \
+            --entries $entries --entry-ladder range_to_sl --entry-sl-gap $slgap --activation-delay 2 --pending-expiry 180 \
+            --max-hold $maxhold --sl-multiplier $slm --final-target $final \
+            --lock-after-tp1 true --lock-after-tp2 $lock2 --tp1-lock-delay-minutes $delay --tp2-lock-delay-minutes 2 \
+            --profit-lock-mode tp_levels --bep-trigger-distance 3.0 --tp1-lock-fraction $frac --tp2-lock-target TP1 \
+            --runner-after-tp3 false --tp3-lock-target TP2 --trailing-open-distance 0.0 --trailing-close-distance 0.0 \
+            | tee run.txt
+          python tools/parse_tick_run.py run.txt > tick.json
+          # 5) merge into one comparison row
+          python tools/merge_cell_metrics.py --config '${{ toJSON(matrix) }}' \
+            --tick tick.json --m1-risk m1risk.json --m1-fixed m1fixed.json > "out/${{ matrix.id }}.json"
+          cat "out/${{ matrix.id }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "tickfull-${{ matrix.id }}"
+          path: "out/*.json"
+          if-no-files-found: error
+
+  aggregate:
+    needs: score
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - uses: actions/download-artifact@v4
+        with: { path: cells }
+      - name: Build TICK-vs-M1 comparison leaderboard
+        run: |
+          python - <<'PY'
+          import glob, json, csv, os
+          rows=[]
+          for f in glob.glob("cells/**/*.json", recursive=True):
+              try: rows.append(json.load(open(f)))
+              except Exception as e: print("skip", f, e)
+          # rank on the REAL metric: TICK net (risk 1%)
+          rows.sort(key=lambda r: (r.get("tick_net") if r.get("tick_net") is not None else -1e18), reverse=True)
+          os.makedirs("sweep_reports/tick_r4_full", exist_ok=True)
+          cols=["id","tick_net","m1_net","disc_m1_minus_tick","disc_pct","tick_dd_pct","m1_dd_pct",
+                "m1_net_nobonus","m1_bonus","m1_edge_fixed","m1_closed_lots","m1_winrate","tick_nofill",
+                "slm","entries","slgap","maxhold","delay","frac","lock2","final",
+                "rr1","rr2","rr3","bb","rsi_buy","rsi_sell"]
+          out="sweep_reports/tick_r4_full/leaderboard.csv"
+          with open(out,"w",newline="") as fh:
+              w=csv.writer(fh); w.writerow(["rank"]+cols)
+              for i,r in enumerate(rows,1):
+                  w.writerow([i]+[r.get(c,"") for c in cols])
+          champ=next((r for r in rows if r.get("id")=="c000"), None)
+          champ_rank=next((i for i,r in enumerate(rows,1) if r.get("id")=="c000"), None)
+          def fmt(r):
+              return (f"tick ${r.get('tick_net')} | M1 ${r.get('m1_net')} (disc {r.get('disc_pct')}%) | "
+                      f"M1 DD {r.get('m1_dd_pct')}% | edge(fixed) ${r.get('m1_edge_fixed')} | "
+                      f"slm {r.get('slm')} e{r.get('entries')} mh{r.get('maxhold')} f{r.get('frac')} "
+                      f"d{r.get('delay')} lock2={r.get('lock2')} {r.get('final')} | "
+                      f"rr {r.get('rr1')}/{r.get('rr2')}/{r.get('rr3')} bb{r.get('bb')} rsi{r.get('rsi_buy')}/{r.get('rsi_sell')}")
+          with open("sweep_reports/tick_r4_full/README.md","w") as fh:
+              fh.write("# R4 non-trailing FULL sweep -- TICK vs M1 (May+June 2026, full R4 tick window)\n\n")
+              fh.write(f"{len(rows)} candidates, scored on the SAME tick-covered May+June window three ways:\n")
+              fh.write("- **TICK** net (risk 1%) -- real Mt5Executor on committed May+June ticks (the rank key)\n")
+              fh.write("- **M1** net (risk 1%, slippage 2.0/1.0) -- compounded net + bonus, concurrent-risk DD\n")
+              fh.write("- **edge(fixed)** -- M1 at fixed 0.01 lot (capital-independent)\n")
+              fh.write("- **disc** = M1 net - TICK net (how much the backtest over-states)\n\n")
+              if rows: fh.write(f"**Winner {rows[0]['id']}**: {fmt(rows[0])}\n\n")
+              if champ: fh.write(f"**Champion c000** (rank {champ_rank}/{len(rows)}): {fmt(champ)}\n\n")
+              fh.write("## Top 20 (by TICK net)\n\n")
+              fh.write("| # | id | TICK $ | M1 $ | disc% | M1 DD% | edge(fix) $ | slm | e | mh | f | d | lock2 | tgt | rr | bb | rsi |\n")
+              fh.write("|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|--|\n")
+              for i,r in enumerate(rows[:20],1):
+                  fh.write(f"| {i} | {r.get('id')} | {r.get('tick_net')} | {r.get('m1_net')} | {r.get('disc_pct')} | "
+                           f"{r.get('m1_dd_pct')} | {r.get('m1_edge_fixed')} | {r.get('slm')} | {r.get('entries')} | "
+                           f"{r.get('maxhold')} | {r.get('frac')} | {r.get('delay')} | {r.get('lock2')} | {r.get('final')} | "
+                           f"{r.get('rr1')}/{r.get('rr2')}/{r.get('rr3')} | {r.get('bb')} | {r.get('rsi_buy')}/{r.get('rsi_sell')} |\n")
+              fh.write("\nTICK fills are broker-driven -- the winner is RESEARCH until forward/demo-validated.\n")
+          print(open("sweep_reports/tick_r4_full/README.md").read())
+          PY
+      - name: Commit leaderboard
+        run: |
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+          git add sweep_reports/tick_r4_full
+          git commit -m "tick-sweep: R4 non-trailing FULL leaderboard (decided on May+June ticks)" || echo "nothing to commit"
+          git pull --rebase origin main || true
+          git push || echo "push failed"
+      - uses: actions/upload-artifact@v4
+        with: { name: "tick-r4-full-leaderboard", path: "sweep_reports/tick_r4_full/**", if-no-files-found: warn }
