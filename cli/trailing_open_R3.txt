@@ -66,6 +66,7 @@ python tools/auto_explicit.py `
   --mt5-server-offset 3 `
   --mt5-history-bars 5000 `
   --reopen-missing-positions true `
+  --trailing-live-entry true `
   --sizing-mode risk `
   --lot 0.5 `
   --risk 0.065 `

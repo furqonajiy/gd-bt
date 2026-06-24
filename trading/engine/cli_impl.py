@@ -1749,6 +1749,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Each cycle, re-open at market any entry the replay still holds OPEN "
                          "but that is missing from MT5 (e.g. closed by hand), so live execution "
                          "keeps mirroring the backtest.")
+    pa.add_argument("--trailing-live-entry", action="store_true",
+                    help="Trailing-open only: place the entry off the LIVE price instead of the M1 "
+                         "backtest replay. A signal the replay marks 'already played out' is still "
+                         "placed if LIVE never traded it (no closed deals for its magic) and the "
+                         "pending window is open; the broker fills the STOP + exits on the SL, and "
+                         "the history gate blocks re-entry once it trades and closes.")
     pa.add_argument("--apply-signal-edits", action="store_true",
                     help="Consume the listener's signal-overrides journal each cycle: when the "
                          "provider EDITS a signal, flatten its live order and re-place it at the "

@@ -66,6 +66,14 @@ def build_parser() -> argparse.ArgumentParser:
                               "but that is missing from MT5 (e.g. closed by hand), with the replay's "
                               "lot, its current effective stop, and the leg's target — live keeps "
                               "mirroring the backtest until the replay itself exits the leg.")
+    runtime.add_argument("--trailing-live-entry", choices=["true", "false"], default="false",
+                         help="Trailing-open only: place the entry off the LIVE price instead of "
+                              "the M1 backtest replay. A signal the replay marks 'already played out' "
+                              "is still placed if LIVE never traded it (no closed deals for its magic) "
+                              "and the pending window is open — the broker then fills the STOP + exits "
+                              "on the SL. Once it trades and closes live, the history gate blocks "
+                              "re-entry. Lets fast-exit trailing signals trade live; those fills are "
+                              "broker/tick-driven, so demo-validate + calibrate before trusting parity.")
     runtime.add_argument("--apply-signal-edits", choices=["true", "false"], default="false",
                          help="Consume the listener's signal-overrides journal each cycle: on a "
                               "provider EDIT flatten the live order and re-place it at the corrected "
