@@ -340,9 +340,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Before the backtest, APPEND the latest MT5 ticks into "
                         "data/ticks/ (export_ticks --merge) and re-split to "
                         "--ticks-split-mb MiB parts. Soft-fails without MT5. Default true.")
-    p.add_argument("--sync-tick-months", type=int, default=2,
+    p.add_argument("--sync-tick-months", type=int, default=1,
                    help="How many recent months of ticks to refresh on --sync-ticks "
-                        "(broker tick history is short; default 2).")
+                        "(default 1 = the current month only -- the only month that "
+                        "gains new ticks; the append is incremental so a completed "
+                        "past month would be a cheap no-op if you raise this).")
     p.add_argument("--ticks-split-mb", type=float, default=95.0,
                    help="MiB cap per tick part when re-packing after --sync-ticks "
                         "(stay under GitHub's 100 MiB limit; default 95).")

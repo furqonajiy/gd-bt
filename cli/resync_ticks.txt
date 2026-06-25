@@ -75,14 +75,18 @@ python tools/export_ticks.py `
 # --mt5-server-offset accordingly (verify with `python -m trading.engine.cli mt5-info`).
 
 # ===== CONTINUE FROM THE LATEST STATE (incremental --merge) =====
-# Add only the NEW ticks since the last fetch -- no whole-window re-download.
-# --merge resumes from the last recorded tick and appends just the newer ones
-# (so ticks already archived but since aged out of the broker's tick window are
-# preserved -- --overwrite would lose them). Against the COMMITTED split archive,
-# --merge AUTO-REASSEMBLES the _pN parts back into the full month file first, then
-# resumes; --split-mb 95 then re-packs into GitHub-safe parts. So "continue" is
-# just --merge (+ --split-mb to re-pack). Set the dates to the month you are
-# extending (same month = grow it forward; a new month = first fetch of it).
+# Add only the NEW ticks since the last fetch -- no whole-archive re-download or
+# reassemble. --merge resumes from the last recorded tick and appends just the
+# newer ones (so ticks already archived but since aged out of the broker's tick
+# window are preserved -- --overwrite would lose them). Against the COMMITTED
+# split archive WITH --split-mb, --merge APPENDS the new ticks to the TAIL part
+# and re-splits ONLY that tail (p1..p(N-1) are never touched), so a completed
+# past month with no new ticks is a cheap no-op and the current month only
+# rewrites its last part -- never the whole ~600 MiB month. (Without --split-mb it
+# instead reassembles the parts into a full working file and merges into that.)
+# Set the dates to the month you are extending (same month = grow it forward; a
+# new month = first fetch of it). Tip: just sync the CURRENT month -- past months
+# don't gain ticks.
 python tools/export_ticks.py `
   --symbol XAUUSD `
   --start-date 2026-06-01 `
