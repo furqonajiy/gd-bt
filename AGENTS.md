@@ -446,6 +446,18 @@ RSI × S/R × S&D for R4 runs from `.github/workflows/self-scalper-rr-bb-rsi-sr-
 (prefix `selfsdr`), whose `rsi_sqz6_rr40` cell reproduces the champion. Keep **one
 writer per sweep branch**; and run sweeps on a
 `research/...` branch, never on `main`.
+**Trailing decided on TICKS:** `.github/workflows/tick-sweep-trailing-self.yml`
+sweeps trailing-open × trailing-close × `trailing_close_after_stage` (0 = trail from
+open, 1 = trail only after TP1) on the self-scalper (C160) feed, scored by
+`tools/tick_backtest.py` on the committed **June ELEV8 ticks** (the M1 engine
+over-states trailing-open/close fills; the older `self-scalper-trailing-sweep` is
+M1-only). Keep trailing distances **≥ the broker min-stop** (`SYMBOL_TRADE_STOPS_LEVEL`,
+~0.4) — a resting STOP closer than that is rejected (retcode 10015) and the tick mock
+does NOT enforce the floor. `trailing_close_after_stage` now also gates the
+`tp_levels` profit-lock mode (not just scale-out), so the trail can engage only after
+TP1; and the executor never parks a trailing-close stop below the position's real fill
+(`mt5_executor_trailing._apply_trailing_close_stops`), so a trailing-close exit is
+never a loss vs the actual open price.
 
 ## Commands
 

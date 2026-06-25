@@ -308,7 +308,8 @@ def build_config(args) -> StrategyConfig:
         tp1_lock_fraction=args.tp1_lock_fraction, tp2_lock_target=args.tp2_lock_target,
         runner_after_tp3=args.runner_after_tp3, tp3_lock_target=args.tp3_lock_target,
         trailing_open_distance=args.trailing_open_distance,
-        trailing_close_distance=args.trailing_close_distance)
+        trailing_close_distance=args.trailing_close_distance,
+        trailing_close_after_stage=getattr(args, "trailing_close_after_stage", 0))
 
 
 def _install_sim_clock():
@@ -447,6 +448,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--tp3-lock-target", choices=["TP2"], required=True)
     s.add_argument("--trailing-open-distance", type=_positive_float, required=True)
     s.add_argument("--trailing-close-distance", type=_positive_float, required=True)
+    s.add_argument("--trailing-close-after-stage", type=int, default=0,
+                   help="Engage the trailing-close stop only at/after this stage "
+                        "(0=from open, 1=after TP1, 2=after TP2).")
     return p
 
 

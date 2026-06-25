@@ -219,7 +219,18 @@ class Position:
             stop = self.signal.tp1
         else:
             stop = entry.initial_sl
-        return self._combine_with_trailing_stop(entry, stop, config) if config is not None else stop
+        if config is None:
+            return stop
+        # trailing_close_after_stage gates WHEN the ratcheting trailing-close stop
+        # is folded in (0 = from open, the default/parity behavior; 1 = only at/after
+        # TP1, 2 = after TP2). Before that stage the leg rides the base stop above
+        # (initial SL, then the TP1/TP2 lock). Mirrors the scale-out branch's gate so
+        # the lever works in BOTH modes -- so a sweep can decide trail-from-open vs
+        # trail-after-TP1.
+        after = int(getattr(config, "trailing_close_after_stage", 0) or 0)
+        if after > 0 and stage < after:
+            return stop
+        return self._combine_with_trailing_stop(entry, stop, config)
 
 
 def _floor_to_step(value: float, step: float) -> float:
