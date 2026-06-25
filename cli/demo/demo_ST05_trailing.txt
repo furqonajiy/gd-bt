@@ -1,0 +1,94 @@
+# =========================================================================
+# ST05 — SELF-SCALPER TRAILING-OPEN/CLOSE (DEMO)  | tag ST05  *** DEMO ONLY ***
+# Self-generated scalper feed (RSI 70/25-style + Bollinger squeeze + R:R 1.2/2.5/5,
+# same filter as C160) on C160 geometry, PLUS trailing-open 0.2 / trailing-close 0.5.
+#
+# WHY this config: on the DEMO broker's REAL June ticks (self feed generated from
+# the demo M1, hybrid tick backtest) trailing 0.2/0.5 returned net ~ +$3,931 / win
+# ~60% vs the no-trailing C160 base at ~ +$148 / win ~43% over the same window --
+# trailing is the lever for the scalper. (One short window; DEMO to confirm.)
+#
+# INCLUDES THE INSTANT-CLOSE FIX: the executor now refuses to park a trailing-close
+# stop BELOW the position's real fill (commit f628ca6) -- so the "opens then closes
+# instantly at a loss" you saw (a trailing-close stop set under a spike fill) cannot
+# happen: underwater legs ride the original SL; the trail only locks in profit.
+#
+# *** READ BEFORE TRUSTING ***
+#  1) ONE demo-tick window (June 2026). Forward-only; watch the demo equity.
+#  2) Trailing-open STOP fills are broker-driven; the backtest mock fills at the
+#     exact trigger with NO slippage. The demo run IS the slippage calibration --
+#     compare demo fills to the trigger and to the backtest repro below.
+#  3) payoff < 1 (many small wins, fewer larger losses): it needs the high hit-rate.
+#
+# IDENTITY (one per strategy): --strategy-tag ST05 · positions_st05.json ·
+#   signals/st05_live.txt · forensic_st05.jsonl / notifications_st05.jsonl ·
+#   reports/ST05_demo. Run on the DEMO account, ideally ALONE.
+# =========================================================================
+
+# ===== 1. LIVE FEED GENERATOR (self-scalper, from the demo terminal's M1) =====
+python tools/live_feed_loop.py `
+  --family scalper `
+  --interval 30 `
+  --gen-start-days 3 `
+  --gen-recent-months 2 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/st05_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
+
+# ===== 2. LIVE AUTO EXECUTOR (trailing-open 0.2 / trailing-close 0.5) =====
+python tools/auto_explicit.py `
+  --signals signals/st05_live.txt `
+  --positions-json positions_st05.json `
+  --strategy-tag ST05 `
+  --forensic-log forensic_st05.jsonl `
+  --notifications notifications_st05.jsonl `
+  --watch-interval 3 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --reopen-missing-positions true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --entries 7 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 300 `
+  --sl-multiplier 2.1 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 false `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.75 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.2 `
+  --trailing-close-distance 0.5 `
+  --trailing-live-entry true
+
+# ===== 3. TICK BACKTEST ON THE DEMO ARCHIVE (reproduce / calibrate) =====
+# Generate the self feed from the committed demo M1 first, then tick-backtest it:
+#   python tools/generate_scalper_signals.py --charts "data/demo/XAUUSD_M1_*_DEMO.csv" `
+#     --output signals/st05_demo.txt --start 2026-06-01 --session-start 0 --session-end 0 `
+#     --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
+python tools/backtest_hybrid.py `
+  --signals signals/st05_demo.txt `
+  --charts "data/demo/XAUUSD_M1_*_DEMO.csv" `
+  --ticks "data/demo/ticks/XAUUSD_TICK_*_DEMO.csv" `
+  --max-drawdown-limit-pct 50 --progress-interval-seconds 30 `
+  --sizing-mode risk --lot 0.01 --risk 0.01 --minimum-lot 0.01 --lot-step 0.01 --bonus-per-closed-lot 3 `
+  --entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.7 --shared-sl false `
+  --activation-delay 2 --pending-expiry 180 --max-hold 300 --sl-multiplier 2.1 --final-target TP3 `
+  --lock-after-tp1 true --lock-after-tp2 false --tp1-lock-delay-minutes 24 --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels --bep-trigger-distance 3 --tp1-lock-fraction 0.75 --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.2 --trailing-close-distance 0.5 `
+  --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0 `
+  --output-dir reports/ST05_demo --initial-capital 1000
