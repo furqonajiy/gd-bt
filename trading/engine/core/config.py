@@ -102,6 +102,17 @@ class StrategyConfig:
     # set it, and it would fight the executor's SLTP ownership.
     trailing_close_min_step: float = 0.0
 
+    # Daily-drawdown circuit breaker (backtest + live parity with the
+    # auto_self._evaluate_guards "DAILY-LOSS HALT"). When > 0, trading stops for
+    # the REST of a feed-zone day once that day's realized equity falls to
+    # day_start_equity * (1 - daily_drawdown_stop_pct/100) -- i.e. an intraday
+    # loss of this many percent from the day's opening equity. The remaining
+    # signals of that day are skipped (recorded as excluded "daily-drawdown-halt"),
+    # and the guard resets at the next day. 0.0 disables it (parity default), so
+    # DEFAULT_CONFIG / existing backtests are byte-identical. Measured from the
+    # day's STARTING equity (not the intraday peak), to match the live guard.
+    daily_drawdown_stop_pct: float = 0.0
+
     # Optional trend-following runner. When enabled and a TP3 trade is already
     # profitable, the strategy can keep it open while EMA trend agrees and protect
     # it with an ATR trailing stop. Disabled by default; enable per run with

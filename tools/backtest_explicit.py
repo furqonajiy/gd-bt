@@ -352,6 +352,12 @@ def add_required_strategy_args(p: argparse.ArgumentParser) -> None:
                                "runs in both runners): the backtest engine trails continuously and "
                                "ignores it; auto_explicit.py sends the SL modify to MT5 only when the "
                                "stop improves by at least this many price units.")
+    strategy.add_argument("--daily-drawdown-stop-pct", type=_positive_float, default=0.0,
+                          help="Daily-drawdown circuit breaker (percent): when >0, stop trading for the "
+                               "rest of a feed-zone day once that day's equity falls this many percent "
+                               "below the day's opening equity; the remaining signals of the day are "
+                               "skipped and the guard resets the next day. Mirrors the live "
+                               "auto_self DAILY-LOSS HALT. 0 disables it (default).")
     strategy.add_argument("--lock-exit-slippage", type=_positive_float, default=0.0,
                           help="Backtest realism (price units): UNIFORM give-back when a LOCKED "
                                "protective stop (LOCK_TP1/LOCK_TP2) fills at market on the retrace, "
@@ -506,6 +512,7 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         trailing_open_distance=args.trailing_open_distance,
         trailing_close_distance=args.trailing_close_distance,
         trailing_close_min_step=args.trailing_close_min_step,
+        daily_drawdown_stop_pct=args.daily_drawdown_stop_pct,
         lock_exit_slippage_points=args.lock_exit_slippage,
         lock_tp1_exit_slippage_points=args.lock_tp1_exit_slippage,
         lock_tp2_exit_slippage_points=args.lock_tp2_exit_slippage,

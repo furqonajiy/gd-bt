@@ -244,6 +244,17 @@ pair is a thin package that imports it.
   These are **backtest-only** and never change live order placement. From the
   2026-06-16 reconciliation: at equal lot, live tracks the backtest on entries,
   TP3, and SL to the cent; the only gap is locked exits, which this models.
+- **Daily-drawdown circuit breaker** (`daily_drawdown_stop_pct`,
+  `--daily-drawdown-stop-pct`; default **0.0 → OFF/parity**). The backtest mirror
+  of the live `auto_self._evaluate_guards` "DAILY-LOSS HALT": when > 0, `run_backtest`
+  stops trading for the rest of a **feed-zone day** once that day's realized equity
+  falls to `day_start_equity·(1 − pct/100)` — the remaining signals of the day are
+  skipped (excluded `daily-drawdown-halt`) and the guard **resets at the next day**.
+  Measured from the day's **opening** equity (not the intraday peak), to match the
+  live guard; it does not change the multi-day headline max-DD figure. Regime-
+  dependent: on the Victor feed a 10% daily stop *added* ~+$22k in the parabolic
+  2026 window (cut losing days) but cost ~−$2.7k in the recovering 2025 window —
+  forward-validate per regime, don't assume it always helps.
 - **Signal R:R / SL-source policy** (`strategy/backtest.apply_signal_rr_policy`,
   applied per-signal in `run_backtest`; **all default OFF → parity**). For
   provider feeds whose posted TP/SL vary in quality — Victor's 2024–25 signals

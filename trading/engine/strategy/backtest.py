@@ -557,7 +557,29 @@ def run_backtest(
     atr_at = (_atr_lookup(chart_df, config.atr_period)
               if getattr(config, "sl_source", "signal") == "atr" else None)
 
+    # Daily-drawdown circuit breaker (mirrors auto_self._evaluate_guards): when
+    # configured, once a feed-zone day's realized equity drops to
+    # day_start_equity * (1 - pct/100), the rest of that day's signals are
+    # skipped, and the guard resets when the day rolls over. Disabled at 0.0
+    # (parity). Signals are processed chronologically, so a day's signals are
+    # contiguous and the day-open equity is just `equity` at the day boundary.
+    daily_dd_stop = float(getattr(config, "daily_drawdown_stop_pct", 0.0) or 0.0)
+    current_day = None
+    day_start_equity = equity
+    day_halted = False
+
     for sig in signals:
+        if daily_dd_stop > 0:
+            sig_day = sig.signal_time_source.date()
+            if sig_day != current_day:
+                current_day = sig_day
+                day_start_equity = equity
+                day_halted = False
+            if day_halted:
+                excluded.append({"signal_key": sig.signal_key,
+                                 "reason": "daily-drawdown-halt"})
+                continue
+
         screened, reason = screen_signal(
             sig, config, chart_start, chart_end, atr_at=atr_at,
             exclude_structural_anomalies=exclude_structural_anomalies,
@@ -572,6 +594,9 @@ def run_backtest(
         entry_rows.extend(built["entry_rows"])
         if built["status"] != "OPEN":
             equity = built["equity_after"]
+        if daily_dd_stop > 0 and day_start_equity > 0 and \
+                equity <= day_start_equity * (1.0 - daily_dd_stop / 100.0):
+            day_halted = True
         if equity <= 0:
             break
 
