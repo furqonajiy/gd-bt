@@ -504,9 +504,15 @@ shared_sl off, on the **triple-filtered** scalper24 feed `--rsi-buy-max 75
 `champions/CHAMPION_R4parab.json`), the edge+OOS leader of the 34-variant RSI ×
 Bollinger × R:R sweep (edge $63,940 / OOS $11,633 / DD 38.4%) — it superseded the
 e5 RSI champion, which had superseded SC24T24E8 for R4 after it breached the DD ≤
-40% gate on 2026 data (SC24T24E8 remains the R2bull/R3strong champion); the only
-other deployed feed is `cli/champion_victor` (Victor — feed
-`signals/victor_live.txt`, positions `positions_victor.json`, tag VIC).
+40% gate on 2026 data (SC24T24E8 remains the R2bull/R3strong champion); the other
+deployed feeds are `cli/champion_victor` (Victor — feed
+`signals/victor_live.txt`, positions `positions_victor.json`, tag VIC). **Deployed 2026-06-25** beside their champions as live tick-tuned
+head-to-heads: `cli/candidate_VIC_C116_tick` (**V116** beside VIC —
+TP2/mh180/slm1.7/delay12, TICK +$24.7k, M1 DD 11.3%, under the gate) and
+`cli/candidate_R4_C160_tick` (**C160** beside SQZ6 — *research-grade*: M1 DD
+**42.1% is OVER the 40% gate** and 193/200 May+June cells were tick-negative, so
+run it at REDUCED risk / on DEMO and monitor; SQZ6 stays the gate-compliant R4
+champion).
 `cli/resync_m1_from_2020` is the M1-archive resync utility (not a strategy), and
 `cli/rr08x15x30` is a **backtest-only R:R research candidate** — the #1-by-edge R4
 signal-R:R sweep winner (TP1/TP2/TP3 rewritten via the generator's

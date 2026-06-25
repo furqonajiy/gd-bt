@@ -15,11 +15,19 @@ Usage (run in the terminal you want the process to live in):
     python cli/run.py sqz6             # menu: sections of the SQZ6 champion
     python cli/run.py sqz6 3           # run section 3 (live auto executor) here
     python cli/run.py victor listener  # match a section by name too
+    python cli/run.py v116 backtest    # run sections 4..end (signal-gen + all backtests)
+    python cli/run.py c160 5-9         # run a range of sections, in order
     python cli/run.py sqz6 3 --print   # show the exact command, don't run it
 
-Aliases: victor/vic, sqz6, e640, rr08, resync (or any unique part of a filename).
-The reconstructed command is byte-identical to the snapshot (PowerShell `
-continuations are joined into one line), so this never diverges from cli/*.txt.
+Section selectors: a number (3), a name substring (listener), a range (5-9 / 4-),
+or a keyword -- `backtest`/`bt` (sections >= 4: signal-gen + every era backtest),
+`live` (1-3), `all`. Multi-section selectors run their sections in order and stop
+at the first one that fails.
+
+Aliases: victor/vic, sqz6, e640, rr08, sl19, c160, v116, resync, ticks (or any
+unique part of a filename). The reconstructed command is byte-identical to the
+snapshot (PowerShell ` continuations are joined into one line), so this never
+diverges from cli/*.txt.
 """
 from __future__ import annotations
 
@@ -144,12 +152,28 @@ def resolve_strategy(token: str, files: list[Path]) -> Path | None:
     return exact[0] if len(exact) == 1 else None
 
 
-def resolve_section(token: str, sections: list[Section]) -> Section | None:
-    if token.isdigit():
-        hits = [s for s in sections if s.number == int(token)]
-        return hits[0] if hits else None
-    hits = [s for s in sections if token.lower() in s.name.lower()]
-    return hits[0] if len(hits) == 1 else None
+def resolve_sections(token: str, sections: list[Section]) -> tuple[list[Section], bool]:
+    """Resolve a section selector to an ORDERED list of sections + whether multiple
+    are intentional. Accepts a keyword (backtest/bt -> number>=4; live -> 1-3; all),
+    a range (N-M or N-), a number, or a name substring. The bool is True when the
+    selector deliberately picks many (keyword/range) so the caller runs them all;
+    False for number/name (a name matching >1 is ambiguous, not a batch)."""
+    t = token.lower().strip()
+    if t in ("backtest", "backtests", "bt"):
+        return [s for s in sections if s.number >= 4], True
+    if t == "live":
+        return [s for s in sections if 1 <= s.number <= 3], True
+    if t == "all":
+        return list(sections), True
+    m = re.fullmatch(r"(\d+)-(\d*)", t)
+    if m:
+        lo = int(m.group(1))
+        hi = int(m.group(2)) if m.group(2) else max((s.number for s in sections), default=lo)
+        return [s for s in sections if lo <= s.number <= hi], True
+    if t.isdigit():
+        return [s for s in sections if s.number == int(t)], False
+    hits = [s for s in sections if t in s.name.lower()]
+    return hits, False
 
 
 def _choose(prompt: str, labels: list[str]) -> int | None:
@@ -181,7 +205,9 @@ def run_section(section: Section, *, dry: bool) -> int:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Run a cli/*.txt section in the current terminal.")
     p.add_argument("strategy", nargs="?", help="victor | sqz6 | e640 | rr08 | resync (or part of a filename)")
-    p.add_argument("section", nargs="?", help="section number (1-9, 0=setup) or part of its name")
+    p.add_argument("section", nargs="?",
+                   help="section number (1-9), name substring, range (5-9 / 4-), or a "
+                        "keyword: backtest/bt (>=4), live (1-3), all")
     p.add_argument("--print", "--dry-run", dest="dry", action="store_true",
                    help="show the exact command instead of running it")
     args = p.parse_args(argv)
@@ -208,21 +234,33 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{path.name} has no runnable sections", file=sys.stderr)
         return 1
 
-    # --- pick section ---
-    section: Section | None = None
+    # --- pick section(s) ---
+    selected: list[Section] = []
     if args.section:
-        section = resolve_section(args.section, sections)
-        if section is None:
-            print(f"no single match for section {args.section!r} in {path.stem}; choose one:")
-    if section is None:
+        sel, multi = resolve_sections(args.section, sections)
+        if not sel:
+            print(f"no match for section {args.section!r} in {path.stem}; choose one:")
+        elif len(sel) > 1 and not multi:
+            print(f"section {args.section!r} is ambiguous in {path.stem}; choose one:")
+        else:
+            selected = sel
+    if not selected:
         labels = [f"{s.number}. {s.name}" for s in sections]
         idx = _choose(f"Section of {path.stem}", labels)
         if idx is None:
             return 1
-        section = sections[idx]
+        selected = [sections[idx]]
 
-    print(f"\n=== {path.stem}  ->  {section.number}. {section.name} ===")
-    return run_section(section, dry=args.dry)
+    if len(selected) > 1:
+        print(f"=== {path.stem}: running sections "
+              f"{', '.join(str(s.number) for s in selected)} in order ===")
+    for s in selected:
+        print(f"\n=== {path.stem}  ->  {s.number}. {s.name} ===")
+        rc = run_section(s, dry=args.dry)
+        if rc != 0:
+            print(f"[stopped: section {s.number} ({s.name}) exited {rc}]", file=sys.stderr)
+            return rc
+    return 0
 
 
 if __name__ == "__main__":

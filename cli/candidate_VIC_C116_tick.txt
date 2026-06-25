@@ -33,9 +33,11 @@
 # deployed VIC champion (TP3 / mh240 / slm2.1) is only ~breakeven on May+June ticks
 # (+$244), so this TP2 / mh180 / slm1.7 tune is a real, evidence-backed improvement.
 #
-# STATUS: RESEARCH CANDIDATE, NOT the deployed champion. It is one window (May+June
-# 2026 ticks). FORWARD/DEMO-VALIDATE beside the deployed VIC before any live
-# promotion; prefer DEMO first. The deployed Victor remains cli/champion_victor.txt.
+# STATUS: DEPLOYED 2026-06-25 -- run LIVE beside VIC (section 3) as a head-to-head.
+# Evidence is one tick window (May+June 2026), but the profile is strong AND stable
+# (TICK +$24.7k, M1 DD 11.3% -- well under the 40% gate), the safer of the two
+# tick-tuned deploys. Still confirm it tracks the backtest live; the incumbent VIC
+# (cli/champion_victor.txt) stays the reference champion.
 #
 # ONE IDENTITY PER STRATEGY (keyed off tag **V116**), so it never collides with VIC:
 #   --strategy-tag V116 · --positions-json positions_v116.json ·
