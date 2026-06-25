@@ -213,13 +213,30 @@ jobs:
               fh.write("\nTICK fills are broker-driven -- the winner is RESEARCH until forward/demo-validated.\n")
           print(open("sweep_reports/tick_r4_full/README.md").read())
           PY
-      - name: Commit leaderboard
+      # Upload the freshly generated leaderboard BEFORE the git commit, so the
+      # artifact always captures the clean files even if the push below races/fails
+      # (the previous order let a mid-rebase, conflict-marked working tree get uploaded).
+      - uses: actions/upload-artifact@v4
+        with: { name: "tick-r4-full-leaderboard", path: "sweep_reports/tick_r4_full/**", if-no-files-found: warn }
+      - name: Commit leaderboard to main
         run: |
           git config user.name "C - Furqon Aji Yudhistira"
           git config user.email "furqonajiy@gmail.com"
           git add sweep_reports/tick_r4_full
-          git commit -m "tick-sweep: R4 non-trailing FULL leaderboard (decided on May+June ticks)" || echo "nothing to commit"
-          git pull --rebase origin main || true
-          git push || echo "push failed"
-      - uses: actions/upload-artifact@v4
-        with: { name: "tick-r4-full-leaderboard", path: "sweep_reports/tick_r4_full/**", if-no-files-found: warn }
+          git commit -m "tick-sweep: R4 non-trailing FULL leaderboard (decided on May+June ticks)" \
+            || { echo "nothing to commit"; exit 0; }
+          # checkout@v5 leaves a DETACHED HEAD, so a bare `git push` fails ("not on a
+          # branch"); push the detached HEAD explicitly to main. The leaderboard files
+          # may already exist on main from a prior run (add/add conflict on rebase), so
+          # rebase favouring our freshly regenerated files (-X theirs), retrying on any
+          # race with a concurrent writer.
+          for i in 1 2 3 4 5; do
+            git fetch origin main || true
+            if git rebase -X theirs origin/main; then
+              if git push origin HEAD:main; then echo "pushed"; exit 0; fi
+            else
+              git rebase --abort 2>/dev/null || true
+            fi
+            sleep $((2 ** i))
+          done
+          echo "push failed after retries"; exit 1

@@ -184,13 +184,28 @@ jobs:
               fh.write("\nVictor signal R:R/ATR policy NOT swept (tick_backtest limitation). RESEARCH until forward/demo-validated.\n")
           print(open("sweep_reports/tick_vic_full/README.md").read())
           PY
-      - name: Commit leaderboard
+      # Upload the freshly generated leaderboard BEFORE the git commit, so the
+      # artifact always captures the clean files even if the push below races/fails.
+      - uses: actions/upload-artifact@v4
+        with: { name: "tick-vic-leaderboard", path: "sweep_reports/tick_vic_full/**", if-no-files-found: warn }
+      - name: Commit leaderboard to main
         run: |
           git config user.name "C - Furqon Aji Yudhistira"
           git config user.email "furqonajiy@gmail.com"
           git add sweep_reports/tick_vic_full
-          git commit -m "tick-sweep: VICTOR May+June leaderboard (decided on ticks)" || echo "nothing to commit"
-          git pull --rebase origin main || true
-          git push || echo "push failed"
-      - uses: actions/upload-artifact@v4
-        with: { name: "tick-vic-leaderboard", path: "sweep_reports/tick_vic_full/**", if-no-files-found: warn }
+          git commit -m "tick-sweep: VICTOR May+June leaderboard (decided on ticks)" \
+            || { echo "nothing to commit"; exit 0; }
+          # checkout@v5 leaves a DETACHED HEAD, so a bare `git push` fails ("not on a
+          # branch"); push the detached HEAD explicitly to main. Rebase favouring our
+          # freshly regenerated files (-X theirs) so a prior run's files on main don't
+          # cause an add/add conflict, retrying on any race with a concurrent writer.
+          for i in 1 2 3 4 5; do
+            git fetch origin main || true
+            if git rebase -X theirs origin/main; then
+              if git push origin HEAD:main; then echo "pushed"; exit 0; fi
+            else
+              git rebase --abort 2>/dev/null || true
+            fi
+            sleep $((2 ** i))
+          done
+          echo "push failed after retries"; exit 1
