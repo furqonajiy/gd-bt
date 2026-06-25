@@ -32,7 +32,8 @@ class _Tick:
 
 
 class _Position:
-    def __init__(self, *, ticket, magic, comment, sl, tp, ptype=0, volume=0.10):
+    def __init__(self, *, ticket, magic, comment, sl, tp, ptype=0, volume=0.10,
+                 price_open=4750.0):
         self.ticket = ticket
         self.magic = magic
         self.comment = comment
@@ -41,7 +42,7 @@ class _Position:
         self.type = ptype
         self.volume = volume
         self.time = 0
-        self.price_open = 4750.0
+        self.price_open = price_open
 
 
 class _FakeMt5:
@@ -123,7 +124,7 @@ def _trailing_pos(min_step: float):
     return sig, cfg, pos
 
 
-def _executor_with_position(sig, broker_sl: float):
+def _executor_with_position(sig, broker_sl: float, price_open: float = 4750.0):
     mt5 = _FakeMt5(bid=4756.0, ask=4756.2)
     mt5._positions = [_Position(
         ticket=501,
@@ -131,6 +132,7 @@ def _executor_with_position(sig, broker_sl: float):
         comment=mt5_entry_comment(sig.signal_key, 0),
         sl=broker_sl,
         tp=4780.0,
+        price_open=price_open,
     )]
     return Mt5Executor(_FakeConn(mt5), "XAUUSD"), mt5
 
@@ -182,3 +184,29 @@ def test_first_protective_set_ignores_min_step():
     reqs = _sltp_requests(mt5)
     assert len(reqs) == 1
     assert reqs[0]["sl"] == 4754.0
+
+
+def test_trailing_close_not_parked_below_real_fill():
+    """In-profit-vs-real-fill guard: the engine's trailing_stop (4754, computed
+    against the M1 entry 4750) must NOT be sent when the position actually filled
+    HIGHER (price_open 4756) -- 4754 < 4756 would be a LOSS vs the real fill (the
+    open-then-instant-close-at-a-loss bug). The leg keeps its protective SL."""
+    sig, cfg, pos = _trailing_pos(min_step=0.0)
+    executor, mt5 = _executor_with_position(sig, broker_sl=0.0, price_open=4756.0)
+
+    executor._apply_trailing_close_stops(pos, cfg)
+
+    assert _sltp_requests(mt5) == []   # losing trailing-close stop suppressed
+
+
+def test_trailing_close_parked_when_in_profit_vs_real_fill():
+    """Same trail target (4754), but the real fill (4750) is below it -> 4754 is a
+    profit, so the trailing-close stop IS applied (the fix does not block genuine
+    in-profit trails)."""
+    sig, cfg, pos = _trailing_pos(min_step=0.0)
+    executor, mt5 = _executor_with_position(sig, broker_sl=0.0, price_open=4750.0)
+
+    executor._apply_trailing_close_stops(pos, cfg)
+
+    reqs = _sltp_requests(mt5)
+    assert len(reqs) == 1 and reqs[0]["sl"] == 4754.0
