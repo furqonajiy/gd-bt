@@ -47,9 +47,12 @@
 #     tick-run measurement characteristic, not 200 blown accounts. Use the M1
 #     concurrent-risk DD for the gate, and forward/demo-validate the real DD.
 #
-# STATUS: RESEARCH CANDIDATE, NOT the deployed champion. FORWARD/DEMO-VALIDATE
-# beside SQZ6 before any live promotion; prefer DEMO first. The deployed R4
-# champion remains SQZ6 (cli/champion_R4_SQZ6_no_trailing.txt).
+# STATUS: DEPLOYED 2026-06-25 -- run LIVE beside SQZ6 (section 3) as a head-to-head,
+# but RESEARCH-GRADE: its M1 concurrent DD is 42.1% (OVER the <=40% gate) and over
+# May+June 193/200 cells were tick-NEGATIVE, so this is the best of a marginal field,
+# NOT a proven edge. Deploy at REDUCED risk (lower --risk so concurrent DD < 40%)
+# and/or on DEMO, and monitor closely. SQZ6 (cli/champion_R4_SQZ6_no_trailing.txt)
+# stays the gate-compliant R4 champion.
 #
 # ONE IDENTITY PER STRATEGY (so it never collides with SQZ6 / SL19 / E640 live):
 # keyed end-to-end off tag **C160** --

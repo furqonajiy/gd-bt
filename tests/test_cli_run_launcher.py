@@ -81,9 +81,39 @@ def test_resolvers_and_aliases():
     assert run.resolve_strategy("vic", files) == VICTOR
     assert run.resolve_strategy("nope", files) is None
     sections = run.parse_sections(SQZ6)
-    assert run.resolve_section("3", sections).number == 3
-    assert run.resolve_section("auto", sections).number == 3   # name match
-    assert run.resolve_section("99", sections) is None
+
+    def one(token):
+        sel, _multi = run.resolve_sections(token, sections)
+        return sel[0] if len(sel) == 1 else None
+
+    assert one("3").number == 3
+    assert one("auto").number == 3                    # name match
+    assert run.resolve_sections("99", sections)[0] == []   # no such number
+
+
+def test_section_keywords_and_ranges():
+    sections = run.parse_sections(SQZ6)
+
+    bt, multi = run.resolve_sections("backtest", sections)
+    assert multi and [s.number for s in bt] == [4, 5, 6, 7, 8, 9]  # >= 4 (4=signal-gen for SQZ6)
+    assert run.resolve_sections("bt", sections)[0] == bt
+
+    rng, multi = run.resolve_sections("7-9", sections)
+    assert multi and [s.number for s in rng] == [7, 8, 9]
+    assert [s.number for s in run.resolve_sections("8-", sections)[0]] == [8, 9]
+
+    live, multi = run.resolve_sections("live", sections)
+    assert multi and [s.number for s in live] == [2, 3]          # 1 (listener) is N/A here
+
+
+def test_backtest_keyword_runs_sections_4_to_end(capsys):
+    # V116: section 4 is N/A, so `backtest` is sections 5..9; all reconstruct.
+    rc = run.main(["v116", "backtest", "--print"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "running sections 5, 6, 7, 8, 9 in order" in out
+    assert out.count("tools/backtest_hybrid.py") == 2          # 2026-06 + 2026-01
+    assert out.count("tools/backtest_explicit.py") == 3        # 2025 / 2024 / 2021-2023
 
 
 def test_print_mode_runs_nothing(capsys):
