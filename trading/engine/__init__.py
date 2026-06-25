@@ -228,9 +228,12 @@ from .strategy.regime_adaptive import champion_config, make_regime_config_resolv
 
 # 8. strategy.backtest
 from .strategy.backtest import (
+    aggregate_backtest_result,
     position_status,
     replay_signal,
+    replay_signal_rows,
     run_backtest,
+    screen_signal,
     write_backtest_outputs,
 )
 
@@ -304,6 +307,7 @@ __all__ = [
     "read_current_regime", "trend_score",
     "champion_config", "make_regime_config_resolver",
     "position_status", "replay_signal", "run_backtest", "write_backtest_outputs",
+    "aggregate_backtest_result", "replay_signal_rows", "screen_signal",
     "GeneratedSignal", "RejectionSignalConfig", "format_generated_signals", "generate_rejection_signals",
     "MomentumSignalConfig", "generate_momentum_signals",
     "Mt5ChartSource", "Mt5Connection", "archive_m1_by_month", "mt5_equity",

@@ -252,141 +252,126 @@ def _finalize_bucket(b: dict) -> None:
         b["pnl_pct"] = 0.0
 
 
-def run_backtest(
-        signals: list[Signal], chart: CsvChartSource,
-        config: StrategyConfig = DEFAULT_CONFIG,
-        *,
-        exclude_structural_anomalies: bool = False,
-        contract_size: float = CONTRACT_SIZE_OZ,
-        config_resolver=None,
-) -> dict:
-    """Replay every signal and aggregate.
+def screen_signal(sig, config, chart_start, chart_end, *, atr_at=None,
+                  exclude_structural_anomalies=False, config_resolver=None):
+    """Apply run_backtest's per-signal gates (chart bounds, structural anomaly,
+    signal R:R / ATR policy). Returns ((transformed_sig, sig_config), None) to
+    replay, or (None, reason) to exclude. Mirrors the run_backtest loop head so
+    the hybrid backtest screens signals identically (parity)."""
+    if chart_start is None or sig.signal_time_chart < chart_start:
+        return None, "before chart start"
+    if chart_end is None or sig.signal_time_chart > chart_end:
+        return None, "after chart end"
+    if exclude_structural_anomalies and sig.structural_anomaly:
+        return None, "structural anomaly"
+    sig_config = config_resolver(sig) if config_resolver is not None else config
+    transformed = apply_signal_rr_policy(
+        sig, sig_config,
+        atr_value=atr_at(sig.signal_time_chart) if atr_at is not None else None)
+    if transformed is None:
+        return None, "below min R:R"
+    return (transformed, sig_config), None
 
-    ``config_resolver``: optional ``callable(signal) -> StrategyConfig``. When
-    given (regime-adaptive backtest), each signal is replayed under the config it
-    returns instead of the fixed ``config`` -- so the backtest mirrors the live
-    ``auto --adaptive`` switch. ``config`` is still the base for capital/reporting.
-    """
-    chart_df = chart.dataframe
-    chart_start = chart.first_time()
-    chart_end = chart.last_time()
 
-    equity = config.initial_capital
-    rows: list[dict] = []
-    entry_rows: list[dict] = []
-    excluded: list[dict] = []
+def replay_signal_rows(sig, chart_df, equity, sig_config, base_config,
+                       contract_size=CONTRACT_SIZE_OZ):
+    """Replay ONE already-screened/transformed signal on M1 bars and build its
+    per-signal + per-entry report rows. Extracted VERBATIM from run_backtest's
+    loop body so the hybrid tick/M1 backtest reuses the EXACT M1 row construction
+    (parity). ``sig_config`` is the per-signal (resolver) replay config; ``base_config``
+    is the run base used for the per-entry bonus + final-target label (matching
+    run_backtest's original config/sig_config split). Returns a dict with keys
+    row, entry_rows, status, equity_after."""
+    pos = replay_signal(sig, chart_df, equity, sig_config, contract_size)
+    status, trading_pnl = position_status(pos)
+    closed_lots = 0.0 if status == "OPEN" else _entry_closed_lots(pos)
+    bonus = 0.0 if status == "OPEN" else _bonus_for_position(pos, sig_config)
+    total_pnl = trading_pnl + bonus if status != "OPEN" else None
+    equity_after = equity if status == "OPEN" else equity + float(total_pnl or 0.0)
+    row = {
+        "global_id": sig.global_id, "signal_key": sig.signal_key,
+        "signal_time_chart": sig.signal_time_chart,
+        # The signal's own feed-zone (source) clock -- e.g. GMT+7 for the
+        # Victor/SQZ6 feeds. The Daily/Monthly breakdowns group by THIS, so a
+        # report day lines up with the signal codes (SQZ6-0623) the same way
+        # --start-date/--end-date do, not the chart (EET/EEST) day.
+        "signal_time_source": sig.signal_time_source,
+        "side": sig.side,
+        "status": status,
+        "pnl": total_pnl,
+        "trading_pnl": trading_pnl if status != "OPEN" else None,
+        "bonus": bonus if status != "OPEN" else None,
+        "closed_lots": closed_lots,
+        "equity_before": equity, "equity_after": equity_after,
+    }
 
-    # ATR lookup only when the base config sources its SL from ATR (cheap; built
-    # once). Per-signal config_resolver SL sources beyond the base are not ATR
-    # here -- the Victor/self sweeps use a single fixed config per run.
-    atr_at = (_atr_lookup(chart_df, config.atr_period)
-              if getattr(config, "sl_source", "signal") == "atr" else None)
-
-    for sig in signals:
-        if chart_start is None or sig.signal_time_chart < chart_start:
-            excluded.append({"signal_key": sig.signal_key, "reason": "before chart start"})
-            continue
-        if chart_end is None or sig.signal_time_chart > chart_end:
-            excluded.append({"signal_key": sig.signal_key, "reason": "after chart end"})
-            continue
-        if exclude_structural_anomalies and sig.structural_anomaly:
-            excluded.append({"signal_key": sig.signal_key, "reason": "structural anomaly"})
-            continue
-
-        sig_config = config_resolver(sig) if config_resolver is not None else config
-        transformed = apply_signal_rr_policy(
-            sig, sig_config,
-            atr_value=atr_at(sig.signal_time_chart) if atr_at is not None else None)
-        if transformed is None:
-            excluded.append({"signal_key": sig.signal_key, "reason": "below min R:R"})
-            continue
-        sig = transformed
-        pos = replay_signal(sig, chart_df, equity, sig_config, contract_size)
-        status, trading_pnl = position_status(pos)
-        closed_lots = 0.0 if status == "OPEN" else _entry_closed_lots(pos)
-        bonus = 0.0 if status == "OPEN" else _bonus_for_position(pos, sig_config)
-        total_pnl = trading_pnl + bonus if status != "OPEN" else None
-        equity_after = equity if status == "OPEN" else equity + float(total_pnl or 0.0)
-        rows.append({
-            "global_id": sig.global_id, "signal_key": sig.signal_key,
+    tz_label = (f"GMT+{sig.source_tz_offset}" if sig.source_tz_offset >= 0
+                else f"GMT{sig.source_tz_offset}")
+    entry_rows = []
+    for e in pos.entries:
+        entry_closed_lots = float(e.lot or 0.0) if e.fill_time is not None and e.exit_time is not None and status != "OPEN" else 0.0
+        entry_bonus = entry_closed_lots * float(getattr(base_config, "bonus_per_closed_lot", 0.0) or 0.0)
+        entry_trading_pnl = e.pnl
+        entry_total_pnl = (entry_trading_pnl + entry_bonus) if entry_trading_pnl is not None and status != "OPEN" else entry_trading_pnl
+        # Realized R-multiple = favourable price move / risk distance to the
+        # executed SL. Side-aware so a winning SELL is +R. None when an entry
+        # never filled/closed or has no risk distance.
+        entry_rr = _realized_rr(sig.side, e.entry_price, e.initial_sl, e.exit_price,
+                                filled=e.fill_time is not None)
+        # Per-entry-target mode gives each leg its own target; else the single
+        # position target. R:R is to whichever target this leg aims at.
+        entry_target_price = e.target_price if e.target_price is not None else pos.target_level
+        entry_target_label = e.target_label or base_config.final_target.upper()
+        entry_rr_planned = _planned_rr(e.entry_price, e.initial_sl, entry_target_price)
+        entry_rows.append({
+            "global_id": sig.global_id,
+            "signal_key": sig.signal_key,
+            "entry_key": f"{sig.signal_key}.{e.entry_index + 1}",
+            "entry_number": e.entry_index + 1,
+            "signal_date": sig.source_date,
+            "signal_time_source": sig.source_time_text,
+            "source_tz": tz_label,
             "signal_time_chart": sig.signal_time_chart,
-            # The signal's own feed-zone (source) clock -- e.g. GMT+7 for the
-            # Victor/SQZ6 feeds. The Daily/Monthly breakdowns group by THIS, so a
-            # report day lines up with the signal codes (SQZ6-0623) the same way
-            # --start-date/--end-date do, not the chart (EET/EEST) day.
-            "signal_time_source": sig.signal_time_source,
             "side": sig.side,
-            "status": status,
-            "pnl": total_pnl,
-            "trading_pnl": trading_pnl if status != "OPEN" else None,
-            "bonus": bonus if status != "OPEN" else None,
-            "closed_lots": closed_lots,
-            "equity_before": equity, "equity_after": equity_after,
+            "range_low": sig.range_low,
+            "range_high": sig.range_high,
+            "original_SL": sig.sl,
+            "TP1": sig.tp1,
+            "TP2": sig.tp2,
+            "TP3": sig.tp3,
+            "final_target_label": entry_target_label,
+            "final_target_price": entry_target_price,
+            "entry_index": e.entry_index,
+            "entry_price": e.entry_price,
+            "effective_SL": e.initial_sl,
+            "SL_distance": pos.base_stop_distance,
+            "lot": e.lot,
+            "entry_status": e.status,
+            "fill_time": e.fill_time,
+            "exit_time": e.exit_time,
+            "exit_price": e.exit_price,
+            "stop_at_exit": e.stop_at_exit,
+            "trading_pnl": entry_trading_pnl,
+            "closed_lots": entry_closed_lots,
+            "bonus": entry_bonus,
+            "pnl": entry_total_pnl,
+            "rr": entry_rr,
+            "rr_planned": entry_rr_planned,
+            "first_fill_time": pos.first_fill_time,
+            "time_exit_deadline": pos.time_exit_deadline,
+            "signal_status": status,
+            "equity_before": equity,
+            "equity_after": equity_after,
         })
+    return {"row": row, "entry_rows": entry_rows, "status": status,
+            "equity_after": equity_after}
 
-        tz_label = (f"GMT+{sig.source_tz_offset}" if sig.source_tz_offset >= 0
-                    else f"GMT{sig.source_tz_offset}")
-        for e in pos.entries:
-            entry_closed_lots = float(e.lot or 0.0) if e.fill_time is not None and e.exit_time is not None and status != "OPEN" else 0.0
-            entry_bonus = entry_closed_lots * float(getattr(config, "bonus_per_closed_lot", 0.0) or 0.0)
-            entry_trading_pnl = e.pnl
-            entry_total_pnl = (entry_trading_pnl + entry_bonus) if entry_trading_pnl is not None and status != "OPEN" else entry_trading_pnl
-            # Realized R-multiple = favourable price move / risk distance to the
-            # executed SL. Side-aware so a winning SELL is +R. None when an entry
-            # never filled/closed or has no risk distance.
-            entry_rr = _realized_rr(sig.side, e.entry_price, e.initial_sl, e.exit_price,
-                                    filled=e.fill_time is not None)
-            # Per-entry-target mode gives each leg its own target; else the single
-            # position target. R:R is to whichever target this leg aims at.
-            entry_target_price = e.target_price if e.target_price is not None else pos.target_level
-            entry_target_label = e.target_label or config.final_target.upper()
-            entry_rr_planned = _planned_rr(e.entry_price, e.initial_sl, entry_target_price)
-            entry_rows.append({
-                "global_id": sig.global_id,
-                "signal_key": sig.signal_key,
-                "entry_key": f"{sig.signal_key}.{e.entry_index + 1}",
-                "entry_number": e.entry_index + 1,
-                "signal_date": sig.source_date,
-                "signal_time_source": sig.source_time_text,
-                "source_tz": tz_label,
-                "signal_time_chart": sig.signal_time_chart,
-                "side": sig.side,
-                "range_low": sig.range_low,
-                "range_high": sig.range_high,
-                "original_SL": sig.sl,
-                "TP1": sig.tp1,
-                "TP2": sig.tp2,
-                "TP3": sig.tp3,
-                "final_target_label": entry_target_label,
-                "final_target_price": entry_target_price,
-                "entry_index": e.entry_index,
-                "entry_price": e.entry_price,
-                "effective_SL": e.initial_sl,
-                "SL_distance": pos.base_stop_distance,
-                "lot": e.lot,
-                "entry_status": e.status,
-                "fill_time": e.fill_time,
-                "exit_time": e.exit_time,
-                "exit_price": e.exit_price,
-                "stop_at_exit": e.stop_at_exit,
-                "trading_pnl": entry_trading_pnl,
-                "closed_lots": entry_closed_lots,
-                "bonus": entry_bonus,
-                "pnl": entry_total_pnl,
-                "rr": entry_rr,
-                "rr_planned": entry_rr_planned,
-                "first_fill_time": pos.first_fill_time,
-                "time_exit_deadline": pos.time_exit_deadline,
-                "signal_status": status,
-                "equity_before": equity,
-                "equity_after": equity_after,
-            })
 
-        if status != "OPEN":
-            equity = equity_after
-        if equity <= 0:
-            break
-
+def aggregate_backtest_result(rows, entry_rows, excluded, config, chart_df,
+                              chart_start, chart_end, equity, signals_parsed):
+    """Aggregate replayed rows into the backtest result dict (summary, monthly,
+    daily breakdowns, drawdown, entry stats). Extracted VERBATIM from run_backtest
+    so the hybrid backtest emits a byte-identical result shape (parity)."""
     wins = sum(1 for r in rows if r["status"] == "WIN")
     losses = sum(1 for r in rows if r["status"] == "LOSS")
     breakevens = sum(1 for r in rows if r["status"] == "BREAKEVEN")
@@ -511,7 +496,7 @@ def run_backtest(
         "config": asdict(config),
         "chart_start": chart_start.isoformat(sep=" ") if chart_start else None,
         "chart_end": chart_end.isoformat(sep=" ") if chart_end else None,
-        "signals_parsed": len(signals),
+        "signals_parsed": signals_parsed,
         "signals_included": len(rows),
         "signals_excluded": len(excluded),
         "final_equity": equity,
@@ -540,6 +525,59 @@ def run_backtest(
         "monthly": monthly_rows,
         "daily": daily_rows,
     }
+
+
+def run_backtest(
+        signals: list[Signal], chart: CsvChartSource,
+        config: StrategyConfig = DEFAULT_CONFIG,
+        *,
+        exclude_structural_anomalies: bool = False,
+        contract_size: float = CONTRACT_SIZE_OZ,
+        config_resolver=None,
+) -> dict:
+    """Replay every signal and aggregate.
+
+    ``config_resolver``: optional ``callable(signal) -> StrategyConfig``. When
+    given (regime-adaptive backtest), each signal is replayed under the config it
+    returns instead of the fixed ``config`` -- so the backtest mirrors the live
+    ``auto --adaptive`` switch. ``config`` is still the base for capital/reporting.
+    """
+    chart_df = chart.dataframe
+    chart_start = chart.first_time()
+    chart_end = chart.last_time()
+
+    equity = config.initial_capital
+    rows: list[dict] = []
+    entry_rows: list[dict] = []
+    excluded: list[dict] = []
+
+    # ATR lookup only when the base config sources its SL from ATR (cheap; built
+    # once). Per-signal config_resolver SL sources beyond the base are not ATR
+    # here -- the Victor/self sweeps use a single fixed config per run.
+    atr_at = (_atr_lookup(chart_df, config.atr_period)
+              if getattr(config, "sl_source", "signal") == "atr" else None)
+
+    for sig in signals:
+        screened, reason = screen_signal(
+            sig, config, chart_start, chart_end, atr_at=atr_at,
+            exclude_structural_anomalies=exclude_structural_anomalies,
+            config_resolver=config_resolver)
+        if screened is None:
+            excluded.append({"signal_key": sig.signal_key, "reason": reason})
+            continue
+        sig, sig_config = screened
+        built = replay_signal_rows(sig, chart_df, equity, sig_config, config,
+                                   contract_size=contract_size)
+        rows.append(built["row"])
+        entry_rows.extend(built["entry_rows"])
+        if built["status"] != "OPEN":
+            equity = built["equity_after"]
+        if equity <= 0:
+            break
+
+    return aggregate_backtest_result(
+        rows, entry_rows, excluded, config, chart_df, chart_start, chart_end,
+        equity, len(signals))
 
 
 def _dot_free_stem(stem: str) -> str:
