@@ -55,6 +55,17 @@ pair is a thin package that imports it.
   (re-exported from the engine root) with its own output proven unchanged. The CLI
   snapshots' **2026 backtest sections (5 & 6) call `backtest_hybrid` + `--ticks`**;
   the pre-tick eras (7–9) stay on `backtest_explicit` (no tick overlap).
+  **It refreshes BOTH data sources before each run**: `--sync-charts true` (M1,
+  inherited from `backtest_explicit`) and `--sync-ticks true` (default on) — the
+  tick refresh is an **APPEND** via `export_ticks --merge` (resumes from the last
+  recorded tick, never re-fetches aged-out ticks) then re-splits to
+  `--ticks-split-mb` (default **95**) MiB parts, GitHub-safe. Both syncs soft-fail
+  without MT5, falling back to the committed archives. `export_ticks --merge`
+  **auto-reassembles existing `_pN` split parts** into the full month first
+  (`split_ticks_by_size.join_parts` / `parts_for`; `--join` also exposes this
+  standalone), so "continue from the latest state" works against the committed,
+  size-split archive — the full file is the incremental working copy, the `_pN`
+  parts are what you commit. See `cli/resync_ticks.txt`.
 - `listeners/` — per-platform signal-source listeners, one subfolder per source
   (`telegram/`, and future `whatsapp/`, etc.).
   `listeners/telegram/listener.py` — ingests Victor's Telegram channel into
