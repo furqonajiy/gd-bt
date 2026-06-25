@@ -1,0 +1,91 @@
+# =========================================================================
+# TR05 — TRAILING-OPEN/CLOSE SCALPER (DEMO)  | tag TR05   *** DEMO ONLY ***
+# Victor feed + V116 geometry (e7) PLUS trailing-open 0.2 / trailing-close 0.5.
+# Tick-decided on the full May+June 2026 R4 window (victor_signals.txt, real
+# Mt5Executor over the committed tick archive):
+#     net $9,812 (+84% vs no-trail $5,341) · win 67.1% · maxDD -17.0% ·
+#     net/DD 576 (beats the no-trail baseline 493). #1 of the trailing grid.
+# The lever: a near-instant trailing-OPEN arm (0.2) enters on confirmed momentum,
+# and a tight trailing-CLOSE (0.5) banks profit fast -- the SYSTEMATIC version of
+# "close winners quickly", but with losers still stop-protected (unlike manually
+# clicking "close all profitable", which keeps the full-size losers).
+#
+# *** READ BEFORE TRUSTING THIS ***
+#  1) ONE tick window (May+June 2026, R4 only). NOT validated on R3 (2025 has no
+#     ticks -> M1 under-models trailing-open fills) or out-of-sample. Forward-only.
+#  2) Trailing-open fills are BROKER/TICK-driven: the backtest's MockMt5 fills the
+#     STOP at the exact trigger with NO slippage/requote. Live STOP fills slip a
+#     point or two and the give-back is exactly where this strategy lives (TC 0.5
+#     is tiny). DEMO-CALIBRATE the real fill cost before believing the +84%.
+#  3) payoff 0.92 (<1): wins are small + frequent, losses fewer + larger. It needs
+#     the high hit-rate to hold; a sustained trend against the open basket is the
+#     failure mode. Watch the demo equity (floating), not just closed balance.
+#
+# IDENTITY (one per strategy): --strategy-tag TR05 · --positions-json
+#   positions_tr05.json · forensic_tr05.jsonl / notifications_tr05.jsonl · reports/
+#   TR05_2026xx. Reads Victor's filtered feed (signals/victor_live.txt). Run on a
+#   DEMO account, ideally ALONE (not beside live V116) so the trailing behavior is
+#   isolated and double-exposure on the same Victor signals doesn't confound it.
+# =========================================================================
+
+# ===== LIVE DEMO AUTO EXECUTOR (trailing-open + trailing-close) =====
+# Requires sections 1-2 of cli/candidate_VIC_C116_tick.txt running first (the
+# Telegram listener -> victor_signals.txt and the provider filter -> victor_live.txt).
+python tools/auto_explicit.py `
+  --signals signals/victor_live.txt `
+  --positions-json positions_tr05.json `
+  --strategy-tag TR05 `
+  --forensic-log forensic_tr05.jsonl `
+  --notifications notifications_tr05.jsonl `
+  --watch-interval 3 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.025 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --entries 7 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 180 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.2 `
+  --trailing-close-distance 0.5 `
+  --trailing-live-entry true
+
+# ===== TICK BACKTEST (reproduce the +84% on the committed May+June ticks) =====
+python tools/backtest_hybrid.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk --lot 0.01 --risk 0.025 `
+  --minimum-lot 0.01 --lot-step 0.01 --bonus-per-closed-lot 3 `
+  --entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.5 `
+  --activation-delay 2 --pending-expiry 180 --max-hold 180 `
+  --sl-multiplier 1.7 --final-target TP2 `
+  --lock-after-tp1 true --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels --bep-trigger-distance 3 `
+  --tp1-lock-fraction 0.5 --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.2 --trailing-close-distance 0.5 `
+  --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0 `
+  --output-dir reports/TR05_2026 `
+  --initial-capital 12000 `
+  --start-date 2026-05-01 --end-date 2026-06-25
