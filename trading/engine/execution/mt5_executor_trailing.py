@@ -539,6 +539,21 @@ class Mt5Executor(_Tp2Mt5Executor):
             if entry.status != "OPEN" or entry.trailing_stop is None:
                 continue
             target_sl = round(engine_pos.effective_stop_for(entry, config), digits)
+            # PROFIT GUARD vs the ACTUAL fill (not the M1-replay entry). The engine's
+            # trailing_stop is computed against the replay entry_price, which can sit
+            # BELOW a live market fill (e.g. a trailing-open STOP that filled on a
+            # spike, or any slippage), so a stop the model treats as "in profit" can
+            # be a LOSS against the real open price -> the open-then-instant-close at a
+            # loss. Only park the trailing-close stop when it is on the profit side of
+            # the position's real open price; otherwise leave the existing protective
+            # SL (original / TP1-lock) in place. A trailing-close exit is then never a
+            # loss vs the real fill.
+            open_px = float(getattr(p, "price_open", 0.0) or 0.0)
+            if open_px > 0:
+                if engine_pos.signal.side == "BUY" and target_sl <= open_px:
+                    continue
+                if engine_pos.signal.side == "SELL" and target_sl >= open_px:
+                    continue
             current_sl = float(getattr(p, "sl", 0.0) or 0.0)
             improves = (
                     current_sl <= 0
