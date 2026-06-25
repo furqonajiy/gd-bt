@@ -38,6 +38,13 @@
 #
 # Dates are CHART-time GMT+3; --end-date is EXCLUSIVE.
 #
+# NOTE: you usually do NOT need to run this by hand. The backtest sections (5 & 6)
+# of the strategy snapshots run tools/backtest_hybrid.py with --sync-charts true
+# --sync-ticks true, which BEFORE every backtest refreshes BOTH the M1 archive AND
+# the tick archive -- the tick refresh is an APPEND (export_ticks --merge,
+# re-split at <=95 MiB), exactly what this snapshot does. Run this standalone only
+# to (re)build the tick archive outside a backtest, or for a custom date range.
+#
 # ===== RESYNC TICKS (run from the repo root) =====
 python tools/export_ticks.py `
   --symbol XAUUSD `
@@ -67,12 +74,44 @@ python tools/export_ticks.py `
 # --symbol to Market Watch exactly. If the broker clock is not GMT+3, set
 # --mt5-server-offset accordingly (verify with `python -m trading.engine.cli mt5-info`).
 
-# ===== RE-SPLIT an already-exported full file (no MT5 needed) =====
-# If you exported WITHOUT --split-mb (or hand-built a big data/ticks file), cut it
-# to GitHub-safe parts after the fact:
+# ===== CONTINUE FROM THE LATEST STATE (incremental --merge) =====
+# Add only the NEW ticks since the last fetch -- no whole-window re-download.
+# --merge resumes from the last recorded tick and appends just the newer ones
+# (so ticks already archived but since aged out of the broker's tick window are
+# preserved -- --overwrite would lose them). Against the COMMITTED split archive,
+# --merge AUTO-REASSEMBLES the _pN parts back into the full month file first, then
+# resumes; --split-mb 95 then re-packs into GitHub-safe parts. So "continue" is
+# just --merge (+ --split-mb to re-pack). Set the dates to the month you are
+# extending (same month = grow it forward; a new month = first fetch of it).
+python tools/export_ticks.py `
+  --symbol XAUUSD `
+  --start-date 2026-06-01 `
+  --end-date 2026-07-01 `
+  --output-dir data/ticks `
+  --mt5-server-offset 3 `
+  --merge `
+  --split-mb 95 `
+  --progress
+
+# TIP -- avoid the reassemble round-trip on every update: keep the FULL working
+# month file locally (do NOT commit it; it is >100 MiB) and --merge onto it WITHOUT
+# --split-mb day-to-day; run --split-mb 95 only right before you commit/push. Then
+# `git add` just the _pN parts. Full file = incremental working copy; parts = what
+# you commit.
+
+# ===== RE-SPLIT / RE-JOIN an already-exported file (no MT5 needed) =====
+# Split a full file into GitHub-safe parts after the fact (if you exported WITHOUT
+# --split-mb, or hand-built a big data/ticks file):
 # python tools/split_ticks_by_size.py `
-#   data/ticks/XAUUSD_TICK_202606_ELEV8.csv `
+#   --input data/ticks/XAUUSD_TICK_202606_ELEV8.csv `
 #   --max-mb 95 `
+#   --remove-source
+#
+# Reassemble committed parts back into the full working file (inverse of split;
+# what --merge does automatically, exposed here for manual use):
+# python tools/split_ticks_by_size.py `
+#   --join `
+#   --input data/ticks/XAUUSD_TICK_202606_ELEV8.csv `
 #   --remove-source
 
 # ===== VERIFY before committing/pushing =====

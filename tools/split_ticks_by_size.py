@@ -27,10 +27,12 @@ from __future__ import annotations
 
 import argparse
 import glob
+import re
 import sys
 from pathlib import Path
 
 _MIB = 1024 * 1024
+_PART_RE = re.compile(r"_p(\d+)_ELEV8\.csv$")
 
 
 def _part_path(src: Path, n: int) -> Path:
@@ -40,6 +42,41 @@ def _part_path(src: Path, n: int) -> Path:
         base = name[: -len("_ELEV8.csv")]
         return src.with_name(f"{base}_p{n}_ELEV8.csv")
     return src.with_name(f"{src.stem}_p{n}.csv")
+
+
+def parts_for(full: Path) -> list[Path]:
+    """The size-split _pN parts that a split of ``full`` produced, in NUMERIC
+    order (p2 before p10). ``full`` is the un-split path
+    (``..._YYYYMM_ELEV8.csv``); its parts are ``..._YYYYMM_pN_ELEV8.csv``."""
+    name = full.name
+    if not name.endswith("_ELEV8.csv"):
+        return []
+    base = name[: -len("_ELEV8.csv")]
+    hits = [p for p in full.parent.glob(f"{base}_p*_ELEV8.csv") if _PART_RE.search(p.name)]
+    return sorted(hits, key=lambda p: int(_PART_RE.search(p.name).group(1)))
+
+
+def join_parts(parts: list[Path], dest: Path, *, remove_parts: bool = False) -> Path:
+    """Reassemble size-split _pN parts into one file (the inverse of split_file).
+
+    The header from the first part is kept; the repeated header line at the top of
+    every later part is dropped, so ``dest`` is byte-identical to the original
+    pre-split file. Parts are written in the order given (use ``parts_for`` for
+    numeric order). Optionally deletes the consumed parts afterwards."""
+    if not parts:
+        raise SystemExit("join_parts: no parts to join")
+    with dest.open("w", encoding="utf-8", newline="") as out:
+        for i, part in enumerate(parts):
+            with part.open("r", encoding="utf-8", newline="") as f:
+                if i != 0:
+                    f.readline()  # drop the repeated header
+                out.write(f.read())
+    print(f"[joined] {len(parts)} part(s) -> {dest.name} ({dest.stat().st_size / _MIB:.1f} MiB)")
+    if remove_parts:
+        for p in parts:
+            p.unlink()
+        print(f"[removed parts] {len(parts)}")
+    return dest
 
 
 def split_file(src: Path, max_bytes: int, *, remove_source: bool = False) -> list[Path]:
@@ -106,7 +143,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Max size per part in MiB (default 95; stay under GitHub's 100).")
     p.add_argument("--remove-source", action="store_true",
                    help="Delete each source file after it is split (avoids a glob "
-                        "matching the full file AND its parts).")
+                        "matching the full file AND its parts). In --join mode, "
+                        "delete the consumed _pN parts after reassembly.")
+    p.add_argument("--join", action="store_true",
+                   help="REASSEMBLE mode (inverse of split): each --input is a FULL "
+                        "target path (e.g. data/ticks/XAUUSD_TICK_202606_ELEV8.csv); "
+                        "its _pN parts are joined back into it byte-identically. Use "
+                        "to restore an incremental working file from committed parts "
+                        "before `export_ticks --merge`.")
     return p
 
 
@@ -116,6 +160,19 @@ def main(argv: list[str] | None = None) -> int:
     for pat in args.input:
         hits = [Path(p) for p in glob.glob(pat)]
         paths.extend(hits if hits else [Path(pat)])
+
+    if args.join:
+        total = 0
+        for full in paths:
+            parts = parts_for(full)
+            if not parts:
+                print(f"[skip] no _pN parts found for {full.name}")
+                continue
+            join_parts(parts, full, remove_parts=args.remove_source)
+            total += 1
+        print(f"[all done] reassembled {total} file(s)")
+        return 0
+
     max_bytes = int(args.max_mb * _MIB)
     total_parts = 0
     for src in paths:

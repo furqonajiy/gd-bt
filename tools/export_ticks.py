@@ -157,6 +157,18 @@ def _export_month(conn: Mt5Connection, args: argparse.Namespace, month_start: da
     mt5 = conn.mt5
     out_path = Path(args.output_dir) / f"{args.symbol}_TICK_{month_start:%Y%m}_ELEV8.csv"
 
+    # Continue-from-latest with a SPLIT archive: --split-mb deletes the full month
+    # file, leaving only _pN parts, so --merge would otherwise see "no file" and
+    # re-fetch the whole month (losing ticks the broker has since aged out). When
+    # merging and only parts exist, reassemble them back into the full file first
+    # so merge can resume from the last recorded tick (a later --split-mb re-packs).
+    if getattr(args, "merge", False) and not (out_path.exists() and out_path.stat().st_size > 0):
+        from tools.split_ticks_by_size import join_parts, parts_for
+        parts = parts_for(out_path)
+        if parts:
+            join_parts(parts, out_path, remove_parts=True)
+            print(f"[reassembled] {len(parts)} part(s) -> {out_path.name} to resume merge")
+
     # A header-only file is a stale artifact of a prior run that hit a no-tick
     # window; drop it so it neither blocks a re-fetch nor counts as data.
     if _is_header_only_tick_file(out_path):

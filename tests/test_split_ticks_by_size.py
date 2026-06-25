@@ -9,7 +9,7 @@ for p in (str(_REPO_ROOT), str(_REPO_ROOT / "tools")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from split_ticks_by_size import _part_path, split_file  # noqa: E402
+from split_ticks_by_size import _part_path, join_parts, parts_for, split_file  # noqa: E402
 
 _HEADER = "<DATE>\t<TIME>\t<TIME_MSC>\t<BID>\t<ASK>\t<LAST>\t<VOLUME>\t<VOLUME_REAL>\t<FLAGS>\t<SPREAD>\n"
 
@@ -54,3 +54,27 @@ def test_file_already_under_cap_is_left_untouched(tmp_path):
     parts = split_file(src, 10 * 1024 * 1024, remove_source=True)
     assert parts == []          # nothing to split
     assert src.exists()         # not removed when it wasn't split
+
+
+def test_parts_for_returns_numeric_order(tmp_path):
+    # 12 parts so a string sort (p1, p10, p11, p12, p2, ...) would be wrong.
+    for n in range(1, 13):
+        (tmp_path / f"XAUUSD_TICK_202606_p{n}_ELEV8.csv").write_text(_HEADER, encoding="utf-8")
+    full = tmp_path / "XAUUSD_TICK_202606_ELEV8.csv"
+    got = [int(p.name.split("_p")[1].split("_")[0]) for p in parts_for(full)]
+    assert got == list(range(1, 13))
+
+
+def test_split_then_join_is_byte_identical(tmp_path):
+    src = tmp_path / "XAUUSD_TICK_202606_ELEV8.csv"
+    _write_ticks(src, 300)
+    original = src.read_bytes()
+    parts = split_file(src, 4 * 1024, remove_source=True)
+    assert len(parts) > 1 and not src.exists()
+
+    # parts_for must rediscover them (numeric order) and join back byte-identically.
+    found = parts_for(src)
+    assert found == parts
+    join_parts(found, src, remove_parts=True)
+    assert src.read_bytes() == original          # round-trip is lossless
+    assert all(not p.exists() for p in parts)    # parts consumed

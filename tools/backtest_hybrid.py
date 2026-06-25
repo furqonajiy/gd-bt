@@ -284,6 +284,43 @@ def _run_hybrid_loop(signals, chart, chart_df, chart_start, chart_end, ticks,
     return result
 
 
+def _sync_ticks_from_mt5(symbol: str, server_offset: int, months_back: int,
+                         split_mb: float = 95.0) -> None:
+    """Best-effort: APPEND the latest ticks from MT5 into data/ticks/ before
+    backtesting, then re-pack into <= split_mb MiB parts. Mirrors the M1 chart
+    sync (_sync_charts_from_mt5): soft-fails (warn + continue) when MetaTrader5 is
+    unavailable (Linux/CI) or the terminal isn't reachable, so the run falls back
+    to the committed tick archive.
+
+    Uses export_ticks in --merge mode, which auto-reassembles any existing _pN
+    split parts, resumes from the last recorded tick and appends ONLY newer ones
+    (never re-fetching ticks the broker has aged out), then --split-mb re-packs the
+    grown month into GitHub-safe parts. So the archive grows incrementally, capped
+    at split_mb MiB/part."""
+    try:
+        from datetime import date
+        import export_ticks as ex
+        today = date.today()
+        # First day of the month `months_back` ago -> first day of next month.
+        start_idx = (today.year * 12 + today.month - 1) - max(0, months_back - 1)
+        end_idx = today.year * 12 + today.month  # next month's index (exclusive)
+        sy, sm = divmod(start_idx, 12)
+        ey, em = divmod(end_idx, 12)
+        argv = [
+            "--symbol", symbol,
+            "--start-date", f"{sy:04d}-{sm + 1:02d}-01",
+            "--end-date", f"{ey:04d}-{em + 1:02d}-01",
+            "--output-dir", "data/ticks",
+            "--mt5-server-offset", str(server_offset),
+            "--merge", "--split-mb", str(split_mb), "--progress",
+        ]
+        ex.main(argv)
+    except SystemExit as e:  # export_ticks raises SystemExit on no-MT5/bad input
+        print(f"[mt5] skipped tick sync ({e})", file=sys.stderr)
+    except Exception as e:
+        print(f"[mt5] skipped tick sync ({e})", file=sys.stderr)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = bx.build_parser()
     p.description = ("Hybrid backtest: TICK fills where tick data covers a signal, "
@@ -296,6 +333,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--watch-seconds", type=int, default=3,
                    help="Tick poll cadence for the real executor (matches live "
                         "--watch-interval 3). Default 3.")
+    # Sync BOTH data sources before the backtest. --sync-charts (M1) comes from
+    # backtest_explicit's chart-sync args (default True); --sync-ticks mirrors it
+    # for the tick archive (APPEND via --merge, re-split at --ticks-split-mb).
+    p.add_argument("--sync-ticks", type=bx._bool_text, default=True,
+                   help="Before the backtest, APPEND the latest MT5 ticks into "
+                        "data/ticks/ (export_ticks --merge) and re-split to "
+                        "--ticks-split-mb MiB parts. Soft-fails without MT5. Default true.")
+    p.add_argument("--sync-tick-months", type=int, default=2,
+                   help="How many recent months of ticks to refresh on --sync-ticks "
+                        "(broker tick history is short; default 2).")
+    p.add_argument("--ticks-split-mb", type=float, default=95.0,
+                   help="MiB cap per tick part when re-packing after --sync-ticks "
+                        "(stay under GitHub's 100 MiB limit; default 95).")
     # --mt5-symbol is already defined by backtest_explicit's chart-sync args; reused.
     return p
 
@@ -303,6 +353,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = bx.config_from_args(args)
+
+    # Refresh BOTH data sources from MT5 before backtesting (each soft-fails if
+    # MT5 is unavailable, falling back to the committed archives). M1 first, then
+    # the tick archive (appended via export_ticks --merge, re-split at <=95 MiB).
+    if getattr(args, "sync_charts", False):
+        bx._sync_charts_from_mt5(args.mt5_symbol, args.mt5_server_offset, args.sync_months)
+    if getattr(args, "sync_ticks", False):
+        _sync_ticks_from_mt5(args.mt5_symbol, args.mt5_server_offset,
+                             args.sync_tick_months, args.ticks_split_mb)
 
     signals = bx.filter_signals_by_date(
         parse_signals_file(Path(args.signals)), args.start_date, args.end_date,
