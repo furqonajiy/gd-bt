@@ -12,10 +12,20 @@
 #     max-hold (min)       240  ->  180    (shorter time-exit)
 #     final-target         TP3  ->  TP2    (bank at TP2, no TP3 reach)
 #     tp1-lock-delay (min)  24  ->  12     (lock the TP1 floor sooner)
-#   OTHERWISE: entries 8, entry-ladder range_to_sl, entry-sl-gap 0.5,
+#   OTHERWISE: entry-ladder range_to_sl, entry-sl-gap 0.5,
 #     tp1-lock-fraction 0.5, lock-after-tp1/2 ON, NO trailing, risk 2.5%.
 #   NOTE: the Victor signal R:R / ATR policy (rewrite_tp_rr, sl_source=atr, ...) is
 #     NOT used here (tick_backtest can't apply it; the old VIC didn't either).
+#
+# ENTRIES 8 -> 7 (tick-tuned 2026-06-25): a tick scout over the full May+June R4
+#   window (victor_signals.txt, real Mt5Executor) found entries 7 the single best
+#   "more profit, less drawdown" lever -- net +10% ($4,860 -> $5,341) AND drawdown
+#   -32% (-15.9% -> -10.8%) vs e8, best net/DD in the field (493 vs 306). One leg
+#   fewer trims the deepest entry's exposure without giving up the edge. Levers that
+#   raised payoff (run-to-TP3, longer max-hold) HURT on real fills, so the TP2 cap
+#   stays. SHIPPED ahead of the confirming full GH tick-sweep-victor-mayjune
+#   (which brackets e6/e7/e8 on the same ticks) -- one in-sample window, so
+#   forward-validate live and re-check against the sweep leaderboard.
 #
 # REAL-TICK EVIDENCE (May+June 2026, risk 2.5% / $50k):
 #   TICK net (real Mt5Executor)            $24,658   <- rank 1 of 150
@@ -94,7 +104,7 @@ python tools/auto_explicit.py `
   --risk 0.025 `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
-  --entries 8 `
+  --entries 7 `
   --entry-ladder range_to_sl `
   --entry-sl-gap 0.5 `
   --activation-delay 2 `
@@ -144,7 +154,7 @@ python tools/backtest_hybrid.py `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
-  --entries 8 `
+  --entries 7 `
   --entry-ladder range_to_sl `
   --entry-sl-gap 0.5 `
   --activation-delay 2 `
@@ -192,7 +202,7 @@ python tools/backtest_hybrid.py `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
-  --entries 8 `
+  --entries 7 `
   --entry-ladder range_to_sl `
   --entry-sl-gap 0.5 `
   --activation-delay 2 `
@@ -233,7 +243,7 @@ python tools/backtest_explicit.py `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
-  --entries 8 `
+  --entries 7 `
   --entry-ladder range_to_sl `
   --entry-sl-gap 0.5 `
   --activation-delay 2 `
@@ -275,7 +285,7 @@ python tools/backtest_explicit.py `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
-  --entries 8 `
+  --entries 7 `
   --entry-ladder range_to_sl `
   --entry-sl-gap 0.5 `
   --activation-delay 2 `
@@ -318,7 +328,7 @@ python tools/backtest_explicit.py `
   --minimum-lot 0.01 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
-  --entries 8 `
+  --entries 7 `
   --entry-ladder range_to_sl `
   --entry-sl-gap 0.5 `
   --activation-delay 2 `
