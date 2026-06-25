@@ -499,30 +499,7 @@ shared_sl off, on the **triple-filtered** scalper24 feed `--rsi-buy-max 75
 Bollinger × R:R sweep (edge $63,940 / OOS $11,633 / DD 38.4%) — it superseded the
 e5 RSI champion, which had superseded SC24T24E8 for R4 after it breached the DD ≤
 40% gate on 2026 data (SC24T24E8 remains the R2bull/R3strong champion); the other
-deployed feeds are `cli/champion_victor` (Victor — feed
-`signals/victor_live.txt`, positions `positions_victor.json`, tag VIC). **Deployed 2026-06-25** beside their champions as live tick-tuned
-head-to-heads: `cli/candidate_VIC_C116_tick` (**V116** beside VIC —
-TP2/mh180/slm1.7/delay12, TICK +$24.7k, M1 DD 11.3%, under the gate) and
-`cli/candidate_R4_C160_tick` (**C160** beside SQZ6 — *research-grade*: M1 DD
-**42.1% is OVER the 40% gate** and 193/200 May+June cells were tick-negative, so
-run it at REDUCED risk / on DEMO and monitor; SQZ6 stays the gate-compliant R4
-champion).
-`cli/resync_m1_from_2020` is the M1-archive resync utility (not a strategy), and
-`cli/rr08x15x30` is a **backtest-only R:R research candidate** — the #1-by-edge R4
-signal-R:R sweep winner (TP1/TP2/TP3 rewritten via the generator's
-`--rr1/--rr2/--rr3` on the unfiltered scalper24 feed; **not deployed**,
-forward-validate before any live use). Its OOS-leader sibling — R:R 1.0/2.0/4.0 on
-e6/slm2.3 — was promoted to the cross-regime **`cli/E640`** identity (tag **E640** →
-`positions_e640.json`, `signals/e640*.txt`, `reports/E640_*`): the single most
-regime-robust config — strong, consistent edge in both R4 (DD 38%, gate-compliant)
-and R3 (DD ~48%, needs the 50% stretch gate); still a candidate, forward-validate
-(esp. the R3 ~48% DD) before live. The former `cli/rr10x20x40.txt` snapshot of this
-config was consolidated into E640. The
-superseded reference snapshots (`cli_R4_scalper24` / `_breakout` / `_scalperwide24`
-/ `_bbsqueeze`, `cli_trailing_risk02allhours`, and `cli_adaptive_regime` — the
-`auto --adaptive` regime auto-switch, whose feature still lives in
-`strategy/regime_adaptive.py`) were removed 2026-06-18; recover from git history if
-needed.
+deployed feeds are **V116** (the **Victor champion**, `cli/candidate_VIC_C116_tick` — tick-tuned TP2/mh180/slm1.7/delay12 on Victor's provider feed `signals/victor_live.txt`, positions `positions_v116.json`, tag V116; it replaced the old VIC champion 2026-06-25, TICK +$24.7k / M1 DD 11.3%) and **C160** (`cli/candidate_R4_C160_tick`, beside SQZ6 — *research-grade*: M1 DD **42.1% is OVER the 40% gate** and 193/200 May+June cells were tick-negative, so run it at REDUCED risk / on DEMO; SQZ6 stays the gate-compliant R4 champion). `cli/resync_m1_from_2020` (M1) and `cli/resync_ticks` (tick archive, <=95 MiB parts) are data-sync utilities, not strategies. Pruned snapshots — the old `champion_victor` (VIC), `cli/E640`, `cli/rr08x15x30`, `candidate_R4_SL19_tick`, and the `trailing_open_R*` / `trailing_small_0101` research cells (plus the earlier `cli_R4_scalper24` / `_breakout` / `_scalperwide24` / `_bbsqueeze`, `cli_trailing_risk02allhours`, `cli_adaptive_regime`) — were removed; recover from git history if needed. The `auto --adaptive` regime auto-switch feature still lives in `strategy/regime_adaptive.py`.
 
 ## Docs to keep in sync with code
 
@@ -616,9 +593,10 @@ interleaves their events and races the rotation, so each executor passes its own
 Example: the R4 champion is tag `SQZ6` → `positions_sqz6.json`,
 `signals/sqz6.txt` / `signals/sqz6_live.txt`, `reports/SQZ6_2026xx`,
 `forensic_sqz6.jsonl` / `notifications_sqz6.jsonl`, snapshot
-`cli/champion_R4_SQZ6_no_trailing.txt`; Victor is `VIC` →
-`positions_victor.json`, `signals/victor_live.txt`, `forensic_victor.jsonl` /
-`notifications_victor.jsonl`. When you add a strategy, mint a fresh tag and
+`cli/champion_R4_SQZ6_no_trailing.txt`; the Victor champion is tag `V116` →
+`positions_v116.json`, `signals/victor_live.txt`, `forensic_v116.jsonl` /
+`notifications_v116.jsonl`, snapshot `cli/candidate_VIC_C116_tick.txt`. When you
+add a strategy, mint a fresh tag and
 derive all artifact names (positions, feed, report, logs) from it.
 </content>
 

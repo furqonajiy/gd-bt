@@ -24,7 +24,7 @@ def _load():
 
 run = _load()
 SQZ6 = CLI / "champion_R4_SQZ6_no_trailing.txt"
-VICTOR = CLI / "champion_victor.txt"
+VICTOR = CLI / "candidate_VIC_C116_tick.txt"   # V116 is now the Victor champion
 
 
 def test_every_snapshot_parses_into_runnable_sections():
@@ -39,8 +39,9 @@ def test_every_snapshot_parses_into_runnable_sections():
 
 
 def test_setup_preamble_is_not_exposed():
-    # Victor's leading block (cd / conda activate / git ...) must be filtered out:
-    # those change shell state a subprocess can't hand back to the terminal.
+    # Any leading cd / conda activate / git block must be filtered out (those change
+    # shell state a subprocess can't hand back); every exposed command is a program
+    # invocation that runs in the current terminal.
     for s in run.parse_sections(VICTOR):
         for cmd in s.commands:
             assert not cmd.startswith(("cd ", "conda ", "git ")), cmd

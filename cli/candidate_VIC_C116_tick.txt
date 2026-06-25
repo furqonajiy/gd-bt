@@ -1,20 +1,21 @@
 # =========================================================================
-# VICTOR TICK-TUNED CANDIDATE — VIC_C116  | tag V116   *** RESEARCH ***
-# "VIC_C116" = the #1 Victor-feed config by REAL-TICK P&L in the Victor May+June
-# tick sweep (150 lifecycle candidates, tools/tick_backtest.py on the real
-# Mt5Executor over the committed May+June tick archive, risk 2.5% / $50k).
-# Leaderboard: sweep_reports/tick_vic_full/ (rank 1 of 150).
+# VICTOR CHAMPION — V116  | tag V116
+# The deployed Victor strategy (replaced the old VIC champion 2026-06-25). It is
+# the #1 Victor-feed config by REAL-TICK P&L in the Victor May+June tick sweep
+# (150 lifecycle candidates, tools/tick_backtest.py on the real Mt5Executor over
+# the committed May+June tick archive, risk 2.5% / $50k). Leaderboard:
+# sweep_reports/tick_vic_full/ (rank 1 of 150).
 #
-# WHAT IT IS (Victor's PROVIDER feed, lifecycle-only tune; differs from the
-# deployed VIC champion in exactly FOUR params -- the feed is identical):
+# WHAT IT IS (Victor's PROVIDER feed; the old VIC champion was a lifecycle tune
+# away -- FOUR params -- and this superseded it):
 #     sl-multiplier        2.1  ->  1.7    (tighter stop)
 #     max-hold (min)       240  ->  180    (shorter time-exit)
 #     final-target         TP3  ->  TP2    (bank at TP2, no TP3 reach)
 #     tp1-lock-delay (min)  24  ->  12     (lock the TP1 floor sooner)
-#   UNCHANGED vs VIC: entries 8, entry-ladder range_to_sl, entry-sl-gap 0.5,
+#   OTHERWISE: entries 8, entry-ladder range_to_sl, entry-sl-gap 0.5,
 #     tp1-lock-fraction 0.5, lock-after-tp1/2 ON, NO trailing, risk 2.5%.
 #   NOTE: the Victor signal R:R / ATR policy (rewrite_tp_rr, sl_source=atr, ...) is
-#     NOT part of this tune (tick_backtest can't apply it; deployed Victor doesn't).
+#     NOT used here (tick_backtest can't apply it; the old VIC didn't either).
 #
 # REAL-TICK EVIDENCE (May+June 2026, risk 2.5% / $50k):
 #   TICK net (real Mt5Executor)            $24,658   <- rank 1 of 150
@@ -26,32 +27,23 @@
 #   win rate                               63.1%
 #   discrepancy (M1 net - TICK net)        +76%     (modest over-statement)
 #
-# WHY THIS MATTERS: unlike the self-scalper (193/200 cells TICK-NEGATIVE over the
-# SAME May+June window), the ENTIRE Victor top-20 is TICK-POSITIVE (+$18k..$24.7k)
-# at 11-20% M1 DD. The Victor provider feed is the robust, low-drawdown performer on
-# real ticks across May+June -- the stable profile the scalper never reached. The
-# deployed VIC champion (TP3 / mh240 / slm2.1) is only ~breakeven on May+June ticks
-# (+$244), so this TP2 / mh180 / slm1.7 tune is a real, evidence-backed improvement.
+# WHY IT WON: unlike the self-scalper (193/200 cells TICK-NEGATIVE over the SAME
+# May+June window), the ENTIRE Victor top-20 is TICK-POSITIVE (+$18k..$24.7k) at
+# 11-20% M1 DD. The old VIC champion (TP3 / mh240 / slm2.1) was only ~breakeven on
+# May+June ticks (+$244), so this TP2 / mh180 / slm1.7 tune is the evidence-backed
+# upgrade -- now the deployed Victor. Evidence is one tick window, so keep watching
+# that it tracks the backtest live.
 #
-# STATUS: DEPLOYED 2026-06-25 -- run LIVE beside VIC (section 3) as a head-to-head.
-# Evidence is one tick window (May+June 2026), but the profile is strong AND stable
-# (TICK +$24.7k, M1 DD 11.3% -- well under the 40% gate), the safer of the two
-# tick-tuned deploys. Still confirm it tracks the backtest live; the incumbent VIC
-# (cli/champion_victor.txt) stays the reference champion.
-#
-# ONE IDENTITY PER STRATEGY (keyed off tag **V116**), so it never collides with VIC:
-#   --strategy-tag V116 · --positions-json positions_v116.json ·
-#   reports/V116_2026xx (Excel) · forensic_v116.jsonl / notifications_v116.jsonl.
-#   The FEED is shared with Victor on purpose: Victor's signals come from Telegram
-#   and cannot be re-generated, so V116 READS the same provider feed
-#   (signals/victor_live.txt live, victor_signals.txt backtest) that VIC's listener
-#   + filter already produce -- do NOT start a second listener/filter for V116.
-#   Running V116 beside VIC on one account double-trades each Victor signal under
-#   DISJOINT magics (different tag), the intended head-to-head (like SL19 vs SQZ6).
+# IDENTITY (keyed off tag **V116**): --strategy-tag V116 ·
+#   --positions-json positions_v116.json · reports/V116_2026xx (Excel) ·
+#   forensic_v116.jsonl / notifications_v116.jsonl. The live feed is Victor's own
+#   provider feed (victor_signals.txt raw, signals/victor_live.txt filtered),
+#   produced by THIS snapshot's own listener + filter (sections 1-2) -- it is
+#   self-contained, no other snapshot needed.
 #
 # SECTION MAP (same in every strategy CLI; copy-paste 5-9 for the backtests):
-#   1. Telegram Listener            (N/A -- shares Victor's listener)
-#   2. Live Loop Signal Generator   (N/A -- shares Victor's provider filter)
+#   1. Telegram Listener            (ingests Victor's channel -> victor_signals.txt)
+#   2. Live Loop Signal Generator   (provider filter --watch -> victor_live.txt)
 #   3. Live Auto Executor           (places + manages real orders, tag V116)
 #   4. Signal Generator             (N/A -- backtest reads victor_signals.txt direct)
 #   5. Backtest from 2026-06         -> reports/V116_202606.xlsx  (R4 parabolic, current month; slip 2.0/1.0)
@@ -62,23 +54,31 @@
 # =========================================================================
 
 # ===== 1. TELEGRAM LISTENER =====
-# N/A -- V116 does NOT run its own listener. It shares Victor's provider feed:
-# run the deployed Victor's listener (cli/champion_victor.txt section 1), which
-# writes victor_signals.txt. V116 reads that same source.
+# Ingests Victor's Telegram channel into victor_signals.txt -- this IS V116's live
+# signal source.
+#    First-time setup only: `python listeners\telegram\listener.py list-chats`
+#    to find the channel id, then paste it into listener_config.json.
+python listeners\telegram\listener.py --signals-file victor_signals.txt
 
 # ===== 2. LIVE LOOP SIGNAL GENERATOR =====
-# N/A -- V116 does NOT run its own provider filter. Victor's filter
-# (cli/champion_victor.txt section 2) regenerates signals/victor_live.txt; V116's
-# executor (section 3) reads that same file. Do not start a second filter.
+# Victor's "live loop" is the provider filter in --watch mode: it regenerates
+# signals/victor_live.txt from victor_signals.txt on every change.
+#    `--preset all` keeps EVERY Victor signal (no hour/side filtering), so the
+#    live feed is exactly Victor's signals and matches the backtest below.
+python tools/live_provider_signal_filter.py `
+  --input victor_signals.txt `
+  --output signals/victor_live.txt `
+  --preset all `
+  --watch `
+  --interval 2
 
 # ===== 3. LIVE AUTO EXECUTOR =====
 # Reads Victor's filtered feed (victor_live.txt), places + manages real orders on
 # MT5 under tag V116. Strategy params are byte-identical to the parity backtests
 # (sections 5-9); only the backtest-only locked-exit slippage varies there, never
-# live. The four lifecycle differences from VIC are: sl-multiplier 1.7, max-hold
-# 180, final-target TP2, tp1-lock-delay 12. Victor-specific NON-default flags kept
-# (--replace-missing-entries / --reopen-missing-positions / --apply-signal-edits /
-# --signal-overrides-file), matching VIC so the only variable is the geometry.
+# live. Lifecycle: sl-multiplier 1.7, max-hold 180, final-target TP2, tp1-lock-delay
+# 12. Victor-specific NON-default flags kept (--replace-missing-entries /
+# --reopen-missing-positions / --apply-signal-edits / --signal-overrides-file).
 python tools/auto_explicit.py `
   --signals signals/victor_live.txt `
   --positions-json positions_v116.json `
