@@ -1,5 +1,5 @@
 # =========================================================================
-# ST05 — SELF-SCALPER TRAILING-OPEN/CLOSE (DEMO)  | tag ST05  *** DEMO ONLY ***
+# DTR0 — SELF-SCALPER TRAILING-OPEN/CLOSE (DEMO)  | tag DTR0  *** DEMO ONLY ***
 # Self-generated scalper feed (RSI 70/25-style + Bollinger squeeze + R:R 1.2/2.5/5,
 # same filter as C160) on C160 geometry, PLUS trailing-open 0.5 / trailing-close 0.5.
 #
@@ -27,9 +27,9 @@
 #     compare demo fills to the trigger and to the backtest repro below.
 #  3) payoff < 1 (many small wins, fewer larger losses): it needs the high hit-rate.
 #
-# IDENTITY (one per strategy): --strategy-tag ST05 · positions_st05.json ·
-#   signals/st05_live.txt · forensic_st05.jsonl / notifications_st05.jsonl ·
-#   reports/ST05_demo. Run on the DEMO account, ideally ALONE.
+# IDENTITY (one per strategy): --strategy-tag DTR0 · positions_dtr0.json ·
+#   signals/dtr0_live.txt · forensic_dtr0.jsonl / notifications_dtr0.jsonl ·
+#   reports/DTR0_demo. Run on the DEMO account, ideally ALONE.
 # =========================================================================
 
 # ===== 1. LIVE FEED GENERATOR (self-scalper, from the demo terminal's M1) =====
@@ -40,15 +40,15 @@ python tools/live_feed_loop.py `
   --gen-recent-months 2 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
-  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/st05_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/dtr0_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
 
 # ===== 2. LIVE AUTO EXECUTOR (trailing-open 0.5 / trailing-close 0.5) =====
 python tools/auto_explicit.py `
-  --signals signals/st05_live.txt `
-  --positions-json positions_st05.json `
-  --strategy-tag ST05 `
-  --forensic-log forensic_st05.jsonl `
-  --notifications notifications_st05.jsonl `
+  --signals signals/dtr0_live.txt `
+  --positions-json positions_dtr0.json `
+  --strategy-tag DTR0 `
+  --forensic-log forensic_dtr0.jsonl `
+  --notifications notifications_dtr0.jsonl `
   --watch-interval 3 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
@@ -83,10 +83,10 @@ python tools/auto_explicit.py `
 # ===== 3. TICK BACKTEST ON THE DEMO ARCHIVE (reproduce / calibrate) =====
 # Generate the self feed from the committed demo M1 first, then tick-backtest it:
 #   python tools/generate_scalper_signals.py --charts "data/demo/XAUUSD_M1_*_DEMO.csv" `
-#     --output signals/st05_demo.txt --start 2026-06-01 --session-start 0 --session-end 0 `
+#     --output signals/dtr0_demo.txt --start 2026-06-01 --session-start 0 --session-end 0 `
 #     --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
 python tools/backtest_hybrid.py `
-  --signals signals/st05_demo.txt `
+  --signals signals/dtr0_demo.txt `
   --charts "data/demo/XAUUSD_M1_*_DEMO.csv" `
   --ticks "data/demo/ticks/XAUUSD_TICK_*_DEMO.csv" `
   --max-drawdown-limit-pct 50 --progress-interval-seconds 30 `
@@ -98,4 +98,4 @@ python tools/backtest_hybrid.py `
   --runner-after-tp3 false `
   --trailing-open-distance 0.5 --trailing-close-distance 0.5 `
   --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0 `
-  --output-dir reports/ST05_demo --initial-capital 1000
+  --output-dir reports/DTR0_demo --initial-capital 1000
