@@ -47,6 +47,8 @@ back, so do them once yourself in the terminal before launching.)
 | `sqz6` | `champion_R4_SQZ6_no_trailing.txt` | R4 champion rsi75_sqz6_rr40 (tag SQZ6) — deployed |
 | `e640` | `E640.txt` | cross-regime candidate (tag E640) |
 | `rr08` | `rr08x15x30.txt` | R:R research candidate (tag RR08) |
+| `sl19` | `candidate_R4_SL19_tick.txt` | R4 June-tick candidate: SQZ6 w/ slm1.9 (tag SL19) — **research** |
+| `c160` | `candidate_R4_C160_tick.txt` | R4 May+June-tick sweep winner (tag C160) — **research** |
 | `tr40` | `trailing_open_R4.txt` | best trailing-open cell, R4 (tag TR40) — **research, parity-fragile** |
 | `tr30` | `trailing_open_R3.txt` | best trailing-open cell, R3 (tag TR30) — **research, parity-fragile** |
 | `tr20` | `trailing_open_R2.txt` | best trailing-open cell, R2 (tag TR20) — **research, parity-fragile** |
