@@ -60,12 +60,17 @@ pair is a thin package that imports it.
   tick refresh is an **APPEND** via `export_ticks --merge` (resumes from the last
   recorded tick, never re-fetches aged-out ticks) then re-splits to
   `--ticks-split-mb` (default **95**) MiB parts, GitHub-safe. Both syncs soft-fail
-  without MT5, falling back to the committed archives. `export_ticks --merge`
-  **auto-reassembles existing `_pN` split parts** into the full month first
-  (`split_ticks_by_size.join_parts` / `parts_for`; `--join` also exposes this
-  standalone), so "continue from the latest state" works against the committed,
-  size-split archive — the full file is the incremental working copy, the `_pN`
-  parts are what you commit. See `cli/resync_ticks.txt`.
+  without MT5, falling back to the committed archives. The tick sync touches only
+  the **current month** (`--sync-tick-months` default 1 — the only month that
+  gains ticks). `export_ticks --merge --split-mb` is a **true incremental append**
+  against the committed split archive: it resumes from the last tick in the LAST
+  `_pN` part, fetches only newer ticks, and **re-splits ONLY that tail** (`p1..p(N-1)`
+  are never touched), so a completed past month is a cheap no-op and the current
+  month only rewrites its last part — never the whole ~600 MiB month. Only
+  `--merge` **without** `--split-mb` reassembles the parts into a full working file
+  (`split_ticks_by_size.join_parts` / `parts_for`; `--join` + `split_file`'s
+  `start_part`/`force` back the tail re-split), so the full file is the incremental
+  working copy and the `_pN` parts are what you commit. See `cli/resync_ticks.txt`.
 - `listeners/` — per-platform signal-source listeners, one subfolder per source
   (`telegram/`, and future `whatsapp/`, etc.).
   `listeners/telegram/listener.py` — ingests Victor's Telegram channel into

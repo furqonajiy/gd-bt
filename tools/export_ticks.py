@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import calendar
 import csv
+import shutil
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -276,6 +277,72 @@ def _split_exported(output_dir: str, symbol: str, months: list[tuple[int, int]],
     return written
 
 
+def _fetch_new_rows(conn, args, fetch_start: datetime, month_end: datetime,
+                    resume_msc: int) -> list[dict]:
+    """Fetch ticks in [fetch_start, month_end), keep only those strictly newer than
+    resume_msc (de-dupes the re-pulled boundary second). Returns row dicts."""
+    mt5 = conn.mt5
+    out: list[dict] = []
+    for chunk_start, chunk_end in _iter_chunks(fetch_start, month_end, args.chunk_hours):
+        ticks = mt5.copy_ticks_range(
+            args.symbol, _chart_to_mt5_epoch(chunk_start, args.mt5_server_offset),
+            _chart_to_mt5_epoch(chunk_end, args.mt5_server_offset), mt5.COPY_TICKS_ALL)
+        if ticks is None:
+            raise RuntimeError(f"copy_ticks_range failed for {args.symbol} "
+                               f"{chunk_start:%Y-%m-%d %H:%M}: {mt5.last_error()}")
+        if len(ticks):
+            out.extend(r for r in _tick_rows(ticks, args.mt5_server_offset)
+                       if int(r["<TIME_MSC>"]) > resume_msc)
+        if args.sleep_seconds > 0:
+            time.sleep(args.sleep_seconds)
+    return out
+
+
+def _merge_append_split_month(conn, args, month_start: datetime, month_end: datetime):
+    """Incremental tick append against a SIZE-SPLIT archive (committed _pN parts),
+    WITHOUT reassembling p1..p(N-1).
+
+    Resumes from the last tick in the LAST part, fetches only newer ticks, and
+    re-splits just (last part + new ticks) into parts numbered from the last index.
+    So a completed past month with no new ticks is a cheap no-op (a tail read + an
+    empty fetch), and the current month only ever rewrites its tail -- never the
+    whole ~600 MiB archive. Returns the number of ticks appended, or None when this
+    path does not apply (a full file already exists, no parts yet, or the resume
+    point can't be read) so the caller falls back to the full-file export."""
+    from tools.split_ticks_by_size import _PART_RE, parts_for, split_file
+    out_path = Path(args.output_dir) / f"{args.symbol}_TICK_{month_start:%Y%m}_ELEV8.csv"
+    if out_path.exists() and out_path.stat().st_size > 0:
+        return None  # full file present -> the normal merge path handles it
+    parts = parts_for(out_path)
+    if not parts:
+        return None  # fresh month -> normal export creates (and splits) it
+    last_part = parts[-1]
+    last_n = int(_PART_RE.search(last_part.name).group(1))
+    resume_msc = _last_tick_msc(last_part)
+    if resume_msc is None:
+        return None  # can't resume from the tail -> fall back (may reassemble)
+
+    resume_chart = _mt5_msc_to_chart_time((resume_msc // 1000) * 1000, args.mt5_server_offset)
+    fetch_start = max(resume_chart, month_start)
+    new_rows = _fetch_new_rows(conn, args, fetch_start, month_end, resume_msc)
+    if not new_rows:
+        print(f"[merge] {args.symbol} {month_start:%Y-%m}: up to date (+0 ticks); "
+              f"{len(parts)} part(s) untouched.")
+        return 0
+
+    # Re-split ONLY (last part + new rows), numbered from last_n, so p1..p(N-1) are
+    # never touched. force=True writes a single _p{last_n} even if the tail is sub-cap.
+    shutil.copyfile(last_part, out_path)
+    _write_rows(out_path, new_rows, write_header=False)
+    last_part.unlink()
+    written = split_file(out_path, int(args.split_mb * 1024 * 1024),
+                         remove_source=True, start_part=last_n, force=True)
+    print(f"[merge] {args.symbol} {month_start:%Y-%m}: +{len(new_rows):,} ticks appended; "
+          f"tail re-split into {len(written)} part(s) from p{last_n} "
+          f"(p1..p{last_n - 1} untouched).")
+    return len(new_rows)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Export real MT5 tick data into monthly tab-separated CSV files.")
     p.add_argument("--symbol", default="XAUUSD")
@@ -334,14 +401,23 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"Symbol {args.symbol!r} not found in MT5 Market Watch.")
 
         grand_total = 0
-        months: list[tuple[int, int]] = []
+        months_to_split: list[tuple[int, int]] = []
         for month_start, month_end in _iter_months(start, end):
-            grand_total += _export_month(conn, args, month_start, month_end)
-            months.append((month_start.year, month_start.month))
+            # --merge + --split-mb: APPEND only the new ticks to the split tail
+            # (no whole-archive reassemble). Falls back to the full-file export
+            # when the month isn't a committed split archive.
+            handled = None
+            if args.merge and args.split_mb:
+                handled = _merge_append_split_month(conn, args, month_start, month_end)
+            if handled is None:
+                grand_total += _export_month(conn, args, month_start, month_end)
+                months_to_split.append((month_start.year, month_start.month))
+            else:
+                grand_total += handled
 
         print(f"[all done] exported {grand_total:,} ticks")
-        if args.split_mb:
-            parts = _split_exported(args.output_dir, args.symbol, months, args.split_mb)
+        if args.split_mb and months_to_split:
+            parts = _split_exported(args.output_dir, args.symbol, months_to_split, args.split_mb)
             print(f"[split] wrote {parts} size-capped part(s) (<= {args.split_mb:g} MiB each)")
         return 0
     finally:

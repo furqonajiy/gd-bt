@@ -79,15 +79,18 @@ def join_parts(parts: list[Path], dest: Path, *, remove_parts: bool = False) -> 
     return dest
 
 
-def split_file(src: Path, max_bytes: int, *, remove_source: bool = False) -> list[Path]:
+def split_file(src: Path, max_bytes: int, *, remove_source: bool = False,
+               start_part: int = 1, force: bool = False) -> list[Path]:
     """Split src into <= max_bytes parts on line boundaries; header in each part.
 
     Returns the list of part paths written. If the whole file already fits in one
-    part, it is left untouched and an empty list is returned (nothing to split).
-    """
+    part it is left untouched and an empty list is returned (nothing to split) --
+    UNLESS ``force`` is set, in which case it is still (re)written as a single
+    part. ``start_part`` numbers the first part (use N to APPEND a re-split tail
+    after existing parts p1..p(N-1), leaving them untouched)."""
     if max_bytes <= 0:
         raise SystemExit("--max-mb must be > 0")
-    if src.stat().st_size <= max_bytes:
+    if not force and src.stat().st_size <= max_bytes:
         print(f"[skip] {src.name} is {src.stat().st_size / _MIB:.1f} MiB, already under the cap.")
         return []
 
@@ -98,7 +101,7 @@ def split_file(src: Path, max_bytes: int, *, remove_source: bool = False) -> lis
             raise SystemExit(f"--max-mb too small: header alone is {header_bytes} bytes.")
 
         parts: list[Path] = []
-        part_n = 0
+        part_n = start_part - 1
         out = None
         size = 0
 

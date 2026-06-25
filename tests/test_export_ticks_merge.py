@@ -118,6 +118,72 @@ def test_merge_noop_keeps_existing_file_intact(tmp_path):
     assert path.read_text(encoding="utf-8") == before
 
 
+def _seed_split(tmp_path, cap_bytes, n=2000):
+    """Seed a full June file with n ticks, split it into _pN parts, drop the full
+    file -- mimicking the committed (size-split) archive. Returns (parts, last_msc)."""
+    import sys as _sys
+    if str(ROOT / "tools") not in _sys.path:
+        _sys.path.insert(0, str(ROOT / "tools"))
+    from split_ticks_by_size import split_file
+    base = 1780643040000
+    msc = [base + i * 100 for i in range(n)]
+    full = Path(tmp_path) / "XAUUSD_TICK_202606_ELEV8.csv"
+    rows = export_ticks._tick_rows(_ticks([(m, 4441.0, 4441.3) for m in msc]), 3)
+    export_ticks._write_rows(full, rows, write_header=True)
+    parts = split_file(full, cap_bytes, remove_source=True)
+    assert len(parts) >= 3 and not full.exists()
+    return parts, msc[-1]
+
+
+def _msc_seq(parts):
+    """All ticks' <TIME_MSC>, in part+line order (header stripped from each part)."""
+    seq = []
+    for p in sorted(parts, key=lambda q: int(q.name.split("_p")[1].split("_")[0])):
+        for line in p.read_text().splitlines()[1:]:
+            if line.strip():
+                seq.append(int(line.split("\t")[2]))
+    return seq
+
+
+def test_merge_append_to_split_archive_only_touches_tail(tmp_path):
+    parts, last = _seed_split(tmp_path, cap_bytes=40 * 1024)
+    p1_before, p2_before = parts[0].read_bytes(), parts[1].read_bytes()
+    orig_seq = _msc_seq(parts)
+
+    master = _ticks([
+        (last, 4441.0, 4441.3),         # boundary dup -> dropped (strict >)
+        (last + 100, 4441.2, 4441.5),
+        (last + 200, 4441.4, 4441.7),
+    ])
+    conn = _FakeConn(_FakeMt5(master))
+    appended = export_ticks._merge_append_split_month(
+        conn, _args(tmp_path, merge=True, split_mb=40 / 1024),  # 40 KiB cap
+        datetime(2026, 6, 1), datetime(2026, 6, 6))
+    assert appended == 2
+
+    new_parts = list(Path(tmp_path).glob("XAUUSD_TICK_202606_p*_ELEV8.csv"))
+    # p1, p2 byte-identical (only the tail re-split); no leftover full file.
+    by_n = {int(p.name.split("_p")[1].split("_")[0]): p for p in new_parts}
+    assert by_n[1].read_bytes() == p1_before
+    assert by_n[2].read_bytes() == p2_before
+    assert not (Path(tmp_path) / "XAUUSD_TICK_202606_ELEV8.csv").exists()
+    # Full sequence = original + the 2 new ticks, in order.
+    assert _msc_seq(new_parts) == orig_seq + [last + 100, last + 200]
+
+
+def test_merge_append_noop_leaves_all_parts_untouched(tmp_path):
+    parts, last = _seed_split(tmp_path, cap_bytes=40 * 1024)
+    before = [p.read_bytes() for p in parts]
+    conn = _FakeConn(_FakeMt5(_ticks([(last, 4441.0, 4441.3)])))  # only the dup
+    appended = export_ticks._merge_append_split_month(
+        conn, _args(tmp_path, merge=True, split_mb=40 / 1024),
+        datetime(2026, 6, 1), datetime(2026, 6, 6))
+    assert appended == 0
+    after = [p.read_bytes() for p in parts]
+    assert after == before                       # every part untouched
+    assert not (Path(tmp_path) / "XAUUSD_TICK_202606_ELEV8.csv").exists()
+
+
 def test_header_only_file_is_removed(tmp_path):
     path = Path(tmp_path) / "XAUUSD_TICK_202604_ELEV8.csv"
     path.write_text(export_ticks.HEADER_LINE + "\n", encoding="utf-8")
