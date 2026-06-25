@@ -28,6 +28,8 @@ SOURCE_PRIORITY = {
     "UNKNOWN": 0,
     "INTERNET": 10,
     "ELEV8": 20,
+    "DEMO": 20,   # a separate broker (demo) archive; same priority as ELEV8 but
+                  # kept in its own files/dir so the two never merge in a backtest.
 }
 
 
@@ -55,6 +57,8 @@ def chart_source_from_path(path: Path) -> str:
     stem = Path(path).stem.upper()
     if stem.endswith("_ELEV8"):
         return "ELEV8"
+    if stem.endswith("_DEMO"):
+        return "DEMO"
     if stem.endswith("_INTERNET"):
         return "INTERNET"
     return "UNKNOWN"

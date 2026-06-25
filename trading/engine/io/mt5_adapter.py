@@ -398,6 +398,7 @@ def archive_m1_by_month(
         connection: Mt5Connection, symbol: str, output_dir,
         months_back: int = 4, until_chart_time: Optional[datetime] = None,
         server_offset_hours: int = 3, overwrite: bool = False,
+        source: str = "ELEV8",
 ) -> list[dict]:
     """Pull M1 bars from MT5 and save one CSV per year-month.
 
@@ -405,7 +406,12 @@ def archive_m1_by_month(
     `until_chart_time`, default "now"), this queries MT5, converts to
     chart time and MT5-export-CSV format, and either merges with the
     existing file (default; safe for boundary months) or overwrites it.
-    Output: `<output_dir>/XAUUSD_M1_YYYYMM_ELEV8.csv`.
+    Output: `<output_dir>/XAUUSD_M1_YYYYMM_<SOURCE>.csv`.
+
+    `source` is the broker/source tag baked into the filename (default
+    ``ELEV8``, the live archive). Pass a distinct tag (e.g. ``DEMO``) to keep a
+    SEPARATE broker's archive from merging with the live one -- the demo broker's
+    quotes differ from live, so demo backtests must read demo-tagged files.
 
     Returns a list of `{month, path, bars_written, bars_fetched, bars_existing}`.
     """
@@ -435,7 +441,7 @@ def archive_m1_by_month(
         rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, start_epoch, end_epoch)
         new_df = _rates_to_export_df(rates, server_offset_hours)
 
-        path = output_dir / _archive_filename(symbol, year, month, "ELEV8")
+        path = output_dir / _archive_filename(symbol, year, month, source)
         existing_count = 0
         if path.exists():
             try:

@@ -156,7 +156,7 @@ def _write_rows(path: Path, rows: Iterable[dict[str, str]], *, write_header: boo
 
 def _export_month(conn: Mt5Connection, args: argparse.Namespace, month_start: datetime, month_end: datetime) -> int:
     mt5 = conn.mt5
-    out_path = Path(args.output_dir) / f"{args.symbol}_TICK_{month_start:%Y%m}_ELEV8.csv"
+    out_path = Path(args.output_dir) / f"{args.symbol}_TICK_{month_start:%Y%m}_{getattr(args, 'source', 'ELEV8')}.csv"
 
     # Continue-from-latest with a SPLIT archive: --split-mb deletes the full month
     # file, leaving only _pN parts, so --merge would otherwise see "no file" and
@@ -262,7 +262,7 @@ def _export_month(conn: Mt5Connection, args: argparse.Namespace, month_start: da
 
 
 def _split_exported(output_dir: str, symbol: str, months: list[tuple[int, int]],
-                    max_mb: float) -> int:
+                    max_mb: float, source: str = "ELEV8") -> int:
     """Split each exported month's file into <= max_mb MiB parts, removing the
     full file. Reuses split_ticks_by_size so the _pN naming and line-aligned
     cutting are identical; imported lazily to avoid a load-time dependency.
@@ -271,7 +271,7 @@ def _split_exported(output_dir: str, symbol: str, months: list[tuple[int, int]],
     max_bytes = int(max_mb * 1024 * 1024)
     written = 0
     for year, month in months:
-        src = Path(output_dir) / f"{symbol}_TICK_{year:04d}{month:02d}_ELEV8.csv"
+        src = Path(output_dir) / f"{symbol}_TICK_{year:04d}{month:02d}_{source}.csv"
         if src.exists():
             written += len(split_file(src, max_bytes, remove_source=True))
     return written
@@ -310,7 +310,7 @@ def _merge_append_split_month(conn, args, month_start: datetime, month_end: date
     path does not apply (a full file already exists, no parts yet, or the resume
     point can't be read) so the caller falls back to the full-file export."""
     from tools.split_ticks_by_size import _PART_RE, parts_for, split_file
-    out_path = Path(args.output_dir) / f"{args.symbol}_TICK_{month_start:%Y%m}_ELEV8.csv"
+    out_path = Path(args.output_dir) / f"{args.symbol}_TICK_{month_start:%Y%m}_{getattr(args, 'source', 'ELEV8')}.csv"
     if out_path.exists() and out_path.stat().st_size > 0:
         return None  # full file present -> the normal merge path handles it
     parts = parts_for(out_path)
@@ -349,6 +349,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--start-date", required=True, help="Chart-time GMT+3 date, e.g. 2024-01-01")
     p.add_argument("--end-date", required=True, help="Exclusive chart-time GMT+3 date, e.g. 2026-06-06")
     p.add_argument("--output-dir", default="data/ticks")
+    p.add_argument("--source", default="ELEV8",
+                   help="Broker/source tag baked into the filename "
+                        "(XAUUSD_TICK_YYYYMM[_pN]_<SOURCE>.csv; default ELEV8). Use a "
+                        "distinct tag (e.g. DEMO) so a demo broker's tick archive "
+                        "never mixes with the live one.")
     p.add_argument("--mt5-server-offset", type=int, default=3)
     p.add_argument("--chunk-hours", type=int, default=6)
     p.add_argument("--sleep-seconds", type=float, default=0.2)
@@ -417,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
 
         print(f"[all done] exported {grand_total:,} ticks")
         if args.split_mb and months_to_split:
-            parts = _split_exported(args.output_dir, args.symbol, months_to_split, args.split_mb)
+            parts = _split_exported(args.output_dir, args.symbol, months_to_split, args.split_mb, getattr(args, "source", "ELEV8"))
             print(f"[split] wrote {parts} size-capped part(s) (<= {args.split_mb:g} MiB each)")
         return 0
     finally:

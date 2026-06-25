@@ -1,0 +1,41 @@
+# =========================================================================
+# RESYNC XAUUSD TICK HISTORY FROM THE *DEMO* BROKER (MT5 -> data/demo/ticks/)
+# GitHub-safe <=95 MiB parts. Windows-only: MetaTrader5 + a RUNNING MT5 terminal
+# logged into the DEMO account. PowerShell backtick (`) continuation.
+# =========================================================================
+#
+# WHY a separate demo tick archive:
+#   Trailing-open/close fills are TICK-driven, and the demo broker's ticks differ
+#   from the live ELEV8 ticks -- so a demo strategy (e.g. TR05) must be tick-
+#   backtested on DEMO ticks. This writes a SEPARATE, self-describing archive:
+#       data/demo/ticks/XAUUSD_TICK_YYYYMM_pN_DEMO.csv
+#   The `_DEMO` source tag (--source) and the data/demo/ticks dir keep it fully
+#   isolated from the live `_ELEV8` tick archive; the _pN split machinery is the
+#   same (generalized to any source tag). Times are GMT+3 chart clock.
+#
+# RUN THIS WHILE THE MT5 TERMINAL IS LOGGED INTO THE DEMO ACCOUNT.
+# Set --start-date to the recent window the demo broker actually keeps (tick
+# history is short -- days to a few weeks). --end-date is EXCLUSIVE.
+#
+# ===== RESYNC DEMO TICKS (run from the repo root) =====
+python tools/export_ticks.py `
+  --symbol XAUUSD `
+  --start-date 2026-06-01 `
+  --end-date 2026-06-27 `
+  --output-dir data/demo/ticks `
+  --source DEMO `
+  --mt5-server-offset 3 `
+  --split-mb 95 `
+  --progress
+
+# ----- Incremental append later (only NEW ticks, re-splits just the tail) -----
+# python tools/export_ticks.py `
+#   --symbol XAUUSD --start-date 2026-06-01 --end-date 2026-06-27 `
+#   --output-dir data/demo/ticks --source DEMO --mt5-server-offset 3 `
+#   --merge --split-mb 95 --progress
+#
+# ----- If MT5 is NOT already running/logged in, add connection details -----
+# (--mt5-path / --mt5-login / --mt5-password / --mt5-server), as in the live
+# cli/resync_ticks.txt snapshot.
+#
+# Symbol name varies by broker; match --symbol to Market Watch exactly.
