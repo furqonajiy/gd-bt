@@ -49,6 +49,7 @@ back, so do them once yourself in the terminal before launching.)
 | `rr08` | `rr08x15x30.txt` | R:R research candidate (tag RR08) |
 | `sl19` | `candidate_R4_SL19_tick.txt` | R4 June-tick candidate: SQZ6 w/ slm1.9 (tag SL19) — **research** |
 | `c160` | `candidate_R4_C160_tick.txt` | R4 May+June-tick sweep winner (tag C160) — **research** |
+| `v116`, `vic116` | `candidate_VIC_C116_tick.txt` | Victor May+June-tick sweep winner: TP2/mh180/slm1.7 (tag V116) — **research** |
 | `tr40` | `trailing_open_R4.txt` | best trailing-open cell, R4 (tag TR40) — **research, parity-fragile** |
 | `tr30` | `trailing_open_R3.txt` | best trailing-open cell, R3 (tag TR30) — **research, parity-fragile** |
 | `tr20` | `trailing_open_R2.txt` | best trailing-open cell, R2 (tag TR20) — **research, parity-fragile** |
