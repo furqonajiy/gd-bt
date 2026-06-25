@@ -70,7 +70,10 @@ python tools/export_ticks.py `
 # ===== RE-SPLIT an already-exported full file (no MT5 needed) =====
 # If you exported WITHOUT --split-mb (or hand-built a big data/ticks file), cut it
 # to GitHub-safe parts after the fact:
-# python tools/split_ticks_by_size.py data/ticks/XAUUSD_TICK_202606_ELEV8.csv --max-mb 95 --remove-source
+# python tools/split_ticks_by_size.py `
+#   data/ticks/XAUUSD_TICK_202606_ELEV8.csv `
+#   --max-mb 95 `
+#   --remove-source
 
 # ===== VERIFY before committing/pushing =====
 # Every part MUST be < 100 MiB. PowerShell:
