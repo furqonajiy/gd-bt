@@ -38,6 +38,28 @@ pair is a thin package that imports it.
 - `tools/` — research/ops scripts (sweeps, signal generators, the explicit
   full-parameter runners `auto_explicit.py` / `backtest_explicit.py`,
   `dump_forensic.py`, tick tooling).
+  `tools/backtest_hybrid.py` — the **tick-preferred / M1-fallback backtest**:
+  same signal/chart/strategy contract as `backtest_explicit.py` (it reuses that
+  tool's parser + config) **plus `--ticks`** (default `data/ticks/XAUUSD_TICK_*_ELEV8.csv`).
+  For **each signal**, in chronological order, it picks the best available data —
+  if the committed tick archive covers the signal's lifecycle window it evaluates
+  that signal on the **real `Mt5Executor` against ticks** (exactly as
+  `tools/tick_backtest.py`, the closest-to-live fills), otherwise it falls back to
+  the M1 OHLC engine (the **exact** `run_backtest` row construction, reused
+  verbatim). Equity compounds across the interleaved tick/M1 signals in one curve,
+  and the combined result is aggregated by the SAME `aggregate_backtest_result` the
+  M1 backtest uses, so the workbook (Summary / Daily / Per-Entry) is shape-identical
+  with one extra **Data Source** column tagging each row TICK or M1 (the column +
+  Summary line appear only when a run is hybrid, so pure-M1 reports are unchanged).
+  Tick data currently covers **2026-05..2026-06**, so a 2026-06 run is pure TICK, a
+  pre-2026-05 run is pure M1, and a window spanning the boundary is mixed —
+  automatically. **Parity:** with no ticks in range (or `--ticks` omitted) the
+  output is byte-identical to `backtest_explicit.py` (`tests/test_backtest_hybrid_parity.py`
+  pins this); to enable it, `run_backtest` was refactored to call reusable
+  `screen_signal` / `replay_signal_rows` / `aggregate_backtest_result` helpers
+  (re-exported from the engine root) with its own output proven unchanged. The CLI
+  snapshots' **2026 backtest sections (5 & 6) call `backtest_hybrid` + `--ticks`**;
+  the pre-tick eras (7–9) stay on `backtest_explicit` (no tick overlap).
 - `listeners/` — per-platform signal-source listeners, one subfolder per source
   (`telegram/`, and future `whatsapp/`, etc.).
   `listeners/telegram/listener.py` — ingests Victor's Telegram channel into
@@ -418,6 +440,11 @@ pytest tests/test_smoke.py             # quick strategy-baseline check
 
 python -m trading.engine.cli backtest --signals victor_signals.txt --charts "data/XAUUSD_M1_*.csv"
 python -m trading.engine.cli decide --signal "..." --signal-date 2026-05-07 --signal-tz 7 --charts "data/XAUUSD_M1_*.csv"
+
+# Tick-preferred backtest (real ticks where the archive covers a signal, M1 else):
+python tools/backtest_hybrid.py --signals signals/sqz6.txt --charts "data/XAUUSD_M1_*_ELEV8.csv" \
+  --ticks "data/ticks/XAUUSD_TICK_*_ELEV8.csv" --watch-seconds 3 --output-dir reports/SQZ6_tick_202606 \
+  --start-date 2026-06-01  ...same strategy flags as backtest_explicit...
 ```
 
 `backtest`/`decide` default to **`DEFAULT_CONFIG.initial_capital = $50,000`** (was

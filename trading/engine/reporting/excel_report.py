@@ -219,7 +219,7 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
     initial = cfg.get("initial_capital", 0) or 1
     final = result.get("final_equity", 0)
     return_pct = (final / initial - 1) * 100 if initial else 0.0
-    row = _kv_section(ws, row, "Overall Performance", [
+    overall_pairs = [
         ("Final equity", f"${final:,.2f}"),
         ("Net profit incl. bonus", f"${result.get('net_profit', 0):,.2f}"),
         ("Trading P&L", f"${result.get('trading_pnl', 0):,.2f}"),
@@ -229,7 +229,15 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
         ("Signals included", result.get("signals_included")),
         ("Signal wins / losses", f"{result.get('wins', 0)} / {result.get('losses', 0)}"),
         ("Signal win rate", f"{result.get('win_rate_pct', 0):.2f}%"),
-    ])
+    ]
+    # Hybrid (tick-preferred / M1-fallback) backtests carry a per-source split;
+    # only shown when present, so pure M1/tick reports are unchanged.
+    ds = result.get("data_sources")
+    if ds:
+        overall_pairs.append(
+            ("Data source (signals)",
+             f"TICK {ds.get('tick_signals', 0)} / M1 {ds.get('m1_signals', 0)}"))
+    row = _kv_section(ws, row, "Overall Performance", overall_pairs)
 
     # Entry-outcome counts ("how many skipped / hit TP / SL / etc").
     ws.cell(row=row, column=1, value="Entry Outcomes").font = SUBHEADER_FONT
@@ -457,6 +465,11 @@ def _write_entries_sheet(ws: Worksheet, result: dict) -> None:
         layout += list(LIVE_LAYOUT)
     # Dynamic source-time header (e.g. "Time (GMT+7)").
     layout[2] = (layout[2][0], _source_time_header(rows), layout[2][2], layout[2][3], None)
+    # Hybrid backtests tag each row TICK/M1; add a SIGNAL-group column ONLY when
+    # present so pure M1/tick reports keep their exact column set (parity).
+    if any(r.get("data_source") for r in rows):
+        side_i = next((i for i, (k, *_) in enumerate(layout) if k == "side"), 4)
+        layout.insert(side_i + 1, ("data_source", "Data Source", None, "id", None))
 
     groups = [g for _, _, _, g, _ in layout]
     headers = [h for _, h, _, _, _ in layout]

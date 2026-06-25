@@ -67,6 +67,15 @@ forward/demo validation. They follow the full champion 9-section format
 section 3 (live executor) is **demo/forward-validation only**, and each carries a
 high swept risk%/signal — size down before any real-money trial.
 
+**Tick-aware backtests.** In the non-trailing snapshots, the **2026 backtest
+sections (5 & 6) run `tools/backtest_hybrid.py --ticks data/ticks/...`** instead
+of `backtest_explicit.py`: each signal is filled on the **real tick archive**
+where it covers the signal (2026-05+, the closest-to-live fills) and on M1 OHLC
+elsewhere — auto-routed, one combined report with a **Data Source** column. The
+pre-tick eras (sections 7–9: 2025 / 2024 / 2021-2023) stay on `backtest_explicit`
+(no tick overlap, so identical numbers without loading the tick archive). With no
+ticks in range the hybrid output is byte-identical to `backtest_explicit`.
+
 The launcher reconstructs each command byte-for-byte from the `.txt` (it only
 joins the PowerShell `` ` `` line-continuations), so it never diverges from the
 snapshot — the `.txt` files stay the single source of truth.

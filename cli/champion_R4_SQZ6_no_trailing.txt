@@ -122,12 +122,16 @@ python tools/auto_explicit.py `
 python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/sqz6.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 75 --rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0
 
 # ===== 5. BACKTEST FROM 2026-06 (current month) =====
+# TICK-AWARE: tools/backtest_hybrid.py uses REAL-tick fills where the committed
+#   tick archive (data/ticks, 2026-05+) covers a signal and M1 OHLC elsewhere,
+#   auto-routed per signal; pre-tick eras fall back to M1 (identical numbers).
 # --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
 #   give-back so the backtest matches live (the SAME values the sweep scored
 #   against). Backtest-only; never live.
-python tools/backtest_explicit.py `
+python tools/backtest_hybrid.py `
   --signals signals/sqz6.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
   --max-drawdown-limit-pct 50 `
   --progress-interval-seconds 30 `
   --sync-charts true `
@@ -166,12 +170,16 @@ python tools/backtest_explicit.py `
   --start-date 2026-06-22
 
 # ===== 6. BACKTEST FROM 2026-01 (current regime) =====
+# TICK-AWARE: tools/backtest_hybrid.py uses REAL-tick fills where the committed
+#   tick archive (data/ticks, 2026-05+) covers a signal and M1 OHLC elsewhere,
+#   auto-routed per signal; pre-tick eras fall back to M1 (identical numbers).
 # --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
 #   give-back so the backtest matches live (the SAME values the sweep scored
 #   against). Backtest-only; never live.
-python tools/backtest_explicit.py `
+python tools/backtest_hybrid.py `
   --signals signals/sqz6.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
   --max-drawdown-limit-pct 50 `
   --progress-interval-seconds 30 `
   --sync-charts true `

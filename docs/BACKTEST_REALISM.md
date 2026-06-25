@@ -10,6 +10,15 @@ the cent** on entries, TP1/TP2/TP3 targets, and SL. The **only** gap is **locked
 protective stops** (LOCK_TP1 / LOCK_TP2), which fill at market on the retrace and
 give back a point or two. Everything below is how each live effect is handled.
 
+**Skip the model where you have ticks.** The slippage/spread rows below are how
+the **M1 OHLC** backtest *approximates* live fills. When the **tick archive**
+covers a window, `tools/backtest_hybrid.py` instead replays the **real
+`Mt5Executor` against the ticks** for those signals (M1 fallback elsewhere, one
+combined report, Data Source column) — no fill model needed there, those legs are
+the closest-to-live read. Use it for any 2026-05+ window; the M1 model still
+governs the pre-tick eras. The locked-exit slippage below remains the M1 realism
+knob and is what the per-regime sweeps score against.
+
 ---
 
 ## 1. The realism ledger (every live effect → how the backtest treats it)
