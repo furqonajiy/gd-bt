@@ -43,30 +43,15 @@ back, so do them once yourself in the terminal before launching.)
 
 | Alias | Snapshot | What |
 |---|---|---|
-| `victor`, `vic` | `champion_victor.txt` | Victor feed (tag VIC) — deployed |
-| `sqz6` | `champion_R4_SQZ6_no_trailing.txt` | R4 champion rsi75_sqz6_rr40 (tag SQZ6) — deployed |
-| `e640` | `E640.txt` | cross-regime candidate (tag E640) |
-| `rr08` | `rr08x15x30.txt` | R:R research candidate (tag RR08) |
-| `sl19` | `candidate_R4_SL19_tick.txt` | R4 June-tick candidate: SQZ6 w/ slm1.9 (tag SL19) — **research** |
+| `sqz6` | `champion_R4_SQZ6_no_trailing.txt` | R4 champion rsi75_sqz6_rr40 (tag SQZ6) — **deployed** |
+| `victor`, `vic`, `v116`, `vic116` | `candidate_VIC_C116_tick.txt` | Victor champion: tick-tuned TP2/mh180/slm1.7 (tag V116, M1 DD 11.3%) — **deployed** |
 | `c160` | `candidate_R4_C160_tick.txt` | R4 tick winner (tag C160) — **deployed beside SQZ6** (research-grade: M1 DD 42.1% > gate; reduced risk/demo) |
-| `v116`, `vic116` | `candidate_VIC_C116_tick.txt` | Victor tick winner TP2/mh180/slm1.7 (tag V116) — **deployed beside VIC** (M1 DD 11.3%) |
-| `tr40` | `trailing_open_R4.txt` | best trailing-open cell, R4 (tag TR40) — **research, parity-fragile** |
-| `tr30` | `trailing_open_R3.txt` | best trailing-open cell, R3 (tag TR30) — **research, parity-fragile** |
-| `tr20` | `trailing_open_R2.txt` | best trailing-open cell, R2 (tag TR20) — **research, parity-fragile** |
-| `tr10` | `trailing_open_R1.txt` | best trailing-open cell, R1 (tag TR10) — **research, parity-fragile** |
-| `ts01` | `trailing_small_0101.txt` | `to0p1_tc0p1` (0.1/0.1) — #1 cell in ALL regimes (tag TS01) — **research, strongest fill-artifact suspicion** |
 | `resync` | `resync_m1_from_2020.txt` | M1-archive resync utility |
 | `resync-ticks`, `ticks` | `resync_ticks.txt` | tick-archive export/resync utility (MT5 → data/ticks, ≤95 MiB GitHub-safe parts) |
 
-The `trailing_open_R*` snapshots are the best trailing-open cells from the
-in-progress trailing sweep (run 28009972567). They are **backtest research
-only** — trailing-open is live-parity-fragile (a 0.1–0.2 trailing-open fills
-entries on a pullback the live executor can't reproduce on M1), so their large
-edge is likely optimistic. Reproduce/study them; do **not** deploy without
-forward/demo validation. They follow the full champion 9-section format
-(listener → live loop → auto executor → signal generator → 5 era backtests), but
-section 3 (live executor) is **demo/forward-validation only**, and each carries a
-high swept risk%/signal — size down before any real-money trial.
+(Superseded snapshots — the old `champion_victor` VIC, `E640`, `rr08x15x30`,
+`candidate_R4_SL19_tick`, and the `trailing_open_R*` / `trailing_small_0101`
+research cells — were pruned 2026-06-25; recover from git history if needed.)
 
 **Tick-aware backtests.** In the non-trailing snapshots, the **2026 backtest
 sections (5 & 6) run `tools/backtest_hybrid.py --ticks data/ticks/...`** instead

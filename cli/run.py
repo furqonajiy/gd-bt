@@ -24,10 +24,10 @@ or a keyword -- `backtest`/`bt` (sections >= 4: signal-gen + every era backtest)
 `live` (1-3), `all`. Multi-section selectors run their sections in order and stop
 at the first one that fails.
 
-Aliases: victor/vic, sqz6, e640, rr08, sl19, c160, v116, resync, ticks (or any
-unique part of a filename). The reconstructed command is byte-identical to the
-snapshot (PowerShell ` continuations are joined into one line), so this never
-diverges from cli/*.txt.
+Aliases: sqz6 (R4 champion), victor/vic/v116 (Victor champion), c160 (R4 candidate
+beside SQZ6), resync (M1), ticks (tick archive) -- or any unique part of a
+filename. The reconstructed command is byte-identical to the snapshot (PowerShell `
+continuations are joined into one line), so this never diverges from cli/*.txt.
 """
 from __future__ import annotations
 
@@ -46,15 +46,11 @@ NUM_NAME_RE = re.compile(r"^(\d+)\.\s*(.*)$")   # "3. LIVE AUTO EXECUTOR"
 
 # Friendly aliases -> filename-stem substring.
 ALIASES = {
-    "victor": "champion_victor", "vic": "champion_victor",
-    "sqz6": "champion_R4_SQZ6", "e640": "E640",
-    "rr08": "rr08x15x30", "resync": "resync_m1_from_2020",
-    "resync-ticks": "resync_ticks", "ticks": "resync_ticks",
-    "sl19": "candidate_R4_SL19", "c160": "candidate_R4_C160",
+    "victor": "candidate_VIC_C116", "vic": "candidate_VIC_C116",
     "v116": "candidate_VIC_C116", "vic116": "candidate_VIC_C116",
-    "tr40": "trailing_open_R4", "tr30": "trailing_open_R3",
-    "tr20": "trailing_open_R2", "tr10": "trailing_open_R1",
-    "ts01": "trailing_small_0101",
+    "sqz6": "champion_R4_SQZ6", "c160": "candidate_R4_C160",
+    "resync": "resync_m1_from_2020",
+    "resync-ticks": "resync_ticks", "ticks": "resync_ticks",
 }
 
 
@@ -204,7 +200,7 @@ def run_section(section: Section, *, dry: bool) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Run a cli/*.txt section in the current terminal.")
-    p.add_argument("strategy", nargs="?", help="victor | sqz6 | e640 | rr08 | resync (or part of a filename)")
+    p.add_argument("strategy", nargs="?", help="sqz6 | victor/v116 | c160 | resync | ticks (or part of a filename)")
     p.add_argument("section", nargs="?",
                    help="section number (1-9), name substring, range (5-9 / 4-), or a "
                         "keyword: backtest/bt (>=4), live (1-3), all")
