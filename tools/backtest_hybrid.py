@@ -333,6 +333,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--watch-seconds", type=int, default=3,
                    help="Tick poll cadence for the real executor (matches live "
                         "--watch-interval 3). Default 3.")
+    p.add_argument("--score-json", default=None,
+                   help="Write a machine-readable score JSON to this path: the "
+                        "REAL compounding-equity net P&L + max_drawdown_pct (the "
+                        "trustworthy tick DD, not the parse_tick_run proxy), win "
+                        "rate, and tick/M1 split. Used by the tick sweep to rank by "
+                        "net at real DD <= 40%.")
     # Sync BOTH data sources before the backtest. --sync-charts (M1) comes from
     # backtest_explicit's chart-sync args (default True); --sync-ticks mirrors it
     # for the tick archive (APPEND via --merge, re-split at --ticks-split-mb).
@@ -401,6 +407,23 @@ def main(argv: list[str] | None = None) -> int:
 
     path = write_backtest_outputs(result, Path(args.output_dir))
     print(f"  report: {path}")
+
+    if getattr(args, "score_json", None):
+        import json as _json
+        ds = result.get("data_sources", {})
+        score = {
+            "net_profit": round(float(result["net_profit"]), 2),
+            "max_drawdown_pct": round(abs(float(result["max_drawdown_pct"])), 2),
+            "win_rate_pct": round(float(result.get("win_rate_pct", 0.0)), 1),
+            "signals_included": int(result.get("signals_included", 0)),
+            "tick_signals": int(ds.get("tick_signals", 0)),
+            "m1_signals": int(ds.get("m1_signals", 0)),
+            "wins": int(result.get("wins", 0)),
+            "losses": int(result.get("losses", 0)),
+        }
+        Path(args.score_json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.score_json).write_text(_json.dumps(score), encoding="utf-8")
+        print(f"  score: {args.score_json} -> {score}")
 
     dd = abs(result["max_drawdown_pct"])
     if getattr(args, "fail_on_drawdown_limit", False) and dd > args.max_drawdown_limit_pct:
