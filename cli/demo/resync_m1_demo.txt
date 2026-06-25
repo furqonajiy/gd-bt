@@ -17,8 +17,9 @@
 # RUN THIS WHILE THE MT5 TERMINAL IS LOGGED INTO THE DEMO ACCOUNT.
 #
 # ===== RESYNC DEMO M1 (run from the repo root) =====
+# --months 2 = current + previous month = the LAST 2 MONTHS (2026-05 + 2026-06).
 python -m trading.engine.cli fetch `
-  --months 6 `
+  --months 2 `
   --output-dir data/demo `
   --source DEMO `
   --mt5-symbol XAUUSD `
@@ -26,7 +27,7 @@ python -m trading.engine.cli fetch `
 
 # ----- If MT5 is NOT already running/logged in, pass connection details -----
 # python -m trading.engine.cli fetch `
-#   --months 6 --output-dir data/demo --source DEMO `
+#   --months 2 --output-dir data/demo --source DEMO `
 #   --mt5-symbol XAUUSD --mt5-server-offset 3 `
 #   --mt5-path "C:\Program Files\MetaTrader 5\terminal64.exe" `
 #   --mt5-login 12345678 --mt5-password "YOUR_PASSWORD" --mt5-server "YourDemo-Server"

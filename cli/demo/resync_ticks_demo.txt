@@ -18,9 +18,10 @@
 # history is short -- days to a few weeks). --end-date is EXCLUSIVE.
 #
 # ===== RESYNC DEMO TICKS (run from the repo root) =====
+# LAST 2 MONTHS: 2026-05-01 -> 2026-06-27 (--end-date EXCLUSIVE; covers thru today).
 python tools/export_ticks.py `
   --symbol XAUUSD `
-  --start-date 2026-06-01 `
+  --start-date 2026-05-01 `
   --end-date 2026-06-27 `
   --output-dir data/demo/ticks `
   --source DEMO `
@@ -30,7 +31,7 @@ python tools/export_ticks.py `
 
 # ----- Incremental append later (only NEW ticks, re-splits just the tail) -----
 # python tools/export_ticks.py `
-#   --symbol XAUUSD --start-date 2026-06-01 --end-date 2026-06-27 `
+#   --symbol XAUUSD --start-date 2026-05-01 --end-date 2026-06-27 `
 #   --output-dir data/demo/ticks --source DEMO --mt5-server-offset 3 `
 #   --merge --split-mb 95 --progress
 #
