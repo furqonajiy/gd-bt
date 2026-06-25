@@ -56,6 +56,7 @@ back, so do them once yourself in the terminal before launching.)
 | `tr10` | `trailing_open_R1.txt` | best trailing-open cell, R1 (tag TR10) — **research, parity-fragile** |
 | `ts01` | `trailing_small_0101.txt` | `to0p1_tc0p1` (0.1/0.1) — #1 cell in ALL regimes (tag TS01) — **research, strongest fill-artifact suspicion** |
 | `resync` | `resync_m1_from_2020.txt` | M1-archive resync utility |
+| `resync-ticks`, `ticks` | `resync_ticks.txt` | tick-archive export/resync utility (MT5 → data/ticks, ≤95 MiB GitHub-safe parts) |
 
 The `trailing_open_R*` snapshots are the best trailing-open cells from the
 in-progress trailing sweep (run 28009972567). They are **backtest research
