@@ -1,0 +1,83 @@
+# =========================================================================
+# RESYNC XAUUSD TICK HISTORY (MT5 -> data/ticks/), GitHub-safe <=95 MiB parts
+# Windows-only: requires the MetaTrader5 package + a RUNNING MT5 terminal
+# logged into your broker. PowerShell backtick (`) line continuation.
+# =========================================================================
+#
+# What it does:
+#   Pulls REAL tick data from MT5 (copy_ticks_range) month-by-month and writes
+#   tab-separated CSV(s) under data/ticks/. With --split-mb it then cuts each
+#   month into sequential, line-aligned parts of at most that many MiB and
+#   deletes the full month file, so every part stays under GitHub's 100 MiB push
+#   limit:
+#       data/ticks/XAUUSD_TICK_YYYYMM_p1_ELEV8.csv, _p2, _p3, ...
+#   (the exact format + naming the tick backtest already reads). Times are stored
+#   in CHART time = GMT+3 (the MT5 server clock), same as the M1 archive.
+#
+#   This is the archive the TICK-aware backtest consumes:
+#     - tools/backtest_hybrid.py  (--ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv) and
+#       the CLI snapshots' 2026 backtest sections (5 & 6), and
+#     - tools/tick_backtest.py and the tick sweeps.
+#
+# WHY 95 (not 100):
+#   GitHub HARD-REJECTS any file >= 100 MiB on push (and warns above 50 MiB).
+#   --split-mb 95 leaves margin so a push never bounces; the committed archive's
+#   full parts are ~94 MiB. Raise toward 100 only if you like living dangerously.
+#
+# IMPORTANT — broker tick window is SHORT:
+#   MT5 only returns the ticks YOUR BROKER still stores. Tick history is far
+#   shorter than M1 -- often just days to a few weeks (some brokers keep no
+#   tick history at all). So set --start-date to the recent window you actually
+#   want; requesting more just yields whatever is available. The committed
+#   archive currently spans 2026-05-05 -> 2026-06-24 (May + June).
+#
+# IMPORTANT — --split-mb is a FINAL PACKAGING step:
+#   it removes the full month file, so a later --merge re-fetches the whole
+#   window instead of resuming. Run it once you have the window you want; do not
+#   use it for an archive you grow incrementally.
+#
+# Dates are CHART-time GMT+3; --end-date is EXCLUSIVE.
+#
+# ===== RESYNC TICKS (run from the repo root) =====
+python tools/export_ticks.py `
+  --symbol XAUUSD `
+  --start-date 2026-05-01 `
+  --end-date 2026-06-26 `
+  --output-dir data/ticks `
+  --mt5-server-offset 3 `
+  --split-mb 95 `
+  --progress
+
+# ----- If MT5 is NOT already running/logged in, pass connection details -----
+# (otherwise the command above attaches to the running terminal):
+# python tools/export_ticks.py `
+#   --symbol XAUUSD `
+#   --start-date 2026-05-01 `
+#   --end-date 2026-06-26 `
+#   --output-dir data/ticks `
+#   --mt5-server-offset 3 `
+#   --split-mb 95 `
+#   --progress `
+#   --mt5-path "C:\Program Files\MetaTrader 5\terminal64.exe" `
+#   --mt5-login 12345678 `
+#   --mt5-password "YOUR_PASSWORD" `
+#   --mt5-server "YourBroker-Server"
+
+# Symbol name varies by broker (XAUUSD, XAUUSD.r, GOLD, XAUUSDm, ...). Match
+# --symbol to Market Watch exactly. If the broker clock is not GMT+3, set
+# --mt5-server-offset accordingly (verify with `python -m trading.engine.cli mt5-info`).
+
+# ===== RE-SPLIT an already-exported full file (no MT5 needed) =====
+# If you exported WITHOUT --split-mb (or hand-built a big data/ticks file), cut it
+# to GitHub-safe parts after the fact:
+# python tools/split_ticks_by_size.py data/ticks/XAUUSD_TICK_202606_ELEV8.csv --max-mb 95 --remove-source
+
+# ===== VERIFY before committing/pushing =====
+# Every part MUST be < 100 MiB. PowerShell:
+#   Get-ChildItem data\ticks\XAUUSD_TICK_*_ELEV8.csv |
+#     Select-Object Name, @{N='MiB';E={[math]::Round($_.Length/1MB,1)}} | Sort-Object Name
+# Flag any part >= 100 MiB (must be 0):
+#   Get-ChildItem data\ticks\XAUUSD_TICK_*_ELEV8.csv | Where-Object { $_.Length -ge 100MB }
+
+# ===== Confirm MT5 connection / symbol / server clock first (optional) =====
+# python -m trading.engine.cli mt5-info --mt5-symbol XAUUSD
