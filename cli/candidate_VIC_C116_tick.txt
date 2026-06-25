@@ -1,0 +1,333 @@
+# =========================================================================
+# VICTOR TICK-TUNED CANDIDATE — VIC_C116  | tag V116   *** RESEARCH ***
+# "VIC_C116" = the #1 Victor-feed config by REAL-TICK P&L in the Victor May+June
+# tick sweep (150 lifecycle candidates, tools/tick_backtest.py on the real
+# Mt5Executor over the committed May+June tick archive, risk 2.5% / $50k).
+# Leaderboard: sweep_reports/tick_vic_full/ (rank 1 of 150).
+#
+# WHAT IT IS (Victor's PROVIDER feed, lifecycle-only tune; differs from the
+# deployed VIC champion in exactly FOUR params -- the feed is identical):
+#     sl-multiplier        2.1  ->  1.7    (tighter stop)
+#     max-hold (min)       240  ->  180    (shorter time-exit)
+#     final-target         TP3  ->  TP2    (bank at TP2, no TP3 reach)
+#     tp1-lock-delay (min)  24  ->  12     (lock the TP1 floor sooner)
+#   UNCHANGED vs VIC: entries 8, entry-ladder range_to_sl, entry-sl-gap 0.5,
+#     tp1-lock-fraction 0.5, lock-after-tp1/2 ON, NO trailing, risk 2.5%.
+#   NOTE: the Victor signal R:R / ATR policy (rewrite_tp_rr, sl_source=atr, ...) is
+#     NOT part of this tune (tick_backtest can't apply it; deployed Victor doesn't).
+#
+# REAL-TICK EVIDENCE (May+June 2026, risk 2.5% / $50k):
+#   TICK net (real Mt5Executor)            $24,658   <- rank 1 of 150
+#   M1 net + $3/lot bonus (compounded)     $43,496
+#   M1 net, NO bonus (compounded)          $42,879
+#   M1 edge (fixed 0.01 lot, capital-indep) $2,481
+#   M1 concurrent-risk DD                  11.3%    (WELL under the 40% gate)
+#   tick proxy DD                          22.6%
+#   win rate                               63.1%
+#   discrepancy (M1 net - TICK net)        +76%     (modest over-statement)
+#
+# WHY THIS MATTERS: unlike the self-scalper (193/200 cells TICK-NEGATIVE over the
+# SAME May+June window), the ENTIRE Victor top-20 is TICK-POSITIVE (+$18k..$24.7k)
+# at 11-20% M1 DD. The Victor provider feed is the robust, low-drawdown performer on
+# real ticks across May+June -- the stable profile the scalper never reached. The
+# deployed VIC champion (TP3 / mh240 / slm2.1) is only ~breakeven on May+June ticks
+# (+$244), so this TP2 / mh180 / slm1.7 tune is a real, evidence-backed improvement.
+#
+# STATUS: RESEARCH CANDIDATE, NOT the deployed champion. It is one window (May+June
+# 2026 ticks). FORWARD/DEMO-VALIDATE beside the deployed VIC before any live
+# promotion; prefer DEMO first. The deployed Victor remains cli/champion_victor.txt.
+#
+# ONE IDENTITY PER STRATEGY (keyed off tag **V116**), so it never collides with VIC:
+#   --strategy-tag V116 · --positions-json positions_v116.json ·
+#   reports/V116_2026xx (Excel) · forensic_v116.jsonl / notifications_v116.jsonl.
+#   The FEED is shared with Victor on purpose: Victor's signals come from Telegram
+#   and cannot be re-generated, so V116 READS the same provider feed
+#   (signals/victor_live.txt live, victor_signals.txt backtest) that VIC's listener
+#   + filter already produce -- do NOT start a second listener/filter for V116.
+#   Running V116 beside VIC on one account double-trades each Victor signal under
+#   DISJOINT magics (different tag), the intended head-to-head (like SL19 vs SQZ6).
+#
+# SECTION MAP (same in every strategy CLI; copy-paste 5-9 for the backtests):
+#   1. Telegram Listener            (N/A -- shares Victor's listener)
+#   2. Live Loop Signal Generator   (N/A -- shares Victor's provider filter)
+#   3. Live Auto Executor           (places + manages real orders, tag V116)
+#   4. Signal Generator             (N/A -- backtest reads victor_signals.txt direct)
+#   5. Backtest from 2026-06         -> reports/V116_202606.xlsx  (R4 parabolic, current month; slip 2.0/1.0)
+#   6. Backtest from 2026-01         -> reports/V116_202601.xlsx  (R4 parabolic, current regime; slip 2.0/1.0)
+#   7. Backtest 2025 (R3 strong)     -> reports/V116_2025.xlsx  (slip 0.9/0.45)
+#   8. Backtest 2024 (R2 bull)       -> reports/V116_2024.xlsx  (slip 0.5/0.25)
+#   9. Backtest 2021-2023 (R1 quiet) -> reports/V116_2021_2023.xlsx  (slip 0.4/0.2)
+# =========================================================================
+
+# ===== 1. TELEGRAM LISTENER =====
+# N/A -- V116 does NOT run its own listener. It shares Victor's provider feed:
+# run the deployed Victor's listener (cli/champion_victor.txt section 1), which
+# writes victor_signals.txt. V116 reads that same source.
+
+# ===== 2. LIVE LOOP SIGNAL GENERATOR =====
+# N/A -- V116 does NOT run its own provider filter. Victor's filter
+# (cli/champion_victor.txt section 2) regenerates signals/victor_live.txt; V116's
+# executor (section 3) reads that same file. Do not start a second filter.
+
+# ===== 3. LIVE AUTO EXECUTOR =====
+# Reads Victor's filtered feed (victor_live.txt), places + manages real orders on
+# MT5 under tag V116. Strategy params are byte-identical to the parity backtests
+# (sections 5-9); only the backtest-only locked-exit slippage varies there, never
+# live. The four lifecycle differences from VIC are: sl-multiplier 1.7, max-hold
+# 180, final-target TP2, tp1-lock-delay 12. Victor-specific NON-default flags kept
+# (--replace-missing-entries / --reopen-missing-positions / --apply-signal-edits /
+# --signal-overrides-file), matching VIC so the only variable is the geometry.
+python tools/auto_explicit.py `
+  --signals signals/victor_live.txt `
+  --positions-json positions_v116.json `
+  --strategy-tag V116 `
+  --forensic-log forensic_v116.jsonl `
+  --notifications notifications_v116.jsonl `
+  --watch-interval 3 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.025 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 180 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0 `
+  --trailing-close-distance 0 `
+  --replace-missing-entries true `
+  --reopen-missing-positions true `
+  --apply-signal-edits true `
+  --signal-overrides-file signal_overrides.jsonl
+
+# ===== 4. SIGNAL GENERATOR (before backtest) =====
+# N/A -- there is no generation step for Victor. The backtest reads
+# victor_signals.txt directly (the listener output IS the signal source); sections
+# 5-9 below pass it as --signals.
+
+# ===== 5. BACKTEST FROM 2026-06 (current month) =====
+# --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
+#   give-back so the backtest matches live. Backtest-only; never live. Strategy
+#   params are byte-identical to the auto runner (section 3).
+python tools/backtest_explicit.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.025 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 180 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0 `
+  --trailing-close-distance 0 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/V116_202606 `
+  --initial-capital 12000 `
+  --start-date 2026-06-22
+
+# ===== 6. BACKTEST FROM 2026-01 (current regime) =====
+# --lock-tp1-exit-slippage 2.0 / --lock-tp2-exit-slippage 1.0 model the LOCKED-exit
+#   give-back so the backtest matches live. Backtest-only; never live. Strategy
+#   params are byte-identical to the auto runner (section 3).
+python tools/backtest_explicit.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.025 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 180 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0 `
+  --trailing-close-distance 0 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/V116_202601 `
+  --initial-capital 12000 `
+  --start-date 2026-01-01
+
+# ===== 7. BACKTEST FROM 2025 (R3 strong) =====
+# Era-matched LOCKED-exit slippage 0.9 / 0.45 (R3 2025: ~0.45x the R4 2.0/1.0 anchor).
+#   Backtest-only realism knob; never sent live. Strategy geometry is unchanged.
+python tools/backtest_explicit.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.025 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 180 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0 `
+  --trailing-close-distance 0 `
+  --lock-tp1-exit-slippage 0.9 `
+  --lock-tp2-exit-slippage 0.45 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/V116_2025 `
+  --initial-capital 12000 `
+  --start-date 2025-01-01 `
+  --end-date 2025-12-31
+
+# ===== 8. BACKTEST FROM 2024 (R2 bull) =====
+# Era-matched LOCKED-exit slippage 0.5 / 0.25 (R2 2024: ~0.26x the R4 anchor).
+#   Backtest-only realism knob; never sent live. Strategy geometry is unchanged.
+python tools/backtest_explicit.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.025 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 180 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0 `
+  --trailing-close-distance 0 `
+  --lock-tp1-exit-slippage 0.5 `
+  --lock-tp2-exit-slippage 0.25 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/V116_2024 `
+  --initial-capital 12000 `
+  --start-date 2024-01-01 `
+  --end-date 2024-12-31
+
+# ===== 9. BACKTEST FROM 2021-2023 (R1 quiet) =====
+# Era-matched LOCKED-exit slippage 0.4 / 0.2 (R1 2021-2023 quiet: ~0.20x the R4 anchor).
+#   Backtest-only realism knob; never sent live. Strategy geometry is unchanged.
+#   NOTE: Victor only began posting ~2024, so this window barely emits.
+python tools/backtest_explicit.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 50 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.025 `
+  --minimum-lot 0.01 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 2 `
+  --pending-expiry 180 `
+  --max-hold 180 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --runner-after-tp3 false `
+  --tp3-lock-target TP2 `
+  --trailing-open-distance 0 `
+  --trailing-close-distance 0 `
+  --lock-tp1-exit-slippage 0.4 `
+  --lock-tp2-exit-slippage 0.2 `
+  --trailing-close-after-stage 0 `
+  --output-dir reports/V116_2021_2023 `
+  --initial-capital 12000 `
+  --start-date 2021-01-01 `
+  --end-date 2023-12-31
