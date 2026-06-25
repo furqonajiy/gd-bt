@@ -1,12 +1,19 @@
 # =========================================================================
 # ST05 — SELF-SCALPER TRAILING-OPEN/CLOSE (DEMO)  | tag ST05  *** DEMO ONLY ***
 # Self-generated scalper feed (RSI 70/25-style + Bollinger squeeze + R:R 1.2/2.5/5,
-# same filter as C160) on C160 geometry, PLUS trailing-open 0.2 / trailing-close 0.5.
+# same filter as C160) on C160 geometry, PLUS trailing-open 0.5 / trailing-close 0.5.
 #
-# WHY this config: on the DEMO broker's REAL June ticks (self feed generated from
-# the demo M1, hybrid tick backtest) trailing 0.2/0.5 returned net ~ +$3,931 / win
-# ~60% vs the no-trailing C160 base at ~ +$148 / win ~43% over the same window --
-# trailing is the lever for the scalper. (One short window; DEMO to confirm.)
+# BROKER MIN-STOP: distances must be >= the broker's SYMBOL_TRADE_STOPS_LEVEL or a
+# resting STOP is rejected (retcode 10015 'Invalid price'). This demo broker's floor
+# is 0.4 pt (read it with `python -m trading.engine.cli mt5-info --mt5-symbol XAUUSD`),
+# so trailing-open 0.2 was UNtradeable here (every STOP bounced, placed=0) -- it is
+# set to 0.5 (> 0.4). trailing-close 0.5 is also >= the floor. NOTE: the backtest
+# mock does NOT enforce this floor, so a sub-0.4 distance can look fine in sim yet be
+# untradeable live -- always keep distances above the broker floor.
+#
+# WHY trailing: on the DEMO broker's REAL June ticks (self feed from demo M1, hybrid
+# tick backtest) trailing returned net well above the no-trailing C160 base (~+$148 /
+# ~43% win) -- trailing is the lever for the scalper. (One short window; DEMO to confirm.)
 #
 # INCLUDES THE INSTANT-CLOSE FIX: the executor now refuses to park a trailing-close
 # stop BELOW the position's real fill (commit f628ca6) -- so the "opens then closes
@@ -35,7 +42,7 @@ python tools/live_feed_loop.py `
   --mt5-server-offset 3 `
   -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/st05_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
 
-# ===== 2. LIVE AUTO EXECUTOR (trailing-open 0.2 / trailing-close 0.5) =====
+# ===== 2. LIVE AUTO EXECUTOR (trailing-open 0.5 / trailing-close 0.5) =====
 python tools/auto_explicit.py `
   --signals signals/st05_live.txt `
   --positions-json positions_st05.json `
@@ -69,7 +76,7 @@ python tools/auto_explicit.py `
   --tp1-lock-fraction 0.75 `
   --tp2-lock-target TP1 `
   --runner-after-tp3 false `
-  --trailing-open-distance 0.2 `
+  --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
   --trailing-live-entry true
 
@@ -89,6 +96,6 @@ python tools/backtest_hybrid.py `
   --lock-after-tp1 true --lock-after-tp2 false --tp1-lock-delay-minutes 24 --tp2-lock-delay-minutes 2 `
   --profit-lock-mode tp_levels --bep-trigger-distance 3 --tp1-lock-fraction 0.75 --tp2-lock-target TP1 `
   --runner-after-tp3 false `
-  --trailing-open-distance 0.2 --trailing-close-distance 0.5 `
+  --trailing-open-distance 0.5 --trailing-close-distance 0.5 `
   --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0 `
   --output-dir reports/ST05_demo --initial-capital 1000
