@@ -411,8 +411,11 @@ Run `auto` with `--replace-missing-entries true` (or `--replace-missing-entries`
 on `python -m trading.engine.cli auto`) to self-heal: each cycle it re-places any
 entry still **PENDING** in the replay (price hasn't reached it, window still
 open) whose per-entry comment is missing from MT5. It only acts when the signal
-still has ≥1 footprint on MT5, never re-places an entry price has already passed
-(no chasing), and is LIMIT-only (skips when trailing-open is enabled).
+still has ≥1 footprint on MT5 and never re-places an entry price has already
+passed (no chasing). **The placement type follows the strategy:** with
+`trailing_open_distance = 0` it re-places a LIMIT at the original entry; with
+`trailing_open_distance > 0` (a trailing strategy) it **re-arms the trailing-open
+STOP** at the leg's original levels — a trailing strategy never rests a LIMIT.
 
 ### Manually closed a position the strategy still holds
 
@@ -420,15 +423,25 @@ With `--reopen-missing-positions true`, MT5 mirrors the replay: any entry the
 backtest engine still considers **OPEN** that has no live position (e.g. you
 closed it by hand to thin out exposure) is restored on the next cycle — same
 per-entry comment, the replay's lot, its current effective stop (clamped to a
-broker-legal level), and the leg's target. Restoration is **price-aware, per
-leg**: at market when the current price is at-or-better than that leg's entry
-(BUY: ask ≤ entry; SELL: bid ≥ entry) or when its stop is already locked
-at/beyond the entry (in-profit protection mode); otherwise a LIMIT at the
-leg's original entry inside the pending window — it never chases a price
-that ran away. Re-opening stops on
-its own once the replay exits the leg. While this flag is on, a signal whose
-replay still holds OPEN legs also survives the registry prune even with zero
-MT5 footprint, so a hand-closed signal can't vanish before it is restored.
+broker-legal level), and the leg's target. **Restoration follows the strategy:**
+
+- **`trailing_open_distance = 0` (laddered LIMIT strategies)** — **price-aware,
+  per leg**: at market when the current price is at-or-better than that leg's
+  entry (BUY: ask ≤ entry; SELL: bid ≥ entry) or when its stop is already locked
+  at/beyond the entry (in-profit protection mode); otherwise a LIMIT at the leg's
+  original entry inside the pending window — it never chases a price that ran away.
+- **`trailing_open_distance > 0` (trailing strategies, e.g. TOC5 / TC18)** — it
+  **always re-arms the trailing-open STOP** at the leg's original levels and waits
+  for the dip-rebound, the same basis as the first entry. **A trailing strategy
+  never rests a flat LIMIT on restore.** A leg whose trigger was already crossed
+  in the race falls back to the same tick-confirmed market fill as a fresh arm
+  (never below the trigger). This is what lets you hand-close a trailing leg to
+  bank a small profit and have the executor re-arm it (instead of leaving a
+  worse-basis LIMIT — the 2026-06-25 give-back).
+
+Re-opening stops on its own once the replay exits the leg. While this flag is on,
+a signal whose replay still holds OPEN legs also survives the registry prune even
+with zero MT5 footprint, so a hand-closed signal can't vanish before it is restored.
 
 **Churn guard.** A leg whose live position closed in the **last ~3 minutes**
 (its SL / TP1-lock / TP fired intrabar) is **not** re-opened. The replay only
@@ -444,16 +457,28 @@ If you truly want out of a position early, close it AND remove the feed line
 
 **Reopen mode also handles partially played-out signals.** If you start the
 executor mid-life and a signal's replay has already closed some legs, `auto`
-no longer skips the whole signal: it places the still-PENDING legs as fresh
-LIMITs now and tracks the signal on its replay-OPEN legs, so those are re-opened
-by the rule above on the next cycle. (Without `--reopen-missing-positions` the
-legacy behaviour stands — a partial signal is skipped wholesale, because the
-registry is signal-level and there is no per-entry healing to mirror it.)
+no longer skips the whole signal: it places the still-PENDING legs now (LIMITs
+when trailing is off, trailing-open STOPs when it is on) and tracks the signal on
+its replay-OPEN legs, so those are re-opened by the rule above on the next cycle.
+(Without `--reopen-missing-positions` the legacy behaviour stands — a partial
+signal is skipped wholesale, because the registry is signal-level and there is no
+per-entry healing to mirror it.)
 
-Separately from this flag, `auto` never re-places a signal whose magic
-already has **deal history** in MT5: a finished signal can't be accidentally
-traded twice (the 2026-06-12 `#10` double-trade), even if its registry entry
-was pruned.
+**The "already traded" re-entry gate.** Separately from these flags, `auto`
+never re-places a signal once it has genuinely traded — but what counts as
+"traded" differs by strategy:
+
+- **Laddered LIMIT strategies** use the strict gate: *any* deal history for the
+  magic blocks re-placement, so a finished signal can't be accidentally traded
+  twice (the 2026-06-12 `#10` double-trade), even if its registry entry was pruned.
+- **Trailing strategies** use a **reason-aware** gate: "already traded" means the
+  broker/engine FINISHED the signal — an **SL hit, TP hit, stop-out, or engine
+  (EXPERT) close**. A leg you closed **by hand** (MT5 deal reason CLIENT / MOBILE
+  / WEB) does **not** gate; the trailing-open is re-armed so it can re-enter on the
+  next pullback (operator rule, 2026-06-26 — *"already traded" = the backtest/broker
+  finished it, not that any deal exists; a manual profit-take must not lock the
+  signal out*). So if you want a trailing signal to stay out, let it hit SL/TP or
+  remove the feed line — a hand-close alone will be re-armed.
 
 ### Listener says "matched existing entry by content"
 
