@@ -71,6 +71,21 @@ pair is a thin package that imports it.
   (`split_ticks_by_size.join_parts` / `parts_for`; `--join` + `split_file`'s
   `start_part`/`force` back the tail re-split), so the full file is the incremental
   working copy and the `_pN` parts are what you commit. See `cli/resync_ticks.txt`.
+  **DATE-window alternative — `tools/split_ticks_by_days.py` / `export_ticks
+  --split-days N` (default 3):** cuts the archive on the **calendar** instead of by
+  bytes — each part is a fixed N-day window named by its **start day** with a size
+  sub-index, `XAUUSD_TICK_YYYYMM_D<start>_pN_ELEV8.csv` (`_D1_p1`=days 1-3,
+  `_D4_p1`=4-6, …). Membership is **deterministic** (a tick always lands in the
+  same window, so re-splits are stable/idempotent, unlike the byte split). Every
+  window always has at least `_p1`; a window over `--max-mb` (default **95**, the
+  same GitHub-safe cap) is sub-split into `_p2`, `_p3`, … so the archive is always
+  pushable (June's volatile 16-18 / 22-24 windows are 147/180 MiB raw → each
+  becomes `_p1`+`_p2`). Consumers are unaffected: the tick globs are `_*_ELEV8.csv`
+  (the workflows' `_p*` were widened to `_*`) and `load_ticks` re-sorts every row
+  by timestamp, so `_pN` (byte) and `_D<start>_pN` (date) parts coexist under one
+  glob; `day_parts_for` reassembles a date archive (and falls back to legacy `_pN`
+  for the first migration) byte-identically. `--split-days` and `--split-mb` are
+  mutually exclusive.
 - `listeners/` — per-platform signal-source listeners, one subfolder per source
   (`telegram/`, and future `whatsapp/`, etc.).
   `listeners/telegram/listener.py` — ingests Victor's Telegram channel into

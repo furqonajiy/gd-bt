@@ -10,7 +10,7 @@ name: tick-sweep-trailing-realdd
 # 40% gate. Goal: BIGGEST net P&L with REAL tick DD <= 40%.
 #
 # All simulation is TICK: committed June 2026 ELEV8 ticks on main
-# (data/ticks/XAUUSD_TICK_202606_p*_ELEV8.csv), real Mt5Executor per signal, M1
+# (data/ticks/XAUUSD_TICK_202606_*_ELEV8.csv), real Mt5Executor per signal, M1
 # fallback only where ticks don't cover the lifecycle.
 #
 # Grid (C160 geometry pinned; the entry/exit levers swept):
@@ -75,7 +75,7 @@ jobs:
           timeout 11000 python tools/backtest_hybrid.py \
             --signals feed.txt \
             --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
-            --ticks data/ticks/XAUUSD_TICK_202606_p*_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_202606_*_ELEV8.csv \
             --sync-charts false --sync-ticks false \
             --watch-seconds 3 --max-drawdown-limit-pct 100 --progress-interval-seconds 0 \
             --initial-capital 50000 --sizing-mode risk \

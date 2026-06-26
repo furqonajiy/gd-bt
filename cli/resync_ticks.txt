@@ -103,6 +103,23 @@ python tools/export_ticks.py `
 # `git add` just the _pN parts. Full file = incremental working copy; parts = what
 # you commit.
 
+# ===== DATE-WINDOW split: every 3 days instead of by size (no MT5 needed) =====
+# Cut the archive on the CALENDAR instead of by bytes: each part is a fixed
+# N-day window named by its START day, with a _pN size sub-index --
+#   XAUUSD_TICK_YYYYMM_D<start>_pN_ELEV8.csv  (_D1_p1 = days 1-3, _D4_p1 = 4-6, ...)
+# A tick ALWAYS lands in the same window, so re-splits are deterministic/stable
+# (unlike the byte split). Every window has at least _p1; a window over --max-mb
+# (default 95) is sub-split into _p2, _p3, ... so it stays under GitHub's 100 MiB.
+# Pass the FULL base path; committed _pN (size) parts are reassembled first, then
+# re-split by day (a one-time migration). Consumers are unchanged (the tick globs
+# are _*_ELEV8.csv; load_ticks re-sorts by timestamp).
+# python tools/split_ticks_by_days.py `
+#   --input data/ticks/XAUUSD_TICK_202606_ELEV8.csv `
+#   --days 3 --max-mb 95 --remove-source
+#
+# To make a FRESH sync produce date windows directly, swap --split-mb 95 for
+# --split-days 3 on the export_ticks commands above (they are mutually exclusive).
+
 # ===== RE-SPLIT / RE-JOIN an already-exported file (no MT5 needed) =====
 # Split a full file into GitHub-safe parts after the fact (if you exported WITHOUT
 # --split-mb, or hand-built a big data/ticks file):
