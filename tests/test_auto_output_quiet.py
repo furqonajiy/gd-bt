@@ -187,6 +187,41 @@ def test_auto_idle_cycle_is_quiet(tmp_path, monkeypatch, capsys):
     assert "(no tracked signals)" not in captured.out
 
 
+def test_auto_repeated_warning_prints_once_across_cycles(tmp_path, monkeypatch, capsys):
+    # A steady passive warning (e.g. the external-SL-change notice) must print on
+    # the cycle it first appears and then be SUPPRESSED while it persists -- not
+    # re-spammed every watch cycle. State persists via a shared notified_keys.
+    WARN = ("external SL change detected on #123 (TOC5-2026-06-02#01.1): "
+            "MT5 SL=4028.78, executor expected 4028.43; is MT5 native trailing enabled?")
+
+    class _WarnExecutor(_FakeExecutor):
+        def warn_on_unknown(self, known_magics):
+            return [WARN]
+
+    monkeypatch.setattr("trading.engine.Mt5Executor", _WarnExecutor)
+    signals_path = tmp_path / "signals.txt"
+    signals_path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda path, **kw: [])
+    state: dict = {}
+    notified: dict = {"detected": set(), "skipped": set()}
+
+    def _pass(it):
+        return cli._auto_pass(
+            _args(tmp_path), DEFAULT_CONFIG, _FakeConn(),
+            _FakeChart(datetime(2026, 6, 2, 6, 0)), signals_path,
+            iteration=it, candidate_console_state=state, notified_keys=notified,
+        )
+
+    _pass(1)
+    out1 = capsys.readouterr().out
+    assert WARN in out1                      # first appearance prints
+
+    _pass(2)
+    out2 = capsys.readouterr().out
+    assert WARN not in out2                   # persists -> suppressed, no re-spam
+    assert out2 == ""                         # nothing else either: a quiet cycle
+
+
 def test_auto_placement_prints_single_event_line(tmp_path, monkeypatch, capsys):
     signal = _signal()
     plog = ExecutionLog(actions=["  BUY LIMIT placed for test"], placed=1)
