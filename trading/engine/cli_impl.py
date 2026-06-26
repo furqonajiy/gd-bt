@@ -1545,10 +1545,11 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             password=args.mt5_password, server=args.mt5_server,
     ) as conn:
         summary = archive_m1_by_month(
-            conn, args.mt5_symbol, ARCHIVE_DIR,
+            conn, args.mt5_symbol, getattr(args, "output_dir", None) or ARCHIVE_DIR,
             months_back=getattr(args, "months", ARCHIVE_MONTHS),
             server_offset_hours=args.mt5_server_offset,
             overwrite=False,
+            source=getattr(args, "source", "ELEV8"),
         )
         print(render_archive_summary(summary))
     return 0
@@ -1792,6 +1793,14 @@ def build_parser() -> argparse.ArgumentParser:
                          "loops use 1: prior months' CSVs are immutable once the "
                          "month has rolled over, so only the current month needs "
                          "refreshing.")
+    pf.add_argument("--output-dir", default=ARCHIVE_DIR,
+                    help="Directory for the per-month CSVs (default data/). Use a "
+                         "separate dir for a separate broker, e.g. data/demo.")
+    pf.add_argument("--source", default="ELEV8",
+                    help="Broker/source tag baked into the filename "
+                         "(XAUUSD_M1_YYYYMM_<SOURCE>.csv; default ELEV8). Use a "
+                         "distinct tag (e.g. DEMO) so a demo broker's archive never "
+                         "merges with the live one.")
     _add_mt5_flags(pf)
     pf.set_defaults(func=cmd_fetch)
 

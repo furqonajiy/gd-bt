@@ -18,6 +18,7 @@ from . import cli_impl as _impl
 from .cli_impl import *  # noqa: F401,F403 - preserve the original public CLI surface
 from trading.engine.core import chart_tz
 from trading.engine import ManualPositionSource, StrategyConfig
+from trading.engine import PlannedOrder, compute_entries
 from trading.engine import parse_signals_file as _default_parse_signals_file
 from trading.engine import decide as _default_decide
 
@@ -41,6 +42,30 @@ _is_partial_placement = _impl._is_partial_placement
 _chart_now = _impl._chart_now
 
 from .closure_report import report_entry_closures
+
+
+def _restore_trailing_ladder_orders(placed_orders, replay_entries, planned_entries, side):
+    """Rebuild the FULL trailing-open ladder for --trailing-live-entry.
+
+    Keep the placeable orders and add a PlannedOrder for every replay leg the
+    replay filtered out (it considers them "already played out"), so LIVE places
+    the whole ladder. The missing legs use the PLANNED entry price
+    (``planned_entries``) -- a played-out replay leg's ``entry_price`` is
+    overwritten with its modelled fill, whereas SL/lot are not, so those come
+    from the replay entry. Returns the orders sorted by entry_index.
+    """
+    have = {o.entry_index for o in placed_orders}
+    full = list(placed_orders)
+    for e in replay_entries:
+        if e.entry_index in have:
+            continue
+        ep = (planned_entries[e.entry_index]
+              if e.entry_index < len(planned_entries) else e.entry_price)
+        full.append(PlannedOrder(
+            entry_index=e.entry_index, side=side, entry_price=float(ep),
+            initial_sl=float(e.initial_sl), lot=float(e.lot), risk_dollars=0.0))
+    full.sort(key=lambda o: o.entry_index)
+    return full
 
 
 def _execution_log_has_output(log: Any) -> bool:
@@ -621,6 +646,35 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                 notifier.signal_skipped(signal_key=signal.signal_key, side=signal.side, reason=header)
                 notified_keys["skipped"].add(signal.signal_key)
             continue
+
+        # Trailing-open LIVE entry on a PARTIAL FOLLOW: the replay filtered out the
+        # legs it considers "already played out", but LIVE never traded them -- so a
+        # fast trailing signal permanently DROPS those legs (the reported #07 #1/#2
+        # bug). Rebuild the FULL ladder off the replay's PLANNED entries and place
+        # every leg as a trailing-open STOP. Uses compute_entries (deterministic
+        # planned prices) for the missing legs, because a played-out replay leg's
+        # entry_price is overwritten with its modelled fill; SL/lot are NOT
+        # overwritten so they come from the replay entry. The history gate +
+        # find_orders keep it to one live placement, and the trailing-open arm only
+        # fills in the pullback zone (no chasing). Mirrors the SKIP_INVALIDATED
+        # rescue, but per-leg. Gated on --trailing-live-entry so non-trailing / non-
+        # live-entry runs are unchanged.
+        if trailing_live_entry:
+            _rp = getattr(rec.new_signal, "replay_position", None)
+            if _rp is not None and len(rec.new_signal.orders) < len(_rp.entries):
+                _before = len(rec.new_signal.orders)
+                _full = _restore_trailing_ladder_orders(
+                    rec.new_signal.orders, _rp.entries,
+                    list(compute_entries(signal, config)), signal.side)
+                _added = len(_full) - _before
+                rec.new_signal.orders = _full
+                _auto_record_candidate_action(
+                    log, candidate_console_state, signal.signal_key,
+                    f"Signal {signal.signal_key}: --trailing-live-entry -- restored "
+                    f"{_added} replay-played-out leg(s) to place the FULL {len(_full)}-leg "
+                    f"trailing-open ladder live.",
+                    dedup_text=f"TLE_FULL_LADDER:{signal.signal_key}",
+                )
 
         if _is_partial_placement(rec):
             status = _auto_partial_placement_status_line(signal.signal_key, rec)

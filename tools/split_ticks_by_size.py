@@ -32,27 +32,42 @@ import sys
 from pathlib import Path
 
 _MIB = 1024 * 1024
-_PART_RE = re.compile(r"_p(\d+)_ELEV8\.csv$")
+# Match a _pN part of ANY source tag (ELEV8, DEMO, ...); group(1) is the part num.
+_PART_RE = re.compile(r"_p(\d+)_[A-Za-z0-9]+\.csv$")
+# Trailing _<TAG>.csv source tag (e.g. _ELEV8, _DEMO); the live archive is ELEV8.
+# The tag must START with a letter so a purely-numeric suffix (a legacy untagged
+# ``XAUUSD_TICK_202606.csv``) is NOT mistaken for a source tag.
+_TAG_RE = re.compile(r"_([A-Za-z][A-Za-z0-9]*)\.csv$")
+
+
+def _split_tag(name: str) -> tuple[str, str | None]:
+    """Split a tick filename into (base-without-tag, source-tag). The tag is the
+    trailing ``_<TAG>.csv`` (e.g. ``XAUUSD_TICK_202606_ELEV8.csv`` -> base
+    ``XAUUSD_TICK_202606``, tag ``ELEV8``); a legacy untagged ``...csv`` -> tag
+    None. Generalises the historical ELEV8-only naming so a separate broker
+    archive (e.g. DEMO) splits/joins with the same machinery."""
+    m = _TAG_RE.search(name)
+    if not m:
+        return (name[:-4] if name.endswith(".csv") else name, None)
+    return (name[: m.start()], m.group(1))
 
 
 def _part_path(src: Path, n: int) -> Path:
-    """Insert _p{n} before the _ELEV8 tag (or before .csv if there's no tag)."""
-    name = src.name
-    if name.endswith("_ELEV8.csv"):
-        base = name[: -len("_ELEV8.csv")]
-        return src.with_name(f"{base}_p{n}_ELEV8.csv")
+    """Insert _p{n} before the source tag (or before .csv if there's no tag)."""
+    base, tag = _split_tag(src.name)
+    if tag is not None:
+        return src.with_name(f"{base}_p{n}_{tag}.csv")
     return src.with_name(f"{src.stem}_p{n}.csv")
 
 
 def parts_for(full: Path) -> list[Path]:
     """The size-split _pN parts that a split of ``full`` produced, in NUMERIC
     order (p2 before p10). ``full`` is the un-split path
-    (``..._YYYYMM_ELEV8.csv``); its parts are ``..._YYYYMM_pN_ELEV8.csv``."""
-    name = full.name
-    if not name.endswith("_ELEV8.csv"):
+    (``..._YYYYMM_<TAG>.csv``); its parts are ``..._YYYYMM_pN_<TAG>.csv``."""
+    base, tag = _split_tag(full.name)
+    if tag is None:
         return []
-    base = name[: -len("_ELEV8.csv")]
-    hits = [p for p in full.parent.glob(f"{base}_p*_ELEV8.csv") if _PART_RE.search(p.name)]
+    hits = [p for p in full.parent.glob(f"{base}_p*_{tag}.csv") if _PART_RE.search(p.name)]
     return sorted(hits, key=lambda p: int(_PART_RE.search(p.name).group(1)))
 
 
