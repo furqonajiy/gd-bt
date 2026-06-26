@@ -6,7 +6,7 @@ name: tick-sweep-r4-nontrailing
 # M1 backtest over-states P&L by 3-4x (optimistic lock/fill modelling the real
 # Mt5Executor never achieves). So this sweep scores every cell with
 # tools/tick_backtest.py -- the REAL executor replayed against the committed
-# June tick archive (data/ticks/XAUUSD_TICK_202606_p*_ELEV8.csv) -- and ranks on
+# June tick archive (data/ticks/XAUUSD_TICK_202606_*_ELEV8.csv) -- and ranks on
 # the tick P&L. Trailing stays OFF (trailing_open=trailing_close=0); this re-tunes
 # the deployed non-trailing R4 champion (rsi75_sqz6_rr40 feed, e8 geometry).
 #
@@ -76,7 +76,7 @@ jobs:
           timeout 3000 python tools/tick_backtest.py \
             --signals feed.txt \
             --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
-            --ticks data/ticks/XAUUSD_TICK_202606_p*_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_202606_*_ELEV8.csv \
             --watch-seconds 3 --initial-capital 50000 --sizing-mode risk \
             --lot 0.01 --risk 0.01 --minimum-lot 0.01 --lot-step 0.01 --bonus-per-closed-lot 3.0 \
             --entries 8 --entry-ladder range_to_sl --entry-sl-gap 0.5 \

@@ -164,8 +164,12 @@ def _export_month(conn: Mt5Connection, args: argparse.Namespace, month_start: da
     # merging and only parts exist, reassemble them back into the full file first
     # so merge can resume from the last recorded tick (a later --split-mb re-packs).
     if getattr(args, "merge", False) and not (out_path.exists() and out_path.stat().st_size > 0):
+        from tools.split_ticks_by_days import day_parts_for
         from tools.split_ticks_by_size import join_parts, parts_for
-        parts = parts_for(out_path)
+        # Recognize BOTH archive shapes: _D<start> date parts (--split-days) and
+        # legacy _pN size parts (--split-mb). Whichever is on disk is reassembled
+        # so --merge resumes from the last tick; a later --split-* re-packs.
+        parts = day_parts_for(out_path) or parts_for(out_path)
         if parts:
             join_parts(parts, out_path, remove_parts=True)
             print(f"[reassembled] {len(parts)} part(s) -> {out_path.name} to resume merge")
@@ -277,6 +281,21 @@ def _split_exported(output_dir: str, symbol: str, months: list[tuple[int, int]],
     return written
 
 
+def _split_exported_days(output_dir: str, symbol: str, months: list[tuple[int, int]],
+                         days: int, max_mb: float = 95.0) -> int:
+    """Split each exported month's file into fixed `days`-day calendar windows
+    (_D<start>_pN naming, sub-split at max_mb so each part is GitHub-safe),
+    removing the full file. Reuses split_ticks_by_days so the date-window cutting
+    is shared. Returns the number of parts written."""
+    from tools.split_ticks_by_days import split_file_by_days
+    written = 0
+    for year, month in months:
+        src = Path(output_dir) / f"{symbol}_TICK_{year:04d}{month:02d}_ELEV8.csv"
+        if src.exists():
+            written += len(split_file_by_days(src, days, max_mb=max_mb, remove_source=True))
+    return written
+
+
 def _fetch_new_rows(conn, args, fetch_start: datetime, month_end: datetime,
                     resume_msc: int) -> list[dict]:
     """Fetch ticks in [fetch_start, month_end), keep only those strictly newer than
@@ -369,6 +388,14 @@ def build_parser() -> argparse.ArgumentParser:
                         "_p2, ...). NOTE: with the full file removed, a later --merge "
                         "re-fetches the window instead of resuming -- use it as a final "
                         "packaging step, not for an incrementally-grown archive.")
+    p.add_argument("--split-days", type=int, default=None,
+                   help="After fetching, split each month into fixed N-day calendar "
+                        "parts named by start day (_D1=days 1-3, _D4=4-6, ... for 3) "
+                        "and delete the full file. DATE-based alternative to "
+                        "--split-mb: membership is deterministic (a tick always lands "
+                        "in the same part), but a window has NO size cap -- a volatile "
+                        "stretch can exceed GitHub's 100 MiB (the splitter warns). "
+                        "Mutually exclusive with --split-mb.")
 
     p.add_argument("--mt5-path", default=None)
     p.add_argument("--mt5-login", type=int, default=None)
@@ -387,6 +414,10 @@ def main(argv: list[str] | None = None) -> int:
     end = _parse_date(args.end_date)
     if end <= start:
         raise SystemExit("--end-date must be after --start-date")
+    if args.split_mb and args.split_days:
+        raise SystemExit("--split-mb and --split-days are mutually exclusive.")
+    if args.split_days is not None and args.split_days < 1:
+        raise SystemExit("--split-days must be >= 1")
 
     conn = Mt5Connection(
         path=args.mt5_path,
@@ -419,6 +450,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.split_mb and months_to_split:
             parts = _split_exported(args.output_dir, args.symbol, months_to_split, args.split_mb)
             print(f"[split] wrote {parts} size-capped part(s) (<= {args.split_mb:g} MiB each)")
+        if args.split_days and months_to_split:
+            parts = _split_exported_days(args.output_dir, args.symbol, months_to_split, args.split_days)
+            print(f"[split] wrote {parts} date-window part(s) ({args.split_days} day(s) each)")
         return 0
     finally:
         conn.shutdown()

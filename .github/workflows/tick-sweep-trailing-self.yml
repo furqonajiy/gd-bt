@@ -76,7 +76,7 @@ jobs:
           timeout 5000 python tools/tick_backtest.py \
             --signals feed.txt \
             --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
-            --ticks data/ticks/XAUUSD_TICK_202606_p*_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_202606_*_ELEV8.csv \
             --watch-seconds 3 --initial-capital 50000 --sizing-mode risk \
             --lot 0.01 --risk 0.01 --minimum-lot 0.01 --lot-step 0.01 --bonus-per-closed-lot 3.0 \
             --entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.7 \
