@@ -19,7 +19,9 @@ name: tick-sweep-trailing-tc18-retune
 #   to  (trailing-OPEN distance)   : {0.5, 0.7}       -- pullback depth (>= broker 0.4 floor)
 #   tc  (trailing-CLOSE distance)  : {0.5, 0.75}      -- exit-trail tightness
 #   mh  (max-hold, min)            : {240, 300}       -- shorter time-exit can cut DD
-#   -> 3 x 2 x 2 x 2 = 24 cells.
+#   ad  (activation-delay, min)    : {0, 1, 2}        -- waiting time to OPEN the entry;
+#                                                        2 looks too slow on R4, so test 0/1
+#   -> 3 x 2 x 2 x 2 x 3 = 72 cells.
 #
 # The `baseline` job scores TC18 EXACTLY the SAME 3 ways. A cell is flagged when it
 # beats TC18 on net+DD, and separately when it beats on ALL FOUR (net, DD, edge,
@@ -90,10 +92,10 @@ jobs:
             --sizing-mode risk --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 3.0 \
             --start-date "${START}" --output-dir reports/tc18_risk --score-json raw/tc18_risk.json
           timeout 7000 python tools/backtest_hybrid.py $COMMON $STRAT \
-            --sizing-mode fixed --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
             --start-date "${START}" --output-dir reports/tc18_edge --score-json raw/tc18_edge.json
           timeout 7000 python tools/backtest_hybrid.py $COMMON $STRAT \
-            --sizing-mode fixed --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
             --start-date "${OOS_START}" --output-dir reports/tc18_oos --score-json raw/tc18_oos.json
           python - <<'PY'
           import json
@@ -119,6 +121,7 @@ jobs:
         to:  ["0.5", "0.7"]
         tc:  ["0.5", "0.75"]
         mh:  ["240", "300"]
+        ad:  ["0", "1", "2"]
     runs-on: ubuntu-latest
     timeout-minutes: 320
     steps:
@@ -137,13 +140,13 @@ jobs:
             --rr1 1.2 --rr2 2.5 --rr3 5
         env:
           START: ${{ github.event.inputs.start_date }}
-      - name: Cell slm=${{ matrix.slm }} to=${{ matrix.to }} tc=${{ matrix.tc }} mh=${{ matrix.mh }} -- net/DD + edge + OOS
+      - name: Cell slm=${{ matrix.slm }} to=${{ matrix.to }} tc=${{ matrix.tc }} mh=${{ matrix.mh }} ad=${{ matrix.ad }} -- net/DD + edge + OOS
         run: |
           set -o pipefail
-          CELL="tc18_slm${slm//./}_to${to//./}_tc${tc//./}_mh${mh}"
+          CELL="tc18_slm${slm//./}_to${to//./}_tc${tc//./}_mh${mh}_ad${ad}"
           mkdir -p out raw
           STRAT="--entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.7 --shared-sl false \
-            --activation-delay 2 --pending-expiry 180 --max-hold ${mh} \
+            --activation-delay ${ad} --pending-expiry 180 --max-hold ${mh} \
             --sl-multiplier ${slm} --final-target TP3 --runner-after-tp3 false \
             --lock-after-tp1 true --lock-after-tp2 true \
             --tp1-lock-delay-minutes 24 --tp2-lock-delay-minutes 24 \
@@ -160,17 +163,17 @@ jobs:
             --sizing-mode risk --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 3.0 \
             --start-date "${START}" --output-dir "reports/${CELL}_risk" --score-json "raw/${CELL}_risk.json"
           timeout 7000 python tools/backtest_hybrid.py $COMMON $STRAT \
-            --sizing-mode fixed --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
             --start-date "${START}" --output-dir "reports/${CELL}_edge" --score-json "raw/${CELL}_edge.json"
           timeout 7000 python tools/backtest_hybrid.py $COMMON $STRAT \
-            --sizing-mode fixed --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
             --start-date "${OOS_START}" --output-dir "reports/${CELL}_oos" --score-json "raw/${CELL}_oos.json"
-          python - "$CELL" "$slm" "$to" "$tc" "$mh" <<'PY'
+          python - "$CELL" "$slm" "$to" "$tc" "$mh" "$ad" <<'PY'
           import json, sys
-          cell, slm, to, tc, mh = sys.argv[1:6]
+          cell, slm, to, tc, mh, ad = sys.argv[1:7]
           r = json.load(open(f"raw/{cell}_risk.json")); e = json.load(open(f"raw/{cell}_edge.json")); o = json.load(open(f"raw/{cell}_oos.json"))
           d = {"cell": cell, "sl_multiplier": float(slm), "trailing_open": float(to),
-               "trailing_close": float(tc), "max_hold": int(mh),
+               "trailing_close": float(tc), "max_hold": int(mh), "activation_delay": int(ad),
                "net_compound": r["net_profit"], "drawdown_pct": r["max_drawdown_pct"],
                "win_rate_pct": r["win_rate_pct"], "signals_included": r["signals_included"],
                "tick_signals": r["tick_signals"], "m1_signals": r["m1_signals"],
@@ -184,9 +187,10 @@ jobs:
           to: ${{ matrix.to }}
           tc: ${{ matrix.tc }}
           mh: ${{ matrix.mh }}
+          ad: ${{ matrix.ad }}
       - uses: actions/upload-artifact@v4
         with:
-          name: "tc18re-${{ matrix.slm }}-${{ matrix.to }}-${{ matrix.tc }}-${{ matrix.mh }}"
+          name: "tc18re-${{ matrix.slm }}-${{ matrix.to }}-${{ matrix.tc }}-${{ matrix.mh }}-ad${{ matrix.ad }}"
           path: "out/*.json"
           if-no-files-found: error
 
@@ -229,7 +233,7 @@ jobs:
               r["beats_all"] = r["beats_netdd"] and r["beats_edge"] and r["beats_oos"]
           rows.sort(key=lambda r: (r.get("passes_dd", False), r.get("net_compound", -1e18)), reverse=True)
           os.makedirs("sweep_reports/tick_trailing_tc18_retune", exist_ok=True)
-          cols = ["cell","sl_multiplier","trailing_open","trailing_close","max_hold",
+          cols = ["cell","sl_multiplier","trailing_open","trailing_close","max_hold","activation_delay",
                   "net_compound","drawdown_pct","edge","oos","passes_dd","beats_netdd","beats_edge",
                   "beats_oos","beats_all","win_rate_pct","signals_included","tick_signals","m1_signals"]
           out = "sweep_reports/tick_trailing_tc18_retune/leaderboard.csv"
