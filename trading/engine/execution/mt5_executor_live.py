@@ -1132,16 +1132,22 @@ class Mt5Executor(_BaseMt5Executor):
             raw_stop = float(engine_pos.effective_stop_for(entry, config))
             favorable = (float(tick.ask) <= entry_price if side == "BUY"
                          else float(tick.bid) >= entry_price)
-            # In-profit locked legs (stop at/beyond entry) keep the market
-            # re-open regardless of price side: the clamped stop bounds the
-            # risk to the fallback buffer, and a LIMIT at the entry would fill
-            # straight into its own stop. The no-chase rule below only governs
-            # legs whose stop is still on the risk side of the entry.
+            # NEVER chase to a worse-than-entry market price (operator rule,
+            # 2026-06-26). Market re-open ONLY when price is at-or-better than the
+            # leg's entry (BUY: ask <= entry, SELL: bid >= entry) -- a better
+            # basis than the model's. When price has moved AGAINST the entry we do
+            # NOT open at market, even if the replay's stop has ratcheted to/beyond
+            # entry: LIVE never held this leg, so there is no real profit to "lock"
+            # -- a market open here would buy near TP3 with the stop far below,
+            # i.e. tiny upside against a large give-back if it reverses. Instead we
+            # rest a LIMIT at the ORIGINAL entry (below) so a fill can only happen
+            # at the modeled basis; if price runs to target without us, we simply
+            # miss the trade rather than chase it.
             stop_beyond_entry = (raw_stop >= entry_price if side == "BUY"
                                  else raw_stop <= entry_price)
             tp = entry.target_price if entry.target_price is not None else engine_pos.target_level
             comment = mt5_entry_comment(signal_key, entry.entry_index)
-            if favorable or stop_beyond_entry:
+            if favorable:
                 if side == "BUY":
                     order_type, price = self.mt5.ORDER_TYPE_BUY, float(tick.ask)
                     sl = min(raw_stop, float(tick.bid) - LATE_LOCK_FALLBACK_BUFFER)
@@ -1184,13 +1190,20 @@ class Mt5Executor(_BaseMt5Executor):
                 order_type = (self.mt5.ORDER_TYPE_BUY_LIMIT if side == "BUY"
                               else self.mt5.ORDER_TYPE_SELL_LIMIT)
                 price = entry_price
+                # A re-entry LIMIT rests at the ORIGINAL entry, so its stop must be
+                # on the risk side of that entry. If the replay's stop has ratcheted
+                # to/through the entry (stop_beyond_entry), it is on the wrong side
+                # for a LIMIT here AND meaningless (LIVE never held the leg, nothing
+                # to lock) -- fall back to the leg's ORIGINAL stop, i.e. re-enter at
+                # the modeled setup. Otherwise keep the (still-risk-side) raw stop.
+                limit_stop = float(entry.initial_sl) if stop_beyond_entry else raw_stop
                 request = {
                     "action":       self.mt5.TRADE_ACTION_PENDING,
                     "symbol":       self.symbol,
                     "volume":       lot,
                     "type":         order_type,
                     "price":        round(price, digits),
-                    "sl":           round(raw_stop, digits),
+                    "sl":           round(limit_stop, digits),
                     "tp":           round(float(tp), digits),
                     "magic":        magic,
                     "comment":      comment,
@@ -1223,7 +1236,7 @@ class Mt5Executor(_BaseMt5Executor):
         if self.notifier is not None and reopened:
             self.notifier.order_placed(
                 signal_key=signal_key, side=side,
-                order_kind=f"{side} MARKET (re-open)", placed=reopened,
+                order_kind=f"{side} re-open", placed=reopened,
             )
         if self.notifier is not None and failed:
             self.notifier.place_failed(
