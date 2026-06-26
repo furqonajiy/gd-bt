@@ -982,6 +982,53 @@ class Mt5Executor(_BaseMt5Executor):
             return False
         return any(int(getattr(d, "magic", -1) or -1) == magic for d in (deals or []))
 
+    def _magic_system_closed(self, magic: int, since_chart: datetime) -> bool:
+        """True when the magic has a SYSTEM-closed OUT deal -- an SL or TP hit, a
+        broker stop-out, or an EXPERT (our own API) close.
+
+        The reason-aware sibling of ``_magic_already_traded``, used by the
+        TRAILING place gate: for a trailing strategy "already traded" must mean
+        the broker/engine FINISHED the signal (SL/TP/engine close), NOT merely
+        that a deal exists. An operator who closes a leg BY HAND to bank a small
+        profit (MT5 deal reason CLIENT / MOBILE / WEB) leaves a close deal too,
+        but that must NOT lock the signal out -- the trailing-open is re-armed so
+        the leg can re-enter on the next pullback (operator rule, 2026-06-26).
+        A real SL/TP/stop-out/engine close DOES gate, so a stopped-out signal
+        never churns back in.
+
+        Only OUT deals (closes) count; an IN deal is the open. Best-effort: no
+        history getter / a call failure means no block (matches
+        ``_magic_already_traded``); a deal whose ``reason`` can't be read is
+        treated as a system close (conservative -- never LESS strict than the
+        any-deal gate for an old MT5 build / stub).
+        """
+        getter = getattr(self.mt5, "history_deals_get", None)
+        if getter is None:
+            return False
+        try:
+            deals = getter(
+                since_chart - timedelta(hours=1),
+                _wall_clock_chart_now() + timedelta(days=1),
+            ) or []
+        except Exception:
+            return False
+        out_entry = int(getattr(self.mt5, "DEAL_ENTRY_OUT", 1))
+        # Operator-initiated close reasons -> a MANUAL close, which does NOT gate.
+        manual = {
+            int(getattr(self.mt5, "DEAL_REASON_CLIENT", 0)),
+            int(getattr(self.mt5, "DEAL_REASON_MOBILE", 1)),
+            int(getattr(self.mt5, "DEAL_REASON_WEB", 2)),
+        }
+        for d in deals:
+            if int(getattr(d, "magic", -1) or -1) != magic:
+                continue
+            if int(getattr(d, "entry", -1) or -1) != out_entry:
+                continue  # only a close completes the signal; skip the open
+            reason = getattr(d, "reason", None)
+            if reason is None or int(reason) not in manual:
+                return True  # SL / TP / stop-out / engine close (or unknown) -> done
+        return False
+
     def _recently_closed_entry_indices(self, magic: int,
                                        cooldown_seconds: float) -> set[int]:
         """Entry indices for ``magic`` whose live position CLOSED within the
