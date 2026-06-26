@@ -668,13 +668,21 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                     list(compute_entries(signal, config)), signal.side)
                 _added = len(_full) - _before
                 rec.new_signal.orders = _full
-                _auto_record_candidate_action(
-                    log, candidate_console_state, signal.signal_key,
-                    f"Signal {signal.signal_key}: --trailing-live-entry -- restored "
-                    f"{_added} replay-played-out leg(s) to place the FULL {len(_full)}-leg "
-                    f"trailing-open ladder live.",
-                    dedup_text=f"TLE_FULL_LADDER:{signal.signal_key}",
-                )
+                # Announce the restore ONCE per signal per session. The restore
+                # re-runs every cycle while the signal stays an untracked candidate
+                # (placed=0 -- already resolved / waiting to arm), and the per-cycle
+                # candidate_console_state key gets clobbered by place_signal's own
+                # action later in the same cycle, so dedup_text there re-fired the
+                # line every watch interval (and dragged the "Pruned" line along).
+                # notified_keys persists and is never overwritten, so the line shows
+                # once. The order rebuild + placement below are UNCHANGED -- log only.
+                _tle_seen = notified_keys.setdefault("tle_full_ladder", set())
+                if signal.signal_key not in _tle_seen:
+                    _tle_seen.add(signal.signal_key)
+                    log.actions.append(
+                        f"Signal {signal.signal_key}: --trailing-live-entry -- restored "
+                        f"{_added} replay-played-out leg(s) to place the FULL {len(_full)}-leg "
+                        f"trailing-open ladder live.")
 
         if _is_partial_placement(rec):
             status = _auto_partial_placement_status_line(signal.signal_key, rec)

@@ -525,6 +525,53 @@ def test_trailing_live_entry_places_a_replay_played_out_signal(tmp_path, monkeyp
     assert _FakeRegistry.entries  # tracked after a live placement
 
 
+def _partial_follow_rec(signal):
+    """A partial FOLLOW: replay holds 7 legs but only 5 are still placeable (2
+    played out), so --trailing-live-entry rebuilds the full ladder."""
+    from trading.engine import PlannedOrder
+    entries = [SimpleNamespace(entry_index=i, entry_price=4520.0 + i, initial_sl=4511.0,
+                               lot=0.01, status="PENDING") for i in range(7)]
+    orders = [PlannedOrder(entry_index=i, side=signal.side, entry_price=4520.0 + i,
+                           initial_sl=4511.0, lot=0.01, risk_dollars=0.0) for i in range(2, 7)]
+    plan = SimpleNamespace(
+        action="FOLLOW", orders=orders,
+        replay_position=SimpleNamespace(entries=entries),
+        rationale="", pending_expires_at=datetime(2026, 6, 2, 14, 30),
+        pending_activates_at=datetime(2026, 6, 2, 6, 0),
+    )
+    return SimpleNamespace(new_signal=plan)
+
+
+def test_trailing_live_entry_full_ladder_restore_logs_once_across_cycles(tmp_path, monkeypatch, capsys):
+    """The --trailing-live-entry FULL-ladder restore line must print ONCE per
+    signal per session, even though the restore re-runs every cycle while the
+    signal stays an untracked candidate (placed=0). Regression for the 2026-06-27
+    TC18 spam where it (and the 'Pruned' line) re-fired every watch interval."""
+    signal = _signal()
+    sp = tmp_path / "signals.txt"; sp.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda p, **k: [signal])
+    monkeypatch.setattr(cli, "decide", lambda *a, **k: _partial_follow_rec(signal))
+    cfg = replace(DEFAULT_CONFIG, entry_count=7, trailing_open_distance=0.5)
+    _FakeExecutor.place_log = ExecutionLog()  # placed=0 -> signal stays an untracked candidate
+    args = _args(tmp_path); args.trailing_live_entry = "true"
+    nk = {"detected": set(), "skipped": set()}
+    state: dict = {}
+
+    def run(it):
+        return cli._auto_pass(args, cfg, _FakeConn(), _FakeChart(datetime(2026, 6, 2, 6, 0)),
+                              sp, iteration=it, candidate_console_state=state, notified_keys=nk)
+
+    assert run(1) == 0
+    out1 = capsys.readouterr().out
+    assert "restored 2 replay-played-out leg(s)" in out1   # announced once
+    assert "FULL 7-leg trailing-open ladder" in out1
+
+    assert run(2) == 0
+    out2 = capsys.readouterr().out
+    assert "restored" not in out2                          # NOT re-fired next cycle
+    assert "trailing-open ladder" not in out2
+
+
 def test_trailing_live_entry_off_keeps_replay_played_out_skip(tmp_path, monkeypatch, capsys):
     """Default (flag off): the replay verdict stands -- played-out signal is skipped,
     place_signal is not called."""
