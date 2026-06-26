@@ -23,7 +23,9 @@ name: tick-sweep-trailing-vic-aggressive
 #   stage (trail engages AFTER)    : {1, 2}      -- after TP1 / after TP2
 #   slm (sl-multiplier)            : {1.5, 1.7}  -- TIGHTER stop (1.5) vs V116's 1.7
 #   ft  (final-target)             : {TP2, TP3}  -- bank at TP2 (V116) vs ride to TP3
-#   -> 2 x 2 x 2 x 2 x 2 = 32 cells.
+#   ad  (activation-delay, min)    : {0, 1, 2}   -- waiting time to OPEN the entry;
+#                                                   2 (V116) looks too slow on R4, so test 0/1
+#   -> 2 x 2 x 2 x 2 x 2 x 3 = 96 cells.
 #
 # The `baseline` job scores V116 EXACTLY (trailing OFF) the SAME 3 ways, so every
 # comparison is apples-to-apples. A cell is flagged when it beats V116 on net+DD,
@@ -85,10 +87,10 @@ jobs:
             --sizing-mode risk --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 3.0 \
             --start-date "${START}" --output-dir reports/v116_risk --score-json raw/v116_risk.json
           timeout 7000 python tools/backtest_hybrid.py $COMMON $STRAT \
-            --sizing-mode fixed --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
             --start-date "${START}" --output-dir reports/v116_edge --score-json raw/v116_edge.json
           timeout 7000 python tools/backtest_hybrid.py $COMMON $STRAT \
-            --sizing-mode fixed --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
             --start-date "${OOS_START}" --output-dir reports/v116_oos --score-json raw/v116_oos.json
           python - <<'PY'
           import json
@@ -115,6 +117,7 @@ jobs:
         stage: ["1", "2"]
         slm: ["1.5", "1.7"]
         ft:  ["TP2", "TP3"]
+        ad:  ["0", "1", "2"]
     runs-on: ubuntu-latest
     timeout-minutes: 320
     steps:
@@ -123,13 +126,13 @@ jobs:
       - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
       - run: pip install -r requirements.txt
-      - name: Cell to=${{ matrix.to }} tc=${{ matrix.tc }} stage=${{ matrix.stage }} slm=${{ matrix.slm }} ft=${{ matrix.ft }} -- net/DD + edge + OOS
+      - name: Cell to=${{ matrix.to }} tc=${{ matrix.tc }} stage=${{ matrix.stage }} slm=${{ matrix.slm }} ft=${{ matrix.ft }} ad=${{ matrix.ad }} -- net/DD + edge + OOS
         run: |
           set -o pipefail
-          CELL="vic_to${to//./}_tc${tc//./}_s${stage}_slm${slm//./}_${ft}"
+          CELL="vic_to${to//./}_tc${tc//./}_s${stage}_slm${slm//./}_${ft}_ad${ad}"
           mkdir -p out raw
           STRAT="--entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.5 \
-            --activation-delay 2 --pending-expiry 180 --max-hold 180 \
+            --activation-delay ${ad} --pending-expiry 180 --max-hold 180 \
             --sl-multiplier ${slm} --final-target ${ft} --runner-after-tp3 false \
             --lock-after-tp1 true --lock-after-tp2 true \
             --tp1-lock-delay-minutes 12 --tp2-lock-delay-minutes 2 \
@@ -146,17 +149,18 @@ jobs:
             --sizing-mode risk --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 3.0 \
             --start-date "${START}" --output-dir "reports/${CELL}_risk" --score-json "raw/${CELL}_risk.json"
           timeout 7000 python tools/backtest_hybrid.py $COMMON $STRAT \
-            --sizing-mode fixed --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
             --start-date "${START}" --output-dir "reports/${CELL}_edge" --score-json "raw/${CELL}_edge.json"
           timeout 7000 python tools/backtest_hybrid.py $COMMON $STRAT \
-            --sizing-mode fixed --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
             --start-date "${OOS_START}" --output-dir "reports/${CELL}_oos" --score-json "raw/${CELL}_oos.json"
-          python - "$CELL" "$to" "$tc" "$stage" "$slm" "$ft" <<'PY'
+          python - "$CELL" "$to" "$tc" "$stage" "$slm" "$ft" "$ad" <<'PY'
           import json, sys
-          cell, to, tc, stage, slm, ft = sys.argv[1:7]
+          cell, to, tc, stage, slm, ft, ad = sys.argv[1:8]
           r = json.load(open(f"raw/{cell}_risk.json")); e = json.load(open(f"raw/{cell}_edge.json")); o = json.load(open(f"raw/{cell}_oos.json"))
           d = {"cell": cell, "trailing_open": float(to), "trailing_close": float(tc),
                "trail_after_stage": int(stage), "sl_multiplier": float(slm), "final_target": ft,
+               "activation_delay": int(ad),
                "net_compound": r["net_profit"], "drawdown_pct": r["max_drawdown_pct"],
                "win_rate_pct": r["win_rate_pct"], "signals_included": r["signals_included"],
                "tick_signals": r["tick_signals"], "m1_signals": r["m1_signals"],
@@ -171,9 +175,10 @@ jobs:
           stage: ${{ matrix.stage }}
           slm: ${{ matrix.slm }}
           ft: ${{ matrix.ft }}
+          ad: ${{ matrix.ad }}
       - uses: actions/upload-artifact@v4
         with:
-          name: "vicaggr-${{ matrix.to }}-${{ matrix.tc }}-${{ matrix.stage }}-${{ matrix.slm }}-${{ matrix.ft }}"
+          name: "vicaggr-${{ matrix.to }}-${{ matrix.tc }}-${{ matrix.stage }}-${{ matrix.slm }}-${{ matrix.ft }}-ad${{ matrix.ad }}"
           path: "out/*.json"
           if-no-files-found: error
 
@@ -217,8 +222,8 @@ jobs:
           rows.sort(key=lambda r: (r.get("passes_dd", False), r.get("net_compound", -1e18)), reverse=True)
           os.makedirs("sweep_reports/tick_trailing_vic_aggressive", exist_ok=True)
           cols = ["cell","trailing_open","trailing_close","trail_after_stage","sl_multiplier","final_target",
-                  "net_compound","drawdown_pct","edge","oos","passes_dd","beats_netdd","beats_edge",
-                  "beats_oos","beats_all","win_rate_pct","signals_included","tick_signals","m1_signals"]
+                  "activation_delay","net_compound","drawdown_pct","edge","oos","passes_dd","beats_netdd",
+                  "beats_edge","beats_oos","beats_all","win_rate_pct","signals_included","tick_signals","m1_signals"]
           out = "sweep_reports/tick_trailing_vic_aggressive/leaderboard.csv"
           with open(out, "w", newline="") as fh:
               w = csv.writer(fh); w.writerow(["rank"]+cols)
