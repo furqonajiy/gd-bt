@@ -48,6 +48,7 @@ back, so do them once yourself in the terminal before launching.)
 | `c160` | `candidate_R4_C160_tick.txt` | R4 tick winner (tag C160) — **deployed beside SQZ6** (research-grade: M1 DD 42.1% > gate; reduced risk/demo) |
 | `toc5` | `candidate_TOC5_trailing_tick.txt` | C160 feed + trailing (tag TOC5) — real-DD tick sweep #1 (net $115.6k / DD 23.5%); **research — demo-validate** |
 | `tc18` | `candidate_TC18_trailing_tick.txt` | TOC5 with the aggressive-sweep levers (slm1.8 / trail-after-TP2; tag TC18) — net $166.8k / DD 23.65% (+44% net at flat DD); **research — demo-validate vs TOC5** |
+| `vt05` | `candidate_VT05_victor_trailing.txt` | V116 Victor feed + trailing (to0.5/tc0.5/trail-TP1, slm1.5, ad1; tag VT05) — VIC sweep #1 under DD≤40%: ~2× net/edge but ~2× DD and OOS collapses ($526→$57); **research — demo-validate vs V116** |
 | `resync` | `resync_m1_from_2020.txt` | M1-archive resync utility |
 | `resync-ticks`, `ticks` | `resync_ticks.txt` | tick-archive export/resync utility (MT5 → data/ticks, ≤95 MiB GitHub-safe parts) |
 
