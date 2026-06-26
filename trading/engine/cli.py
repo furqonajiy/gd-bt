@@ -716,6 +716,23 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             f"Pruned {removed} closed signal(s) from {registry_path.name}"
         )
 
+    # Cross-cycle console dedup: a warning or action identical to one already
+    # shown is suppressed until it clears and recurs, so a steady passive notice
+    # (the external-SL-change warning, a repeating "partial placement", a retried
+    # "FAILED re-open ... Invalid price") prints ONCE instead of every watch cycle.
+    # Real state transitions (placements, fills, lock moves, closes) carry unique
+    # text so they still show, and a genuinely repeated event re-fires after it
+    # clears. Forensic + notifier already received these at generation time, so
+    # this only quiets the console -- a no-op cycle now prints nothing.
+    shown_w = notified_keys.setdefault("shown_warnings", set())
+    shown_a = notified_keys.setdefault("shown_actions", set())
+    cur_w = list(getattr(log, "warnings", []) or [])
+    cur_a = list(getattr(log, "actions", []) or [])
+    log.warnings = [w for w in cur_w if w not in shown_w]
+    log.actions = [a for a in cur_a if a not in shown_a]
+    notified_keys["shown_warnings"] = set(cur_w)
+    notified_keys["shown_actions"] = set(cur_a)
+
     if _execution_log_has_output(log):
         print(_stamped(render_execution_log(log)))
 
