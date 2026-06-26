@@ -110,7 +110,10 @@ jobs:
   sweep:
     strategy:
       fail-fast: false
-      max-parallel: 20
+      # Capped low so the sweep does NOT consume the whole account's GitHub Actions
+      # runner allowance -- leaves slots free for other repos' workflows. Slower
+      # (more waves) but non-blocking; raise only when nothing else needs runners.
+      max-parallel: 6
       matrix:
         to:  ["0.5", "1.0"]
         tc:  ["0.5", "1.5"]

@@ -5,7 +5,8 @@ name: tick-sweep-trailing-tc18-retune
 # forward-fit metrics (fixed-lot edge + OOS) the deploy decision uses.
 #
 # Per cell (and for the TC18 baseline) we run THREE tick backtests on the SAME
-# committed June ELEV8 ticks (real Mt5Executor, M1 fallback):
+# committed MAY+JUNE 2026 ELEV8 ticks (R4 runs from MAY, not June only; real
+# Mt5Executor, M1 fallback):
 #   1. NET COMPOUND + DRAWDOWN -- sizing risk 1% / $50,000 base, $3/lot bonus.
 #   2. EDGE  -- fixed 0.01 lot, NO bonus, FULL window (capital-independent).
 #   3. OOS   -- fixed 0.01 lot, NO bonus, held-out TAIL (from oos_start).
@@ -31,8 +32,8 @@ on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: "Full-window start (TC18 was found on 2026-06-01)"
-        default: "2026-06-01"
+        description: "Full-window start (R4 runs from May -> sweep May+June, not June only)"
+        default: "2026-05-01"
       oos_start:
         description: "Held-out OOS tail start (fixed-lot, no bonus)"
         default: "2026-06-16"
@@ -115,7 +116,10 @@ jobs:
   sweep:
     strategy:
       fail-fast: false
-      max-parallel: 20
+      # Capped low so the sweep does NOT consume the whole account's GitHub Actions
+      # runner allowance -- leaves slots free for other repos' workflows. Slower
+      # (more waves) but non-blocking; raise only when nothing else needs runners.
+      max-parallel: 6
       matrix:
         slm: ["1.6", "1.7", "1.8"]
         to:  ["0.5", "0.7"]
@@ -249,7 +253,7 @@ jobs:
           netdd = sorted([r for r in rows if r.get("beats_netdd")], key=lambda r: r.get("net_compound", 0), reverse=True)
           with open("sweep_reports/tick_trailing_tc18_retune/README.md", "w") as fh:
               fh.write("# TC18 re-tune trailing TICK sweep -- beat TC18\n\n")
-              fh.write(f"{len(rows)} cells on committed June ELEV8 ticks. Metrics per cell: **net compound + DD** "
+              fh.write(f"{len(rows)} cells on committed May+June ELEV8 ticks. Metrics per cell: **net compound + DD** "
                        f"(risk 1% / $50k base, $3/lot bonus), **edge** (fixed 0.01 lot, no bonus, full window), "
                        f"**OOS** (fixed-lot, no bonus, held-out tail). Incumbent **TC18** (scored the SAME way): "
                        f"net ${B_NET:,.0f}, DD {B_DD:g}%, edge ${B_EDGE:,.0f}, OOS ${B_OOS:,.0f}.\n\n")
