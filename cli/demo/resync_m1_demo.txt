@@ -1,0 +1,40 @@
+# =========================================================================
+# RESYNC XAUUSD M1 HISTORY FROM THE *DEMO* BROKER  (MT5 -> data/demo/)
+# Windows-only: MetaTrader5 package + a RUNNING MT5 terminal logged into the
+# DEMO account. PowerShell backtick (`) line continuation.
+# =========================================================================
+#
+# WHY a separate demo archive:
+#   The demo broker's quotes/spreads differ from the live ELEV8 feed, so a demo
+#   strategy (e.g. TR05) must be backtested on DEMO data, not the live archive.
+#   This writes a SEPARATE, self-describing archive:
+#       data/demo/XAUUSD_M1_YYYYMM_DEMO.csv
+#   The `_DEMO` source tag (--source) keeps it from ever merging with the live
+#   `_ELEV8` files, and --output-dir data/demo keeps them in their own folder.
+#   Same ELEV8 CSV format + GMT+3 chart clock; merge is the default (append new
+#   bars, refresh matching timestamps, keep what you already have).
+#
+# RUN THIS WHILE THE MT5 TERMINAL IS LOGGED INTO THE DEMO ACCOUNT.
+#
+# ===== RESYNC DEMO M1 (run from the repo root) =====
+# --months 2 = current + previous month = the LAST 2 MONTHS (2026-05 + 2026-06).
+python -m trading.engine.cli fetch `
+  --months 2 `
+  --output-dir data/demo `
+  --source DEMO `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3
+
+# ----- If MT5 is NOT already running/logged in, pass connection details -----
+# python -m trading.engine.cli fetch `
+#   --months 2 --output-dir data/demo --source DEMO `
+#   --mt5-symbol XAUUSD --mt5-server-offset 3 `
+#   --mt5-path "C:\Program Files\MetaTrader 5\terminal64.exe" `
+#   --mt5-login 12345678 --mt5-password "YOUR_PASSWORD" --mt5-server "YourDemo-Server"
+#
+# Symbol name varies by broker (XAUUSD, XAUUSD.r, GOLD, XAUUSDm, ...). Match
+# --mt5-symbol to Market Watch exactly. If the demo server clock is not GMT+3,
+# set --mt5-server-offset accordingly (verify with `... mt5-info`).
+#
+# ===== VERIFY =====
+#   Get-ChildItem data\demo\XAUUSD_M1_*_DEMO.csv | Select-Object Name, Length

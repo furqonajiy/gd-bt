@@ -65,6 +65,28 @@ def test_parts_for_returns_numeric_order(tmp_path):
     assert got == list(range(1, 13))
 
 
+def test_part_path_generalizes_to_any_source_tag():
+    # A separate broker (DEMO) splits/joins with the same machinery as ELEV8.
+    src = Path("data/demo/ticks/XAUUSD_TICK_202606_DEMO.csv")
+    assert _part_path(src, 1).name == "XAUUSD_TICK_202606_p1_DEMO.csv"
+    assert _part_path(src, 12).name == "XAUUSD_TICK_202606_p12_DEMO.csv"
+    # A purely-numeric suffix is NOT a tag -> legacy "_pN before .csv" fallback.
+    assert _part_path(Path("XAUUSD_TICK_202606.csv"), 2).name == "XAUUSD_TICK_202606_p2.csv"
+
+
+def test_demo_tag_split_join_roundtrip_and_parts_discovery(tmp_path):
+    src = tmp_path / "XAUUSD_TICK_202606_DEMO.csv"
+    original = _write_ticks(src, 300) and src.read_bytes()
+    parts = split_file(src, 4 * 1024, remove_source=True)
+    assert len(parts) > 1 and not src.exists()
+    assert all(p.name.endswith("_DEMO.csv") and "_p" in p.name for p in parts)
+    # parts_for derives the DEMO tag from the full path and finds them in order.
+    found = parts_for(src)
+    assert found == parts
+    join_parts(found, src, remove_parts=True)
+    assert src.read_bytes() == original
+
+
 def test_split_then_join_is_byte_identical(tmp_path):
     src = tmp_path / "XAUUSD_TICK_202606_ELEV8.csv"
     _write_ticks(src, 300)
