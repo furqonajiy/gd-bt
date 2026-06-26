@@ -431,23 +431,28 @@ def test_reopen_unfavorable_past_window_does_not_chase(monkeypatch):
     assert not any("not chasing" in a for a in log2.actions)  # deduped
 
 
-def test_reopen_locked_leg_stays_market_even_at_unfavorable_price(monkeypatch):
-    # TP1-locked replay stop sits above the entry: the no-chase rule does NOT
-    # apply (a limit at the entry would fill into its own stop). The leg keeps
-    # the #69 market re-open; with price beyond the lock the stop rides as-is.
+def test_reopen_locked_leg_unfavorable_places_limit_at_original(monkeypatch):
+    # No-chase rule (2026-06-26): even a TP1-locked replay leg is NOT market-opened
+    # when price has moved PAST the entry. LIVE never held this leg, so there is no
+    # profit to lock -- a market buy up near the target with the stop far below is
+    # exactly the bad give-back we refuse. Re-place a LIMIT at the ORIGINAL entry
+    # with the ORIGINAL SL (the ratcheted lock is on the wrong side for a limit
+    # there); if price runs to target without us we miss it rather than chase.
     _reset_executor_guards()
     pos = _pos_with_open_leg()
     pos.stage = 1
     pos.stage1_time = pos.activation_time + timedelta(minutes=1)
     _freeze_wall_clock(monkeypatch, pos.activation_time + timedelta(minutes=10))
-    mt5 = _FakeMt5(bid=4216.40, ask=4216.70)  # ask > entry 4211, bid > TP1 lock
+    mt5 = _FakeMt5(bid=4216.40, ask=4216.70)  # ask > entry 4211 (unfavorable)
 
     log = _executor(mt5).reopen_missing_open_positions(pos, _CFG)
     assert log.placed == 1
     (req,) = mt5.requests
-    assert req["action"] == mt5.TRADE_ACTION_DEAL
-    assert req["type"] == mt5.ORDER_TYPE_BUY
-    assert req["sl"] == 4215.50  # the TP1 lock, legal since bid 4216.40 above it
+    assert req["action"] == mt5.TRADE_ACTION_PENDING
+    assert req["type"] == mt5.ORDER_TYPE_BUY_LIMIT
+    assert req["price"] == round(pos.entries[0].entry_price, 2)  # original entry 4211
+    assert req["sl"] == round(pos.entries[0].initial_sl, 2)      # original SL, not the TP1 lock
+    assert req["tp"] == round(pos.target_level, 2)
 
 
 def test_reopen_sell_sides_mirror_the_price_rule(monkeypatch):
@@ -502,21 +507,24 @@ def test_reopen_does_not_race_the_time_exit(monkeypatch):
     assert mt5.requests == []
 
 
-def test_reopen_clamps_locked_stop_to_legal_level(monkeypatch):
+def test_reopen_favorable_clamps_locked_stop_to_legal_level(monkeypatch):
+    # The locked-stop clamp now guards only FAVORABLE market re-opens (price at or
+    # better than entry incl. spread -- here ask 4210.30 <= entry 4211). If the
+    # replay's effective stop (TP1 4215.50) sits above the buy fill it would be an
+    # illegal SL for a long, so it is buffered down to the closest legal level.
     _reset_executor_guards()
     pos = _pos_with_open_leg()
     pos.stage = 1
     pos.stage1_time = pos.activation_time + timedelta(minutes=1)
     _freeze_wall_clock(monkeypatch, pos.activation_time + timedelta(minutes=10))
-    # Replay's effective stop is TP1 (4215.50) but live bid is below it: the
-    # re-opened position cannot carry an illegal SL, so it is buffered down.
-    mt5 = _FakeMt5(bid=4213.00, ask=4213.30)
+    mt5 = _FakeMt5(bid=4210.00, ask=4210.30)  # favorable: ask <= entry 4211
 
     log = _executor(mt5).reopen_missing_open_positions(pos, _CFG)
 
     assert log.placed == 1
     (req,) = mt5.requests
-    assert req["sl"] == 4212.50  # bid - 0.5, not the illegal 4215.50
+    assert req["action"] == mt5.TRADE_ACTION_DEAL  # favorable -> market re-open
+    assert req["sl"] == 4209.50  # bid - 0.5, not the illegal 4215.50
 
 
 # --- 3. never re-place a signal that already traded --------------------------
