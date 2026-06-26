@@ -766,9 +766,21 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     _handle_closures(notifier, forensic, tracked, alive)
     removed = registry.prune(alive)
     if removed:
-        log.actions.append(
-            f"Pruned {removed} closed signal(s) from {registry_path.name}"
+        # Prune is registry bookkeeping (clearing entries whose MT5 footprint is
+        # gone), not a trade event. Surface it on the console ONLY when the cycle
+        # ALSO produced real output -- so an idle executor that re-tracks then
+        # prunes a just-finished signal every watch cycle (the reopen add/prune
+        # churn, very visible at --watch-interval 1) stays silent instead of
+        # printing "Pruned N closed signal(s)" every second. The prune still
+        # happens; only the console line is withheld on an otherwise-idle cycle.
+        cycle_had_output = bool(
+            log.actions or log.warnings
+            or log.placed or log.modified or log.cancelled or log.closed
         )
+        if cycle_had_output:
+            log.actions.append(
+                f"Pruned {removed} closed signal(s) from {registry_path.name}"
+            )
 
     # Cross-cycle console dedup: a warning or action identical to one already
     # shown is suppressed until it clears and recurs, so a steady passive notice
