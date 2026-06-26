@@ -176,17 +176,22 @@ class Mt5Executor(_Tp2Mt5Executor):
             )
             return log
 
-        # History gate: a magic with closed deals has already traded live, so it
-        # is never re-placed (a finished signal can't trade twice). Mirrors the
-        # non-trailing executor; essential for --trailing-live-entry, which can
-        # re-meet a signal the replay marks played-out -- LIVE history, not the
-        # replay, decides whether it already traded. Best-effort on a stub.
-        if not getattr(plan, "force_replace", False) and self._magic_already_traded(
+        # History gate (TRAILING, reason-aware): a magic whose signal the broker
+        # or engine FINISHED -- an SL/TP hit, a stop-out, or an engine close -- has
+        # genuinely traded and is never re-placed (a stopped-out signal can't churn
+        # back in). But a leg the OPERATOR closed BY HAND (MT5 deal reason
+        # CLIENT/MOBILE/WEB) to bank a small profit does NOT gate: the trailing-open
+        # is re-armed so it can re-enter on the next pullback (operator rule,
+        # 2026-06-26 -- "already traded" means the backtest/broker finished it, not
+        # that any deal exists). This is the trailing complement to the LIMIT path's
+        # strict any-deal gate. Best-effort on a stub.
+        if not getattr(plan, "force_replace", False) and self._magic_system_closed(
                 magic, signal.signal_time_chart):
             if signal.signal_key not in self._session_skipped_traded_signal_keys:
                 log.actions.append(
-                    f"Signal {signal.signal_key} already traded this session "
-                    f"(closed deals in MT5 history for its magic); skipping."
+                    f"Signal {signal.signal_key} already traded "
+                    f"(SL/TP/engine close in MT5 history for its magic); skipping. "
+                    f"(A manual close would instead re-arm the trailing-open.)"
                 )
                 self._session_skipped_traded_signal_keys.add(signal.signal_key)
             return log

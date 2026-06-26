@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from trading.engine import Bar, DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, PlannedOrder
-from trading.engine import advance_bars, open_position, parse_one_signal
+from trading.engine import advance_bars, open_position, parse_one_signal, signal_to_magic
 from trading.engine.execution import mt5_executor_live, mt5_executor_trailing
 
 
@@ -62,12 +62,21 @@ class _FakeMt5:
     ORDER_FILLING_IOC = 1
     SYMBOL_FILLING_IOC = 2
     SYMBOL_FILLING_FOK = 1
+    DEAL_ENTRY_IN = 0
+    DEAL_ENTRY_OUT = 1
+    DEAL_REASON_CLIENT = 0
+    DEAL_REASON_MOBILE = 1
+    DEAL_REASON_WEB = 2
+    DEAL_REASON_EXPERT = 3
+    DEAL_REASON_SL = 4
+    DEAL_REASON_TP = 5
 
-    def __init__(self, *, bid: float, ask: float):
+    def __init__(self, *, bid: float, ask: float, history_deals=None):
         self._tick = _Tick(bid, ask)
         self.requests = []
         self._orders = []
         self._positions = []
+        self._history = list(history_deals or [])
 
     def symbol_info(self, symbol):
         return _Sym()
@@ -80,6 +89,9 @@ class _FakeMt5:
 
     def orders_get(self, symbol=None):
         return list(self._orders)
+
+    def history_deals_get(self, date_from, date_to):
+        return list(self._history)
 
     def order_send(self, request):
         self.requests.append(dict(request))
@@ -345,6 +357,80 @@ def test_live_executor_places_buy_stop_not_buy_limit_when_trailing_open_enabled(
     assert request["price"] != 4750.0
     assert request["sl"] == 4732.54
     assert any("placed trailing-open STOP" in action for action in log.actions)
+
+
+class _FakeDeal:
+    def __init__(self, magic, *, entry, reason):
+        self.magic = magic
+        self.entry = entry
+        self.reason = reason
+
+
+def _trailing_plan(signal):
+    activation = signal.signal_time_chart
+    return NewSignalPlan(
+        signal=signal,
+        action="FOLLOW",
+        rationale="test",
+        orders=[PlannedOrder(0, signal.side, 4750.0, 4740.34, 0.10, 96.6)],
+        pending_expires_at=activation + timedelta(minutes=630),
+        final_target_label="TP3",
+        final_target_price=4780.0,
+        total_initial_risk_dollars=96.6,
+        pending_activates_at=activation,
+        trailing_open_distance=2.0,
+    )
+
+
+def test_trailing_place_gated_by_system_close(monkeypatch):
+    """A magic the broker/engine FINISHED (SL/TP hit, stop-out, engine close) is
+    'already traded' -- the trailing-open is NOT re-placed, so a stopped-out
+    signal never churns back in."""
+    signal = parse_one_signal(
+        "1. BUY XAUUSD 4750 - 4748 SL 4744 TP1 4760 TP2 4770 TP3 4780 10:00 AM",
+        source_date="2026-06-01", source_offset=3,
+    )
+    activation = signal.signal_time_chart
+    monkeypatch.setattr(mt5_executor_trailing, "_wall_clock_chart_now",
+                        lambda: activation + timedelta(minutes=1))
+    magic = signal_to_magic(signal.signal_key)
+    mt5 = _FakeMt5(bid=4740.0, ask=4740.2, history_deals=[
+        _FakeDeal(magic, entry=_FakeMt5.DEAL_ENTRY_IN, reason=_FakeMt5.DEAL_REASON_EXPERT),
+        _FakeDeal(magic, entry=_FakeMt5.DEAL_ENTRY_OUT, reason=_FakeMt5.DEAL_REASON_SL),
+    ])
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.place_signal(signal, _trailing_plan(signal))
+
+    assert log.placed == 0
+    assert mt5.requests == []
+    assert any("already traded" in a and "SL/TP/engine close" in a for a in log.actions)
+
+
+def test_trailing_place_rearms_after_manual_close(monkeypatch):
+    """A leg the OPERATOR closed BY HAND (deal reason CLIENT/MOBILE/WEB) does NOT
+    gate: the trailing-open STOP is re-armed so it can re-enter on the next
+    pullback (operator rule 2026-06-26)."""
+    signal = parse_one_signal(
+        "1. BUY XAUUSD 4750 - 4748 SL 4744 TP1 4760 TP2 4770 TP3 4780 10:00 AM",
+        source_date="2026-06-01", source_offset=3,
+    )
+    activation = signal.signal_time_chart
+    monkeypatch.setattr(mt5_executor_trailing, "_wall_clock_chart_now",
+                        lambda: activation + timedelta(minutes=1))
+    magic = signal_to_magic(signal.signal_key)
+    mt5 = _FakeMt5(bid=4740.0, ask=4740.2, history_deals=[
+        _FakeDeal(magic, entry=_FakeMt5.DEAL_ENTRY_IN, reason=_FakeMt5.DEAL_REASON_EXPERT),
+        _FakeDeal(magic, entry=_FakeMt5.DEAL_ENTRY_OUT, reason=_FakeMt5.DEAL_REASON_CLIENT),
+    ])
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.place_signal(signal, _trailing_plan(signal))
+
+    assert log.placed == 1
+    assert len(mt5.requests) == 1
+    assert mt5.requests[0]["type"] == mt5.ORDER_TYPE_BUY_STOP   # re-armed, not gated
+    assert not any("already traded" in a for a in log.actions)
 
 
 def test_live_executor_waits_when_price_has_not_moved_far_enough_for_trailing_open(monkeypatch):
