@@ -2,38 +2,43 @@ name: tick-sweep-trailing-vic-aggressive
 
 # AGGRESSIVE trailing sweep on VICTOR's PROVIDER feed (victor_signals.txt), R4
 # 2026, scored on REAL ticks -- goal: beat the deployed Victor champion V116 on
-# BOTH net AND drawdown by adding trailing-open + trailing-close.
+# net + drawdown by adding trailing-open + trailing-close, AND surface the
+# forward-fit metrics (fixed-lot edge + OOS) the deploy decision actually uses.
+#
+# Per cell (and for the V116 baseline) we run THREE tick backtests on the SAME
+# committed May+June ELEV8 ticks (real Mt5Executor, M1 fallback):
+#   1. NET COMPOUND + DRAWDOWN -- sizing risk 1% / $50,000 base, $3/lot bonus
+#      (the headline the user reads).
+#   2. EDGE  -- fixed 0.01 lot, NO bonus, FULL window (capital-independent edge).
+#   3. OOS   -- fixed 0.01 lot, NO bonus, held-out TAIL (from oos_start) -- does
+#      the fixed-lot edge survive out-of-sample.
 #
 # INCUMBENT V116 (cli/candidate_VIC_C116_tick.txt, NO trailing): entries 7 /
 #   range_to_sl / entry-sl-gap 0.5 / slm 1.7 / max-hold 180 / final-target TP2 /
-#   tp1-lock-delay 12 / tp1-lock-fraction 0.5 / lock-after-tp1+tp2 / risk 2.5%.
-#   We hold that geometry fixed and sweep the trailing + stop levers:
+#   tp1-lock-delay 12 / tp1-lock-fraction 0.5 / lock-after-tp1+tp2. We hold that
+#   geometry fixed and sweep the trailing + stop levers:
 #
-#   to  (trailing-OPEN distance)   : {0.5, 1.0}  -- enter on a pullback+rebound
-#                                                   (better basis); >= broker 0.4 floor
+#   to  (trailing-OPEN distance)   : {0.5, 1.0}  -- enter on a pullback (>= broker 0.4 floor)
 #   tc  (trailing-CLOSE distance)  : {0.5, 1.5}  -- how tight the exit trails
 #   stage (trail engages AFTER)    : {1, 2}      -- after TP1 / after TP2
 #   slm (sl-multiplier)            : {1.5, 1.7}  -- TIGHTER stop (1.5) vs V116's 1.7
 #   ft  (final-target)             : {TP2, TP3}  -- bank at TP2 (V116) vs ride to TP3
-#   -> 2 x 2 x 2 x 2 x 2 = 32 cells. trailing-open fixed >= the broker min-stop.
+#   -> 2 x 2 x 2 x 2 x 2 = 32 cells.
 #
-# A separate `baseline` job scores V116 EXACTLY (trailing OFF, final-target TP2)
-# on the SAME window via the SAME tool (backtest_hybrid --score-json), so the
-# beat-on-both comparison is apples-to-apples (not the snapshot's headline, which
-# used a different tool/capital). Every cell that beats V116 on BOTH net (>) AND
-# DD (<) is flagged.
-#
-# Scored on REAL tick DD via backtest_hybrid --score-json (May+June 2026 ELEV8
-# ticks, real Mt5Executor, M1 fallback). risk 2.5% / $50k base, bonus $3/lot,
-# R4 locked-exit slippage 2.0/1.0. ELEV8 != your live/demo broker -- a winner
-# here is RESEARCH until forward-validated; V116 stays champion until then.
+# The `baseline` job scores V116 EXACTLY (trailing OFF) the SAME 3 ways, so every
+# comparison is apples-to-apples. A cell is flagged when it beats V116 on net+DD,
+# and separately when it beats on ALL FOUR (net, DD, edge, OOS) -- the deploy-grade
+# winner. ELEV8 != your broker -- a winner here is RESEARCH until forward-validated.
 
 on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: "Backtest/feed start (feed-zone date; May+June = full tick window)"
+        description: "Full-window start (May+June = full tick window)"
         default: "2026-05-01"
+      oos_start:
+        description: "Held-out OOS tail start (fixed-lot, no bonus)"
+        default: "2026-06-16"
       max_dd:
         description: "Max REAL tick drawdown %% allowed in the ranking"
         default: "40"
@@ -49,29 +54,20 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  # ---- V116 incumbent, trailing OFF, scored by the SAME tool/window ----------
   baseline:
     runs-on: ubuntu-latest
-    timeout-minutes: 220
+    timeout-minutes: 320
     steps:
       - uses: actions/checkout@v5
         with: { fetch-depth: 1 }
       - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
       - run: pip install -r requirements.txt
-      - name: Score V116 (no trailing) on real ticks
+      - name: Score V116 (no trailing) -- net/DD + edge + OOS
         run: |
           set -o pipefail
-          mkdir -p out
-          timeout 12000 python tools/backtest_hybrid.py \
-            --signals victor_signals.txt \
-            --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
-            --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv \
-            --sync-charts false --sync-ticks false \
-            --watch-seconds 3 --max-drawdown-limit-pct 100 --progress-interval-seconds 0 \
-            --initial-capital 50000 --sizing-mode risk \
-            --lot 0.01 --risk 0.025 --minimum-lot 0.01 --lot-step 0.01 --bonus-per-closed-lot 3.0 \
-            --entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.5 \
+          mkdir -p out raw
+          STRAT="--entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.5 \
             --activation-delay 2 --pending-expiry 180 --max-hold 180 \
             --sl-multiplier 1.7 --final-target TP2 --runner-after-tp3 false \
             --lock-after-tp1 true --lock-after-tp2 true \
@@ -79,20 +75,36 @@ jobs:
             --profit-lock-mode tp_levels --bep-trigger-distance 3.0 --tp1-lock-fraction 0.5 \
             --tp2-lock-target TP1 --tp3-lock-target TP2 \
             --trailing-open-distance 0 --trailing-close-distance 0 --trailing-close-after-stage 0 \
-            --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0 \
-            --output-dir reports/vic_v116_base --score-json "out/v116_base.json" \
-            --start-date "${START}"
-          python - "out/v116_base.json" <<'PY'
-          import json, sys
-          d = json.load(open(sys.argv[1])); d.update(cell="v116_base", mode="no_trailing")
-          open(sys.argv[1], "w").write(json.dumps(d)); print(d)
+            --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0"
+          COMMON="--signals victor_signals.txt \
+            --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv --sync-charts false --sync-ticks false \
+            --watch-seconds 3 --max-drawdown-limit-pct 100 --progress-interval-seconds 0 \
+            --minimum-lot 0.01 --lot-step 0.01"
+          timeout 7000 python tools/backtest_hybrid.py $COMMON $STRAT \
+            --sizing-mode risk --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 3.0 \
+            --start-date "${START}" --output-dir reports/v116_risk --score-json raw/v116_risk.json
+          timeout 7000 python tools/backtest_hybrid.py $COMMON $STRAT \
+            --sizing-mode fixed --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
+            --start-date "${START}" --output-dir reports/v116_edge --score-json raw/v116_edge.json
+          timeout 7000 python tools/backtest_hybrid.py $COMMON $STRAT \
+            --sizing-mode fixed --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
+            --start-date "${OOS_START}" --output-dir reports/v116_oos --score-json raw/v116_oos.json
+          python - <<'PY'
+          import json
+          r = json.load(open("raw/v116_risk.json")); e = json.load(open("raw/v116_edge.json")); o = json.load(open("raw/v116_oos.json"))
+          d = {"cell": "v116_base", "net_compound": r["net_profit"], "drawdown_pct": r["max_drawdown_pct"],
+               "win_rate_pct": r["win_rate_pct"], "signals_included": r["signals_included"],
+               "tick_signals": r["tick_signals"], "m1_signals": r["m1_signals"],
+               "edge": e["net_profit"], "oos": o["net_profit"]}
+          open("out/v116_base.json", "w").write(json.dumps(d)); print(d)
           PY
         env:
           START: ${{ github.event.inputs.start_date }}
+          OOS_START: ${{ github.event.inputs.oos_start }}
       - uses: actions/upload-artifact@v4
         with: { name: "vic-baseline", path: "out/v116_base.json", if-no-files-found: error }
 
-  # ---- trailing sweep cells --------------------------------------------------
   sweep:
     strategy:
       fail-fast: false
@@ -104,50 +116,56 @@ jobs:
         slm: ["1.5", "1.7"]
         ft:  ["TP2", "TP3"]
     runs-on: ubuntu-latest
-    timeout-minutes: 220
+    timeout-minutes: 320
     steps:
       - uses: actions/checkout@v5
         with: { fetch-depth: 1 }
       - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
       - run: pip install -r requirements.txt
-      - name: Hybrid tick backtest cell to=${{ matrix.to }} tc=${{ matrix.tc }} stage=${{ matrix.stage }} slm=${{ matrix.slm }} ft=${{ matrix.ft }}
+      - name: Cell to=${{ matrix.to }} tc=${{ matrix.tc }} stage=${{ matrix.stage }} slm=${{ matrix.slm }} ft=${{ matrix.ft }} -- net/DD + edge + OOS
         run: |
           set -o pipefail
           CELL="vic_to${to//./}_tc${tc//./}_s${stage}_slm${slm//./}_${ft}"
-          mkdir -p out
-          # V116 geometry + trailing-open/close swept. final-target = ft (TP2 banks
-          # like V116; TP3 lets the trail ride past TP2). Everything else is V116.
-          timeout 12000 python tools/backtest_hybrid.py \
-            --signals victor_signals.txt \
-            --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
-            --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv \
-            --sync-charts false --sync-ticks false \
-            --watch-seconds 3 --max-drawdown-limit-pct 100 --progress-interval-seconds 0 \
-            --initial-capital 50000 --sizing-mode risk \
-            --lot 0.01 --risk 0.025 --minimum-lot 0.01 --lot-step 0.01 --bonus-per-closed-lot 3.0 \
-            --entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.5 \
+          mkdir -p out raw
+          STRAT="--entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.5 \
             --activation-delay 2 --pending-expiry 180 --max-hold 180 \
             --sl-multiplier ${slm} --final-target ${ft} --runner-after-tp3 false \
             --lock-after-tp1 true --lock-after-tp2 true \
             --tp1-lock-delay-minutes 12 --tp2-lock-delay-minutes 2 \
             --profit-lock-mode tp_levels --bep-trigger-distance 3.0 --tp1-lock-fraction 0.5 \
             --tp2-lock-target TP1 --tp3-lock-target TP2 \
-            --trailing-open-distance ${to} --trailing-close-distance ${tc} \
-            --trailing-close-after-stage ${stage} \
-            --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0 \
-            --output-dir "reports/${CELL}" --score-json "out/${CELL}.json" \
-            --start-date "${START}"
-          python - "out/${CELL}.json" "$CELL" "$to" "$tc" "$stage" "$slm" "$ft" <<'PY'
+            --trailing-open-distance ${to} --trailing-close-distance ${tc} --trailing-close-after-stage ${stage} \
+            --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0"
+          COMMON="--signals victor_signals.txt \
+            --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv --sync-charts false --sync-ticks false \
+            --watch-seconds 3 --max-drawdown-limit-pct 100 --progress-interval-seconds 0 \
+            --minimum-lot 0.01 --lot-step 0.01"
+          timeout 7000 python tools/backtest_hybrid.py $COMMON $STRAT \
+            --sizing-mode risk --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 3.0 \
+            --start-date "${START}" --output-dir "reports/${CELL}_risk" --score-json "raw/${CELL}_risk.json"
+          timeout 7000 python tools/backtest_hybrid.py $COMMON $STRAT \
+            --sizing-mode fixed --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
+            --start-date "${START}" --output-dir "reports/${CELL}_edge" --score-json "raw/${CELL}_edge.json"
+          timeout 7000 python tools/backtest_hybrid.py $COMMON $STRAT \
+            --sizing-mode fixed --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot 0 \
+            --start-date "${OOS_START}" --output-dir "reports/${CELL}_oos" --score-json "raw/${CELL}_oos.json"
+          python - "$CELL" "$to" "$tc" "$stage" "$slm" "$ft" <<'PY'
           import json, sys
-          p, cell, to, tc, stage, slm, ft = sys.argv[1:8]
-          d = json.load(open(p))
-          d.update(cell=cell, trailing_open=float(to), trailing_close=float(tc),
-                   trail_after_stage=int(stage), sl_multiplier=float(slm), final_target=ft)
-          open(p, "w").write(json.dumps(d)); print(d)
+          cell, to, tc, stage, slm, ft = sys.argv[1:7]
+          r = json.load(open(f"raw/{cell}_risk.json")); e = json.load(open(f"raw/{cell}_edge.json")); o = json.load(open(f"raw/{cell}_oos.json"))
+          d = {"cell": cell, "trailing_open": float(to), "trailing_close": float(tc),
+               "trail_after_stage": int(stage), "sl_multiplier": float(slm), "final_target": ft,
+               "net_compound": r["net_profit"], "drawdown_pct": r["max_drawdown_pct"],
+               "win_rate_pct": r["win_rate_pct"], "signals_included": r["signals_included"],
+               "tick_signals": r["tick_signals"], "m1_signals": r["m1_signals"],
+               "edge": e["net_profit"], "oos": o["net_profit"]}
+          open(f"out/{cell}.json", "w").write(json.dumps(d)); print(d)
           PY
         env:
           START: ${{ github.event.inputs.start_date }}
+          OOS_START: ${{ github.event.inputs.oos_start }}
           to: ${{ matrix.to }}
           tc: ${{ matrix.tc }}
           stage: ${{ matrix.stage }}
@@ -169,7 +187,7 @@ jobs:
         with: { python-version: "3.11" }
       - uses: actions/download-artifact@v4
         with: { path: cells }
-      - name: Build leaderboard (beat V116 on net AND DD)
+      - name: Build leaderboard (net compound + DD + edge + OOS)
         env:
           MAX_DD: ${{ github.event.inputs.max_dd }}
         run: |
@@ -182,62 +200,65 @@ jobs:
                   d = json.load(open(f))
               except Exception as e:
                   print("skip", f, e); continue
-              if d.get("cell") == "v116_base":
-                  base = d
-              else:
-                  rows.append(d)
+              (rows.append(d) if d.get("cell") != "v116_base" else None)
+              if d.get("cell") == "v116_base": base = d
           if base is None:
-              raise SystemExit("FATAL: V116 baseline score missing -- cannot rank vs incumbent")
-          V_NET = float(base.get("net_profit", 0.0))
-          V_DD = abs(float(base.get("max_drawdown_pct", 999)))
+              raise SystemExit("FATAL: V116 baseline missing -- cannot rank vs incumbent")
+          B_NET = float(base["net_compound"]); B_DD = abs(float(base["drawdown_pct"]))
+          B_EDGE = float(base["edge"]); B_OOS = float(base["oos"])
           for r in rows:
-              dd = abs(float(r.get("max_drawdown_pct", 999)))
-              net = float(r.get("net_profit", -1e18))
+              dd = abs(float(r.get("drawdown_pct", 999))); net = float(r.get("net_compound", -1e18))
+              edge = float(r.get("edge", -1e18)); oos = float(r.get("oos", -1e18))
               r["passes_dd"] = dd <= max_dd
-              r["beats_v116"] = (net > V_NET and dd < V_DD)
-          rows.sort(key=lambda r: (r.get("passes_dd", False), r.get("net_profit", -1e18)), reverse=True)
+              r["beats_netdd"] = (net > B_NET and dd < B_DD)
+              r["beats_edge"] = edge > B_EDGE
+              r["beats_oos"] = oos > B_OOS
+              r["beats_all"] = r["beats_netdd"] and r["beats_edge"] and r["beats_oos"]
+          rows.sort(key=lambda r: (r.get("passes_dd", False), r.get("net_compound", -1e18)), reverse=True)
           os.makedirs("sweep_reports/tick_trailing_vic_aggressive", exist_ok=True)
-          cols = ["cell","trailing_open","trailing_close","trail_after_stage","sl_multiplier",
-                  "final_target","net_profit","max_drawdown_pct","passes_dd","beats_v116",
-                  "win_rate_pct","signals_included","tick_signals","m1_signals"]
+          cols = ["cell","trailing_open","trailing_close","trail_after_stage","sl_multiplier","final_target",
+                  "net_compound","drawdown_pct","edge","oos","passes_dd","beats_netdd","beats_edge",
+                  "beats_oos","beats_all","win_rate_pct","signals_included","tick_signals","m1_signals"]
           out = "sweep_reports/tick_trailing_vic_aggressive/leaderboard.csv"
           with open(out, "w", newline="") as fh:
               w = csv.writer(fh); w.writerow(["rank"]+cols)
-              w.writerow([0]+[base.get(c, "") for c in cols])  # V116 baseline row (rank 0)
+              w.writerow([0]+[base.get(c, "") for c in cols])
               for i, r in enumerate(rows, 1):
                   w.writerow([i]+[r.get(c, "") for c in cols])
           print(open(out).read())
           passing = [r for r in rows if r.get("passes_dd")]
           best = passing[0] if passing else None
-          pareto = sorted([r for r in rows if r.get("beats_v116")],
-                          key=lambda r: r.get("net_profit", 0), reverse=True)
+          allbeat = sorted([r for r in rows if r.get("beats_all")], key=lambda r: r.get("net_compound", 0), reverse=True)
+          netdd = sorted([r for r in rows if r.get("beats_netdd")], key=lambda r: r.get("net_compound", 0), reverse=True)
           with open("sweep_reports/tick_trailing_vic_aggressive/README.md", "w") as fh:
-              fh.write("# Aggressive trailing TICK sweep (VICTOR feed) -- beat V116 on net AND DD\n\n")
-              fh.write(f"{len(rows)} trailing cells on committed May+June ELEV8 ticks, scored by "
-                       f"backtest_hybrid (REAL compounding-equity DD), vs the V116 incumbent "
-                       f"(trailing OFF, scored the SAME way): net ${V_NET:,.0f}, DD {V_DD:g}%.\n\n")
+              fh.write("# Aggressive trailing TICK sweep (VICTOR feed) -- beat V116\n\n")
+              fh.write(f"{len(rows)} trailing cells on committed May+June ELEV8 ticks. Metrics per cell: "
+                       f"**net compound + DD** (risk 1% / $50k base, $3/lot bonus), **edge** (fixed 0.01 lot, "
+                       f"no bonus, full window), **OOS** (fixed-lot, no bonus, held-out tail). Incumbent "
+                       f"**V116** (trailing OFF, scored the SAME way): net ${B_NET:,.0f}, DD {B_DD:g}%, "
+                       f"edge ${B_EDGE:,.0f}, OOS ${B_OOS:,.0f}.\n\n")
               if best:
-                  fh.write(f"**Best net at DD<={max_dd:g}%:** `{best['cell']}` -- net "
-                           f"${best['net_profit']:,.0f}, DD {abs(best['max_drawdown_pct']):g}%, "
-                           f"win {best.get('win_rate_pct')}%.\n\n")
-              if pareto:
-                  fh.write(f"### {len(pareto)} cell(s) BEAT V116 on BOTH net AND DD:\n\n")
-                  for r in pareto[:10]:
-                      fh.write(f"- `{r['cell']}`: net ${r['net_profit']:,.0f} (> {V_NET:,.0f}), "
-                               f"DD {abs(r['max_drawdown_pct']):g}% (< {V_DD:g}%), "
-                               f"win {r.get('win_rate_pct')}%\n")
+                  fh.write(f"**Best net@DD<={max_dd:g}%:** `{best['cell']}` -- net ${best['net_compound']:,.0f}, "
+                           f"DD {abs(best['drawdown_pct']):g}%, edge ${best['edge']:,.0f}, OOS ${best['oos']:,.0f}.\n\n")
+              if allbeat:
+                  fh.write(f"### {len(allbeat)} cell(s) BEAT V116 on ALL FOUR (net, DD, edge, OOS) -- deploy-grade:\n\n")
+                  for r in allbeat[:10]:
+                      fh.write(f"- `{r['cell']}`: net ${r['net_compound']:,.0f}, DD {abs(r['drawdown_pct']):g}%, "
+                               f"edge ${r['edge']:,.0f}, OOS ${r['oos']:,.0f}\n")
               else:
-                  fh.write("### No cell beat V116 on BOTH axes. V116 stays the Victor champion.\n")
-              fh.write("\nDimensions: trailing-open {0.5,1.0}, trailing-close {0.5,1.5}, "
-                       "trail-after-stage {1=TP1,2=TP2}, sl-multiplier {1.5,1.7}, final-target "
-                       "{TP2,TP3}. ELEV8 != your broker -- forward-validate before deploying.\n")
+                  fh.write("### No cell beat V116 on ALL FOUR. V116 stays the Victor champion.\n")
+              if netdd:
+                  fh.write(f"\n{len(netdd)} cell(s) beat V116 on net+DD (headline) -- see `beats_edge`/`beats_oos` "
+                           f"in the CSV for the forward-fit view.\n")
+              fh.write("\nDimensions: trailing-open {0.5,1.0}, trailing-close {0.5,1.5}, trail-after {1=TP1,2=TP2}, "
+                       "sl-mult {1.5,1.7}, final {TP2,TP3}. ELEV8 != your broker -- forward-validate before deploying.\n")
           PY
       - name: Commit leaderboard
         run: |
           git config user.name "C - Furqon Aji Yudhistira"
           git config user.email "furqonajiy@gmail.com"
           git add sweep_reports/tick_trailing_vic_aggressive
-          git commit -m "tick-sweep: VIC aggressive trailing leaderboard (beat V116 on net AND DD)" || echo "nothing to commit"
+          git commit -m "tick-sweep: VIC aggressive trailing leaderboard (net+DD+edge+OOS vs V116)" || echo "nothing to commit"
           git push || echo "push failed"
       - uses: actions/upload-artifact@v4
         with: { name: "tick-trailing-vic-aggressive-leaderboard", path: "sweep_reports/tick_trailing_vic_aggressive/**", if-no-files-found: warn }
