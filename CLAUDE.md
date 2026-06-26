@@ -368,7 +368,17 @@ pair is a thin package that imports it.
   Fresh
   placement is history-gated: a magic with closed deals is never re-placed,
   so a finished signal can't trade twice (the trailing-open executor now carries
-  this same history gate as the LIMIT path). **Reopen/replace are trailing-AWARE:**
+  this same history gate as the LIMIT path). **The trailing gate is reason-AWARE**
+  (`_magic_system_closed`): for a trailing strategy "already traded" means the
+  broker/engine FINISHED the signal — an **SL/TP hit, stop-out, or EXPERT (engine)
+  close** (MT5 deal `reason`), so a stopped-out signal never churns back in — but a
+  leg the operator closed **BY HAND** (reason CLIENT/MOBILE/WEB) does NOT gate, so
+  the trailing-open is **re-armed** and can re-enter on the next pullback (the
+  2026-06-26 operator rule: "already traded" = the backtest/broker finished it, not
+  that any deal exists; a manual profit-take must not lock the signal out). Only OUT
+  deals count; an unreadable `reason` is treated as a system close (conservative).
+  The LIMIT path keeps the strict any-deal gate (`_magic_already_traded`) — this is
+  trailing-only. **Reopen/replace are trailing-AWARE:**
   the self-heal keys on `trailing_open_distance` — at **0** it uses the LIMIT/market
   reopen above; **> 0** it ALWAYS **re-arms the trailing-open STOP** at the leg's
   original levels (never a flat LIMIT), so a missing/hand-closed leg the replay still
