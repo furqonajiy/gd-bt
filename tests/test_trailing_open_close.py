@@ -8,7 +8,7 @@ import pytest
 
 from trading.engine import Bar, DEFAULT_CONFIG, Mt5Executor, NewSignalPlan, PlannedOrder
 from trading.engine import advance_bars, open_position, parse_one_signal
-from trading.engine.execution import mt5_executor_trailing
+from trading.engine.execution import mt5_executor_live, mt5_executor_trailing
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +47,7 @@ class _FakeMt5:
     TRADE_ACTION_PENDING = 5
     TRADE_ACTION_MODIFY = 6
     TRADE_ACTION_SLTP = 7
+    TRADE_ACTION_DEAL = 1
     TRADE_RETCODE_DONE = 10009
     ORDER_TYPE_BUY_LIMIT = 2
     ORDER_TYPE_SELL_LIMIT = 3
@@ -554,3 +555,72 @@ def test_trailing_open_partial_ladder_placed_under_reopen(monkeypatch):
     assert len(mt5.requests) == 1
     assert mt5.requests[0]["type"] == mt5.ORDER_TYPE_BUY_STOP
     assert not any("skipped partial placement" in a for a in log.actions)
+
+
+def _reopen_pos(signal, *, distance=2.0):
+    """Engine position whose single leg the replay holds OPEN -- used to drive
+    the trailing-aware reopen. The leg is 'missing' from MT5 (positions/orders
+    empty), so reopen must restore it."""
+    cfg = replace(
+        DEFAULT_CONFIG,
+        entry_count=1,
+        trailing_open_distance=distance,
+        activation_delay_minutes=0,
+    )
+    pos = open_position(signal, 1000.0, cfg)
+    pos.entries[0].status = "OPEN"
+    pos.entries[0].fill_time = pos.activation_time
+    pos.time_exit_deadline = None  # don't let the time-exit cycle claim the leg
+    return pos, cfg
+
+
+def test_trailing_reopen_rearms_buy_stop_not_buy_limit(monkeypatch):
+    """INVARIANT: a trailing-open strategy NEVER reopens with a LIMIT. When the
+    replay still holds a leg OPEN but it is missing from MT5 (e.g. hand-closed),
+    reopen re-arms the trailing-open STOP at the original levels and waits for the
+    rebound -- exactly like the first entry -- instead of resting a flat BUY LIMIT
+    that gives a worse basis (the 2026-06-25 TOC5 give-back)."""
+    signal = parse_one_signal(
+        "1. BUY XAUUSD 4750 - 4748 SL 4744 TP1 4760 TP2 4770 TP3 4780 10:00 AM",
+        source_date="2026-06-01", source_offset=3,
+    )
+    pos, cfg = _reopen_pos(signal)
+    activation = signal.signal_time_chart
+    # _reopen_candidate_legs reads the wall clock from the live module.
+    monkeypatch.setattr(mt5_executor_live, "_wall_clock_chart_now",
+                        lambda: activation + timedelta(minutes=1))
+    mt5 = _FakeMt5(bid=4740.0, ask=4740.2)  # pulled back -> trailing-open armed
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.reopen_missing_open_positions(pos, cfg)
+
+    assert log.placed == 1
+    assert len(mt5.requests) == 1
+    req = mt5.requests[0]
+    assert req["action"] == mt5.TRADE_ACTION_PENDING
+    assert req["type"] == mt5.ORDER_TYPE_BUY_STOP          # re-armed STOP
+    assert req["type"] != mt5.ORDER_TYPE_BUY_LIMIT         # never a flat LIMIT
+    assert req["price"] == 4742.2                          # rebound trigger = ask + distance
+    assert any("Re-armed trailing-open" in a for a in log.actions)
+
+
+def test_trailing_reopen_falls_back_to_base_limit_when_distance_zero(monkeypatch):
+    """trailing_open_distance == 0 -> the base LIMIT/market reopen still applies
+    (no trailing arm), so the gate is purely on the distance."""
+    signal = parse_one_signal(
+        "1. BUY XAUUSD 4750 - 4748 SL 4744 TP1 4760 TP2 4770 TP3 4780 10:00 AM",
+        source_date="2026-06-01", source_offset=3,
+    )
+    pos, _ = _reopen_pos(signal, distance=2.0)
+    cfg0 = replace(DEFAULT_CONFIG, entry_count=1, trailing_open_distance=0.0)
+    activation = signal.signal_time_chart
+    monkeypatch.setattr(mt5_executor_live, "_wall_clock_chart_now",
+                        lambda: activation + timedelta(minutes=1))
+    # Favorable price (ask <= entry) -> base reopens at market, no trailing STOP.
+    mt5 = _FakeMt5(bid=4749.8, ask=4750.0)
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.reopen_missing_open_positions(pos, cfg0)
+
+    assert not any("Re-armed trailing-open" in a for a in log.actions)
+    assert all(r["type"] not in (mt5.ORDER_TYPE_BUY_STOP,) for r in mt5.requests)

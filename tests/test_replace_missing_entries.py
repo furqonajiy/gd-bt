@@ -32,11 +32,22 @@ class _FakePos:
         self.comment = comment
 
 
+class _Tick:
+    def __init__(self, bid, ask):
+        self.bid = bid
+        self.ask = ask
+
+
 class _FakeMt5:
     TRADE_ACTION_PENDING = 5
+    TRADE_ACTION_DEAL = 1
     TRADE_RETCODE_DONE = 10009
+    ORDER_TYPE_BUY = 0
+    ORDER_TYPE_SELL = 1
     ORDER_TYPE_BUY_LIMIT = 2
     ORDER_TYPE_SELL_LIMIT = 3
+    ORDER_TYPE_BUY_STOP = 4
+    ORDER_TYPE_SELL_STOP = 5
     ORDER_TIME_GTC = 0
     ORDER_FILLING_IOC = 1
     ORDER_FILLING_FOK = 0
@@ -44,17 +55,21 @@ class _FakeMt5:
     SYMBOL_FILLING_IOC = 2
     SYMBOL_FILLING_FOK = 1
 
-    def __init__(self, positions=None, orders=None, ticket0=1000):
+    def __init__(self, positions=None, orders=None, ticket0=1000, tick=None):
         self._positions = list(positions or [])
         self._orders = list(orders or [])
         self.requests = []
         self._ticket = ticket0
+        self._tick = tick
 
     def positions_get(self, symbol=None):
         return list(self._positions)
 
     def orders_get(self, symbol=None):
         return list(self._orders)
+
+    def symbol_info_tick(self, symbol):
+        return self._tick
 
     def symbol_info(self, symbol):
         return _Sym()
@@ -151,10 +166,39 @@ def test_does_not_replace_non_pending_entries():
     assert mt5_entry_comment(key, 1) not in {r["comment"] for r in mt5.requests}
 
 
-def test_skips_when_trailing_open_enabled():
+def test_rearms_trailing_open_stop_not_limit_when_trailing_enabled():
+    """INVARIANT (2026-06-26): a trailing-open strategy NEVER re-places a LIMIT.
+    When a still-PENDING leg's order vanished from MT5, replace re-arms the
+    trailing-open STOP at the original levels instead of skipping (the old
+    behaviour) or resting a flat LIMIT. Gated on >=1 footprint, same as the base."""
     pos = _pos_with_first_filled()
     key = pos.signal.signal_key
-    mt5 = _FakeMt5(positions=[_FakePos(signal_to_magic(key), mt5_entry_comment(key, 0))], orders=[])
+    magic = signal_to_magic(key)
+    distance = 1.0
+    # Arm every missing PENDING SELL leg: bid must be >= entry + distance for the
+    # deepest (highest-priced) pending entry, so price has pulled UP enough.
+    pending_prices = [e.entry_price for e in pos.entries if e.status == "PENDING"]
+    bid = max(pending_prices) + distance + 0.5
+    mt5 = _FakeMt5(positions=[_FakePos(magic, mt5_entry_comment(key, 0))], orders=[],
+                   tick=_Tick(bid=bid, ask=bid + 0.2))
+    cfg = replace(_CFG, trailing_open_distance=distance)
+
+    log = _executor(mt5).replace_missing_pending_entries(pos, cfg, pos.activation_time)
+
+    placed = [r for r in mt5.requests if r["action"] == _FakeMt5.TRADE_ACTION_PENDING]
+    assert log.placed == 7 and len(placed) == 7          # #2..#8 re-armed
+    # every re-placement is a trailing-open STOP, NEVER a LIMIT
+    assert all(r["type"] == _FakeMt5.ORDER_TYPE_SELL_STOP for r in placed)
+    assert not any(r["type"] in (_FakeMt5.ORDER_TYPE_SELL_LIMIT,
+                                 _FakeMt5.ORDER_TYPE_BUY_LIMIT) for r in mt5.requests)
+    assert any("Re-armed trailing-open" in a for a in log.actions)
+
+
+def test_skips_trailing_replace_when_no_footprint():
+    """Trailing replace keeps the base footprint gate: zero orders + zero
+    positions (finished/pruned, or a transient query miss) -> never re-arm."""
+    pos = _pos_with_first_filled()
+    mt5 = _FakeMt5(positions=[], orders=[], tick=_Tick(bid=4330.0, ask=4330.2))
     cfg = replace(_CFG, trailing_open_distance=1.0)
     log = _executor(mt5).replace_missing_pending_entries(pos, cfg, pos.activation_time)
     assert log.placed == 0 and mt5.requests == []

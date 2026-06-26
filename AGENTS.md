@@ -373,7 +373,19 @@ pair is a thin package that imports it.
   Fresh
   placement is history-gated: a magic with closed deals is never re-placed,
   so a finished signal can't trade twice (the trailing-open executor now carries
-  this same history gate as the LIMIT path). **`auto --trailing-live-entry`**
+  this same history gate as the LIMIT path). **Reopen/replace are trailing-AWARE:**
+  the self-heal keys on `trailing_open_distance` — at **0** it uses the LIMIT/market
+  reopen above; **> 0** it ALWAYS **re-arms the trailing-open STOP** at the leg's
+  original levels (never a flat LIMIT), so a missing/hand-closed leg the replay still
+  holds is restored by waiting for the dip-rebound at the same basis as the first
+  entry, and a still-PENDING leg whose STOP vanished is re-armed the same way (the
+  base replace no-ops for trailing; the trailing override re-arms it). The invariant:
+  **a trailing-open strategy never rests a LIMIT entry** — every placement and every
+  restore is a trailing-open arm. A leg whose trigger was already crossed in the race
+  falls back to the same tick-confirmed market fill as a fresh arm (never below the
+  trigger). The `_reopen_candidate_legs` helper (shared by both executors) detects the
+  missing-but-replay-OPEN legs after the recently-closed cooldown; the trailing
+  executor's `_rearm_trailing_open_legs` does the re-arm. **`auto --trailing-live-entry`**
   (trailing-open only, opt-in) places the entry off the **live price** instead of
   the M1 backtest replay: a signal the replay marks *already played out* is still
   placed when LIVE never traded it (history gate clear) and the pending window is

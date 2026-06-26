@@ -1039,47 +1039,30 @@ class Mt5Executor(_BaseMt5Executor):
                     recent.add(idx)
         return recent
 
-    def reopen_missing_open_positions(self, engine_pos: Position,
-                                      config: StrategyConfig) -> ExecutionLog:
-        """Re-open live positions for entries the replay still holds OPEN.
-
-        MT5 mirrors the replay (operator decision, 2026-06-12 reconciliation):
-        when a leg the model still holds is missing from MT5 — typically closed
-        by hand to thin out exposure — it is re-opened at market with the
-        replay's lot, its current effective stop, and the leg's target, under
-        the same per-entry comment so reconciliation re-attaches to the slot.
-        Runs every cycle while the replay keeps the leg open, so a hand-closed
-        leg comes back within one watch interval; once the replay exits the
-        leg, re-opening stops on its own.
-        """
-        log = ExecutionLog()
+    def _reopen_candidate_legs(self, engine_pos: Position, log: ExecutionLog) -> list:
+        """Legs the replay still holds OPEN but MT5 is missing, after the
+        recently-closed cooldown filter. Shared by the LIMIT reopen (this class)
+        and the trailing-open reopen (the trailing executor's override). Returns
+        [] when there's nothing to restore, or when the time-exit cycle owns the
+        legs (don't race it)."""
         open_entries = [e for e in engine_pos.entries if e.status == "OPEN"]
         if not open_entries:
-            return log
+            return []
         wall_clock_now = _wall_clock_chart_now()
         if (engine_pos.time_exit_deadline is not None
                 and wall_clock_now >= engine_pos.time_exit_deadline):
-            return log  # time-exit cycle owns these legs; don't race it
-
+            return []
         magic = signal_to_magic(engine_pos.signal.signal_key)
         signal_key = engine_pos.signal.signal_key
-        side = engine_pos.signal.side
         paired_idx = {entry.entry_index for _p, entry in self._position_entry_pairs(engine_pos, magic)}
         order_comments = {str(getattr(o, "comment", "") or "") for o in self.find_orders(magic)}
-
         missing = [
             e for e in open_entries
             if e.entry_index not in paired_idx
             and mt5_entry_comment(signal_key, e.entry_index) not in order_comments
         ]
         if not missing:
-            return log
-
-        # Suppress the re-open churn: a leg whose live position closed (SL / lock /
-        # TP) in the last few minutes is still held OPEN by the lagging bar-close
-        # replay. Don't resurrect it -- the replay catches up within ~a bar and
-        # stops asking. A genuinely hand-closed leg the replay still holds OPEN
-        # past the cooldown is restored normally on a later cycle.
+            return []
         recently_closed = self._recently_closed_entry_indices(
             magic, REOPEN_RECENT_CLOSE_COOLDOWN_SECONDS)
         if recently_closed:
@@ -1097,8 +1080,30 @@ class Mt5Executor(_BaseMt5Executor):
                 else:
                     kept.append(e)
             missing = kept
+        return missing
+
+    def reopen_missing_open_positions(self, engine_pos: Position,
+                                      config: StrategyConfig) -> ExecutionLog:
+        """Re-open live positions for entries the replay still holds OPEN.
+
+        MT5 mirrors the replay (operator decision, 2026-06-12 reconciliation):
+        when a leg the model still holds is missing from MT5 — typically closed
+        by hand to thin out exposure — it is re-opened at market with the
+        replay's lot, its current effective stop, and the leg's target, under
+        the same per-entry comment so reconciliation re-attaches to the slot.
+        Runs every cycle while the replay keeps the leg open, so a hand-closed
+        leg comes back within one watch interval; once the replay exits the
+        leg, re-opening stops on its own.
+        """
+        log = ExecutionLog()
+        missing = self._reopen_candidate_legs(engine_pos, log)
         if not missing:
             return log
+
+        magic = signal_to_magic(engine_pos.signal.signal_key)
+        signal_key = engine_pos.signal.signal_key
+        side = engine_pos.signal.side
+        wall_clock_now = _wall_clock_chart_now()
 
         tick = self.mt5.symbol_info_tick(self.symbol)
         if tick is None or getattr(tick, "bid", 0) <= 0 or getattr(tick, "ask", 0) <= 0:
