@@ -187,6 +187,32 @@ def test_auto_idle_cycle_is_quiet(tmp_path, monkeypatch, capsys):
     assert "(no tracked signals)" not in captured.out
 
 
+def test_auto_idle_prune_only_cycle_is_quiet(tmp_path, monkeypatch, capsys):
+    # Reopen add/prune churn: a just-finished signal gets re-tracked then pruned
+    # every watch cycle. With no other output, that prune bookkeeping must NOT
+    # spam "Pruned N closed signal(s)" every second (the 2026-06-26 TC18 noise at
+    # --watch-interval 1). The prune still happens; only the console line is held.
+    monkeypatch.setattr(_FakeRegistry, "prune", lambda self, alive: 1)
+    exit_code = _run_auto_once(tmp_path, monkeypatch, signals=[])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out == ""
+    assert "Pruned" not in captured.out
+
+
+def test_auto_prune_shows_when_cycle_has_other_output(tmp_path, monkeypatch, capsys):
+    # When the cycle DOES place something, the prune line is contextual and prints.
+    monkeypatch.setattr(_FakeRegistry, "prune", lambda self, alive: 1)
+    place_log = ExecutionLog()
+    place_log.placed = 1
+    exit_code = _run_auto_once(tmp_path, monkeypatch, signals=[_signal()], place_log=place_log)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Pruned 1 closed signal(s)" in captured.out
+
+
 def test_auto_repeated_warning_prints_once_across_cycles(tmp_path, monkeypatch, capsys):
     # A steady passive warning (e.g. the external-SL-change notice) must print on
     # the cycle it first appears and then be SUPPRESSED while it persists -- not
