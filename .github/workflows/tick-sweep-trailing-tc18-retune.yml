@@ -116,10 +116,10 @@ jobs:
   sweep:
     strategy:
       fail-fast: false
-      # Capped low so the sweep does NOT consume the whole account's GitHub Actions
-      # runner allowance -- leaves slots free for other repos' workflows. Slower
-      # (more waves) but non-blocking; raise only when nothing else needs runners.
-      max-parallel: 6
+      # 16 concurrent jobs: fast, but still leaves a few runner slots vs the typical
+      # 20-job account cap. Drop this back to ~6 if another repo needs runners while
+      # this sweep is in flight.
+      max-parallel: 16
       matrix:
         slm: ["1.6", "1.7", "1.8"]
         to:  ["0.5", "0.7"]
