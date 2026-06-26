@@ -81,13 +81,13 @@ python tools/live_feed_loop.py `
 # trailing-open 0.5 + trailing-close 0.5, engaged ONLY after TP1 (after_stage 1).
 # --trailing-live-entry true: trailing-open legs place off the LIVE price (the
 # broker fills the STOP + exits on the SL); demo-validate + calibrate first.
-# NOTE: --reopen-missing-positions is intentionally OFF for this trailing strategy.
-# The reopen self-heal is LIMIT-based (built for the laddered C160/V116/SQZ6); on a
-# trailing strategy it restores a missing/hand-closed leg with a flat LIMIT at the
-# original entry, which does NOT reproduce the trailing-open's dip-rebound basis and
-# can give a worse fill. A trailing-aware reopen (--reopen-mode trailing, re-arms the
-# trailing-open) is planned; until it lands + demo-validates, leave reopen OFF so the
-# ONLY entry path is the native trailing-open, and your manual closes stick.
+# --reopen-missing-positions true: trailing-AWARE self-heal. The executor now keys
+# the reopen/replace path on trailing-open-distance: with it > 0 (this strategy) a
+# missing/hand-closed leg the replay still holds is restored by RE-ARMING the
+# trailing-open STOP at its original levels (waits for the dip-rebound, same basis as
+# the first entry), NEVER a flat LIMIT. The invariant: a trailing strategy never rests
+# a LIMIT entry. So you can hand-close to bank a small profit and the executor mirrors
+# the backtest by re-arming the trailing-open rather than chasing a worse fill.
 python tools/auto_explicit.py `
   --signals signals/toc5_live.txt `
   --positions-json positions_toc5.json `
@@ -95,6 +95,7 @@ python tools/auto_explicit.py `
   --forensic-log forensic_toc5.jsonl `
   --notifications notifications_toc5.jsonl `
   --watch-interval 1 `
+  --reopen-missing-positions true `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
   --mt5-history-bars 5000 `

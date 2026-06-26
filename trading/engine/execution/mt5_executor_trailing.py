@@ -492,6 +492,135 @@ class Mt5Executor(_Tp2Mt5Executor):
                 log.actions.append(f"  FAILED trailing-open modify on #{order.ticket}: {reason}")
         return log
 
+    def _rearm_trailing_open_legs(self, signal, legs, distance: float,
+                                  target_level: float, log: ExecutionLog) -> None:
+        """Place a trailing-open STOP for each leg (Entry) at its ORIGINAL levels.
+
+        The shared re-entry path for a trailing-open strategy, used by BOTH the
+        trailing reopen (missing-but-replay-OPEN legs) and the trailing replace
+        (missing-but-replay-PENDING legs). Because of this, a trailing-open
+        strategy NEVER places a LIMIT entry: every restore re-arms the
+        trailing-open and waits for the pullback, exactly like the first entry.
+        The SL is anchored to the new trigger (sl_from_fill); a leg whose trigger
+        has already been crossed fills via the same tick-confirmed market fallback
+        as a fresh trailing-open (never below the trigger)."""
+        if not legs:
+            return
+        tick = self.mt5.symbol_info_tick(self.symbol)
+        if tick is None or getattr(tick, "bid", 0) <= 0 or getattr(tick, "ask", 0) <= 0:
+            log.actions.append(
+                f"Signal {signal.signal_key}: cannot re-arm trailing-open, no live tick."
+            )
+            return
+        bid = float(tick.bid)
+        ask = float(tick.ask)
+        side = signal.side
+        magic = signal_to_magic(signal.signal_key)
+        sym = self._sym_info if self._sym_info is not None else self.mt5.symbol_info(self.symbol)
+        digits = sym.digits
+        order_type = self._pending_stop_type(side)
+
+        waiting: list[int] = []
+        for e in legs:
+            lot = round_lot(e.lot, self.min_lot, self.lot_step)
+            if lot <= 0:
+                continue
+            entry_price = float(e.entry_price)
+            trigger = self._candidate_trailing_open_price(side, entry_price, bid, ask, distance)
+            if trigger is None:
+                waiting.append(e.entry_index)  # price hasn't pulled back enough to arm yet
+                continue
+            stop_distance = self._planned_stop_distance(side, entry_price, float(e.initial_sl))
+            dynamic_sl = self._sl_from_fill(side, trigger, stop_distance)
+            tp = e.target_price if getattr(e, "target_price", None) is not None else target_level
+            comment = mt5_entry_comment(signal.signal_key, e.entry_index)
+            request = {
+                "action":       self.mt5.TRADE_ACTION_PENDING,
+                "symbol":       self.symbol,
+                "volume":       lot,
+                "type":         order_type,
+                "price":        round(trigger, digits),
+                "sl":           round(dynamic_sl, digits),
+                "tp":           round(float(tp), digits),
+                "magic":        magic,
+                "comment":      comment,
+                "type_time":    self.mt5.ORDER_TIME_GTC,
+                "type_filling": self._market_fill_mode(),
+            }
+            res = self.mt5.order_send(request)
+            success = bool(res is not None and res.retcode == self.mt5.TRADE_RETCODE_DONE)
+            self._log_order_send(signal.signal_key, "rearm_trailing_open_stop", request, res, success=success)
+            if success:
+                log.placed += 1
+                log.actions.append(
+                    f"  Re-armed trailing-open #{e.entry_index} ({signal.signal_key}) STOP "
+                    f"@ {request['price']:g} SL={request['sl']:g} TP={request['tp']:g} "
+                    f"(replay holds the leg; live order was missing)"
+                )
+            else:
+                reason = (f"order_send None: {self.mt5.last_error()}" if res is None
+                          else f"retcode={res.retcode} comment={getattr(res, 'comment', '')!r}")
+                # Trigger already crossed in the race -> tick-confirmed market fill
+                # (never below the trigger), the same fallback as a fresh arm.
+                if self._market_fill_passed_trailing_open(
+                        signal, e, trigger, lot, stop_distance, float(tp),
+                        magic, comment, digits, log, reason):
+                    log.placed += 1
+                else:
+                    log.actions.append(
+                        f"  FAILED re-arm trailing-open #{e.entry_index} ({signal.signal_key}): {reason}"
+                    )
+        if waiting and signal.signal_key not in self._session_trailing_open_waiting_keys:
+            log.actions.append(
+                f"  Re-arm trailing-open waiting to arm (price not pulled back): "
+                f"#{', #'.join(str(i) for i in waiting)} ({signal.signal_key})."
+            )
+            self._session_trailing_open_waiting_keys.add(signal.signal_key)
+
+    def reopen_missing_open_positions(self, engine_pos, config) -> ExecutionLog:
+        """Trailing-aware reopen. The invariant: trailing_open_distance == 0 uses
+        the base LIMIT/market reopen; trailing_open_distance > 0 ALWAYS re-arms the
+        trailing-open (never a LIMIT) -- restore a missing-but-replay-OPEN leg by
+        re-arming the trailing-open STOP at its original levels, so the re-entry
+        waits for the pullback and fills on the rebound exactly like the first
+        entry. Re-arms only while the leg is missing; once the replay exits it,
+        this stops on its own."""
+        distance = float(getattr(config, "trailing_open_distance", 0.0) or 0.0)
+        if distance <= 0:
+            return super().reopen_missing_open_positions(engine_pos, config)
+        log = ExecutionLog()
+        missing = self._reopen_candidate_legs(engine_pos, log)
+        self._rearm_trailing_open_legs(
+            engine_pos.signal, missing, distance, engine_pos.target_level, log)
+        return log
+
+    def replace_missing_pending_entries(self, engine_pos, config, now) -> ExecutionLog:
+        """Trailing-aware replace. Same invariant: trailing_open_distance > 0 NEVER
+        re-places a LIMIT -- a still-PENDING leg whose STOP vanished is re-armed as
+        a trailing-open (the base path no-ops for trailing). Gated on >=1 existing
+        footprint for the magic, same as the base, so a finished signal isn't
+        resurrected and a transient empty query can't duplicate-place."""
+        distance = float(getattr(config, "trailing_open_distance", 0.0) or 0.0)
+        if distance <= 0:
+            return super().replace_missing_pending_entries(engine_pos, config, now)
+        log = ExecutionLog()
+        signal_key = engine_pos.signal.signal_key
+        magic = signal_to_magic(signal_key)
+        orders = self.find_orders(magic)
+        positions = self.find_positions(magic)
+        if not orders and not positions:
+            return log
+        occupied = {getattr(o, "comment", "") for o in orders}
+        occupied |= {getattr(p, "comment", "") for p in positions}
+        missing = [
+            e for e in engine_pos.entries
+            if e.status == "PENDING"
+            and mt5_entry_comment(signal_key, e.entry_index) not in occupied
+        ]
+        self._rearm_trailing_open_legs(
+            engine_pos.signal, missing, distance, engine_pos.target_level, log)
+        return log
+
     def _modify_stop(self, p, sl: float, signal_key: str, action_name: str,
                      label: str, log: ExecutionLog,
                      locked: list[int], failed: list[tuple[int, str]]) -> float | None:
