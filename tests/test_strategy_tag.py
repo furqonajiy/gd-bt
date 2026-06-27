@@ -37,13 +37,37 @@ def test_tag_changes_signal_key_magic_and_comment():
     assert c_sw.startswith("R4SW") and c_vic != c_sw and len(c_sw) <= 16
 
 
-def test_tag_is_capped_at_four_chars():
-    # A tag longer than 4 chars keeps only the first 4 so the compact comment
-    # `[TAG-]MMDD#DD.N` always fits the broker truncation limit (~16 chars).
-    long = parse_one_signal(LINE, "2026-06-15", 7); long.tag = "R4S24"   # 5 chars
-    assert long.signal_key == "R4S2-2026-06-15#03"
-    c = mt5_entry_comment(long.signal_key, 9)      # entry #10 (2-digit)
-    assert c == "R4S2-0615#03.10" and len(c) <= 16
+def test_tag_capped_at_five_chars():
+    # A 5-char tag is kept in full; a 6-char tag keeps only the first 5.
+    five = parse_one_signal(LINE, "2026-06-15", 7); five.tag = "R4S24"    # 5 chars
+    six = parse_one_signal(LINE, "2026-06-15", 7); six.tag = "R4S24X"     # 6 chars
+    assert five.signal_key == "R4S24-2026-06-15#03"
+    assert six.signal_key == "R4S24-2026-06-15#03"                        # 6th dropped
+    # The compact entry comment still fits the broker 16-char limit.
+    c = mt5_entry_comment(five.signal_key, 7)      # entry #8
+    assert c == "R4S24-0615#03.8" and len(c) <= 16
+
+
+def test_five_char_tag_comment_fits_broker_limit():
+    from trading.engine.execution.mt5_executor import mt5_close_comment, _BROKER_COMMENT_MAX
+    sig = parse_one_signal(LINE, "2026-06-15", 7); sig.tag = "VICT5"      # 5 chars
+    # Entry + close comments are both clamped to the broker limit, and the
+    # entry's one-based .N suffix is always preserved (reconciliation key).
+    for i in range(8):
+        ec = mt5_entry_comment(sig.signal_key, i)
+        assert len(ec) <= _BROKER_COMMENT_MAX
+        assert ec.endswith(f".{i + 1}")
+    cc = mt5_close_comment(sig.signal_key, "tp3")
+    assert len(cc) <= _BROKER_COMMENT_MAX
+
+    # A pathological overflow (long tag + 3-digit signal-of-day + 2-digit entry)
+    # truncates the leading ref but NEVER the .N suffix, so it stays mappable.
+    big = parse_one_signal(
+        "777. BUY XAUUSD 2030 - 2028 SL 2025 TP1 2035 TP2 2040 TP3 2050 2:00 PM",
+        "2026-06-15", 7)
+    big.tag = "VICT5"
+    ec = mt5_entry_comment(big.signal_key, 9)      # entry #10 -> ".10"
+    assert ec.endswith(".10") and len(ec) <= _BROKER_COMMENT_MAX
 
 
 def test_replay_tracked_signal_recovers_tag_from_registry_key():

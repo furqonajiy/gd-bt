@@ -322,10 +322,14 @@ pair is a thin package that imports it.
   one account** (e.g. Victor + a self-feed scalper), give each a distinct
   **`--strategy-tag`** (e.g. `VIC` vs `SC24`) — it is stamped onto `signal_key`
   so the two get disjoint magics/comments and never manage each other's orders.
-  The tag is **capped at 4 chars** (first 4 kept) so the compact comment always
-  fits, and is live-only (empty in backtests, so parity holds); each executor
-  still needs its own `--positions-json`. Keep examples in docs consistent with
-  this shape. `auto
+  The tag is **capped at 5 chars** (first 5 kept); the compact per-entry/close MT5
+  comment is independently **clamped to the broker's 16-char limit** (truncate the
+  leading ref, NEVER the `.N` suffix — so the broker never rejects it and
+  reconciliation still maps the leg), which is what makes a 5-char tag safe. A
+  ≤4-char tag's comment is already ≤16, so the clamp is a no-op and existing
+  comments stay byte-identical. The tag is live-only (empty in backtests, so
+  parity holds); each executor still needs its own `--positions-json`. Keep
+  examples in docs consistent with this shape. `auto
   --replace-missing-entries` self-heals: each cycle it re-places only the
   entries still **PENDING** in the replay whose per-entry comment vanished
   from MT5 (e.g. limits cancelled by hand), gated on the signal still having
