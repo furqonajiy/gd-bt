@@ -84,6 +84,16 @@ def test_hybrid_no_ticks_equals_run_backtest(tmp_path):
     assert _eq(base, _strip_hybrid_tags(hyb))
 
 
+def test_m1_only_flag_parses():
+    """--m1-only is the clean 'no ticks' switch for the M1 side of an M1-vs-TICK
+    comparison (a non-matching --ticks glob is a hard error). It is a store_true
+    defaulting off, so the normal hybrid path is unchanged. Its behaviour (ticks
+    ignored -> pure M1) is the same path pinned by the ticks=None parity test."""
+    act = next((a for a in bh.build_parser()._actions if a.dest == "m1_only"), None)
+    assert act is not None, "--m1-only flag is missing from backtest_hybrid"
+    assert act.default is False and act.const is True  # store_true, default off
+
+
 def test_hybrid_uncovered_ticks_equals_run_backtest(tmp_path):
     """Ticks present but on a different day -> every signal falls back to M1."""
     chart = CsvChartSource([_write_chart(tmp_path)])
