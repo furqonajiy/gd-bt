@@ -60,14 +60,18 @@ pair is a thin package that imports it.
   (re-exported from the engine root) with its own output proven unchanged. The CLI
   snapshots' **2026 backtest sections (5 & 6) call `backtest_hybrid` + `--ticks`**;
   the pre-tick eras (7–9) stay on `backtest_explicit` (no tick overlap).
-  **It refreshes BOTH data sources before each run**: `--sync-charts true` (M1,
-  inherited from `backtest_explicit`) and `--sync-ticks true` (default on) — the
-  tick refresh is an **APPEND** via `export_ticks --merge` (resumes from the last
-  recorded tick, never re-fetches aged-out ticks) then re-splits into
-  **`--ticks-split-days` (default 3) DAY-WINDOW parts** — the committed archive
-  format `XAUUSD_TICK_YYYYMM_D<start>_pN_ELEV8.csv` (`_D1_p1`=days 1-3, `_D4_p1`=4-6,
-  …). Both syncs soft-fail without MT5, falling back to the committed archives. The
-  tick sync touches only the **current month** (`--sync-tick-months` default 1 — the
+  **It refreshes M1 before each run** (`--sync-charts true`, inherited from
+  `backtest_explicit`). The strategy snapshots pass **`--sync-ticks false`** — the
+  backtest reads the committed tick archive and does NOT auto-sync it (refresh ticks
+  deliberately via `cli/resync_ticks.txt` when the market is open; the in-backtest
+  sync could collide with another process holding the parts on Windows). The
+  `--sync-ticks` flag still defaults true on the tool, and when used it APPENDS via
+  `export_ticks --merge` then re-splits into **`--ticks-split-days` (default 3)
+  DAY-WINDOW parts** — the committed archive format
+  `XAUUSD_TICK_YYYYMM_D<start>_pN_ELEV8.csv` (`_D1_p1`=days 1-3, `_D4_p1`=4-6, …),
+  incrementally (only the affected window; 0 new ticks = no-op). Both syncs
+  soft-fail without MT5, falling back to the committed archives. The tick sync
+  touches only the **current month** (`--sync-tick-months` default 1 — the
   only month that gains ticks).
   **The agreed on-disk format is the DATE window** (`tools/split_ticks_by_days.py`
   / `export_ticks --split-days N` / `backtest_hybrid --sync-ticks`): each part is a
@@ -85,15 +89,15 @@ pair is a thin package that imports it.
   The **legacy SIZE split is an escape hatch only** (`split_ticks_by_size.py` /
   `export_ticks --split-mb` / `backtest_hybrid --ticks-split-days 0`): it cuts on
   accumulated bytes (`_pN` with no `_D`), so part boundaries move every re-sync —
-  NOT the committed format. `export_ticks --merge --split-mb` has a true
-  incremental tail-append (resumes from the last tick in the LAST `_pN` part,
-  re-splits ONLY that tail, `p1..p(N-1)` untouched); the default day-window
-  `--merge` instead reassembles the parts into the full working month
-  (`join_parts` / `day_parts_for`, falling back to legacy `_pN` for the first
-  migration) and re-splits by day — deterministic, so re-runs are stable, at the
-  cost of reassembling the current month each time (keep an uncommitted full
-  working file + `--merge` without a `--split` flag to avoid the round-trip, then
-  `--split-days 3` before commit). Consumers are unaffected: the tick globs are
+  NOT the committed format. Both `--merge` modes are **incremental**:
+  `--split-mb` appends to the byte tail (`_merge_append_split_month`); the
+  day-window `--merge` (`_merge_append_split_days`) resumes from the last tick and
+  re-splits **ONLY the affected day window(s)** — earlier windows are never read or
+  rewritten, and **0 new ticks is a true no-op** (no reassemble, so no Windows
+  file-lock window — the `WinError 32` that aborted an in-backtest sync). It only
+  falls back to the full-month reassemble (`join_parts` / `day_parts_for`, also the
+  legacy `_pN` first-migration path) when there is no committed day archive yet.
+  Consumers are unaffected: the tick globs are
   `_*_ELEV8.csv` (the workflows' `_p*` were widened to `_*`) and `load_ticks`
   re-sorts every row by timestamp, so `_pN` (byte) and `_D<start>_pN` (date) parts
   concatenate correctly. `--split-days` and `--split-mb` are mutually exclusive. See

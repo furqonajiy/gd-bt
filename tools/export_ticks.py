@@ -363,6 +363,78 @@ def _merge_append_split_month(conn, args, month_start: datetime, month_end: date
     return len(new_rows)
 
 
+def _merge_append_split_days(conn, args, month_start: datetime, month_end: datetime,
+                             max_mb: float = 95.0):
+    """Incremental tick append against a committed DAY-WINDOW archive
+    (``_D<start>_pN`` parts), WITHOUT reassembling the whole month.
+
+    The day-window merge previously had to reassemble every committed part into the
+    full ~700 MiB month file just to find the resume point and re-split -- slow, and
+    on Windows lock-prone (a backtest's ``--sync-ticks`` hit ``WinError 32`` mid-
+    reassemble). This mirrors ``_merge_append_split_month``: it resumes from the last
+    tick in the LAST day part, fetches only newer ticks, and re-splits ONLY the day
+    window(s) those new ticks land in -- earlier windows are never read or rewritten.
+
+    Crucially, **0 new ticks is a true no-op** (a tail read + an empty fetch) -- the
+    common case for a completed month or a closed-market weekend -- so nothing is
+    reassembled and there is no window for a file lock to corrupt the archive.
+
+    Returns the number of ticks appended, or None when this path does not apply (a
+    full working file already exists, no day parts yet, or the resume point can't be
+    read) so the caller falls back to the full-file export.
+    """
+    from collections import defaultdict
+    from tools.split_ticks_by_days import (
+        _DAY_PART_RE, _window_start_day, _window_base_path, day_parts_for)
+    from tools.split_ticks_by_size import join_parts, split_file
+
+    out_path = Path(args.output_dir) / f"{args.symbol}_TICK_{month_start:%Y%m}_{getattr(args, 'source', 'ELEV8')}.csv"
+    if out_path.exists() and out_path.stat().st_size > 0:
+        return None  # full working file present -> the normal merge path handles it
+    parts = day_parts_for(out_path)
+    if not parts:
+        return None  # no day-window archive (fresh / legacy _pN) -> normal path
+    resume_msc = _last_tick_msc(parts[-1])  # parts are (start_day, sub)-ordered
+    if resume_msc is None:
+        return None  # can't resume from the tail -> fall back (may reassemble)
+
+    resume_chart = _mt5_msc_to_chart_time((resume_msc // 1000) * 1000, args.mt5_server_offset)
+    fetch_start = max(resume_chart, month_start)
+    new_rows = _fetch_new_rows(conn, args, fetch_start, month_end, resume_msc)
+    if not new_rows:
+        print(f"[merge] {args.symbol} {month_start:%Y-%m}: up to date (+0 ticks); "
+              f"{len(parts)} day-window part(s) untouched.")
+        return 0
+
+    days = int(getattr(args, "split_days", None) or 3)
+    max_bytes = int(max_mb * 1024 * 1024)
+    # Route the new ticks into their day windows (all are >= the resume tick, so
+    # they fall in the tail window or LATER windows -- never an earlier one).
+    rows_by_window: dict[int, list] = defaultdict(list)
+    for r in new_rows:
+        day = int(r["<DATE>"].rsplit(".", 1)[1])           # <DATE> = YYYY.MM.DD
+        rows_by_window[_window_start_day(day, days)].append(r)
+    parts_by_window: dict[int, list] = defaultdict(list)
+    for p in parts:
+        parts_by_window[int(_DAY_PART_RE.search(p.name).group(1))].append(p)
+
+    touched = 0
+    for start_day, rows in sorted(rows_by_window.items()):
+        window_base = _window_base_path(out_path, start_day)
+        existing = parts_by_window.get(start_day, [])
+        if existing:
+            # Reassemble ONLY this window's sub-parts, append, then re-split it.
+            join_parts(existing, window_base, remove_parts=True)
+            _write_rows(window_base, rows, write_header=False)
+        else:
+            _write_rows(window_base, rows, write_header=True)  # brand-new window
+        split_file(window_base, max_bytes, remove_source=True, force=True)
+        touched += 1
+    print(f"[merge] {args.symbol} {month_start:%Y-%m}: +{len(new_rows):,} ticks appended "
+          f"into {touched} day-window(s); the other windows were untouched.")
+    return len(new_rows)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Export real MT5 tick data into monthly tab-separated CSV files.")
     p.add_argument("--symbol", default="XAUUSD")
@@ -440,12 +512,15 @@ def main(argv: list[str] | None = None) -> int:
         grand_total = 0
         months_to_split: list[tuple[int, int]] = []
         for month_start, month_end in _iter_months(start, end):
-            # --merge + --split-mb: APPEND only the new ticks to the split tail
-            # (no whole-archive reassemble). Falls back to the full-file export
-            # when the month isn't a committed split archive.
+            # --merge incremental append (no whole-archive reassemble): --split-mb
+            # appends to the byte tail, --split-days appends only to the affected
+            # day window(s). Either is a true no-op on 0 new ticks. Both fall back
+            # to the full-file export when the month isn't a committed split archive.
             handled = None
             if args.merge and args.split_mb:
                 handled = _merge_append_split_month(conn, args, month_start, month_end)
+            elif args.merge and args.split_days:
+                handled = _merge_append_split_days(conn, args, month_start, month_end)
             if handled is None:
                 grand_total += _export_month(conn, args, month_start, month_end)
                 months_to_split.append((month_start.year, month_start.month))
