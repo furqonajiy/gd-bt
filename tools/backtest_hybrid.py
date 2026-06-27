@@ -345,6 +345,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Tick CSV glob(s) (ELEV8 tab format). Default: the committed "
                         "data/ticks archive. Signals whose window is covered run on "
                         "real ticks; the rest fall back to M1.")
+    p.add_argument("--m1-only", action="store_true",
+                   help="Force a PURE M1 backtest: ignore --ticks entirely (no tick "
+                        "fills anywhere), so the result is byte-identical to "
+                        "backtest_explicit but still writes --score-json. Use this for "
+                        "the M1 side of an M1-vs-TICK comparison (a non-matching "
+                        "--ticks glob is an error, so this is the clean way to say "
+                        "'no ticks').")
     p.add_argument("--watch-seconds", type=int, default=3,
                    help="Tick poll cadence for the real executor (matches live "
                         "--watch-interval 3). Default 3.")
@@ -404,9 +411,11 @@ def main(argv: list[str] | None = None) -> int:
         args.date_tz)
     chart = CsvChartSource(bx._expand_chart_paths(args.charts))
 
-    tick_paths = tk._expand(args.ticks)
+    tick_paths = [] if getattr(args, "m1_only", False) else tk._expand(args.ticks)
     ticks = tk.load_ticks(tick_paths) if tick_paths else None
-    if ticks is not None and len(ticks):
+    if getattr(args, "m1_only", False):
+        print("ticks: --m1-only -> pure M1 backtest (identical to backtest_explicit)")
+    elif ticks is not None and len(ticks):
         print(f"ticks: {len(ticks)} rows  {ticks['time'].iloc[0]} -> {ticks['time'].iloc[-1]} "
               f"({len(tick_paths)} file(s))")
     else:

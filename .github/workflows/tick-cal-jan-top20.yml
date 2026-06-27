@@ -1,0 +1,329 @@
+name: tick-cal-jan-top20
+
+# TICK-CALIBRATED Jan-2026 sweep, TOP-20 cells (VIC + TC18).
+#
+# Goal (user): we only have real TICK data for May+June 2026, but want to know
+# the best trailing-open/close params "as if we had TICK from January". We do it
+# in three measured runs per cell, all on the COMMITTED data (latest ticks):
+#
+#   1. TICK  May-Jun  (real tick fills)         -> tickmay_{net,dd,edge}
+#   2. M1    May-Jun  (--m1-only, pure OHLC)     -> m1may_{net,dd,edge}
+#   3. M1    Jan-Jun  (--m1-only, pure OHLC)     -> jan_{net,dd,edge,oos}
+#
+# Calibration (leaderboard): per metric X, factor_X = tickmay_X / m1may_X (the
+# measured M1->TICK discrepancy on the overlap), then the TICK-ESTIMATED Jan
+# result is est_jan_X = jan_X * factor_X. Rank by est_jan_edge (fixed-lot, the
+# reliable forward-fit metric), gate on est_jan_dd <= 40% (risk 1% / $50k), and
+# report est_jan_net (compounded + $3/lot bonus). OOS is informational.
+#
+# net = compounded net + $3/closed-lot bonus (risk 1% / $50k). edge/oos = fixed
+# 0.01 lot, no bonus. LOCK_TP1/TP2 exit slippage 2.0/1.0 on every run (the same
+# backtest-realism the sweeps score against).
+#
+# Output: sweep_reports/tick_cal_jan/{vic,tc18}_top20.csv
+
+on:
+  workflow_dispatch:
+    inputs:
+      jan_start:   { description: "Full R4 start (M1)",  default: "2026-01-01" }
+      may_start:   { description: "Overlap start (M1+TICK)", default: "2026-05-01" }
+      oos_start:   { description: "OOS tail start",       default: "2026-06-16" }
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tick-cal-jan-top20
+  cancel-in-progress: false
+
+jobs:
+  # ===========================================================================
+  # VIC top-20 (+ V116 baseline as rank 0)
+  # ===========================================================================
+  vic_cell:
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        include:
+          - {rank: "00", to: "0",   tc: "0",   stage: "0", slm: "1.7", ft: "TP2", ad: "2"}  # V116 baseline (no trail)
+          - {rank: "01", to: "0.5", tc: "0.5", stage: "1", slm: "1.5", ft: "TP2", ad: "1"}
+          - {rank: "02", to: "0.5", tc: "0.5", stage: "1", slm: "1.5", ft: "TP2", ad: "0"}
+          - {rank: "03", to: "0.5", tc: "0.5", stage: "1", slm: "1.5", ft: "TP2", ad: "2"}
+          - {rank: "04", to: "0.5", tc: "1.5", stage: "1", slm: "1.5", ft: "TP2", ad: "1"}
+          - {rank: "05", to: "0.5", tc: "1.5", stage: "1", slm: "1.5", ft: "TP2", ad: "0"}
+          - {rank: "06", to: "0.5", tc: "1.5", stage: "1", slm: "1.5", ft: "TP2", ad: "2"}
+          - {rank: "07", to: "0.5", tc: "0.5", stage: "1", slm: "1.5", ft: "TP3", ad: "1"}
+          - {rank: "08", to: "0.5", tc: "0.5", stage: "1", slm: "1.5", ft: "TP3", ad: "0"}
+          - {rank: "09", to: "0.5", tc: "0.5", stage: "2", slm: "1.5", ft: "TP3", ad: "1"}
+          - {rank: "10", to: "0.5", tc: "0.5", stage: "1", slm: "1.5", ft: "TP3", ad: "2"}
+          - {rank: "11", to: "0.5", tc: "0.5", stage: "2", slm: "1.5", ft: "TP3", ad: "0"}
+          - {rank: "12", to: "0.5", tc: "0.5", stage: "2", slm: "1.5", ft: "TP2", ad: "1"}
+          - {rank: "13", to: "0.5", tc: "1.5", stage: "2", slm: "1.5", ft: "TP2", ad: "1"}
+          - {rank: "14", to: "0.5", tc: "1.5", stage: "2", slm: "1.5", ft: "TP2", ad: "0"}
+          - {rank: "15", to: "0.5", tc: "0.5", stage: "2", slm: "1.5", ft: "TP2", ad: "0"}
+          - {rank: "16", to: "0.5", tc: "0.5", stage: "2", slm: "1.5", ft: "TP3", ad: "2"}
+          - {rank: "17", to: "0.5", tc: "1.5", stage: "2", slm: "1.5", ft: "TP3", ad: "1"}
+          - {rank: "18", to: "0.5", tc: "1.5", stage: "2", slm: "1.5", ft: "TP3", ad: "0"}
+          - {rank: "19", to: "0.5", tc: "1.5", stage: "1", slm: "1.5", ft: "TP3", ad: "1"}
+          - {rank: "20", to: "0.5", tc: "0.5", stage: "2", slm: "1.5", ft: "TP2", ad: "2"}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 1 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: "VIC r${{ matrix.rank }} to=${{ matrix.to }} tc=${{ matrix.tc }} s=${{ matrix.stage }} slm=${{ matrix.slm }} ${{ matrix.ft }} ad=${{ matrix.ad }}"
+        env:
+          JAN: ${{ github.event.inputs.jan_start }}
+          MAY: ${{ github.event.inputs.may_start }}
+          OOS: ${{ github.event.inputs.oos_start }}
+          rank: ${{ matrix.rank }}
+          to: ${{ matrix.to }}
+          tc: ${{ matrix.tc }}
+          stage: ${{ matrix.stage }}
+          slm: ${{ matrix.slm }}
+          ft: ${{ matrix.ft }}
+          ad: ${{ matrix.ad }}
+        run: |
+          set -o pipefail
+          mkdir -p out raw
+          CELL="vcal_r${rank}_to${to//./}_tc${tc//./}_s${stage}_slm${slm//./}_${ft}_ad${ad}"
+          SIGNALS="victor_signals.txt"
+          STRAT="--entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.5 \
+            --activation-delay ${ad} --pending-expiry 180 --max-hold 180 \
+            --sl-multiplier ${slm} --final-target ${ft} --runner-after-tp3 false \
+            --lock-after-tp1 true --lock-after-tp2 true \
+            --tp1-lock-delay-minutes 12 --tp2-lock-delay-minutes 2 \
+            --profit-lock-mode tp_levels --bep-trigger-distance 3.0 --tp1-lock-fraction 0.5 \
+            --tp2-lock-target TP1 --tp3-lock-target TP2 \
+            --trailing-open-distance ${to} --trailing-close-distance ${tc} --trailing-close-after-stage ${stage} \
+            --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0"
+          COMMON="--sync-ticks false --sync-charts false --max-drawdown-limit-pct 100 \
+            --progress-interval-seconds 0 --minimum-lot 0.01 --lot-step 0.01"
+          CJAN="data/XAUUSD_M1_202601_ELEV8.csv data/XAUUSD_M1_202602_ELEV8.csv data/XAUUSD_M1_202603_ELEV8.csv data/XAUUSD_M1_202604_ELEV8.csv data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          CMAY="data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          TICKS="data/ticks/XAUUSD_TICK_*_ELEV8.csv"
+          bt () { # mode start charts sizing bonus out
+            local src="--m1-only"; [ "$1" = "tick" ] && src="--ticks $TICKS"
+            python tools/backtest_hybrid.py --signals "$SIGNALS" --charts $3 $STRAT $COMMON $src \
+              --sizing-mode $4 --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot $5 \
+              --start-date "$2" --output-dir "reports/${CELL}_$6" --score-json "raw/$6.json"
+          }
+          bt tick "$MAY"  "$CMAY" risk  3.0 tickmay_risk
+          bt tick "$MAY"  "$CMAY" fixed 0   tickmay_edge
+          bt m1   "$MAY"  "$CMAY" risk  3.0 m1may_risk
+          bt m1   "$MAY"  "$CMAY" fixed 0   m1may_edge
+          bt m1   "$JAN"  "$CJAN" risk  3.0 jan_risk
+          bt m1   "$JAN"  "$CJAN" fixed 0   jan_edge
+          bt m1   "$OOS"  "$CJAN" fixed 0   jan_oos
+          python - "$CELL" "$rank" "$to" "$tc" "$stage" "$slm" "$ft" "$ad" <<'PY'
+          import json, sys
+          cell,rank,to,tc,stage,slm,ft,ad = sys.argv[1:9]
+          def g(f,k): return round(float(json.load(open(f"raw/{f}.json"))[k]),2)
+          d={"cell":cell,"orig_rank":int(rank),"strategy":"VIC",
+             "trailing_open":float(to),"trailing_close":float(tc),"trail_after_stage":int(stage),
+             "sl_multiplier":float(slm),"final_target":ft,"activation_delay":int(ad),
+             "tickmay_net":g("tickmay_risk","net_profit"),"tickmay_dd":g("tickmay_risk","max_drawdown_pct"),
+             "tickmay_edge":g("tickmay_edge","net_profit"),
+             "m1may_net":g("m1may_risk","net_profit"),"m1may_dd":g("m1may_risk","max_drawdown_pct"),
+             "m1may_edge":g("m1may_edge","net_profit"),
+             "jan_net":g("jan_risk","net_profit"),"jan_dd":g("jan_risk","max_drawdown_pct"),
+             "jan_edge":g("jan_edge","net_profit"),"jan_oos":g("jan_oos","net_profit"),
+             "jan_signals":int(json.load(open("raw/jan_risk.json"))["signals_included"])}
+          open(f"out/{cell}.json","w").write(json.dumps(d)); print(d)
+          PY
+      - uses: actions/upload-artifact@v4
+        with: { name: "vcal-r${{ matrix.rank }}", path: "out/*.json", if-no-files-found: error }
+
+  # ===========================================================================
+  # TC18 top-20 (+ TC18 deployed baseline as rank 0). C160 self-scalper feed.
+  # ===========================================================================
+  tc18_cell:
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        include:
+          - {rank: "00", slm: "1.8", to: "0.5", tc: "0.5",  mh: "300", ad: "2"}  # TC18 deployed baseline
+          - {rank: "01", slm: "1.6", to: "0.5", tc: "0.5",  mh: "240", ad: "0"}
+          - {rank: "02", slm: "1.6", to: "0.5", tc: "0.5",  mh: "300", ad: "0"}
+          - {rank: "03", slm: "1.6", to: "0.5", tc: "0.75", mh: "240", ad: "0"}
+          - {rank: "04", slm: "1.6", to: "0.5", tc: "0.75", mh: "300", ad: "0"}
+          - {rank: "05", slm: "1.6", to: "0.7", tc: "0.5",  mh: "240", ad: "0"}
+          - {rank: "06", slm: "1.7", to: "0.5", tc: "0.5",  mh: "300", ad: "0"}
+          - {rank: "07", slm: "1.7", to: "0.5", tc: "0.5",  mh: "240", ad: "0"}
+          - {rank: "08", slm: "1.6", to: "0.7", tc: "0.5",  mh: "300", ad: "0"}
+          - {rank: "09", slm: "1.6", to: "0.7", tc: "0.75", mh: "240", ad: "0"}
+          - {rank: "10", slm: "1.7", to: "0.5", tc: "0.75", mh: "300", ad: "0"}
+          - {rank: "11", slm: "1.7", to: "0.5", tc: "0.75", mh: "240", ad: "0"}
+          - {rank: "12", slm: "1.6", to: "0.7", tc: "0.75", mh: "300", ad: "0"}
+          - {rank: "13", slm: "1.6", to: "0.5", tc: "0.5",  mh: "240", ad: "2"}
+          - {rank: "14", slm: "1.6", to: "0.5", tc: "0.5",  mh: "240", ad: "1"}
+          - {rank: "15", slm: "1.7", to: "0.7", tc: "0.5",  mh: "240", ad: "0"}
+          - {rank: "16", slm: "1.8", to: "0.5", tc: "0.5",  mh: "300", ad: "0"}
+          - {rank: "17", slm: "1.7", to: "0.7", tc: "0.5",  mh: "300", ad: "0"}
+          - {rank: "18", slm: "1.8", to: "0.5", tc: "0.5",  mh: "240", ad: "0"}
+          - {rank: "19", slm: "1.6", to: "0.5", tc: "0.75", mh: "240", ad: "2"}
+          - {rank: "20", slm: "1.6", to: "0.5", tc: "0.75", mh: "240", ad: "1"}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 1 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate C160 feed (Jan-Jun 2026)
+        env:
+          JAN: ${{ github.event.inputs.jan_start }}
+        run: |
+          python tools/generate_scalper_signals.py \
+            --charts data/XAUUSD_M1_202601_ELEV8.csv data/XAUUSD_M1_202602_ELEV8.csv \
+              data/XAUUSD_M1_202603_ELEV8.csv data/XAUUSD_M1_202604_ELEV8.csv \
+              data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --output feed.txt --start "${JAN}" \
+            --session-start 0 --session-end 0 --signal-tz 7 \
+            --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 \
+            --rr1 1.2 --rr2 2.5 --rr3 5
+      - name: "TC18 r${{ matrix.rank }} slm=${{ matrix.slm }} to=${{ matrix.to }} tc=${{ matrix.tc }} mh=${{ matrix.mh }} ad=${{ matrix.ad }}"
+        env:
+          JAN: ${{ github.event.inputs.jan_start }}
+          MAY: ${{ github.event.inputs.may_start }}
+          OOS: ${{ github.event.inputs.oos_start }}
+          rank: ${{ matrix.rank }}
+          slm: ${{ matrix.slm }}
+          to: ${{ matrix.to }}
+          tc: ${{ matrix.tc }}
+          mh: ${{ matrix.mh }}
+          ad: ${{ matrix.ad }}
+        run: |
+          set -o pipefail
+          mkdir -p out raw
+          CELL="tcal_r${rank}_slm${slm//./}_to${to//./}_tc${tc//./}_mh${mh}_ad${ad}"
+          SIGNALS="feed.txt"
+          STRAT="--entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.7 --shared-sl false \
+            --activation-delay ${ad} --pending-expiry 180 --max-hold ${mh} \
+            --sl-multiplier ${slm} --final-target TP3 --runner-after-tp3 false \
+            --lock-after-tp1 true --lock-after-tp2 true \
+            --tp1-lock-delay-minutes 24 --tp2-lock-delay-minutes 24 \
+            --profit-lock-mode tp_levels --bep-trigger-distance 3.0 --tp1-lock-fraction 0.75 \
+            --tp2-lock-target TP1 --tp3-lock-target TP2 \
+            --trailing-open-distance ${to} --trailing-close-distance ${tc} --trailing-close-after-stage 2 \
+            --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0"
+          COMMON="--sync-ticks false --sync-charts false --max-drawdown-limit-pct 100 \
+            --progress-interval-seconds 0 --minimum-lot 0.01 --lot-step 0.01"
+          CJAN="data/XAUUSD_M1_202601_ELEV8.csv data/XAUUSD_M1_202602_ELEV8.csv data/XAUUSD_M1_202603_ELEV8.csv data/XAUUSD_M1_202604_ELEV8.csv data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          CMAY="data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          TICKS="data/ticks/XAUUSD_TICK_*_ELEV8.csv"
+          bt () { # mode start charts sizing bonus out
+            local src="--m1-only"; [ "$1" = "tick" ] && src="--ticks $TICKS"
+            python tools/backtest_hybrid.py --signals "$SIGNALS" --charts $3 $STRAT $COMMON $src \
+              --sizing-mode $4 --risk 0.01 --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot $5 \
+              --start-date "$2" --output-dir "reports/${CELL}_$6" --score-json "raw/$6.json"
+          }
+          bt tick "$MAY"  "$CMAY" risk  3.0 tickmay_risk
+          bt tick "$MAY"  "$CMAY" fixed 0   tickmay_edge
+          bt m1   "$MAY"  "$CMAY" risk  3.0 m1may_risk
+          bt m1   "$MAY"  "$CMAY" fixed 0   m1may_edge
+          bt m1   "$JAN"  "$CJAN" risk  3.0 jan_risk
+          bt m1   "$JAN"  "$CJAN" fixed 0   jan_edge
+          bt m1   "$OOS"  "$CJAN" fixed 0   jan_oos
+          python - "$CELL" "$rank" "$slm" "$to" "$tc" "$mh" "$ad" <<'PY'
+          import json, sys
+          cell,rank,slm,to,tc,mh,ad = sys.argv[1:8]
+          def g(f,k): return round(float(json.load(open(f"raw/{f}.json"))[k]),2)
+          d={"cell":cell,"orig_rank":int(rank),"strategy":"TC18",
+             "sl_multiplier":float(slm),"trailing_open":float(to),"trailing_close":float(tc),
+             "max_hold":int(mh),"activation_delay":int(ad),
+             "tickmay_net":g("tickmay_risk","net_profit"),"tickmay_dd":g("tickmay_risk","max_drawdown_pct"),
+             "tickmay_edge":g("tickmay_edge","net_profit"),
+             "m1may_net":g("m1may_risk","net_profit"),"m1may_dd":g("m1may_risk","max_drawdown_pct"),
+             "m1may_edge":g("m1may_edge","net_profit"),
+             "jan_net":g("jan_risk","net_profit"),"jan_dd":g("jan_risk","max_drawdown_pct"),
+             "jan_edge":g("jan_edge","net_profit"),"jan_oos":g("jan_oos","net_profit"),
+             "jan_signals":int(json.load(open("raw/jan_risk.json"))["signals_included"])}
+          open(f"out/{cell}.json","w").write(json.dumps(d)); print(d)
+          PY
+      - uses: actions/upload-artifact@v4
+        with: { name: "tcal-r${{ matrix.rank }}", path: "out/*.json", if-no-files-found: error }
+
+  # ===========================================================================
+  # LEADERBOARD - calibrate (factor = tickmay/m1may), estimate Jan-as-TICK, rank
+  # ===========================================================================
+  leaderboard:
+    needs: [vic_cell, tc18_cell]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 1 }
+      - uses: actions/download-artifact@v4
+        with: { pattern: "vcal-*", path: "art/vic", merge-multiple: true }
+      - uses: actions/download-artifact@v4
+        with: { pattern: "tcal-*", path: "art/tc18", merge-multiple: true }
+      - name: Calibrate + rank
+        run: |
+          python - <<'PY'
+          import json, csv, glob, os, math
+
+          def factor(t, m):
+              # measured M1->TICK discrepancy on the overlap; guard tiny/zero M1.
+              if m is None or t is None or abs(m) < 1e-9: return None
+              return round(t / m, 4)
+
+          def build(prefix, out_path):
+              rows = []
+              for f in sorted(glob.glob(f"art/{prefix}/*.json")):
+                  d = json.load(open(f))
+                  fe = factor(d["tickmay_edge"], d["m1may_edge"])
+                  fn = factor(d["tickmay_net"],  d["m1may_net"])
+                  fd = factor(d["tickmay_dd"],   d["m1may_dd"])
+                  d["f_edge"], d["f_net"], d["f_dd"] = fe, fn, fd
+                  d["est_jan_edge"] = round(d["jan_edge"] * fe, 2) if fe is not None else None
+                  d["est_jan_net"]  = round(d["jan_net"]  * fn, 2) if fn is not None else None
+                  d["est_jan_dd"]   = round(d["jan_dd"]   * fd, 2) if fd is not None else None
+                  d["est_jan_oos"]  = round(d["jan_oos"]  * fe, 2) if fe is not None else None
+                  rows.append(d)
+              # rank: passes est DD<=40 first, then by est_jan_edge desc (None last)
+              def key(r):
+                  e = r.get("est_jan_edge")
+                  dd = r.get("est_jan_dd")
+                  ok = (e is not None) and (dd is not None) and (dd <= 40.0)
+                  return (0 if ok else 1, -(e if e is not None else -math.inf))
+              rows.sort(key=key)
+              cols = ["cell","strategy","orig_rank","sl_multiplier","trailing_open",
+                      "trailing_close","trail_after_stage","final_target","max_hold",
+                      "activation_delay",
+                      "est_jan_edge","est_jan_net","est_jan_dd","est_jan_oos",
+                      "f_edge","f_net","f_dd",
+                      "jan_edge","jan_net","jan_dd","jan_oos","jan_signals",
+                      "tickmay_edge","tickmay_net","tickmay_dd",
+                      "m1may_edge","m1may_net","m1may_dd"]
+              os.makedirs(os.path.dirname(out_path), exist_ok=True)
+              with open(out_path, "w", newline="") as fh:
+                  w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
+                  w.writeheader(); w.writerows(rows)
+              print(f"Wrote {out_path} ({len(rows)} rows)")
+              # console: top 5 passing DD<=40
+              ok = [r for r in rows if r.get("est_jan_dd") is not None and r["est_jan_dd"]<=40 and r.get("est_jan_edge") is not None]
+              for r in ok[:5]:
+                  print(f"  {r['cell']}: est_edge=${r['est_jan_edge']} est_net=${r['est_jan_net']} est_dd={r['est_jan_dd']}% (f_edge={r['f_edge']})")
+
+          build("vic",  "sweep_reports/tick_cal_jan/vic_top20.csv")
+          build("tc18", "sweep_reports/tick_cal_jan/tc18_top20.csv")
+          PY
+      - name: Commit leaderboards
+        run: |
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+          git add sweep_reports/tick_cal_jan/
+          git diff --cached --quiet || git commit -m "tick-cal Jan top20: M1->TICK calibrated Jan estimate (VIC + TC18)"
+          git push origin HEAD || true
+      - uses: actions/upload-artifact@v4
+        with: { name: "tick-cal-jan-top20", path: "sweep_reports/tick_cal_jan/", if-no-files-found: warn }
