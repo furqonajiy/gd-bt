@@ -58,34 +58,41 @@ pair is a thin package that imports it.
   **It refreshes BOTH data sources before each run**: `--sync-charts true` (M1,
   inherited from `backtest_explicit`) and `--sync-ticks true` (default on) — the
   tick refresh is an **APPEND** via `export_ticks --merge` (resumes from the last
-  recorded tick, never re-fetches aged-out ticks) then re-splits to
-  `--ticks-split-mb` (default **95**) MiB parts, GitHub-safe. Both syncs soft-fail
-  without MT5, falling back to the committed archives. The tick sync touches only
-  the **current month** (`--sync-tick-months` default 1 — the only month that
-  gains ticks). `export_ticks --merge --split-mb` is a **true incremental append**
-  against the committed split archive: it resumes from the last tick in the LAST
-  `_pN` part, fetches only newer ticks, and **re-splits ONLY that tail** (`p1..p(N-1)`
-  are never touched), so a completed past month is a cheap no-op and the current
-  month only rewrites its last part — never the whole ~600 MiB month. Only
-  `--merge` **without** `--split-mb` reassembles the parts into a full working file
-  (`split_ticks_by_size.join_parts` / `parts_for`; `--join` + `split_file`'s
-  `start_part`/`force` back the tail re-split), so the full file is the incremental
-  working copy and the `_pN` parts are what you commit. See `cli/resync_ticks.txt`.
-  **DATE-window alternative — `tools/split_ticks_by_days.py` / `export_ticks
-  --split-days N` (default 3):** cuts the archive on the **calendar** instead of by
-  bytes — each part is a fixed N-day window named by its **start day** with a size
-  sub-index, `XAUUSD_TICK_YYYYMM_D<start>_pN_ELEV8.csv` (`_D1_p1`=days 1-3,
-  `_D4_p1`=4-6, …). Membership is **deterministic** (a tick always lands in the
-  same window, so re-splits are stable/idempotent, unlike the byte split). Every
-  window always has at least `_p1`; a window over `--max-mb` (default **95**, the
-  same GitHub-safe cap) is sub-split into `_p2`, `_p3`, … so the archive is always
-  pushable (June's volatile 16-18 / 22-24 windows are 147/180 MiB raw → each
-  becomes `_p1`+`_p2`). Consumers are unaffected: the tick globs are `_*_ELEV8.csv`
-  (the workflows' `_p*` were widened to `_*`) and `load_ticks` re-sorts every row
-  by timestamp, so `_pN` (byte) and `_D<start>_pN` (date) parts coexist under one
-  glob; `day_parts_for` reassembles a date archive (and falls back to legacy `_pN`
-  for the first migration) byte-identically. `--split-days` and `--split-mb` are
-  mutually exclusive.
+  recorded tick, never re-fetches aged-out ticks) then re-splits into
+  **`--ticks-split-days` (default 3) DAY-WINDOW parts** — the committed archive
+  format `XAUUSD_TICK_YYYYMM_D<start>_pN_ELEV8.csv` (`_D1_p1`=days 1-3, `_D4_p1`=4-6,
+  …). Both syncs soft-fail without MT5, falling back to the committed archives. The
+  tick sync touches only the **current month** (`--sync-tick-months` default 1 — the
+  only month that gains ticks).
+  **The agreed on-disk format is the DATE window** (`tools/split_ticks_by_days.py`
+  / `export_ticks --split-days N` / `backtest_hybrid --sync-ticks`): each part is a
+  fixed N-day window named by its **start day** with a size sub-index. Membership is
+  **deterministic** (a tick always lands in the same window, so re-splits are
+  stable/idempotent, unlike the byte split). Every window always has at least
+  `_p1`; a window over `--max-mb` (default **95**, the GitHub-safe cap) is sub-split
+  into `_p2`, `_p3`, … so the archive is always pushable (June's volatile 16-18 /
+  22-24 windows are 147/180 MiB raw → each becomes `_p1`+`_p2`). The splitters
+  generalize to **any source tag** (`_ELEV8`, `_DEMO`, …). **EVERY generator emits
+  this format** — the in-backtest `--sync-ticks`, both `cli/resync_ticks*.txt`
+  snapshots, and the manual `split_ticks_by_days.py` — and
+  `tests/test_tick_archive_format.py` fails CI on any committed legacy `_pN` /
+  unsplit / `_H1`/`_H2` tick file.
+  The **legacy SIZE split is an escape hatch only** (`split_ticks_by_size.py` /
+  `export_ticks --split-mb` / `backtest_hybrid --ticks-split-days 0`): it cuts on
+  accumulated bytes (`_pN` with no `_D`), so part boundaries move every re-sync —
+  NOT the committed format. `export_ticks --merge --split-mb` has a true
+  incremental tail-append (resumes from the last tick in the LAST `_pN` part,
+  re-splits ONLY that tail, `p1..p(N-1)` untouched); the default day-window
+  `--merge` instead reassembles the parts into the full working month
+  (`join_parts` / `day_parts_for`, falling back to legacy `_pN` for the first
+  migration) and re-splits by day — deterministic, so re-runs are stable, at the
+  cost of reassembling the current month each time (keep an uncommitted full
+  working file + `--merge` without a `--split` flag to avoid the round-trip, then
+  `--split-days 3` before commit). Consumers are unaffected: the tick globs are
+  `_*_ELEV8.csv` (the workflows' `_p*` were widened to `_*`) and `load_ticks`
+  re-sorts every row by timestamp, so `_pN` (byte) and `_D<start>_pN` (date) parts
+  concatenate correctly. `--split-days` and `--split-mb` are mutually exclusive. See
+  `cli/resync_ticks.txt`.
 - `listeners/` — per-platform signal-source listeners, one subfolder per source
   (`telegram/`, and future `whatsapp/`, etc.).
   `listeners/telegram/listener.py` — ingests Victor's Telegram channel into
@@ -554,7 +561,7 @@ shared_sl off, on the **triple-filtered** scalper24 feed `--rsi-buy-max 75
 Bollinger × R:R sweep (edge $63,940 / OOS $11,633 / DD 38.4%) — it superseded the
 e5 RSI champion, which had superseded SC24T24E8 for R4 after it breached the DD ≤
 40% gate on 2026 data (SC24T24E8 remains the R2bull/R3strong champion); the other
-deployed feeds are **V116** (the **Victor champion**, `cli/candidate_VIC_C116_tick` — tick-tuned TP2/mh180/slm1.7/delay12 on Victor's provider feed `signals/victor_live.txt`, positions `positions_v116.json`, tag V116; it replaced the old VIC champion 2026-06-25, TICK +$24.7k / M1 DD 11.3%) and **C160** (`cli/candidate_R4_C160_tick`, beside SQZ6 — *research-grade*: M1 DD **42.1% is OVER the 40% gate** and 193/200 May+June cells were tick-negative, so run it at REDUCED risk / on DEMO; SQZ6 stays the gate-compliant R4 champion). The **trailing** research candidates on the C160 feed are **TOC5** (`cli/candidate_TOC5_trailing_tick`, tag TOC5 — real-DD tick sweep #1: trailing-open 0.5 / trailing-close 0.5 / trail-after-TP1, net $115.6k / real-tick DD 23.5%) and **TC18** (`cli/candidate_TC18_trailing_tick`, tag TC18 — aggressive-sweep #1: the SAME feed/geometry with slm 2.1→1.8 + trail-after-**TP2** + lock-after-tp2 on + tp2-lock-delay 24, net **$166.8k / DD 23.65%**, +44% net at essentially flat DD; the strict beat-on-both gate flagged no winner only on the 0.14 pt DD). **Both are RESEARCH — demo-validate (TC18 side-by-side vs TOC5) before live size; SQZ6 stays the champion.** A **Victor** trailing research candidate **VT05** (`cli/candidate_VT05_victor_trailing`, tag VT05) is V116's feed/geometry + the #1 cell of the VIC aggressive trailing sweep (to0.5/tc0.5/trail-after-TP1 + slm 1.7→1.5 + activation-delay 2→1): on May+June ticks it ~2× net ($21.7k) and edge ($3.1k) vs V116 but also ~2× DD (5.6%→9.6%, still ≪40%) and its **OOS collapses** ($526→$57) — so it's overfit, **V116 stays the deployed Victor champion**, run VT05 on DEMO A/B only. It reads the SAME Victor feed as V116 (one provider feed); only tag/positions/logs/params differ. `cli/resync_m1_from_2020` (M1) and `cli/resync_ticks` (tick archive, <=95 MiB parts) are data-sync utilities, not strategies. A separate **DEMO-broker data lane** keeps demo quotes from clobbering the live ELEV8 archive: `fetch` / `export_ticks` take **`--source DEMO`** (tag baked into the filename — `XAUUSD_M1_YYYYMM_DEMO.csv`, `XAUUSD_TICK_..._DEMO.csv`) + **`--output-dir data/demo`**, and `chart.py` recognizes `_DEMO` at the same load priority as `_ELEV8` (inert without demo files). The demo trailing candidate **DTR0** (`cli/demo/demo_DTR0_trailing.txt`, tag DTR0, **DEMO-ONLY**) is the C160 self-scalper feed + trailing-open/close 0.5/0.5, with `cli/demo/backtest_TR05_demo.txt` (repro) and `cli/demo/resync_{m1,ticks}_demo.txt` (sync into `data/demo`). The bulky `_DEMO` CSVs are **not committed** — regenerate them locally via the resync snapshots. Pruned snapshots — the old `champion_victor` (VIC), `cli/E640`, `cli/rr08x15x30`, `candidate_R4_SL19_tick`, and the `trailing_open_R*` / `trailing_small_0101` research cells (plus the earlier `cli_R4_scalper24` / `_breakout` / `_scalperwide24` / `_bbsqueeze`, `cli_trailing_risk02allhours`, `cli_adaptive_regime`) — were removed; recover from git history if needed. The `auto --adaptive` regime auto-switch feature still lives in `strategy/regime_adaptive.py`.
+deployed feeds are **V116** (the **Victor champion**, `cli/candidate_VIC_C116_tick` — tick-tuned TP2/mh180/slm1.7/delay12 on Victor's provider feed `signals/victor_live.txt`, positions `positions_v116.json`, tag V116; it replaced the old VIC champion 2026-06-25, TICK +$24.7k / M1 DD 11.3%) and **C160** (`cli/candidate_R4_C160_tick`, beside SQZ6 — *research-grade*: M1 DD **42.1% is OVER the 40% gate** and 193/200 May+June cells were tick-negative, so run it at REDUCED risk / on DEMO; SQZ6 stays the gate-compliant R4 champion). The **trailing** research candidates on the C160 feed are **TOC5** (`cli/candidate_TOC5_trailing_tick`, tag TOC5 — real-DD tick sweep #1: trailing-open 0.5 / trailing-close 0.5 / trail-after-TP1, net $115.6k / real-tick DD 23.5%) and **TC18** (`cli/candidate_TC18_trailing_tick`, tag TC18 — aggressive-sweep #1: the SAME feed/geometry with slm 2.1→1.8 + trail-after-**TP2** + lock-after-tp2 on + tp2-lock-delay 24, net **$166.8k / DD 23.65%**, +44% net at essentially flat DD; the strict beat-on-both gate flagged no winner only on the 0.14 pt DD). **Both are RESEARCH — demo-validate (TC18 side-by-side vs TOC5) before live size; SQZ6 stays the champion.** A **Victor** trailing research candidate **VT05** (`cli/candidate_VT05_victor_trailing`, tag VT05) is V116's feed/geometry + the #1 cell of the VIC aggressive trailing sweep (to0.5/tc0.5/trail-after-TP1 + slm 1.7→1.5 + activation-delay 2→1): on May+June ticks it ~2× net ($21.7k) and edge ($3.1k) vs V116 but also ~2× DD (5.6%→9.6%, still ≪40%) and its **OOS collapses** ($526→$57) — so it's overfit, **V116 stays the deployed Victor champion**, run VT05 on DEMO A/B only. It reads the SAME Victor feed as V116 (one provider feed); only tag/positions/logs/params differ. `cli/resync_m1_from_2020` (M1) and `cli/resync_ticks` (tick archive, day-window `_D<start>_pN` parts) are data-sync utilities, not strategies. A separate **DEMO-broker data lane** keeps demo quotes from clobbering the live ELEV8 archive: `fetch` / `export_ticks` take **`--source DEMO`** (tag baked into the filename — `XAUUSD_M1_YYYYMM_DEMO.csv`, `XAUUSD_TICK_..._DEMO.csv`) + **`--output-dir data/demo`**, and `chart.py` recognizes `_DEMO` at the same load priority as `_ELEV8` (inert without demo files). The demo trailing candidate **DTR0** (`cli/demo/demo_DTR0_trailing.txt`, tag DTR0, **DEMO-ONLY**) is the C160 self-scalper feed + trailing-open/close 0.5/0.5, with `cli/demo/backtest_TR05_demo.txt` (repro) and `cli/demo/resync_{m1,ticks}_demo.txt` (sync into `data/demo`). The bulky `_DEMO` CSVs are **not committed** — regenerate them locally via the resync snapshots. Pruned snapshots — the old `champion_victor` (VIC), `cli/E640`, `cli/rr08x15x30`, `candidate_R4_SL19_tick`, and the `trailing_open_R*` / `trailing_small_0101` research cells (plus the earlier `cli_R4_scalper24` / `_breakout` / `_scalperwide24` / `_bbsqueeze`, `cli_trailing_risk02allhours`, `cli_adaptive_regime`) — were removed; recover from git history if needed. The `auto --adaptive` regime auto-switch feature still lives in `strategy/regime_adaptive.py`.
 
 ## Docs to keep in sync with code
 

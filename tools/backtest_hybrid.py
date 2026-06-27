@@ -285,18 +285,26 @@ def _run_hybrid_loop(signals, chart, chart_df, chart_start, chart_end, ticks,
 
 
 def _sync_ticks_from_mt5(symbol: str, server_offset: int, months_back: int,
-                         split_mb: float = 95.0) -> None:
+                         split_days: int = 3, split_mb: float = 95.0) -> None:
     """Best-effort: APPEND the latest ticks from MT5 into data/ticks/ before
-    backtesting, then re-pack into <= split_mb MiB parts. Mirrors the M1 chart
-    sync (_sync_charts_from_mt5): soft-fails (warn + continue) when MetaTrader5 is
-    unavailable (Linux/CI) or the terminal isn't reachable, so the run falls back
-    to the committed tick archive.
+    backtesting, then re-pack into the committed archive's DAY-WINDOW parts
+    (XAUUSD_TICK_YYYYMM_D<startday>_pN_ELEV8.csv -- the agreed format). Mirrors the
+    M1 chart sync (_sync_charts_from_mt5): soft-fails (warn + continue) when
+    MetaTrader5 is unavailable (Linux/CI) or the terminal isn't reachable, so the
+    run falls back to the committed tick archive.
 
-    Uses export_ticks in --merge mode, which auto-reassembles any existing _pN
-    split parts, resumes from the last recorded tick and appends ONLY newer ones
-    (never re-fetching ticks the broker has aged out), then --split-mb re-packs the
-    grown month into GitHub-safe parts. So the archive grows incrementally, capped
-    at split_mb MiB/part."""
+    Uses export_ticks in --merge mode, which auto-reassembles any existing parts
+    (both _D<start> day windows and legacy _pN size parts), resumes from the last
+    recorded tick and appends ONLY newer ones (never re-fetching ticks the broker
+    has aged out), then re-splits the grown month BY CALENDAR DAY so part
+    membership is deterministic and every part stays under GitHub's 100 MiB limit
+    (split_ticks_by_days sub-caps a hot window at 95 MiB). So the archive grows
+    incrementally in the SAME day-window format the backtest reads.
+
+    split_days >= 1 selects the day-window format (default 3 days/part -- the agreed
+    convention). split_days < 1 is an escape hatch that falls back to the legacy
+    size split at split_mb MiB; the committed archive is day-window, so leave it on
+    the default unless you deliberately want size parts."""
     try:
         from datetime import date
         import export_ticks as ex
@@ -312,8 +320,15 @@ def _sync_ticks_from_mt5(symbol: str, server_offset: int, months_back: int,
             "--end-date", f"{ey:04d}-{em + 1:02d}-01",
             "--output-dir", "data/ticks",
             "--mt5-server-offset", str(server_offset),
-            "--merge", "--split-mb", str(split_mb), "--progress",
+            "--merge", "--progress",
         ]
+        # Day-window split is the committed-archive format; size split stays a
+        # deliberate escape hatch (split_days < 1). They are mutually exclusive in
+        # export_ticks, so emit exactly one.
+        if split_days and split_days >= 1:
+            argv += ["--split-days", str(split_days)]
+        else:
+            argv += ["--split-mb", str(split_mb)]
         ex.main(argv)
     except SystemExit as e:  # export_ticks raises SystemExit on no-MT5/bad input
         print(f"[mt5] skipped tick sync ({e})", file=sys.stderr)
@@ -341,19 +356,30 @@ def build_parser() -> argparse.ArgumentParser:
                         "net at real DD <= 40%.")
     # Sync BOTH data sources before the backtest. --sync-charts (M1) comes from
     # backtest_explicit's chart-sync args (default True); --sync-ticks mirrors it
-    # for the tick archive (APPEND via --merge, re-split at --ticks-split-mb).
+    # for the tick archive (APPEND via --merge, re-split into DAY-WINDOW parts).
     p.add_argument("--sync-ticks", type=bx._bool_text, default=True,
                    help="Before the backtest, APPEND the latest MT5 ticks into "
-                        "data/ticks/ (export_ticks --merge) and re-split to "
-                        "--ticks-split-mb MiB parts. Soft-fails without MT5. Default true.")
+                        "data/ticks/ (export_ticks --merge) and re-split into "
+                        "--ticks-split-days day-window parts (the committed "
+                        "XAUUSD_TICK_YYYYMM_D<start>_pN format). Soft-fails without "
+                        "MT5. Default true.")
     p.add_argument("--sync-tick-months", type=int, default=1,
                    help="How many recent months of ticks to refresh on --sync-ticks "
                         "(default 1 = the current month only -- the only month that "
                         "gains new ticks; the append is incremental so a completed "
                         "past month would be a cheap no-op if you raise this).")
+    p.add_argument("--ticks-split-days", type=int, default=3,
+                   help="Calendar days per tick part when re-packing after "
+                        "--sync-ticks (default 3 = the committed day-window format "
+                        "_D1=days 1-3, _D4=4-6, ...; a hot window is sub-capped at "
+                        "95 MiB so every part stays under GitHub's 100 MiB limit). "
+                        "Set < 1 to fall back to the legacy size split "
+                        "(--ticks-split-mb).")
     p.add_argument("--ticks-split-mb", type=float, default=95.0,
-                   help="MiB cap per tick part when re-packing after --sync-ticks "
-                        "(stay under GitHub's 100 MiB limit; default 95).")
+                   help="MiB cap per tick part ONLY when --ticks-split-days < 1 "
+                        "(legacy size-split escape hatch; stay under GitHub's 100 "
+                        "MiB limit; default 95). Ignored for the default day-window "
+                        "split, which sub-caps hot windows at 95 MiB on its own.")
     # --mt5-symbol is already defined by backtest_explicit's chart-sync args; reused.
     return p
 
@@ -364,12 +390,14 @@ def main(argv: list[str] | None = None) -> int:
 
     # Refresh BOTH data sources from MT5 before backtesting (each soft-fails if
     # MT5 is unavailable, falling back to the committed archives). M1 first, then
-    # the tick archive (appended via export_ticks --merge, re-split at <=95 MiB).
+    # the tick archive (appended via export_ticks --merge, re-split into day-window
+    # _D<start>_pN parts -- the committed format).
     if getattr(args, "sync_charts", False):
         bx._sync_charts_from_mt5(args.mt5_symbol, args.mt5_server_offset, args.sync_months)
     if getattr(args, "sync_ticks", False):
         _sync_ticks_from_mt5(args.mt5_symbol, args.mt5_server_offset,
-                             args.sync_tick_months, args.ticks_split_mb)
+                             args.sync_tick_months, args.ticks_split_days,
+                             args.ticks_split_mb)
 
     signals = bx.filter_signals_by_date(
         parse_signals_file(Path(args.signals)), args.start_date, args.end_date,

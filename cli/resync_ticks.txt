@@ -1,28 +1,35 @@
 # =========================================================================
-# RESYNC XAUUSD TICK HISTORY (MT5 -> data/ticks/), GitHub-safe <=95 MiB parts
+# RESYNC XAUUSD TICK HISTORY (MT5 -> data/ticks/), GitHub-safe DAY-WINDOW parts
 # Windows-only: requires the MetaTrader5 package + a RUNNING MT5 terminal
 # logged into your broker. PowerShell backtick (`) line continuation.
 # =========================================================================
 #
 # What it does:
 #   Pulls REAL tick data from MT5 (copy_ticks_range) month-by-month and writes
-#   tab-separated CSV(s) under data/ticks/. With --split-mb it then cuts each
-#   month into sequential, line-aligned parts of at most that many MiB and
-#   deletes the full month file, so every part stays under GitHub's 100 MiB push
-#   limit:
-#       data/ticks/XAUUSD_TICK_YYYYMM_p1_ELEV8.csv, _p2, _p3, ...
-#   (the exact format + naming the tick backtest already reads). Times are stored
-#   in CHART time = GMT+3 (the MT5 server clock), same as the M1 archive.
+#   tab-separated CSV(s) under data/ticks/. With --split-days it cuts each month
+#   into fixed N-day CALENDAR windows named by their start day, deletes the full
+#   month file, and sub-caps a hot window at 95 MiB so every part stays under
+#   GitHub's 100 MiB push limit -- the AGREED archive format:
+#       data/ticks/XAUUSD_TICK_YYYYMM_D<start>_pN_ELEV8.csv
+#       (_D1_p1 = days 1-3, _D4_p1 = 4-6, ...; a window over 95 MiB adds _p2, _p3)
+#   A tick ALWAYS lands in the same date window, so re-splits are deterministic
+#   and grow-only (unlike a byte split, whose part boundaries move every re-sync).
+#   Times are stored in CHART time = GMT+3 (the MT5 server clock), same as the M1
+#   archive.
 #
 #   This is the archive the TICK-aware backtest consumes:
 #     - tools/backtest_hybrid.py  (--ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv) and
 #       the CLI snapshots' 2026 backtest sections (5 & 6), and
 #     - tools/tick_backtest.py and the tick sweeps.
+#   (Consumers glob _*_ELEV8.csv and re-sort by timestamp, so the part naming
+#   never matters to them -- but EVERY generator must emit the _D<start>_pN format
+#   so the committed archive stays uniform; tests/test_tick_archive_format.py
+#   fails CI on any legacy _pN / unsplit tick file.)
 #
 # WHY 95 (not 100):
 #   GitHub HARD-REJECTS any file >= 100 MiB on push (and warns above 50 MiB).
-#   --split-mb 95 leaves margin so a push never bounces; the committed archive's
-#   full parts are ~94 MiB. Raise toward 100 only if you like living dangerously.
+#   The 95 MiB within-window sub-cap leaves margin so a push never bounces;
+#   June's volatile 16-18 / 22-24 windows are why a window can need a _p2.
 #
 # IMPORTANT — broker tick window is SHORT:
 #   MT5 only returns the ticks YOUR BROKER still stores. Tick history is far
@@ -31,10 +38,11 @@
 #   want; requesting more just yields whatever is available. The committed
 #   archive currently spans 2026-05-05 -> 2026-06-24 (May + June).
 #
-# IMPORTANT — --split-mb is a FINAL PACKAGING step:
-#   it removes the full month file, so a later --merge re-fetches the whole
-#   window instead of resuming. Run it once you have the window you want; do not
-#   use it for an archive you grow incrementally.
+# IMPORTANT — --split-days is a PACKAGING step that removes the full month file.
+#   On --merge it auto-reassembles the committed parts (both _D<start> date parts
+#   and any legacy _pN size parts) into the full month, appends only newer ticks,
+#   then re-splits by day. That reassemble round-trip is fine for the current
+#   month; for a big month synced often, prefer the working-file TIP below.
 #
 # Dates are CHART-time GMT+3; --end-date is EXCLUSIVE.
 #
@@ -42,8 +50,9 @@
 # of the strategy snapshots run tools/backtest_hybrid.py with --sync-charts true
 # --sync-ticks true, which BEFORE every backtest refreshes BOTH the M1 archive AND
 # the tick archive -- the tick refresh is an APPEND (export_ticks --merge,
-# re-split at <=95 MiB), exactly what this snapshot does. Run this standalone only
-# to (re)build the tick archive outside a backtest, or for a custom date range.
+# re-split into --ticks-split-days day windows, default 3), exactly what this
+# snapshot does. Run this standalone only to (re)build the tick archive outside a
+# backtest, or for a custom date range.
 #
 # ===== RESYNC TICKS (run from the repo root) =====
 python tools/export_ticks.py `
@@ -52,7 +61,7 @@ python tools/export_ticks.py `
   --end-date 2026-06-26 `
   --output-dir data/ticks `
   --mt5-server-offset 3 `
-  --split-mb 95 `
+  --split-days 3 `
   --progress
 
 # ----- If MT5 is NOT already running/logged in, pass connection details -----
@@ -63,7 +72,7 @@ python tools/export_ticks.py `
 #   --end-date 2026-06-26 `
 #   --output-dir data/ticks `
 #   --mt5-server-offset 3 `
-#   --split-mb 95 `
+#   --split-days 3 `
 #   --progress `
 #   --mt5-path "C:\Program Files\MetaTrader 5\terminal64.exe" `
 #   --mt5-login 12345678 `
@@ -75,18 +84,14 @@ python tools/export_ticks.py `
 # --mt5-server-offset accordingly (verify with `python -m trading.engine.cli mt5-info`).
 
 # ===== CONTINUE FROM THE LATEST STATE (incremental --merge) =====
-# Add only the NEW ticks since the last fetch -- no whole-archive re-download or
-# reassemble. --merge resumes from the last recorded tick and appends just the
-# newer ones (so ticks already archived but since aged out of the broker's tick
-# window are preserved -- --overwrite would lose them). Against the COMMITTED
-# split archive WITH --split-mb, --merge APPENDS the new ticks to the TAIL part
-# and re-splits ONLY that tail (p1..p(N-1) are never touched), so a completed
-# past month with no new ticks is a cheap no-op and the current month only
-# rewrites its last part -- never the whole ~600 MiB month. (Without --split-mb it
-# instead reassembles the parts into a full working file and merges into that.)
-# Set the dates to the month you are extending (same month = grow it forward; a
-# new month = first fetch of it). Tip: just sync the CURRENT month -- past months
-# don't gain ticks.
+# Add only the NEW ticks since the last fetch. --merge resumes from the last
+# recorded tick and appends just the newer ones (so ticks already archived but
+# since aged out of the broker's tick window are preserved -- --overwrite would
+# lose them). Against the COMMITTED day-window archive, --merge reassembles the
+# _D<start>_pN parts into the full working month, appends, and re-splits by day
+# (deterministic: a tick always lands back in the same window). Set the dates to
+# the month you are extending (same month = grow it forward; a new month = first
+# fetch of it). Tip: just sync the CURRENT month -- past months don't gain ticks.
 python tools/export_ticks.py `
   --symbol XAUUSD `
   --start-date 2026-06-01 `
@@ -94,35 +99,29 @@ python tools/export_ticks.py `
   --output-dir data/ticks `
   --mt5-server-offset 3 `
   --merge `
-  --split-mb 95 `
+  --split-days 3 `
   --progress
 
 # TIP -- avoid the reassemble round-trip on every update: keep the FULL working
 # month file locally (do NOT commit it; it is >100 MiB) and --merge onto it WITHOUT
-# --split-mb day-to-day; run --split-mb 95 only right before you commit/push. Then
-# `git add` just the _pN parts. Full file = incremental working copy; parts = what
-# you commit.
+# any --split flag day-to-day; run --split-days 3 only right before you commit/push.
+# Then `git add` just the _D<start>_pN parts. Full file = incremental working copy;
+# date parts = what you commit.
 
-# ===== DATE-WINDOW split: every 3 days instead of by size (no MT5 needed) =====
-# Cut the archive on the CALENDAR instead of by bytes: each part is a fixed
-# N-day window named by its START day, with a _pN size sub-index --
-#   XAUUSD_TICK_YYYYMM_D<start>_pN_ELEV8.csv  (_D1_p1 = days 1-3, _D4_p1 = 4-6, ...)
-# A tick ALWAYS lands in the same window, so re-splits are deterministic/stable
-# (unlike the byte split). Every window has at least _p1; a window over --max-mb
-# (default 95) is sub-split into _p2, _p3, ... so it stays under GitHub's 100 MiB.
-# Pass the FULL base path; committed _pN (size) parts are reassembled first, then
-# re-split by day (a one-time migration). Consumers are unchanged (the tick globs
-# are _*_ELEV8.csv; load_ticks re-sorts by timestamp).
+# ===== RE-SPLIT an already-exported file into day windows (no MT5 needed) =====
+# The one-time migration from a legacy _pN size archive, or to re-pack a full
+# working file you grew with the TIP above. Pass the FULL base path; committed
+# parts (BOTH _D<start>_pN date parts and legacy _pN size parts) are reassembled
+# first, then re-split by day.
 # python tools/split_ticks_by_days.py `
 #   --input data/ticks/XAUUSD_TICK_202606_ELEV8.csv `
 #   --days 3 --max-mb 95 --remove-source
-#
-# To make a FRESH sync produce date windows directly, swap --split-mb 95 for
-# --split-days 3 on the export_ticks commands above (they are mutually exclusive).
 
-# ===== RE-SPLIT / RE-JOIN an already-exported file (no MT5 needed) =====
-# Split a full file into GitHub-safe parts after the fact (if you exported WITHOUT
-# --split-mb, or hand-built a big data/ticks file):
+# ===== LEGACY size split (escape hatch -- NOT the committed format) =====
+# Cut by accumulated bytes instead of by calendar (parts: _p1, _p2, ... with no
+# _D). The committed archive is day-window; use this ONLY for a throwaway/local
+# pack. backtest_hybrid --sync-ticks falls back to it only with
+# --ticks-split-days 0, and export_ticks with --split-mb instead of --split-days.
 # python tools/split_ticks_by_size.py `
 #   --input data/ticks/XAUUSD_TICK_202606_ELEV8.csv `
 #   --max-mb 95 `
@@ -141,6 +140,10 @@ python tools/export_ticks.py `
 #     Select-Object Name, @{N='MiB';E={[math]::Round($_.Length/1MB,1)}} | Sort-Object Name
 # Flag any part >= 100 MiB (must be 0):
 #   Get-ChildItem data\ticks\XAUUSD_TICK_*_ELEV8.csv | Where-Object { $_.Length -ge 100MB }
+# Flag any LEGACY (non-day-window) tick file (must be 0 -- the agreed format is
+# _D<start>_pN; pytest tests/test_tick_archive_format.py enforces this):
+#   Get-ChildItem data\ticks\XAUUSD_TICK_*_ELEV8.csv |
+#     Where-Object { $_.Name -notmatch '_D\d+_p\d+_ELEV8\.csv$' }
 
 # ===== Confirm MT5 connection / symbol / server clock first (optional) =====
 # python -m trading.engine.cli mt5-info --mt5-symbol XAUUSD
