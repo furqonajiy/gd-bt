@@ -49,8 +49,10 @@ back, so do them once yourself in the terminal before launching.)
 | `toc5` | `candidate_TOC5_trailing_tick.txt` | C160 feed + trailing (tag TOC5) — real-DD tick sweep #1 (net $115.6k / DD 23.5%); **research — demo-validate** |
 | `tc18` | `candidate_TC18_trailing_tick.txt` | TOC5 with the aggressive-sweep levers (slm1.8 / trail-after-TP2; tag TC18) — net $166.8k / DD 23.65% (+44% net at flat DD); **research — demo-validate vs TOC5** |
 | `vt05` | `candidate_VT05_victor_trailing.txt` | V116 Victor feed + trailing (to0.5/tc0.5/trail-TP1, slm1.5, ad1; tag VT05) — VIC sweep #1 under DD≤40%: ~2× net/edge but ~2× DD and OOS collapses ($526→$57); **research — demo-validate vs V116** |
+| `vct5` | `candidate_VCT5_victor_trailing.txt` | **Victor Trail 0.5** (tag VCT5) — VT05 geometry promoted to a **deployed** identity at **MAX risk 5%**; #1 VIC cell of the tick-calibrated Jan sweep (est edge $14k / OOS $977 / DD 23.5% **at 1%** → ~5× DD at 5%). Aggressive, NOT gate-compliant by design |
+| `t160` | `candidate_T160_trailing_tick.txt` | **Trailing SLM 1.6** (tag T160) — C160 self-scalper feed + trailing (slm1.6/to0.5/tc0.5/mh240/ad0) at risk 1%; #1 cell of the tick-calibrated Jan sweep (est edge $93.9k / OOS $5.4k / DD 44.4%). **Deployed, high-DD** (beats TC18 on edge+OOS+DD) |
 | `resync` | `resync_m1_from_2020.txt` | M1-archive resync utility |
-| `resync-ticks`, `ticks` | `resync_ticks.txt` | tick-archive export/resync utility (MT5 → data/ticks, ≤95 MiB GitHub-safe parts) |
+| `resync-ticks`, `ticks` | `resync_ticks.txt` | tick-archive export/resync utility (MT5 → data/ticks, day-window `_D<start>_pN` parts) |
 
 (Superseded snapshots — the old `champion_victor` VIC, `E640`, `rr08x15x30`,
 `candidate_R4_SL19_tick`, and the `trailing_open_R*` / `trailing_small_0101`

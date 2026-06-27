@@ -49,6 +49,8 @@ ALIASES = {
     "victor": "candidate_VIC_C116", "vic": "candidate_VIC_C116",
     "v116": "candidate_VIC_C116", "vic116": "candidate_VIC_C116",
     "sqz6": "champion_R4_SQZ6", "c160": "candidate_R4_C160",
+    "vct5": "candidate_VCT5_victor_trailing",
+    "t160": "candidate_T160_trailing_tick",
     "resync": "resync_m1_from_2020",
     "resync-ticks": "resync_ticks", "ticks": "resync_ticks",
 }
