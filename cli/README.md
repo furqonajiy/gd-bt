@@ -66,6 +66,10 @@ elsewhere — auto-routed, one combined report with a **Data Source** column. Th
 pre-tick eras (sections 7–9: 2025 / 2024 / 2021-2023) stay on `backtest_explicit`
 (no tick overlap, so identical numbers without loading the tick archive). With no
 ticks in range the hybrid output is byte-identical to `backtest_explicit`.
+These sections run with **`--sync-ticks false`** — they read the committed tick
+archive and do NOT auto-refresh it; sync ticks deliberately via the
+`resync-ticks` snapshot when the market is open (the in-backtest sync could
+collide with another process holding the parts on Windows).
 
 The launcher reconstructs each command byte-for-byte from the `.txt` (it only
 joins the PowerShell `` ` `` line-continuations), so it never diverges from the

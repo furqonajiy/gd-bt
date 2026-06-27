@@ -46,13 +46,16 @@
 #
 # Dates are CHART-time GMT+3; --end-date is EXCLUSIVE.
 #
-# NOTE: you usually do NOT need to run this by hand. The backtest sections (5 & 6)
-# of the strategy snapshots run tools/backtest_hybrid.py with --sync-charts true
-# --sync-ticks true, which BEFORE every backtest refreshes BOTH the M1 archive AND
-# the tick archive -- the tick refresh is an APPEND (export_ticks --merge,
-# re-split into --ticks-split-days day windows, default 3), exactly what this
-# snapshot does. Run this standalone only to (re)build the tick archive outside a
-# backtest, or for a custom date range.
+# NOTE: the tick archive is refreshed by THIS snapshot (run it deliberately when
+# the market is open). The strategy snapshots' backtest sections (5 & 6) run with
+# --sync-ticks false -- they read the committed archive and do NOT auto-sync,
+# because the in-backtest tick sync could collide with another process holding the
+# parts (Windows WinError 32) and is unnecessary on a closed-market weekend.
+# When --sync-ticks IS used, the refresh is an incremental APPEND (export_ticks
+# --merge --split-days, default 3): it resumes from the last tick and re-splits
+# ONLY the affected day window(s) -- 0 new ticks is a true no-op (no reassemble),
+# so it is safe to leave on if you prefer. Run this standalone to (re)build the
+# tick archive, or for a custom date range.
 #
 # ===== RESYNC TICKS (run from the repo root) =====
 python tools/export_ticks.py `

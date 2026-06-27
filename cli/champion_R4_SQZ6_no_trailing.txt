@@ -132,7 +132,7 @@ python tools/backtest_hybrid.py `
   --signals signals/sqz6.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
   --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
-  --sync-ticks true `
+  --sync-ticks false `
   --max-drawdown-limit-pct 50 `
   --progress-interval-seconds 30 `
   --sync-charts true `
@@ -181,7 +181,7 @@ python tools/backtest_hybrid.py `
   --signals signals/sqz6.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
   --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
-  --sync-ticks true `
+  --sync-ticks false `
   --max-drawdown-limit-pct 50 `
   --progress-interval-seconds 30 `
   --sync-charts true `

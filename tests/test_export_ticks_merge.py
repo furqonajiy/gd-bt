@@ -184,6 +184,82 @@ def test_merge_append_noop_leaves_all_parts_untouched(tmp_path):
     assert not (Path(tmp_path) / "XAUUSD_TICK_202606_ELEV8.csv").exists()
 
 
+import calendar
+
+
+def _msc_on(day: int, extra_ms: int = 0) -> int:
+    """GMT+3-server (no shift) millisecond epoch at noon on 2026-06-<day>."""
+    return calendar.timegm(datetime(2026, 6, day, 12, 0, 0).timetuple()) * 1000 + extra_ms
+
+
+def _seed_day_split(tmp_path):
+    """Seed a committed DAY-WINDOW June archive: ticks on Jun 2 (_D1), Jun 5 (_D4)
+    and Jun 8 (_D7), split by 3-day windows, full file removed. Returns (parts,
+    last_msc)."""
+    import sys as _sys
+    if str(ROOT / "tools") not in _sys.path:
+        _sys.path.insert(0, str(ROOT / "tools"))
+    from split_ticks_by_days import split_file_by_days
+    msc = [_msc_on(2), _msc_on(5), _msc_on(8, 100), _msc_on(8, 200)]
+    full = Path(tmp_path) / "XAUUSD_TICK_202606_ELEV8.csv"
+    rows = export_ticks._tick_rows(_ticks([(m, 4441.0, 4441.3) for m in msc]), 3)
+    export_ticks._write_rows(full, rows, write_header=True)
+    parts = split_file_by_days(full, days=3, remove_source=True)
+    assert not full.exists()
+    return parts, msc[-1]
+
+
+def _win_map(tmp_path):
+    from split_ticks_by_days import _DAY_PART_RE
+    out: dict[int, list] = {}
+    for p in Path(tmp_path).glob("XAUUSD_TICK_202606_D*_p*_ELEV8.csv"):
+        out.setdefault(int(_DAY_PART_RE.search(p.name).group(1)), []).append(p)
+    return out
+
+
+def test_merge_append_split_days_only_touches_affected_windows(tmp_path):
+    parts, last = _seed_day_split(tmp_path)
+    before = _win_map(tmp_path)
+    d1_before = before[1][0].read_bytes()
+    d4_before = before[4][0].read_bytes()
+
+    master = _ticks([
+        (last, 4441.0, 4441.3),            # boundary dup -> dropped (strict >)
+        (_msc_on(9, 50), 4441.2, 4441.5),  # window _D7 (days 7-9): appended to tail
+        (_msc_on(11, 50), 4441.4, 4441.7), # window _D10 (days 10-12): brand-new window
+    ])
+    conn = _FakeConn(_FakeMt5(master))
+    appended = export_ticks._merge_append_split_days(
+        conn, _args(tmp_path, merge=True, split_days=3),
+        datetime(2026, 6, 1), datetime(2026, 7, 1))
+    assert appended == 2
+
+    # No stray full file, earlier windows byte-identical, new window created.
+    assert not (Path(tmp_path) / "XAUUSD_TICK_202606_ELEV8.csv").exists()
+    after = _win_map(tmp_path)
+    assert after[1][0].read_bytes() == d1_before
+    assert after[4][0].read_bytes() == d4_before
+    assert 10 in after                                  # new _D10 window
+    # Total data rows = 4 seeded + 2 appended.
+    total = sum(sum(1 for ln in p.read_text().splitlines()[1:] if ln.strip())
+                for ps in after.values() for p in ps)
+    assert total == 6
+
+
+def test_merge_append_split_days_noop_leaves_windows_untouched(tmp_path):
+    parts, last = _seed_day_split(tmp_path)
+    before = {p.name: p.read_bytes() for p in parts}
+    conn = _FakeConn(_FakeMt5(_ticks([(last, 4441.0, 4441.3)])))  # only the dup
+    appended = export_ticks._merge_append_split_days(
+        conn, _args(tmp_path, merge=True, split_days=3),
+        datetime(2026, 6, 1), datetime(2026, 7, 1))
+    assert appended == 0
+    after = {p.name: p.read_bytes()
+             for p in Path(tmp_path).glob("XAUUSD_TICK_202606_D*_p*_ELEV8.csv")}
+    assert after == before                               # every window untouched
+    assert not (Path(tmp_path) / "XAUUSD_TICK_202606_ELEV8.csv").exists()
+
+
 def test_header_only_file_is_removed(tmp_path):
     path = Path(tmp_path) / "XAUUSD_TICK_202604_ELEV8.csv"
     path.write_text(export_ticks.HEADER_LINE + "\n", encoding="utf-8")
