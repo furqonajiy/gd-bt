@@ -48,14 +48,17 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # Reuse the size splitter's reassembly (join_parts is naming-agnostic), its
-# within-window size sub-split (split_file -> _pN), and its legacy _pN finder
-# (parts_for) so the FIRST migration from a size archive can rebuild the full
-# month; never re-derive the join or the size cut.
-from tools.split_ticks_by_size import join_parts, parts_for, split_file  # noqa: E402
+# within-window size sub-split (split_file -> _pN), its legacy _pN finder
+# (parts_for) and its source-tag splitter (_split_tag) so the FIRST migration from
+# a size archive can rebuild the full month AND a non-ELEV8 archive (e.g. _DEMO)
+# splits/joins with the same machinery; never re-derive the join or the size cut.
+from tools.split_ticks_by_size import _split_tag, join_parts, parts_for, split_file  # noqa: E402
 
 _MIB = 1024 * 1024
-# _D<start>_p<sub>: a date window (start day-of-month) carrying a size sub-index.
-_DAY_PART_RE = re.compile(r"_D(\d+)_p(\d+)_ELEV8\.csv$")
+# _D<start>_p<sub>_<TAG>: a date window (start day-of-month) carrying a size
+# sub-index, for ANY source tag (ELEV8, DEMO, ...) -- group(1)/group(2) are the
+# start day and the sub-index.
+_DAY_PART_RE = re.compile(r"_D(\d+)_p(\d+)_[A-Za-z0-9]+\.csv$")
 
 
 def _window_start_day(day: int, days: int) -> int:
@@ -65,24 +68,23 @@ def _window_start_day(day: int, days: int) -> int:
 
 
 def _window_base_path(base: Path, start_day: int) -> Path:
-    """The per-window FULL temp path (no _pN yet): insert _D{start_day} before
-    the _ELEV8 tag. split_file then size-splits this into _D{start_day}_pN."""
-    name = base.name
-    if name.endswith("_ELEV8.csv"):
-        stem = name[: -len("_ELEV8.csv")]
-        return base.with_name(f"{stem}_D{start_day}_ELEV8.csv")
+    """The per-window FULL temp path (no _pN yet): insert _D{start_day} before the
+    source tag (_ELEV8, _DEMO, ...). split_file then size-splits this into
+    _D{start_day}_pN_<TAG>."""
+    stem, tag = _split_tag(base.name)
+    if tag is not None:
+        return base.with_name(f"{stem}_D{start_day}_{tag}.csv")
     return base.with_name(f"{base.stem}_D{start_day}.csv")
 
 
 def day_parts_for(base: Path) -> list[Path]:
-    """The _D<start>_p<sub> date parts of ``base`` (..._YYYYMM_ELEV8.csv), ordered
+    """The _D<start>_p<sub> date parts of ``base`` (..._YYYYMM_<TAG>.csv), ordered
     by (start day, sub-index) -- numeric, not lexicographic (D31 after D4; p10
-    after p2)."""
-    name = base.name
-    if not name.endswith("_ELEV8.csv"):
+    after p2). Works for any source tag (ELEV8, DEMO, ...)."""
+    stem, tag = _split_tag(base.name)
+    if tag is None:
         return []
-    stem = name[: -len("_ELEV8.csv")]
-    hits = [p for p in base.parent.glob(f"{stem}_D*_p*_ELEV8.csv") if _DAY_PART_RE.search(p.name)]
+    hits = [p for p in base.parent.glob(f"{stem}_D*_p*_{tag}.csv") if _DAY_PART_RE.search(p.name)]
     return sorted(hits, key=lambda p: (int(_DAY_PART_RE.search(p.name).group(1)),
                                        int(_DAY_PART_RE.search(p.name).group(2))))
 
@@ -214,8 +216,10 @@ def _expand_inputs(patterns: list[str]) -> list[Path]:
         for c in (hits if hits else [pat]):
             cp = Path(c)
             name = cp.name
-            # ..._YYYYMM_{D<start>_pN | pN}_ELEV8.csv -> ..._YYYYMM_ELEV8.csv (base)
-            base_name = re.sub(r"_(?:D\d+_p\d+|p\d+)_ELEV8\.csv$", "_ELEV8.csv", name)
+            # ..._YYYYMM_{D<start>_pN | pN}_<TAG>.csv -> ..._YYYYMM_<TAG>.csv (base),
+            # preserving the source tag (ELEV8, DEMO, ...).
+            base_name = re.sub(r"_(?:D\d+_p\d+|p\d+)_([A-Za-z][A-Za-z0-9]*)\.csv$",
+                               r"_\1.csv", name)
             cp = cp.with_name(base_name)
             if str(cp) not in seen:
                 seen.add(str(cp))

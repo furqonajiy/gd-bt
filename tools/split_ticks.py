@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """Split monthly tick files into half-month parts, fetching missing months first.
 
+DEPRECATED / DO NOT USE FOR THE COMMITTED ARCHIVE. This produces the OLD
+half-month ``_H1``/``_H2`` naming, which is NOT the agreed on-disk format. The
+committed tick archive is the **day-window** ``_D<start>_pN`` format -- use
+``tools/split_ticks_by_days.py`` (or ``export_ticks --split-days`` /
+``backtest_hybrid --sync-ticks``) instead. ``tests/test_tick_archive_format.py``
+fails CI on any ``_H1``/``_H2`` (or legacy ``_pN``) tick file committed under
+``data/ticks/``. This module is retained only for historical reference.
+
 Each month's full tick file (the one tools/export_ticks.py writes) is split into
 two by-date parts -- H1 = days 1-15, H2 = days 16-end -- so a ~600 MB month becomes
 two roughly-300 MB files. A month with no full file yet is fetched from MT5 first

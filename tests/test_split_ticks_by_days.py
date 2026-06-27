@@ -106,6 +106,30 @@ def test_round_trip_join_matches_original(tmp_path):
     assert rejoined.read_text() == original  # byte-identical reassembly
 
 
+def test_day_split_generalizes_to_demo_source_tag(tmp_path):
+    """A non-ELEV8 source tag (e.g. DEMO) splits/discovers/reassembles with the
+    same day-window machinery -- so the DEMO tick lane emits _D<start>_pN_DEMO,
+    not legacy _pN."""
+    full = tmp_path / "XAUUSD_TICK_202606_DEMO.csv"
+    _write_month(full, range(1, 11))  # days 1..10
+    original = full.read_text()
+
+    parts = split_file_by_days(full, days=3, remove_source=True)
+    names = [p.name for p in parts]
+    assert names == [
+        "XAUUSD_TICK_202606_D1_p1_DEMO.csv",
+        "XAUUSD_TICK_202606_D4_p1_DEMO.csv",
+        "XAUUSD_TICK_202606_D7_p1_DEMO.csv",
+        "XAUUSD_TICK_202606_D10_p1_DEMO.csv",
+    ]
+    # Discovery + byte-identical reassembly work for the DEMO tag too.
+    found = day_parts_for(full)
+    assert [p.name for p in found] == names
+    rejoined = tmp_path / "XAUUSD_TICK_202606_DEMO.csv"
+    join_parts(found, rejoined)
+    assert rejoined.read_text() == original
+
+
 def test_migrates_from_legacy_pN_size_parts(tmp_path):
     """Re-splitting a committed _pN SIZE archive yields _D<start> date parts and
     removes the stale _pN parts (the real ELEV8 migration)."""

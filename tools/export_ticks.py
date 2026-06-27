@@ -282,15 +282,16 @@ def _split_exported(output_dir: str, symbol: str, months: list[tuple[int, int]],
 
 
 def _split_exported_days(output_dir: str, symbol: str, months: list[tuple[int, int]],
-                         days: int, max_mb: float = 95.0) -> int:
+                         days: int, max_mb: float = 95.0, source: str = "ELEV8") -> int:
     """Split each exported month's file into fixed `days`-day calendar windows
     (_D<start>_pN naming, sub-split at max_mb so each part is GitHub-safe),
     removing the full file. Reuses split_ticks_by_days so the date-window cutting
-    is shared. Returns the number of parts written."""
+    is shared; honors the `source` tag so a non-ELEV8 archive (e.g. DEMO) splits
+    into _D<start>_pN_<source> parts too. Returns the number of parts written."""
     from tools.split_ticks_by_days import split_file_by_days
     written = 0
     for year, month in months:
-        src = Path(output_dir) / f"{symbol}_TICK_{year:04d}{month:02d}_ELEV8.csv"
+        src = Path(output_dir) / f"{symbol}_TICK_{year:04d}{month:02d}_{source}.csv"
         if src.exists():
             written += len(split_file_by_days(src, days, max_mb=max_mb, remove_source=True))
     return written
@@ -456,7 +457,8 @@ def main(argv: list[str] | None = None) -> int:
             parts = _split_exported(args.output_dir, args.symbol, months_to_split, args.split_mb, getattr(args, "source", "ELEV8"))
             print(f"[split] wrote {parts} size-capped part(s) (<= {args.split_mb:g} MiB each)")
         if args.split_days and months_to_split:
-            parts = _split_exported_days(args.output_dir, args.symbol, months_to_split, args.split_days)
+            parts = _split_exported_days(args.output_dir, args.symbol, months_to_split,
+                                         args.split_days, source=getattr(args, "source", "ELEV8"))
             print(f"[split] wrote {parts} date-window part(s) ({args.split_days} day(s) each)")
         return 0
     finally:

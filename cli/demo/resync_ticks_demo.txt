@@ -1,17 +1,19 @@
 # =========================================================================
 # RESYNC XAUUSD TICK HISTORY FROM THE *DEMO* BROKER (MT5 -> data/demo/ticks/)
-# GitHub-safe <=95 MiB parts. Windows-only: MetaTrader5 + a RUNNING MT5 terminal
+# GitHub-safe DAY-WINDOW parts. Windows-only: MetaTrader5 + a RUNNING MT5 terminal
 # logged into the DEMO account. PowerShell backtick (`) continuation.
 # =========================================================================
 #
 # WHY a separate demo tick archive:
 #   Trailing-open/close fills are TICK-driven, and the demo broker's ticks differ
 #   from the live ELEV8 ticks -- so a demo strategy (e.g. TR05) must be tick-
-#   backtested on DEMO ticks. This writes a SEPARATE, self-describing archive:
-#       data/demo/ticks/XAUUSD_TICK_YYYYMM_pN_DEMO.csv
+#   backtested on DEMO ticks. This writes a SEPARATE, self-describing archive in
+#   the AGREED day-window format:
+#       data/demo/ticks/XAUUSD_TICK_YYYYMM_D<start>_pN_DEMO.csv
+#       (_D1_p1 = days 1-3, _D4_p1 = 4-6, ...; a window over 95 MiB adds _p2, _p3)
 #   The `_DEMO` source tag (--source) and the data/demo/ticks dir keep it fully
-#   isolated from the live `_ELEV8` tick archive; the _pN split machinery is the
-#   same (generalized to any source tag). Times are GMT+3 chart clock.
+#   isolated from the live `_ELEV8` tick archive; the day-window split machinery is
+#   the same (generalized to any source tag). Times are GMT+3 chart clock.
 #
 # RUN THIS WHILE THE MT5 TERMINAL IS LOGGED INTO THE DEMO ACCOUNT.
 # Set --start-date to the recent window the demo broker actually keeps (tick
@@ -26,14 +28,14 @@ python tools/export_ticks.py `
   --output-dir data/demo/ticks `
   --source DEMO `
   --mt5-server-offset 3 `
-  --split-mb 95 `
+  --split-days 3 `
   --progress
 
-# ----- Incremental append later (only NEW ticks, re-splits just the tail) -----
+# ----- Incremental append later (only NEW ticks; reassembles + re-splits by day) -----
 # python tools/export_ticks.py `
 #   --symbol XAUUSD --start-date 2026-05-01 --end-date 2026-06-27 `
 #   --output-dir data/demo/ticks --source DEMO --mt5-server-offset 3 `
-#   --merge --split-mb 95 --progress
+#   --merge --split-days 3 --progress
 #
 # ----- If MT5 is NOT already running/logged in, add connection details -----
 # (--mt5-path / --mt5-login / --mt5-password / --mt5-server), as in the live
