@@ -1,0 +1,529 @@
+name: top20-extended-jan-m1
+
+# Run the VIC top-20 and TC18 top-20 trailing cells over TWO windows using M1-only
+# (no ticks — pure OHLC, so Jan data is available):
+#
+#   1. Jan-Jun 2026 (full R4 period since January, M1 only)
+#      → net+bonus, edge, OOS — see how trailing holds over a longer R4 window
+#
+#   2. May-Jun 2026 (M1 only)
+#      → same 3 metrics — direct M1 vs TICK comparison (TICK results already
+#        in sweep_reports/tick_trailing_{vic_aggressive,tc18_retune}/leaderboard.csv)
+#
+# OOS definition is the same in all runs: fixed-lot no-bonus tail from oos_start
+# (default 2026-06-16), identical to the original TICK sweeps.
+#
+# Outputs: sweep_reports/top20_extended/{vic,tc18}_comparison.csv
+#   Columns: orig_rank | params | jan_{net,dd,edge} | oos_m1 | may_m1_{net,dd,edge}
+#            | may_tick_{net,dd,edge,oos}  (joined from committed leaderboards)
+
+on:
+  workflow_dispatch:
+    inputs:
+      jan_start:
+        description: "Full R4 start"
+        default: "2026-01-01"
+      may_start:
+        description: "May window start (M1 vs TICK comparison)"
+        default: "2026-05-01"
+      oos_start:
+        description: "OOS tail start (same definition as original sweeps)"
+        default: "2026-06-16"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: top20-extended-jan-m1
+  cancel-in-progress: false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VIC BASELINE  (V116 no-trailing — Jan + May, M1 only)
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+  vic_baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 1 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: V116 baseline (no trailing) — Jan + May M1
+        run: |
+          set -o pipefail
+          mkdir -p out raw
+          STRAT="--entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.5 \
+            --activation-delay 2 --pending-expiry 180 --max-hold 180 \
+            --sl-multiplier 1.7 --final-target TP2 --runner-after-tp3 false \
+            --lock-after-tp1 true --lock-after-tp2 true \
+            --tp1-lock-delay-minutes 12 --tp2-lock-delay-minutes 2 \
+            --profit-lock-mode tp_levels --bep-trigger-distance 3.0 --tp1-lock-fraction 0.5 \
+            --tp2-lock-target TP1 --tp3-lock-target TP2 \
+            --trailing-open-distance 0 --trailing-close-distance 0 --trailing-close-after-stage 0 \
+            --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0"
+          COMMON="--signals victor_signals.txt --sync-charts false \
+            --watch-seconds 3 --max-drawdown-limit-pct 100 \
+            --progress-interval-seconds 0 --minimum-lot 0.01 --lot-step 0.01"
+          CJAN="data/XAUUSD_M1_202601_ELEV8.csv data/XAUUSD_M1_202602_ELEV8.csv \
+            data/XAUUSD_M1_202603_ELEV8.csv data/XAUUSD_M1_202604_ELEV8.csv \
+            data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          CMAY="data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          python tools/backtest_hybrid.py $COMMON --charts $CJAN $STRAT \
+            --sizing-mode risk --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 3.0 --start-date "${JAN}" \
+            --output-dir reports/v116b_jnet --score-json raw/jnet.json
+          python tools/backtest_hybrid.py $COMMON --charts $CJAN $STRAT \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 0 --start-date "${JAN}" \
+            --output-dir reports/v116b_jedge --score-json raw/jedge.json
+          python tools/backtest_hybrid.py $COMMON --charts $CJAN $STRAT \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 0 --start-date "${OOS}" \
+            --output-dir reports/v116b_oos --score-json raw/oos.json
+          python tools/backtest_hybrid.py $COMMON --charts $CMAY $STRAT \
+            --sizing-mode risk --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 3.0 --start-date "${MAY}" \
+            --output-dir reports/v116b_mnet --score-json raw/mnet.json
+          python tools/backtest_hybrid.py $COMMON --charts $CMAY $STRAT \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 0 --start-date "${MAY}" \
+            --output-dir reports/v116b_medge --score-json raw/medge.json
+          python - <<'PY'
+          import json
+          jn=json.load(open("raw/jnet.json")); je=json.load(open("raw/jedge.json"))
+          oo=json.load(open("raw/oos.json"));  mn=json.load(open("raw/mnet.json"))
+          me=json.load(open("raw/medge.json"))
+          d={"cell":"v116_base","orig_rank":0,
+             "trailing_open":0,"trailing_close":0,"trail_after_stage":0,
+             "sl_multiplier":1.7,"final_target":"TP2","activation_delay":2,
+             "jan_net":round(jn["net_profit"],2),"jan_dd":round(jn["max_drawdown_pct"],2),
+             "jan_edge":round(je["net_profit"],2),"jan_signals":jn["signals_included"],
+             "oos_m1":round(oo["net_profit"],2),
+             "may_m1_net":round(mn["net_profit"],2),"may_m1_dd":round(mn["max_drawdown_pct"],2),
+             "may_m1_edge":round(me["net_profit"],2),"may_signals":mn["signals_included"]}
+          open("out/v116_base.json","w").write(json.dumps(d)); print(d)
+          PY
+        env:
+          JAN: ${{ github.event.inputs.jan_start }}
+          MAY: ${{ github.event.inputs.may_start }}
+          OOS: ${{ github.event.inputs.oos_start }}
+      - uses: actions/upload-artifact@v4
+        with: { name: "ext-vic-v116base", path: "out/*.json", if-no-files-found: error }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VIC TOP-20 CELLS
+# ─────────────────────────────────────────────────────────────────────────────
+  vic_cell:
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        include:
+          - {rank: "01", to: "0.5", tc: "0.5",  stage: "1", slm: "1.5", ft: "TP2", ad: "1"}
+          - {rank: "02", to: "0.5", tc: "0.5",  stage: "1", slm: "1.5", ft: "TP2", ad: "0"}
+          - {rank: "03", to: "0.5", tc: "0.5",  stage: "1", slm: "1.5", ft: "TP2", ad: "2"}
+          - {rank: "04", to: "0.5", tc: "1.5",  stage: "1", slm: "1.5", ft: "TP2", ad: "1"}
+          - {rank: "05", to: "0.5", tc: "1.5",  stage: "1", slm: "1.5", ft: "TP2", ad: "0"}
+          - {rank: "06", to: "0.5", tc: "1.5",  stage: "1", slm: "1.5", ft: "TP2", ad: "2"}
+          - {rank: "07", to: "0.5", tc: "0.5",  stage: "1", slm: "1.5", ft: "TP3", ad: "1"}
+          - {rank: "08", to: "0.5", tc: "0.5",  stage: "1", slm: "1.5", ft: "TP3", ad: "0"}
+          - {rank: "09", to: "0.5", tc: "0.5",  stage: "2", slm: "1.5", ft: "TP3", ad: "1"}
+          - {rank: "10", to: "0.5", tc: "0.5",  stage: "1", slm: "1.5", ft: "TP3", ad: "2"}
+          - {rank: "11", to: "0.5", tc: "0.5",  stage: "2", slm: "1.5", ft: "TP3", ad: "0"}
+          - {rank: "12", to: "0.5", tc: "0.5",  stage: "2", slm: "1.5", ft: "TP2", ad: "1"}
+          - {rank: "13", to: "0.5", tc: "1.5",  stage: "2", slm: "1.5", ft: "TP2", ad: "1"}
+          - {rank: "14", to: "0.5", tc: "1.5",  stage: "2", slm: "1.5", ft: "TP2", ad: "0"}
+          - {rank: "15", to: "0.5", tc: "0.5",  stage: "2", slm: "1.5", ft: "TP2", ad: "0"}
+          - {rank: "16", to: "0.5", tc: "0.5",  stage: "2", slm: "1.5", ft: "TP3", ad: "2"}
+          - {rank: "17", to: "0.5", tc: "1.5",  stage: "2", slm: "1.5", ft: "TP3", ad: "1"}
+          - {rank: "18", to: "0.5", tc: "1.5",  stage: "2", slm: "1.5", ft: "TP3", ad: "0"}
+          - {rank: "19", to: "0.5", tc: "1.5",  stage: "1", slm: "1.5", ft: "TP3", ad: "1"}
+          - {rank: "20", to: "0.5", tc: "0.5",  stage: "2", slm: "1.5", ft: "TP2", ad: "2"}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 1 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: "VIC r${{ matrix.rank }} to=${{ matrix.to }} tc=${{ matrix.tc }} s=${{ matrix.stage }} slm=${{ matrix.slm }} ${{ matrix.ft }} ad=${{ matrix.ad }}"
+        run: |
+          set -o pipefail
+          CELL="vicext_r${rank}_to${to//./}_tc${tc//./}_s${stage}_slm${slm//./}_${ft}_ad${ad}"
+          mkdir -p out raw
+          STRAT="--entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.5 \
+            --activation-delay ${ad} --pending-expiry 180 --max-hold 180 \
+            --sl-multiplier ${slm} --final-target ${ft} --runner-after-tp3 false \
+            --lock-after-tp1 true --lock-after-tp2 true \
+            --tp1-lock-delay-minutes 12 --tp2-lock-delay-minutes 2 \
+            --profit-lock-mode tp_levels --bep-trigger-distance 3.0 --tp1-lock-fraction 0.5 \
+            --tp2-lock-target TP1 --tp3-lock-target TP2 \
+            --trailing-open-distance ${to} --trailing-close-distance ${tc} \
+            --trailing-close-after-stage ${stage} \
+            --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0"
+          COMMON="--signals victor_signals.txt --sync-charts false \
+            --watch-seconds 3 --max-drawdown-limit-pct 100 \
+            --progress-interval-seconds 0 --minimum-lot 0.01 --lot-step 0.01"
+          CJAN="data/XAUUSD_M1_202601_ELEV8.csv data/XAUUSD_M1_202602_ELEV8.csv \
+            data/XAUUSD_M1_202603_ELEV8.csv data/XAUUSD_M1_202604_ELEV8.csv \
+            data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          CMAY="data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          python tools/backtest_hybrid.py $COMMON --charts $CJAN $STRAT \
+            --sizing-mode risk --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 3.0 --start-date "${JAN}" \
+            --output-dir "reports/${CELL}_jnet" --score-json "raw/jnet.json"
+          python tools/backtest_hybrid.py $COMMON --charts $CJAN $STRAT \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 0 --start-date "${JAN}" \
+            --output-dir "reports/${CELL}_jedge" --score-json "raw/jedge.json"
+          python tools/backtest_hybrid.py $COMMON --charts $CJAN $STRAT \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 0 --start-date "${OOS}" \
+            --output-dir "reports/${CELL}_oos" --score-json "raw/oos.json"
+          python tools/backtest_hybrid.py $COMMON --charts $CMAY $STRAT \
+            --sizing-mode risk --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 3.0 --start-date "${MAY}" \
+            --output-dir "reports/${CELL}_mnet" --score-json "raw/mnet.json"
+          python tools/backtest_hybrid.py $COMMON --charts $CMAY $STRAT \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 0 --start-date "${MAY}" \
+            --output-dir "reports/${CELL}_medge" --score-json "raw/medge.json"
+          python - "$CELL" "$rank" "$to" "$tc" "$stage" "$slm" "$ft" "$ad" <<'PY'
+          import json, sys
+          cell,rank,to,tc,stage,slm,ft,ad = sys.argv[1:9]
+          jn=json.load(open("raw/jnet.json")); je=json.load(open("raw/jedge.json"))
+          oo=json.load(open("raw/oos.json"));  mn=json.load(open("raw/mnet.json"))
+          me=json.load(open("raw/medge.json"))
+          d={"cell":cell,"orig_rank":int(rank),
+             "trailing_open":float(to),"trailing_close":float(tc),
+             "trail_after_stage":int(stage),"sl_multiplier":float(slm),
+             "final_target":ft,"activation_delay":int(ad),
+             "jan_net":round(jn["net_profit"],2),"jan_dd":round(jn["max_drawdown_pct"],2),
+             "jan_edge":round(je["net_profit"],2),"jan_signals":jn["signals_included"],
+             "oos_m1":round(oo["net_profit"],2),
+             "may_m1_net":round(mn["net_profit"],2),"may_m1_dd":round(mn["max_drawdown_pct"],2),
+             "may_m1_edge":round(me["net_profit"],2),"may_signals":mn["signals_included"]}
+          open(f"out/{cell}.json","w").write(json.dumps(d)); print(d)
+          PY
+        env:
+          JAN: ${{ github.event.inputs.jan_start }}
+          MAY: ${{ github.event.inputs.may_start }}
+          OOS: ${{ github.event.inputs.oos_start }}
+          rank: ${{ matrix.rank }}
+          to: ${{ matrix.to }}
+          tc: ${{ matrix.tc }}
+          stage: ${{ matrix.stage }}
+          slm: ${{ matrix.slm }}
+          ft: ${{ matrix.ft }}
+          ad: ${{ matrix.ad }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "ext-vic-r${{ matrix.rank }}"
+          path: "out/*.json"
+          if-no-files-found: error
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TC18 BASELINE  (deployed: slm1.8/to0.5/tc0.5/mh300/ad2 — Jan + May, M1)
+# ─────────────────────────────────────────────────────────────────────────────
+  tc18_baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 1 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate C160 feed (Jan-Jun 2026)
+        run: |
+          python tools/generate_scalper_signals.py \
+            --charts data/XAUUSD_M1_202601_ELEV8.csv data/XAUUSD_M1_202602_ELEV8.csv \
+              data/XAUUSD_M1_202603_ELEV8.csv data/XAUUSD_M1_202604_ELEV8.csv \
+              data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --output feed.txt --start "${JAN}" \
+            --session-start 0 --session-end 0 --signal-tz 7 \
+            --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 \
+            --rr1 1.2 --rr2 2.5 --rr3 5
+        env:
+          JAN: ${{ github.event.inputs.jan_start }}
+      - name: TC18 baseline — Jan + May M1
+        run: |
+          set -o pipefail
+          mkdir -p out raw
+          STRAT="--entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.7 --shared-sl false \
+            --activation-delay 2 --pending-expiry 180 --max-hold 300 \
+            --sl-multiplier 1.8 --final-target TP3 --runner-after-tp3 false \
+            --lock-after-tp1 true --lock-after-tp2 true \
+            --tp1-lock-delay-minutes 24 --tp2-lock-delay-minutes 24 \
+            --profit-lock-mode tp_levels --bep-trigger-distance 3.0 --tp1-lock-fraction 0.75 \
+            --tp2-lock-target TP1 --tp3-lock-target TP2 \
+            --trailing-open-distance 0.5 --trailing-close-distance 0.5 \
+            --trailing-close-after-stage 2 \
+            --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0"
+          COMMON="--signals feed.txt --sync-charts false \
+            --watch-seconds 3 --max-drawdown-limit-pct 100 \
+            --progress-interval-seconds 0 --minimum-lot 0.01 --lot-step 0.01"
+          CJAN="data/XAUUSD_M1_202601_ELEV8.csv data/XAUUSD_M1_202602_ELEV8.csv \
+            data/XAUUSD_M1_202603_ELEV8.csv data/XAUUSD_M1_202604_ELEV8.csv \
+            data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          CMAY="data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          python tools/backtest_hybrid.py $COMMON --charts $CJAN $STRAT \
+            --sizing-mode risk --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 3.0 --start-date "${JAN}" \
+            --output-dir reports/tc18b_jnet --score-json raw/jnet.json
+          python tools/backtest_hybrid.py $COMMON --charts $CJAN $STRAT \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 0 --start-date "${JAN}" \
+            --output-dir reports/tc18b_jedge --score-json raw/jedge.json
+          python tools/backtest_hybrid.py $COMMON --charts $CJAN $STRAT \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 0 --start-date "${OOS}" \
+            --output-dir reports/tc18b_oos --score-json raw/oos.json
+          python tools/backtest_hybrid.py $COMMON --charts $CMAY $STRAT \
+            --sizing-mode risk --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 3.0 --start-date "${MAY}" \
+            --output-dir reports/tc18b_mnet --score-json raw/mnet.json
+          python tools/backtest_hybrid.py $COMMON --charts $CMAY $STRAT \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 0 --start-date "${MAY}" \
+            --output-dir reports/tc18b_medge --score-json raw/medge.json
+          python - <<'PY'
+          import json
+          jn=json.load(open("raw/jnet.json")); je=json.load(open("raw/jedge.json"))
+          oo=json.load(open("raw/oos.json"));  mn=json.load(open("raw/mnet.json"))
+          me=json.load(open("raw/medge.json"))
+          d={"cell":"tc18_base","orig_rank":0,
+             "sl_multiplier":1.8,"trailing_open":0.5,"trailing_close":0.5,
+             "max_hold":300,"activation_delay":2,
+             "jan_net":round(jn["net_profit"],2),"jan_dd":round(jn["max_drawdown_pct"],2),
+             "jan_edge":round(je["net_profit"],2),"jan_signals":jn["signals_included"],
+             "oos_m1":round(oo["net_profit"],2),
+             "may_m1_net":round(mn["net_profit"],2),"may_m1_dd":round(mn["max_drawdown_pct"],2),
+             "may_m1_edge":round(me["net_profit"],2),"may_signals":mn["signals_included"]}
+          open("out/tc18_base.json","w").write(json.dumps(d)); print(d)
+          PY
+        env:
+          JAN: ${{ github.event.inputs.jan_start }}
+          MAY: ${{ github.event.inputs.may_start }}
+          OOS: ${{ github.event.inputs.oos_start }}
+      - uses: actions/upload-artifact@v4
+        with: { name: "ext-tc18-tc18base", path: "out/*.json", if-no-files-found: error }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TC18 TOP-20 CELLS
+# ─────────────────────────────────────────────────────────────────────────────
+  tc18_cell:
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        include:
+          - {rank: "01", slm: "1.6", to: "0.5", tc: "0.5",  mh: "240", ad: "0"}
+          - {rank: "02", slm: "1.6", to: "0.5", tc: "0.5",  mh: "300", ad: "0"}
+          - {rank: "03", slm: "1.6", to: "0.5", tc: "0.75", mh: "240", ad: "0"}
+          - {rank: "04", slm: "1.6", to: "0.5", tc: "0.75", mh: "300", ad: "0"}
+          - {rank: "05", slm: "1.6", to: "0.7", tc: "0.5",  mh: "240", ad: "0"}
+          - {rank: "06", slm: "1.7", to: "0.5", tc: "0.5",  mh: "300", ad: "0"}
+          - {rank: "07", slm: "1.7", to: "0.5", tc: "0.5",  mh: "240", ad: "0"}
+          - {rank: "08", slm: "1.6", to: "0.7", tc: "0.5",  mh: "300", ad: "0"}
+          - {rank: "09", slm: "1.6", to: "0.7", tc: "0.75", mh: "240", ad: "0"}
+          - {rank: "10", slm: "1.7", to: "0.5", tc: "0.75", mh: "300", ad: "0"}
+          - {rank: "11", slm: "1.7", to: "0.5", tc: "0.75", mh: "240", ad: "0"}
+          - {rank: "12", slm: "1.6", to: "0.7", tc: "0.75", mh: "300", ad: "0"}
+          - {rank: "13", slm: "1.6", to: "0.5", tc: "0.5",  mh: "240", ad: "2"}
+          - {rank: "14", slm: "1.6", to: "0.5", tc: "0.5",  mh: "240", ad: "1"}
+          - {rank: "15", slm: "1.7", to: "0.7", tc: "0.5",  mh: "240", ad: "0"}
+          - {rank: "16", slm: "1.8", to: "0.5", tc: "0.5",  mh: "300", ad: "0"}
+          - {rank: "17", slm: "1.7", to: "0.7", tc: "0.5",  mh: "300", ad: "0"}
+          - {rank: "18", slm: "1.8", to: "0.5", tc: "0.5",  mh: "240", ad: "0"}
+          - {rank: "19", slm: "1.6", to: "0.5", tc: "0.75", mh: "240", ad: "2"}
+          - {rank: "20", slm: "1.6", to: "0.5", tc: "0.75", mh: "240", ad: "1"}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 1 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate C160 feed (Jan-Jun 2026)
+        run: |
+          python tools/generate_scalper_signals.py \
+            --charts data/XAUUSD_M1_202601_ELEV8.csv data/XAUUSD_M1_202602_ELEV8.csv \
+              data/XAUUSD_M1_202603_ELEV8.csv data/XAUUSD_M1_202604_ELEV8.csv \
+              data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --output feed.txt --start "${JAN}" \
+            --session-start 0 --session-end 0 --signal-tz 7 \
+            --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 \
+            --rr1 1.2 --rr2 2.5 --rr3 5
+        env:
+          JAN: ${{ github.event.inputs.jan_start }}
+      - name: "TC18 r${{ matrix.rank }} slm=${{ matrix.slm }} to=${{ matrix.to }} tc=${{ matrix.tc }} mh=${{ matrix.mh }} ad=${{ matrix.ad }}"
+        run: |
+          set -o pipefail
+          CELL="tc18ext_r${rank}_slm${slm//./}_to${to//./}_tc${tc//./}_mh${mh}_ad${ad}"
+          mkdir -p out raw
+          STRAT="--entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.7 --shared-sl false \
+            --activation-delay ${ad} --pending-expiry 180 --max-hold ${mh} \
+            --sl-multiplier ${slm} --final-target TP3 --runner-after-tp3 false \
+            --lock-after-tp1 true --lock-after-tp2 true \
+            --tp1-lock-delay-minutes 24 --tp2-lock-delay-minutes 24 \
+            --profit-lock-mode tp_levels --bep-trigger-distance 3.0 --tp1-lock-fraction 0.75 \
+            --tp2-lock-target TP1 --tp3-lock-target TP2 \
+            --trailing-open-distance ${to} --trailing-close-distance ${tc} \
+            --trailing-close-after-stage 2 \
+            --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0"
+          COMMON="--signals feed.txt --sync-charts false \
+            --watch-seconds 3 --max-drawdown-limit-pct 100 \
+            --progress-interval-seconds 0 --minimum-lot 0.01 --lot-step 0.01"
+          CJAN="data/XAUUSD_M1_202601_ELEV8.csv data/XAUUSD_M1_202602_ELEV8.csv \
+            data/XAUUSD_M1_202603_ELEV8.csv data/XAUUSD_M1_202604_ELEV8.csv \
+            data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          CMAY="data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          python tools/backtest_hybrid.py $COMMON --charts $CJAN $STRAT \
+            --sizing-mode risk --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 3.0 --start-date "${JAN}" \
+            --output-dir "reports/${CELL}_jnet" --score-json "raw/jnet.json"
+          python tools/backtest_hybrid.py $COMMON --charts $CJAN $STRAT \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 0 --start-date "${JAN}" \
+            --output-dir "reports/${CELL}_jedge" --score-json "raw/jedge.json"
+          python tools/backtest_hybrid.py $COMMON --charts $CJAN $STRAT \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 0 --start-date "${OOS}" \
+            --output-dir "reports/${CELL}_oos" --score-json "raw/oos.json"
+          python tools/backtest_hybrid.py $COMMON --charts $CMAY $STRAT \
+            --sizing-mode risk --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 3.0 --start-date "${MAY}" \
+            --output-dir "reports/${CELL}_mnet" --score-json "raw/mnet.json"
+          python tools/backtest_hybrid.py $COMMON --charts $CMAY $STRAT \
+            --sizing-mode fixed --risk 0.01 --lot 0.01 --initial-capital 50000 \
+            --bonus-per-closed-lot 0 --start-date "${MAY}" \
+            --output-dir "reports/${CELL}_medge" --score-json "raw/medge.json"
+          python - "$CELL" "$rank" "$slm" "$to" "$tc" "$mh" "$ad" <<'PY'
+          import json, sys
+          cell,rank,slm,to,tc,mh,ad = sys.argv[1:8]
+          jn=json.load(open("raw/jnet.json")); je=json.load(open("raw/jedge.json"))
+          oo=json.load(open("raw/oos.json"));  mn=json.load(open("raw/mnet.json"))
+          me=json.load(open("raw/medge.json"))
+          d={"cell":cell,"orig_rank":int(rank),
+             "sl_multiplier":float(slm),"trailing_open":float(to),
+             "trailing_close":float(tc),"max_hold":int(mh),"activation_delay":int(ad),
+             "jan_net":round(jn["net_profit"],2),"jan_dd":round(jn["max_drawdown_pct"],2),
+             "jan_edge":round(je["net_profit"],2),"jan_signals":jn["signals_included"],
+             "oos_m1":round(oo["net_profit"],2),
+             "may_m1_net":round(mn["net_profit"],2),"may_m1_dd":round(mn["max_drawdown_pct"],2),
+             "may_m1_edge":round(me["net_profit"],2),"may_signals":mn["signals_included"]}
+          open(f"out/{cell}.json","w").write(json.dumps(d)); print(d)
+          PY
+        env:
+          JAN: ${{ github.event.inputs.jan_start }}
+          MAY: ${{ github.event.inputs.may_start }}
+          OOS: ${{ github.event.inputs.oos_start }}
+          rank: ${{ matrix.rank }}
+          slm: ${{ matrix.slm }}
+          to: ${{ matrix.to }}
+          tc: ${{ matrix.tc }}
+          mh: ${{ matrix.mh }}
+          ad: ${{ matrix.ad }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "ext-tc18-r${{ matrix.rank }}"
+          path: "out/*.json"
+          if-no-files-found: error
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LEADERBOARD — join all cell results + existing TICK leaderboards
+# ─────────────────────────────────────────────────────────────────────────────
+  leaderboard:
+    needs: [vic_baseline, vic_cell, tc18_baseline, tc18_cell]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 1 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { pattern: "ext-vic-*", path: "artifacts/vic", merge-multiple: true }
+      - uses: actions/download-artifact@v4
+        with: { pattern: "ext-tc18-*", path: "artifacts/tc18", merge-multiple: true }
+      - name: Build comparison leaderboards
+        run: |
+          python - <<'PY'
+          import json, csv, os, glob, math
+
+          def load_tick_lb(path):
+              if not os.path.exists(path): return {}
+              with open(path) as f:
+                  return {r["cell"]: r for r in csv.DictReader(f)}
+
+          vic_tick  = load_tick_lb("sweep_reports/tick_trailing_vic_aggressive/leaderboard.csv")
+          tc18_tick = load_tick_lb("sweep_reports/tick_trailing_tc18_retune/leaderboard.csv")
+
+          def flt(x):
+              try: return round(float(x), 2)
+              except: return None
+
+          def vic_tick_key(d):
+              to  = str(d.get("trailing_open","")).replace(".","")
+              tc  = str(d.get("trailing_close","")).replace(".","")
+              s   = d.get("trail_after_stage","")
+              slm = str(d.get("sl_multiplier","")).replace(".","")
+              ft  = d.get("final_target","")
+              ad  = d.get("activation_delay","")
+              return f"vic_to{to}_tc{tc}_s{s}_slm{slm}_{ft}_ad{ad}"
+
+          def tc18_tick_key(d):
+              slm = str(d.get("sl_multiplier","")).replace(".","")
+              to  = str(d.get("trailing_open","")).replace(".","")
+              tc  = str(d.get("trailing_close","")).replace(".","")
+              mh  = d.get("max_hold","")
+              ad  = d.get("activation_delay","")
+              return f"tc18_slm{slm}_to{to}_tc{tc}_mh{mh}_ad{ad}"
+
+          def build(prefix, tick_lb, tick_key_fn, out_path):
+              rows = []
+              for f in sorted(glob.glob(f"artifacts/{prefix}/*.json")):
+                  d = json.load(open(f))
+                  # look up matching TICK leaderboard row
+                  tkey = d["cell"] if "base" in d["cell"] else tick_key_fn(d)
+                  t = tick_lb.get(tkey, {})
+                  d["may_tick_net"]  = flt(t.get("net_compound"))
+                  d["may_tick_dd"]   = flt(t.get("drawdown_pct"))
+                  d["may_tick_edge"] = flt(t.get("edge"))
+                  d["may_tick_oos"]  = flt(t.get("oos"))
+                  rows.append(d)
+              # sort by jan_edge descending (most reliable forward-fit metric over Jan-Jun)
+              rows.sort(key=lambda r: r.get("jan_edge") or -math.inf, reverse=True)
+              os.makedirs(os.path.dirname(out_path), exist_ok=True)
+              if not rows: return
+              with open(out_path, "w", newline="") as f:
+                  w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+                  w.writeheader(); w.writerows(rows)
+              print(f"Wrote {out_path} ({len(rows)} rows)")
+
+          build("vic",  vic_tick,  vic_tick_key,
+                "sweep_reports/top20_extended/vic_comparison.csv")
+          build("tc18", tc18_tick, tc18_tick_key,
+                "sweep_reports/top20_extended/tc18_comparison.csv")
+          PY
+      - name: Commit leaderboards to repo
+        run: |
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+          git add sweep_reports/top20_extended/
+          git diff --cached --quiet || git commit -m "top20 extended: Jan M1 + May M1 vs TICK comparison"
+          git push origin HEAD || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "top20-extended-leaderboard"
+          path: "sweep_reports/top20_extended/"
+          if-no-files-found: warn
