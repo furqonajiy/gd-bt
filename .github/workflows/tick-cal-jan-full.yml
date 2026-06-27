@@ -1,0 +1,310 @@
+name: tick-cal-jan-full
+
+# TICK-CALIBRATED Jan-2026 FULL trailing grid (VIC 96 + self-scalper 72).
+#
+# Same calibration as tick-cal-jan-top20, over the COMPLETE original sweep grids:
+#   per cell, on the committed latest ticks --
+#     1. TICK May-Jun (real fills)      -> tickmay_{net,dd,edge}
+#     2. M1   May-Jun (--m1-only)       -> m1may_{net,dd,edge}
+#     3. M1   Jan-Jun (--m1-only)       -> jan_{net,dd,edge,oos}  (DD at risk 1%)
+#     4. M1   Jan-Jun at DEPLOY risk    -> jan_{net,dd}_deploy    (VIC 5% / SC 0.5%)
+#   factor_X = tickmay_X / m1may_X ; est_jan_X = jan_X * factor_X.
+# Rank by est_jan_edge (fixed-lot); DD gate flagged at 40% AND 50% (risk 1%), plus
+# an est DD at the per-feed DEPLOY risk (VIC 5%, self-scalper 0.5%). OOS + compounded
+# net+bonus are informational (net+bonus RANKS, it does not decide).
+#
+# Output: sweep_reports/tick_cal_jan_full/{vic,tc18}_full.csv
+
+on:
+  workflow_dispatch:
+    inputs:
+      jan_start: { description: "Full R4 start (M1)", default: "2026-01-01" }
+      may_start: { description: "Overlap start (M1+TICK)", default: "2026-05-01" }
+      oos_start: { description: "OOS tail start", default: "2026-06-16" }
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tick-cal-jan-full
+  cancel-in-progress: false
+
+jobs:
+  # ===========================================================================
+  # VIC full grid: to x tc x stage x slm x ft x ad = 96, + V116 baseline (to=0).
+  # ===========================================================================
+  vic_cell:
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        to: ["0.5", "1.0"]
+        tc: ["0.5", "1.5"]
+        stage: ["1", "2"]
+        slm: ["1.5", "1.7"]
+        ft: ["TP2", "TP3"]
+        ad: ["0", "1", "2"]
+        include:
+          - {to: "0", tc: "0", stage: "0", slm: "1.7", ft: "TP2", ad: "2"}  # V116 baseline (no trail)
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 1 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: "VIC to=${{ matrix.to }} tc=${{ matrix.tc }} s=${{ matrix.stage }} slm=${{ matrix.slm }} ${{ matrix.ft }} ad=${{ matrix.ad }}"
+        env:
+          JAN: ${{ github.event.inputs.jan_start }}
+          MAY: ${{ github.event.inputs.may_start }}
+          OOS: ${{ github.event.inputs.oos_start }}
+          to: ${{ matrix.to }}
+          tc: ${{ matrix.tc }}
+          stage: ${{ matrix.stage }}
+          slm: ${{ matrix.slm }}
+          ft: ${{ matrix.ft }}
+          ad: ${{ matrix.ad }}
+          DEPLOY_RISK: "0.05"
+        run: |
+          set -o pipefail
+          mkdir -p out raw
+          CELL="vcal_to${to//./}_tc${tc//./}_s${stage}_slm${slm//./}_${ft}_ad${ad}"
+          SIGNALS="victor_signals.txt"
+          STRAT="--entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.5 \
+            --activation-delay ${ad} --pending-expiry 180 --max-hold 180 \
+            --sl-multiplier ${slm} --final-target ${ft} --runner-after-tp3 false \
+            --lock-after-tp1 true --lock-after-tp2 true \
+            --tp1-lock-delay-minutes 12 --tp2-lock-delay-minutes 2 \
+            --profit-lock-mode tp_levels --bep-trigger-distance 3.0 --tp1-lock-fraction 0.5 \
+            --tp2-lock-target TP1 --tp3-lock-target TP2 \
+            --trailing-open-distance ${to} --trailing-close-distance ${tc} --trailing-close-after-stage ${stage} \
+            --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0"
+          COMMON="--sync-ticks false --sync-charts false --max-drawdown-limit-pct 500 \
+            --progress-interval-seconds 0 --minimum-lot 0.01 --lot-step 0.01"
+          CJAN="data/XAUUSD_M1_202601_ELEV8.csv data/XAUUSD_M1_202602_ELEV8.csv data/XAUUSD_M1_202603_ELEV8.csv data/XAUUSD_M1_202604_ELEV8.csv data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          CMAY="data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          TICKS="data/ticks/XAUUSD_TICK_*_ELEV8.csv"
+          bt () { # mode start charts sizing bonus out [risk]
+            local src="--m1-only"; [ "$1" = "tick" ] && src="--ticks $TICKS"
+            local risk="${7:-0.01}"
+            python tools/backtest_hybrid.py --signals "$SIGNALS" --charts $3 $STRAT $COMMON $src \
+              --sizing-mode $4 --risk $risk --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot $5 \
+              --start-date "$2" --output-dir "reports/${CELL}_$6" --score-json "raw/$6.json"
+          }
+          bt tick "$MAY"  "$CMAY" risk  3.0 tickmay_risk
+          bt tick "$MAY"  "$CMAY" fixed 0   tickmay_edge
+          bt m1   "$MAY"  "$CMAY" risk  3.0 m1may_risk
+          bt m1   "$MAY"  "$CMAY" fixed 0   m1may_edge
+          bt m1   "$JAN"  "$CJAN" risk  3.0 jan_risk
+          bt m1   "$JAN"  "$CJAN" fixed 0   jan_edge
+          bt m1   "$OOS"  "$CJAN" fixed 0   jan_oos
+          bt m1   "$JAN"  "$CJAN" risk  3.0 jan_deploy "$DEPLOY_RISK"
+          python - "$CELL" "$to" "$tc" "$stage" "$slm" "$ft" "$ad" "$DEPLOY_RISK" <<'PY'
+          import json, sys
+          cell,to,tc,stage,slm,ft,ad,drisk = sys.argv[1:9]
+          def g(f,k): return round(float(json.load(open(f"raw/{f}.json"))[k]),2)
+          d={"cell":cell,"strategy":"VIC",
+             "trailing_open":float(to),"trailing_close":float(tc),"trail_after_stage":int(stage),
+             "sl_multiplier":float(slm),"final_target":ft,"activation_delay":int(ad),
+             "deploy_risk":float(drisk),
+             "tickmay_net":g("tickmay_risk","net_profit"),"tickmay_dd":g("tickmay_risk","max_drawdown_pct"),
+             "tickmay_edge":g("tickmay_edge","net_profit"),
+             "m1may_net":g("m1may_risk","net_profit"),"m1may_dd":g("m1may_risk","max_drawdown_pct"),
+             "m1may_edge":g("m1may_edge","net_profit"),
+             "jan_net":g("jan_risk","net_profit"),"jan_dd":g("jan_risk","max_drawdown_pct"),
+             "jan_edge":g("jan_edge","net_profit"),"jan_oos":g("jan_oos","net_profit"),
+             "jan_net_deploy":g("jan_deploy","net_profit"),"jan_dd_deploy":g("jan_deploy","max_drawdown_pct"),
+             "jan_signals":int(json.load(open("raw/jan_risk.json"))["signals_included"])}
+          open(f"out/{cell}.json","w").write(json.dumps(d)); print(d)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "vcal-${{ matrix.to }}-${{ matrix.tc }}-${{ matrix.stage }}-${{ matrix.slm }}-${{ matrix.ft }}-${{ matrix.ad }}"
+          path: "out/*.json"
+          if-no-files-found: error
+
+  # ===========================================================================
+  # Self-scalper full grid: slm x to x tc x mh x ad = 72 (TC18 baseline is in it).
+  # ===========================================================================
+  tc18_cell:
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        slm: ["1.6", "1.7", "1.8"]
+        to: ["0.5", "0.7"]
+        tc: ["0.5", "0.75"]
+        mh: ["240", "300"]
+        ad: ["0", "1", "2"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 1 }
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Generate C160 feed (Jan-Jun 2026)
+        env:
+          JAN: ${{ github.event.inputs.jan_start }}
+        run: |
+          python tools/generate_scalper_signals.py \
+            --charts data/XAUUSD_M1_202601_ELEV8.csv data/XAUUSD_M1_202602_ELEV8.csv \
+              data/XAUUSD_M1_202603_ELEV8.csv data/XAUUSD_M1_202604_ELEV8.csv \
+              data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --output feed.txt --start "${JAN}" \
+            --session-start 0 --session-end 0 --signal-tz 7 \
+            --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 \
+            --rr1 1.2 --rr2 2.5 --rr3 5
+      - name: "TC18 slm=${{ matrix.slm }} to=${{ matrix.to }} tc=${{ matrix.tc }} mh=${{ matrix.mh }} ad=${{ matrix.ad }}"
+        env:
+          JAN: ${{ github.event.inputs.jan_start }}
+          MAY: ${{ github.event.inputs.may_start }}
+          OOS: ${{ github.event.inputs.oos_start }}
+          slm: ${{ matrix.slm }}
+          to: ${{ matrix.to }}
+          tc: ${{ matrix.tc }}
+          mh: ${{ matrix.mh }}
+          ad: ${{ matrix.ad }}
+          DEPLOY_RISK: "0.005"
+        run: |
+          set -o pipefail
+          mkdir -p out raw
+          CELL="tcal_slm${slm//./}_to${to//./}_tc${tc//./}_mh${mh}_ad${ad}"
+          SIGNALS="feed.txt"
+          STRAT="--entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.7 --shared-sl false \
+            --activation-delay ${ad} --pending-expiry 180 --max-hold ${mh} \
+            --sl-multiplier ${slm} --final-target TP3 --runner-after-tp3 false \
+            --lock-after-tp1 true --lock-after-tp2 true \
+            --tp1-lock-delay-minutes 24 --tp2-lock-delay-minutes 24 \
+            --profit-lock-mode tp_levels --bep-trigger-distance 3.0 --tp1-lock-fraction 0.75 \
+            --tp2-lock-target TP1 --tp3-lock-target TP2 \
+            --trailing-open-distance ${to} --trailing-close-distance ${tc} --trailing-close-after-stage 2 \
+            --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0"
+          COMMON="--sync-ticks false --sync-charts false --max-drawdown-limit-pct 500 \
+            --progress-interval-seconds 0 --minimum-lot 0.01 --lot-step 0.01"
+          CJAN="data/XAUUSD_M1_202601_ELEV8.csv data/XAUUSD_M1_202602_ELEV8.csv data/XAUUSD_M1_202603_ELEV8.csv data/XAUUSD_M1_202604_ELEV8.csv data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          CMAY="data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv"
+          TICKS="data/ticks/XAUUSD_TICK_*_ELEV8.csv"
+          bt () { # mode start charts sizing bonus out [risk]
+            local src="--m1-only"; [ "$1" = "tick" ] && src="--ticks $TICKS"
+            local risk="${7:-0.01}"
+            python tools/backtest_hybrid.py --signals "$SIGNALS" --charts $3 $STRAT $COMMON $src \
+              --sizing-mode $4 --risk $risk --lot 0.01 --initial-capital 50000 --bonus-per-closed-lot $5 \
+              --start-date "$2" --output-dir "reports/${CELL}_$6" --score-json "raw/$6.json"
+          }
+          bt tick "$MAY"  "$CMAY" risk  3.0 tickmay_risk
+          bt tick "$MAY"  "$CMAY" fixed 0   tickmay_edge
+          bt m1   "$MAY"  "$CMAY" risk  3.0 m1may_risk
+          bt m1   "$MAY"  "$CMAY" fixed 0   m1may_edge
+          bt m1   "$JAN"  "$CJAN" risk  3.0 jan_risk
+          bt m1   "$JAN"  "$CJAN" fixed 0   jan_edge
+          bt m1   "$OOS"  "$CJAN" fixed 0   jan_oos
+          bt m1   "$JAN"  "$CJAN" risk  3.0 jan_deploy "$DEPLOY_RISK"
+          python - "$CELL" "$slm" "$to" "$tc" "$mh" "$ad" "$DEPLOY_RISK" <<'PY'
+          import json, sys
+          cell,slm,to,tc,mh,ad,drisk = sys.argv[1:8]
+          def g(f,k): return round(float(json.load(open(f"raw/{f}.json"))[k]),2)
+          d={"cell":cell,"strategy":"TC18",
+             "sl_multiplier":float(slm),"trailing_open":float(to),"trailing_close":float(tc),
+             "max_hold":int(mh),"activation_delay":int(ad),"deploy_risk":float(drisk),
+             "tickmay_net":g("tickmay_risk","net_profit"),"tickmay_dd":g("tickmay_risk","max_drawdown_pct"),
+             "tickmay_edge":g("tickmay_edge","net_profit"),
+             "m1may_net":g("m1may_risk","net_profit"),"m1may_dd":g("m1may_risk","max_drawdown_pct"),
+             "m1may_edge":g("m1may_edge","net_profit"),
+             "jan_net":g("jan_risk","net_profit"),"jan_dd":g("jan_risk","max_drawdown_pct"),
+             "jan_edge":g("jan_edge","net_profit"),"jan_oos":g("jan_oos","net_profit"),
+             "jan_net_deploy":g("jan_deploy","net_profit"),"jan_dd_deploy":g("jan_deploy","max_drawdown_pct"),
+             "jan_signals":int(json.load(open("raw/jan_risk.json"))["signals_included"])}
+          open(f"out/{cell}.json","w").write(json.dumps(d)); print(d)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "tcal-${{ matrix.slm }}-${{ matrix.to }}-${{ matrix.tc }}-${{ matrix.mh }}-${{ matrix.ad }}"
+          path: "out/*.json"
+          if-no-files-found: error
+
+  # ===========================================================================
+  # LEADERBOARD — calibrate, est Jan-as-TICK, rank by edge, DD gates 40/50/deploy
+  # ===========================================================================
+  leaderboard:
+    needs: [vic_cell, tc18_cell]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 1 }
+      - uses: actions/download-artifact@v4
+        with: { pattern: "vcal-*", path: "art/vic", merge-multiple: true }
+      - uses: actions/download-artifact@v4
+        with: { pattern: "tcal-*", path: "art/tc18", merge-multiple: true }
+      - name: Calibrate + rank
+        run: |
+          python - <<'PY'
+          import json, csv, glob, os, math
+
+          def factor(t, m):
+              if m is None or t is None or abs(m) < 1e-9: return None
+              return round(t / m, 4)
+
+          def mul(x, f):
+              return round(x * f, 2) if (x is not None and f is not None) else None
+
+          def build(prefix, out_path):
+              rows = []
+              for f in sorted(glob.glob(f"art/{prefix}/*.json")):
+                  d = json.load(open(f))
+                  fe = factor(d["tickmay_edge"], d["m1may_edge"])
+                  fn = factor(d["tickmay_net"],  d["m1may_net"])
+                  fd = factor(d["tickmay_dd"],   d["m1may_dd"])
+                  d["f_edge"], d["f_net"], d["f_dd"] = fe, fn, fd
+                  d["est_jan_edge"] = mul(d["jan_edge"], fe)
+                  d["est_jan_net"]  = mul(d["jan_net"],  fn)
+                  d["est_jan_dd"]   = mul(d["jan_dd"],   fd)
+                  d["est_jan_oos"]  = mul(d["jan_oos"],  fe)
+                  d["est_jan_dd_deploy"] = mul(d["jan_dd_deploy"], fd)
+                  d["est_jan_net_deploy"] = mul(d["jan_net_deploy"], fn)
+                  dd = d["est_jan_dd"]
+                  d["pass_dd40"] = bool(dd is not None and dd <= 40.0)
+                  d["pass_dd50"] = bool(dd is not None and dd <= 50.0)
+                  rows.append(d)
+              def key(r):
+                  e = r.get("est_jan_edge")
+                  return (0 if e is not None else 1, -(e if e is not None else -math.inf))
+              rows.sort(key=key)
+              cols = ["cell","strategy","sl_multiplier","trailing_open","trailing_close",
+                      "trail_after_stage","final_target","max_hold","activation_delay",
+                      "est_jan_edge","est_jan_oos","est_jan_net","est_jan_dd","pass_dd40","pass_dd50",
+                      "deploy_risk","est_jan_dd_deploy","est_jan_net_deploy",
+                      "f_edge","f_net","f_dd",
+                      "jan_edge","jan_oos","jan_net","jan_dd","jan_dd_deploy","jan_signals",
+                      "tickmay_edge","tickmay_net","tickmay_dd","m1may_edge","m1may_net","m1may_dd"]
+              os.makedirs(os.path.dirname(out_path), exist_ok=True)
+              with open(out_path, "w", newline="") as fh:
+                  w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
+                  w.writeheader(); w.writerows(rows)
+              print(f"Wrote {out_path} ({len(rows)} rows)")
+              for tag, flt in (("DD<=40", lambda r: r["pass_dd40"]),
+                               ("DD<=50", lambda r: r["pass_dd50"])):
+                  ok = [r for r in rows if flt(r) and r.get("est_jan_edge") is not None]
+                  print(f"  [{prefix} best @ {tag}]")
+                  for r in ok[:3]:
+                      print(f"    {r['cell']}: edge=${r['est_jan_edge']} oos=${r['est_jan_oos']} "
+                            f"dd={r['est_jan_dd']}% dd@{r['deploy_risk']}={r['est_jan_dd_deploy']}%")
+
+          build("vic",  "sweep_reports/tick_cal_jan_full/vic_full.csv")
+          build("tc18", "sweep_reports/tick_cal_jan_full/tc18_full.csv")
+          PY
+      - name: Commit leaderboards
+        run: |
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+          git add sweep_reports/tick_cal_jan_full/
+          git diff --cached --quiet || git commit -m "tick-cal Jan FULL grid: VIC 96 + self-scalper 72 (calibrated)"
+          git push origin HEAD || true
+      - uses: actions/upload-artifact@v4
+        with: { name: "tick-cal-jan-full", path: "sweep_reports/tick_cal_jan_full/", if-no-files-found: warn }
