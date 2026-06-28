@@ -31,6 +31,7 @@ class StrategyConfig:
     lot_per_entry: float = 0.5
     risk_per_signal: float = 0.05575
     minimum_lot: float = 0.01
+    maximum_lot: float = 0.0              # 0.0 = no cap; >0 clamps per-entry lot
     lot_step: float = 0.01
 
     # Bonus/rebate. Broker bonus is modeled as cash received for every lot that

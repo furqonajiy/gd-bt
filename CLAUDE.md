@@ -528,7 +528,10 @@ $5,000, originally $1,000). Drawdown is computed from that base, so it is the fi
 the DD≤40% gate and the live executor size against. The $50k base keeps the 0.01-lot
 **minimum-lot floor** from distorting risk% — at $5k many wide-stop signals floored to
 0.01 lot, inflating early per-signal risk above the nominal 1% and running DD hotter;
-at $50k the 1% risk is faithful. (edge/OOS are fixed-lot and capital-independent; the
+at $50k the 1% risk is faithful. **`maximum_lot`** (`--maximum-lot`, default 0.0 = no
+cap) clamps the per-entry lot to the broker's maximum order size; add it to any
+high-risk compounding run (e.g. VCT5 at 5%) to prevent runaway lot sizes.
+ELEV8 cap is 500 lots. (edge/OOS are fixed-lot and capital-independent; the
 concurrent-risk DD gate is ~capital-independent too — raising the base mainly cleans up
 the floor distortion and the compounded path.)
 

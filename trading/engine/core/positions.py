@@ -282,7 +282,11 @@ def compute_lot(equity: float, signal: Signal, config: StrategyConfig, contract_
     if total_price_risk <= 0:
         return 0.0, base_stop_distance
     lot = _floor_to_step(risk_amount / (total_price_risk * contract_size), config.lot_step if config.lot_step > 0 else 0.01)
-    return max(lot, min_lot), base_stop_distance
+    lot = max(lot, min_lot)
+    max_lot = getattr(config, "maximum_lot", 0.0)
+    if max_lot > 0:
+        lot = min(lot, _floor_to_step(max_lot, config.lot_step if config.lot_step > 0 else 0.01))
+    return lot, base_stop_distance
 
 
 def _pnl(side: str, entry: float, exit_price: float, lot: float, contract_size: float) -> float:

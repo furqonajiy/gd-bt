@@ -97,6 +97,7 @@ python tools/auto_explicit.py `
   --lot 0.01 `
   --risk 0.025 `
   --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
   --lot-step 0.01 `
   --entries 7 `
   --entry-ladder range_to_sl `
@@ -146,6 +147,7 @@ python tools/backtest_hybrid.py `
   --lot 0.01 `
   --risk 0.025 `
   --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
   --entries 7 `
@@ -188,6 +190,7 @@ python tools/backtest_hybrid.py `
   --lot 0.01 `
   --risk 0.025 `
   --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
   --entries 7 `
@@ -229,6 +232,7 @@ python tools/backtest_explicit.py `
   --lot 0.01 `
   --risk 0.025 `
   --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
   --entries 7 `
@@ -271,6 +275,7 @@ python tools/backtest_explicit.py `
   --lot 0.01 `
   --risk 0.025 `
   --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
   --entries 7 `
@@ -314,6 +319,7 @@ python tools/backtest_explicit.py `
   --lot 0.01 `
   --risk 0.025 `
   --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3 `
   --entries 7 `
