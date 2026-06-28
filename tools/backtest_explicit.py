@@ -323,6 +323,7 @@ def add_required_strategy_args(p: argparse.ArgumentParser) -> None:
     strategy.add_argument("--lot", type=_positive_float, required=True)
     strategy.add_argument("--risk", type=_positive_float, required=True)
     strategy.add_argument("--minimum-lot", type=_positive_float, required=True)
+    strategy.add_argument("--maximum-lot", type=float, default=0.0, help="Per-entry lot cap (0=no cap)")
     strategy.add_argument("--lot-step", type=_positive_float, required=True)
     strategy.add_argument("--bonus-per-closed-lot", type=_positive_float, required=True)
     strategy.add_argument("--entries", type=int, required=True)
@@ -483,6 +484,7 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         lot_per_entry=args.lot,
         risk_per_signal=args.risk,
         minimum_lot=args.minimum_lot,
+        maximum_lot=args.maximum_lot,
         lot_step=args.lot_step,
         bonus_per_closed_lot=args.bonus_per_closed_lot,
         entry_count=args.entries,
