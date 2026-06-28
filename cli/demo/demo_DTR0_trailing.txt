@@ -58,6 +58,7 @@ python tools/auto_explicit.py `
   --lot 0.01 `
   --risk 0.01 `
   --minimum-lot 0.01 `
+  --maximum-lot 500 `
   --lot-step 0.01 `
   --entries 7 `
   --entry-ladder range_to_sl `
@@ -90,7 +91,7 @@ python tools/backtest_hybrid.py `
   --charts "data/demo/XAUUSD_M1_*_DEMO.csv" `
   --ticks "data/demo/ticks/XAUUSD_TICK_*_DEMO.csv" `
   --max-drawdown-limit-pct 50 --progress-interval-seconds 30 `
-  --sizing-mode risk --lot 0.01 --risk 0.01 --minimum-lot 0.01 --lot-step 0.01 --bonus-per-closed-lot 3 `
+  --sizing-mode risk --lot 0.01 --risk 0.01 --minimum-lot 0.01 --maximum-lot 500 --lot-step 0.01 --bonus-per-closed-lot 3 `
   --entries 7 --entry-ladder range_to_sl --entry-sl-gap 0.7 --shared-sl false `
   --activation-delay 2 --pending-expiry 180 --max-hold 300 --sl-multiplier 2.1 --final-target TP3 `
   --lock-after-tp1 true --lock-after-tp2 false --tp1-lock-delay-minutes 24 --tp2-lock-delay-minutes 2 `
