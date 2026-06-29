@@ -243,3 +243,4 @@ data/XAUUSD_M15_*_ELEV8.csv
 
 # Scratch live-vs-backtest reconcile sims (regenerated, not committed)
 reports/SIM_*.xlsx
+reports/FAIR_*.xlsx
