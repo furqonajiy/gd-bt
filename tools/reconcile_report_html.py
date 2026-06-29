@@ -94,20 +94,41 @@ def parse_report(path: str) -> list[dict]:
 
 
 def parse_backtest(path: str) -> dict[str, dict]:
-    """Backtest Per-Entry Detail keyed by MMDD#DD.N (one leg per key)."""
+    """Backtest Per-Entry Detail keyed by MMDD#DD.N (one leg per key).
+
+    Columns are resolved by HEADER NAME, not by fixed index, so the layout is
+    robust to the HYBRID (tick) backtest's extra ``Data Source`` column -- which
+    shifts the whole EXECUTED block one to the right vs a pure-M1 workbook -- and
+    to any future column addition. (The old fixed indices silently read Status
+    from the Lot column and Exit Price from the Exit Time column on a tick
+    workbook, so every leg looked unfilled and nothing matched.) The meaningful
+    per-column names live in the SECOND header row (row 1 is the
+    SIGNAL/ORIGINAL/EXECUTED group banner)."""
     ws = openpyxl.load_workbook(path, read_only=True)["Per-Entry Detail"]
     out: dict[str, dict] = {}
-    for r in ws.iter_rows(min_row=2, values_only=True):
-        if not r or r[0] in ("Entry Key", None):
+    cols: dict[str, int] | None = None
+    for r in ws.iter_rows(min_row=1, values_only=True):
+        if cols is None:
+            if r and any(str(c).strip() == "Entry Key" for c in r if c is not None):
+                cols = {str(c).strip(): i for i, c in enumerate(r) if c is not None}
+            continue
+        if not r or not r[0] or str(r[0]).strip() == "Entry Key":
             continue
         m = _KEY_RE.match(str(r[0]))
         if not m:
             continue
+
+        def col(name: str):
+            i = cols.get(name)
+            return r[i] if i is not None and i < len(r) else None
+
         key = f"{m.group(1)}{m.group(2)}#{int(m.group(3)):02d}.{m.group(4)}"
-        out[key] = dict(side=r[4], status=r[15], entry_p=_f(r[12]),
-                        exit_p=_f(r[18]),
-                        pnl=_f(r[19]) if r[19] is not None else None,
-                        sl=_f(r[7]), tp1=_f(r[8]), tp2=_f(r[9]), tp3=_f(r[10]))
+        pnl = col("P&L ($)")
+        out[key] = dict(side=col("Side"), status=col("Status"),
+                        entry_p=_f(col("Entry Price")), exit_p=_f(col("Exit Price")),
+                        pnl=_f(pnl) if pnl is not None else None,
+                        sl=_f(col("Orig SL")), tp1=_f(col("TP1")),
+                        tp2=_f(col("TP2")), tp3=_f(col("TP3")))
     return out
 
 
