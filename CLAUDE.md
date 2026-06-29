@@ -56,10 +56,10 @@ pair is a thin package that imports it.
   snapshots' **2026 backtest sections (5 & 6) call `backtest_hybrid` + `--ticks`**;
   the pre-tick eras (7–9) stay on `backtest_explicit` (no tick overlap).
   **It refreshes M1 before each run** (`--sync-charts true`, inherited from
-  `backtest_explicit`). The strategy snapshots pass **`--sync-ticks false`** — the
-  backtest reads the committed tick archive and does NOT auto-sync it (refresh ticks
-  deliberately via `cli/resync_ticks.txt` when the market is open; the in-backtest
-  sync could collide with another process holding the parts on Windows). The
+  `backtest_explicit`). The strategy snapshots now pass **`--sync-ticks true`** —
+  both M1 and the tick archive are synced automatically before every backtest run
+  (sections 5 & 6 call `--sync-charts true --sync-ticks true`; sections 7–9 call
+  `--sync-charts true` via `backtest_explicit`). The
   `--sync-ticks` flag still defaults true on the tool, and when used it APPENDS via
   `export_ticks --merge` then re-splits into **`--ticks-split-days` (default 3)
   DAY-WINDOW parts** — the committed archive format
