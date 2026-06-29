@@ -51,8 +51,16 @@ def test_setup_preamble_is_not_exposed():
 def test_multiline_command_joins_byte_identical():
     # Independently re-derive section 3's command from the raw file region and
     # compare: parse must join the backtick block exactly, lose/add nothing.
+    # Derive the block dynamically (the `python tools/auto_explicit.py` line plus
+    # its PowerShell backtick continuations) rather than hard-coding line numbers,
+    # so adding a flag like --maximum-lot never silently truncates the expectation.
     raw = SQZ6.read_text().splitlines()
-    block = [l for l in raw[80:115] if l.strip() and not l.lstrip().startswith("#")]
+    start = next(i for i, l in enumerate(raw)
+                 if l.strip().startswith("python tools/auto_explicit.py"))
+    end = start
+    while raw[end].rstrip().endswith("`"):   # walk to the final (un-continued) line
+        end += 1
+    block = [l for l in raw[start:end + 1] if l.strip() and not l.lstrip().startswith("#")]
     expected = " ".join(l.rstrip().rstrip("`").strip() for l in block)
     auto = next(s for s in run.parse_sections(SQZ6) if s.number == 3)
     assert auto.commands == [expected]
