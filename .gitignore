@@ -226,7 +226,6 @@ trading/btcusd/runtime/
 
 # Research parameter-sweep scratch (this session) -- not part of the codebase
 /_sweep.py
-/reports/
 
 # Derived M15 resamples (regenerate via tools/resample_m1_to_m15.py)
 data/XAUUSD_M15_*_ELEV8.csv
@@ -241,3 +240,7 @@ data/XAUUSD_M15_*_ELEV8.csv
 # The _DEMO M1 + tick CSVs are bulky (~1 GB of ticks) and broker-specific, so
 # they are NEVER committed to main — only the demo CLI snapshots are tracked.
 /data/demo/
+
+# Scratch live-vs-backtest reconcile sims (regenerated, not committed)
+reports/SIM_*.xlsx
+reports/FAIR_*.xlsx

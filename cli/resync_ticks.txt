@@ -57,6 +57,20 @@
 # so it is safe to leave on if you prefer. Run this standalone to (re)build the
 # tick archive, or for a custom date range.
 #
+# WINDOWS FILE LOCKS (WinError 32):
+#   Every tick-archive delete (the part/source unlink after a join or split) now
+#   goes through robust_remove(), which RETRIES a Windows sharing violation
+#   (WinError 32) with capped backoff (~16s) instead of aborting the sync. So a
+#   freshly-written part momentarily held by Windows Defender, the Search indexer,
+#   Explorer's preview pane, or a parallel run no longer leaves a half-reassembled
+#   archive (both the joined ..._D<start>_<TAG>.csv AND its _pN parts -> duplicate
+#   ticks). Belt-and-suspenders, so it never even waits: (1) EXCLUDE data\ticks
+#   from your antivirus (Windows Security -> Virus & threat protection ->
+#   Exclusions -> Add folder), and (2) prefer running THIS standalone sync over a
+#   backtest's --sync-ticks true, with no other backtest/MT5/Explorer holding the
+#   files. If robust_remove still gives up after ~16s, close whatever holds the
+#   file and re-run -- the append is incremental, so a re-run is cheap.
+#
 # ===== RESYNC TICKS (run from the repo root) =====
 python tools/export_ticks.py `
   --symbol XAUUSD `
