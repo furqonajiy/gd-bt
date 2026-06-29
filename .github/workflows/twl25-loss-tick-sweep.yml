@@ -1,0 +1,171 @@
+name: twl25-loss-tick-sweep
+
+# Maximum loss-filter sweep for the self-scalper family:
+#   1) Broad June-2026 TICK sweep over entry filters + TSL18/TWL strategy geometry.
+#   2) Jan-Jun validation of the top June candidates on every available 2026 tick file.
+#      If only May/June ticks are present, the leaderboard's coverage columns say so.
+#
+# The goal is not to tune DEFAULT_CONFIG; it produces research artifacts under
+# sweep_reports/twl25_loss_sweep and leaves live/backtest parity code untouched.
+
+on:
+  workflow_dispatch:
+    inputs:
+      shards:
+        description: "Shard count. Keep 12 unless the runner queue is busy."
+        default: "12"
+      max_cells_per_shard:
+        description: "0 = all cells assigned to each shard; use a small number for smoke."
+        default: "0"
+      validate_top_n:
+        description: "How many June winners to validate on Jan-Jun ticks."
+        default: "25"
+  push:
+    branches: ["feature/twl25-loss-sweep"]
+    paths:
+      - "tools/sweep_tick_loss_filters.py"
+      - ".github/workflows/twl25-loss-tick-sweep.yml"
+      - "cli/candidate_TWL25_loss_filtered_tick.txt"
+      - "docs/TWL25_LOSS_SWEEP.md"
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  SHARDS: ${{ github.event.inputs.shards || '12' }}
+  MAX_CELLS_PER_SHARD: ${{ github.event.inputs.max_cells_per_shard || '0' }}
+  VALIDATE_TOP_N: ${{ github.event.inputs.validate_top_n || '25' }}
+
+concurrency:
+  group: twl25-loss-tick-sweep-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  june:
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'sweep:') }}
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - name: Run June TICK loss-filter shard
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.shard }}" -ge "$SHARDS" ]; then
+            echo "matrix shard ${{ matrix.shard }} >= SHARDS=$SHARDS; writing empty shard"
+            mkdir -p out
+            : > out/results_june_shard${{ matrix.shard }}.jsonl
+            exit 0
+          fi
+          python tools/sweep_tick_loss_filters.py run-shard \
+            --phase june \
+            --shards "$SHARDS" \
+            --shard ${{ matrix.shard }} \
+            --max-cells "$MAX_CELLS_PER_SHARD" \
+            --output-dir out \
+            --watch-seconds 3 \
+            --min-signals 10 \
+            --top-n 25
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twl25-june-shard-${{ matrix.shard }}
+          path: out/**
+          if-no-files-found: error
+
+  aggregate_june:
+    needs: june
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'sweep:')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: twl25-june-shard-*
+          path: artifacts/june
+      - name: Aggregate June candidates
+        run: |
+          set -euo pipefail
+          python tools/sweep_tick_loss_filters.py aggregate \
+            --phase june \
+            --inputs 'artifacts/june/**/*.jsonl' \
+            --output-dir sweep_reports/twl25_loss_sweep/june \
+            --top-n "$VALIDATE_TOP_N"
+          echo "===== JUNE LEADERBOARD ====="
+          head -50 sweep_reports/twl25_loss_sweep/june/leaderboard_june.csv || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twl25-june-leaderboard
+          path: sweep_reports/twl25_loss_sweep/june/**
+          if-no-files-found: error
+
+  validate_jan_jun:
+    needs: aggregate_june
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'sweep:')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: twl25-june-leaderboard
+          path: artifacts/june_leaderboard
+      - name: Validate top June candidates on Jan-Jun ticks
+        run: |
+          set -euo pipefail
+          python tools/sweep_tick_loss_filters.py validate-top \
+            --phase jan_jun \
+            --candidate-jsonl artifacts/june_leaderboard/top_candidates.jsonl \
+            --output-dir sweep_reports/twl25_loss_sweep/jan_jun \
+            --watch-seconds 3 \
+            --min-signals 10 \
+            --top-n "$VALIDATE_TOP_N"
+          echo "===== JAN-JUN VALIDATION LEADERBOARD ====="
+          head -50 sweep_reports/twl25_loss_sweep/jan_jun/leaderboard_jan_jun.csv || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twl25-jan-jun-validation
+          path: sweep_reports/twl25_loss_sweep/jan_jun/**
+          if-no-files-found: error
+
+  commit_reports:
+    needs: [aggregate_june, validate_jan_jun]
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'sweep:')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: twl25-june-leaderboard
+          path: sweep_reports/twl25_loss_sweep/june
+      - uses: actions/download-artifact@v4
+        with:
+          name: twl25-jan-jun-validation
+          path: sweep_reports/twl25_loss_sweep/jan_jun
+      - name: Commit sweep reports
+        run: |
+          set -euo pipefail
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+          git add sweep_reports/twl25_loss_sweep
+          git commit -m "sweep: publish TWL25 loss-filter tick results" || echo "nothing to commit"
+          git push || echo "push failed"
