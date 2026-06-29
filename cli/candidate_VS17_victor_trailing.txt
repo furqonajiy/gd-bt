@@ -1,0 +1,341 @@
+# =========================================================================
+# VICTOR TRAILING -- VS17 (Victor Slm-1.7)  | tag VS17   *** RESEARCH ***
+# VS17 = the #1 DD<=40% VIC cell of the TICK-CALIBRATED Jan-2026 Phase-2
+# full trailing sweep (sweep_reports/tick_cal_jan_full/vic_phase2.csv #1).
+#
+# WHAT IT IS: V116's Victor provider feed + geometry, with TRAILING ON and
+#   the Phase-2 winner's levers:
+#     --entries                    7 -> 8     (one more entry rung)
+#     --sl-multiplier            1.5 -> 1.7   (wider stop -- more room to breathe)
+#     --activation-delay (min)     1 -> 0     (open immediately)
+#     --max-hold (min)           180 -> 150   (exit sooner)
+#     --trailing-open-distance     0 -> 0.5   (enter on pullback+rebound)
+#     --trailing-close-distance    0 -> 0.5   (trail the exit)
+#     --trailing-close-after-stage 0 -> 1     (trail ONLY after TP1)
+#   OTHERWISE IDENTICAL to V116 / VCT5: range_to_sl / entry-sl-gap 0.5 /
+#     final-target TP2 / lock-after-tp1+tp2 / tp1-lock-delay 12 /
+#     tp1-lock-fraction 0.5 / tp2-lock-target TP1 / runner-after-tp3 false.
+#   *** RISK 5% *** (matching deployed VCT5 for a direct comparison).
+#
+# CALIBRATED EVIDENCE at risk 1% / $50k (Phase-2 tick-calibrated, Jan 2026;
+#   ~1,319 signals):
+#   est. edge  (fixed-lot)  $18,442   (vs deployed VCT5 $14,023  -- +31%)
+#   est. OOS   (fixed-lot)  $1,272    (vs VCT5 $977              -- +30%)
+#   est. DD                 38.4%     (vs VCT5 23.5%             -- +14.9pp)
+#   tick OOS   (real fills) $755      (vs VCT5 $977              -- -23%)
+#   f_edge (M1->TICK ratio) 0.427     (M1 overstates ~2.3x)
+#   At RISK 5% the DD scales up ~5x off this 1% base.
+#
+# vs DEPLOYED VCT5: VS17 leads on est_edge (+31%) and est_oos (+30%), but:
+#   - tick_oos is LOWER ($755 vs $977) -- real OOS fills are weaker
+#   - est_dd is HIGHER (38.4% vs 23.5% at 1% risk)
+#   - slm 1.7 (wider stop) vs 1.5 -- more aggressive
+#   Decision: RESEARCH ONLY -- demo-validate before replacing VCT5.
+#
+# *** READ BEFORE TRUSTING THIS ***
+#  1) The wider stop (slm 1.7) and extra entry rung (e8) amplify both edge
+#     and DD; at 5% risk the DD will be substantially above the 38.4% (1%)
+#     base figure. Size conservatively; use --max-drawdown-limit-pct to cap.
+#  2) Numbers are TICK-CALIBRATED ESTIMATES (M1 Jan scaled by May-Jun
+#     M1->TICK ratio); real ticks exist only for May-Jun. Forward-validate.
+#  3) ELEV8 ticks != your live/demo broker; trailing fills are broker-driven.
+#  4) BROKER MIN-STOP: trailing 0.5 must be >= SYMBOL_TRADE_STOPS_LEVEL.
+#
+# IDENTITY (tag **VS17**, disjoint magics from V116/VCT5; SHARES Victor feed):
+#   --strategy-tag VS17 . --positions-json positions_vs17.json .
+#   reports/VS17_2026xx (Excel) . forensic_vs17.jsonl / notifications_vs17.jsonl.
+#   FEED: Victor's provider feed (victor_signals.txt / signals/victor_live.txt)
+#   -- the SAME source as V116/VCT5. Run the listener+filter (sections 1-2)
+#   ONCE; all Victor executors share the one feed.
+#
+# SECTION MAP (copy-paste 5-9 for backtests; 4 is N/A for Victor):
+#   1. Telegram Listener            (Victor channel -> victor_signals.txt; SHARED)
+#   2. Live Loop Signal Generator   (provider filter --watch; SHARED with V116/VCT5)
+#   3. Live Auto Executor           (tag VS17, TRAILING on, risk 5%)
+#   4. Signal Generator             (N/A -- backtest reads victor_signals.txt direct)
+#   5. Backtest from 2026-06         -> reports/VS17_202606.xlsx  (R4; slip 2.0/1.0)
+#   6. Backtest from 2026-01         -> reports/VS17_202601.xlsx  (R4; slip 2.0/1.0)
+#   7. Backtest 2025 (R3 strong)     -> reports/VS17_2025.xlsx    (slip 0.9/0.45)
+#   8. Backtest 2024 (R2 bull)       -> reports/VS17_2024.xlsx    (slip 0.5/0.25)
+#   9. Backtest 2021-2023 (R1 quiet) -> reports/VS17_2021_2023.xlsx (slip 0.4/0.2)
+# =========================================================================
+
+# ===== 1. TELEGRAM LISTENER =====
+# SHARED with V116/VCT5 -- run only ONE copy of the listener.
+python listeners\telegram\listener.py --signals-file victor_signals.txt
+
+# ===== 2. LIVE LOOP SIGNAL GENERATOR =====
+# Provider filter --watch mode. SHARED with V116/VCT5 -- run once.
+python tools/live_provider_signal_filter.py `
+  --input victor_signals.txt `
+  --output signals/victor_live.txt `
+  --preset all `
+  --watch `
+  --interval 2
+
+# ===== 3. LIVE AUTO EXECUTOR =====
+# tag VS17, trailing-open 0.5 + trailing-close 0.5 after TP1.
+# sl-multiplier 1.7, entries 8, max-hold 150, activation-delay 0.
+python tools/auto_explicit.py `
+  --signals signals/victor_live.txt `
+  --positions-json positions_vs17.json `
+  --strategy-tag VS17 `
+  --forensic-log forensic_vs17.jsonl `
+  --notifications notifications_vs17.jsonl `
+  --watch-interval 3 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
+  --lot-step 0.01 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --replace-missing-entries true `
+  --reopen-missing-positions true `
+  --apply-signal-edits true `
+  --signal-overrides-file signal_overrides.jsonl
+
+# ===== 4. SIGNAL GENERATOR (before backtest) =====
+# N/A -- backtest reads victor_signals.txt directly.
+
+# ===== 5. BACKTEST FROM 2026-06 (current month) =====
+# TICK-AWARE: real fills from committed tick archive (2026-05+), M1 elsewhere.
+# --lock-tp1/tp2-exit-slippage 2.0/1.0 model the locked-exit give-back (R4).
+# --max-drawdown-limit-pct 200: research cell; let it run to see full picture.
+python tools/backtest_hybrid.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
+  --sync-charts true `
+  --sync-ticks false `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --output-dir reports/VS17_202606 `
+  --initial-capital 50000 `
+  --start-date 2026-06-01
+
+# ===== 6. BACKTEST FROM 2026-01 (current regime) =====
+python tools/backtest_hybrid.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
+  --sync-charts true `
+  --sync-ticks false `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --output-dir reports/VS17_202601 `
+  --initial-capital 50000 `
+  --start-date 2026-01-01
+
+# ===== 7. BACKTEST FROM 2025 (R3 strong) =====
+# Era-matched slippage 0.9/0.45 (R3). M1 only (no tick overlap).
+python tools/backtest_explicit.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 0.9 `
+  --lock-tp2-exit-slippage 0.45 `
+  --output-dir reports/VS17_2025 `
+  --initial-capital 50000 `
+  --start-date 2025-01-01 `
+  --end-date 2025-12-31
+
+# ===== 8. BACKTEST FROM 2024 (R2 bull) =====
+# Era-matched slippage 0.5/0.25 (R2). M1 only.
+python tools/backtest_explicit.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 0.5 `
+  --lock-tp2-exit-slippage 0.25 `
+  --output-dir reports/VS17_2024 `
+  --initial-capital 50000 `
+  --start-date 2024-01-01 `
+  --end-date 2024-12-31
+
+# ===== 9. BACKTEST FROM 2021-2023 (R1 quiet) =====
+# Era-matched slippage 0.4/0.2 (R1). M1 only.
+# NOTE: Victor only began posting ~2024; this window barely emits.
+python tools/backtest_explicit.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 0.4 `
+  --lock-tp2-exit-slippage 0.2 `
+  --output-dir reports/VS17_2021_2023 `
+  --initial-capital 50000 `
+  --start-date 2021-01-01 `
+  --end-date 2023-12-31
