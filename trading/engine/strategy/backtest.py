@@ -418,6 +418,30 @@ def aggregate_backtest_result(rows, entry_rows, excluded, config, chart_df,
     for b in monthly_rows:
         b["regime"] = month_regimes.get(b["month"], "")
 
+    # Month-week breakdown: group by the signal's feed-zone month + week-of-month
+    # (W1 = days 1-7, W2 = 8-14, W3 = 15-21, W4 = 22-28, W5 = 29-31), using the
+    # SAME feed-zone date the monthly/daily breakdowns use, so a week row lines up
+    # with the signal codes. Labels are zero-padded month + single-digit week, so
+    # a plain string sort is chronological (2026-05 W4 < 2026-06 W1 < ... W5).
+    weekly: dict[str, dict] = {}
+    for r in rows:
+        src = r["signal_time_source"]
+        wk = f"{src.strftime('%Y-%m')} W{(src.day - 1) // 7 + 1}"
+        if wk not in weekly:
+            weekly[wk] = _new_bucket("week", wk, r["equity_before"])
+        bucket = weekly[wk]
+        bucket["signals"] += 1
+        bucket[_STATUS_TO_KEY.get(r["status"], "no_fills")] += 1
+        if r["pnl"] is not None:
+            bucket["pnl"] += r["pnl"]
+            bucket["trading_pnl"] += r.get("trading_pnl") or 0.0
+            bucket["bonus"] += r.get("bonus") or 0.0
+            bucket["closed_lots"] += r.get("closed_lots") or 0.0
+        bucket["equity_end"] = r["equity_after"]
+    weekly_rows = sorted(weekly.values(), key=lambda b: b["week"])
+    for b in weekly_rows:
+        _finalize_bucket(b)
+
     # Per-entry aggregation (status counts + realized R) keyed by day, used by
     # both the Daily Breakdown and the Summary.
     daily_entry: dict[str, dict] = {}
@@ -523,6 +547,7 @@ def aggregate_backtest_result(rows, entry_rows, excluded, config, chart_df,
         "rows": rows,
         "entry_rows": entry_rows,
         "monthly": monthly_rows,
+        "weekly": weekly_rows,
         "daily": daily_rows,
     }
 

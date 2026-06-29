@@ -1,11 +1,14 @@
 """Excel report writer for backtest results.
 
-Three sheets:
+Four sheets:
   1. Summary           — config, overall stats, entry-outcome counts, realized
                          risk:reward, and the monthly breakdown
-  2. Daily Breakdown   — one row per traded day (pre-start padding excluded),
+  2. Weekly Breakdown  — one row per feed-zone month-week (W1=days 1-7, W2=8-14,
+                         ..., W5=29-31), the mid-grain view between Monthly and
+                         Daily, with the same P&L / win-rate / equity columns
+  3. Daily Breakdown   — one row per traded day (pre-start padding excluded),
                          with per-entry outcome counts and realized R per day
-  3. Per-Entry Detail  — one row per Entry slot, split into ORIGINAL (signal)
+  4. Per-Entry Detail  — one row per Entry slot, split into ORIGINAL (signal)
                          vs EXECUTED (backtest result) column groups
 
 Soft dependency on openpyxl; importing this module raises ImportError if
@@ -327,6 +330,55 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Weekly (month-week) Breakdown sheet
+# ---------------------------------------------------------------------------
+
+def _write_weekly_sheet(ws: Worksheet, result: dict) -> None:
+    """One row per feed-zone month-week (W1=days 1-7 .. W5=29-31). Mirrors the
+    Summary's Monthly Breakdown columns (minus Regime, which is a month-level
+    label) so the mid-grain view reads the same way."""
+    ws.title = "Weekly Breakdown"
+    headers = ["Month-Week", "Signals", "Wins", "Losses", "No-fills",
+               "Win rate", "Trading P&L", "Bonus", "Closed lots",
+               "Net P&L", "P&L %", "Equity EoW"]
+    _write_header(ws, 1, headers)
+
+    weekly = result.get("weekly", []) or []
+    for r_idx, w in enumerate(weekly, start=2):
+        pnl = w.get("pnl", 0.0) or 0.0
+        pnl_pct = w.get("pnl_pct", 0.0) or 0.0
+        signals = w.get("signals", 0) or 0
+        cells = [
+            w.get("week"), signals, w.get("wins"), w.get("losses"), w.get("no_fills"),
+            f"{w.get('win_rate_pct', 0):.1f}%",
+            w.get("trading_pnl", 0.0), w.get("bonus", 0.0), w.get("closed_lots", 0.0),
+            pnl, f"{pnl_pct:+.2f}%", w.get("equity_end", 0.0) or 0.0,
+        ]
+        if signals == 0:
+            _apply_row_fill(ws, r_idx, len(headers), QUIET_DAY_FILL)
+        elif pnl > 0:
+            _apply_row_fill(ws, r_idx, len(headers), PROFIT_FILL)
+        elif pnl < 0:
+            _apply_row_fill(ws, r_idx, len(headers), LOSS_FILL)
+        for c, v in enumerate(cells, start=1):
+            cell = ws.cell(row=r_idx, column=c, value=v)
+            cell.border = GRID
+            if c in (7, 8, 10):              # Trading P&L, Bonus, Net P&L
+                _style_money_cell(cell, float(v or 0.0) if isinstance(v, (int, float)) else None)
+            elif c == 9:                     # Closed lots
+                cell.number_format = LOT_FMT
+            elif c == 11:                    # P&L %
+                _style_pct_cell(cell, pnl_pct)
+            elif c == 12:                    # Equity end-of-week (a level, no red)
+                cell.number_format = MONEY_FMT
+
+    ws.freeze_panes = "A2"
+    if weekly:
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(weekly) + 1}"
+    _autosize(ws)
+
+
+# ---------------------------------------------------------------------------
 # Daily Breakdown sheet
 # ---------------------------------------------------------------------------
 
@@ -563,6 +615,7 @@ def write_excel_report(result: dict, output_path: Path | str) -> Path:
 
     wb = Workbook()
     _write_summary_sheet(wb.active, result)
+    _write_weekly_sheet(wb.create_sheet("Weekly Breakdown"), result)
     _write_daily_sheet(wb.create_sheet("Daily Breakdown"), result)
     _write_entries_sheet(wb.create_sheet("Per-Entry Detail"), result)
 

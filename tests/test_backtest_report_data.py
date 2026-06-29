@@ -195,3 +195,40 @@ def test_summary_monthly_breakdown_shows_equity_end_of_month(tmp_path):
     assert month_cells[0] == "2026-06"
     assert month_cells[1] == (monthly[0].get("regime") or "-")   # regime label cell
     assert month_cells[12] == monthly[0]["equity_end"]
+
+
+def test_weekly_breakdown_groups_by_feed_zone_month_week(tmp_path):
+    # 2026-06-02 falls in week-of-month W1 (days 1-7), keyed on the FEED-zone date
+    # (same zone the monthly/daily breakdowns use).
+    sig = parse_one_signal(
+        "1. BUY XAUUSD 100 - 100 SL 95 TP1 110 TP2 115 TP3 120 11:00 AM",
+        source_date="2026-06-02", source_offset=3,
+    )
+    result = run_backtest([sig], _chart(tmp_path), _config())
+    weekly = result["weekly"]
+    assert [w["week"] for w in weekly] == ["2026-06 W1"]
+    w = weekly[0]
+    assert w["signals"] == 1 and w["wins"] == 1
+    # A single-week run: the week's P&L and end equity match the month and the run.
+    assert w["equity_end"] == result["final_equity"]
+    assert round(w["pnl"], 6) == round(result["monthly"][0]["pnl"], 6)
+
+
+def test_weekly_breakdown_sheet_written_with_headers(tmp_path):
+    from openpyxl import load_workbook
+
+    from trading.engine import write_backtest_outputs
+
+    sig = parse_one_signal(
+        "1. BUY XAUUSD 100 - 100 SL 95 TP1 110 TP2 115 TP3 120 11:00 AM",
+        source_date="2026-06-02", source_offset=3,
+    )
+    result = run_backtest([sig], _chart(tmp_path), _config())
+    path = write_backtest_outputs(result, tmp_path / "reports" / "weekly_check")
+    wb = load_workbook(path)
+    assert "Weekly Breakdown" in wb.sheetnames
+    ws = wb["Weekly Breakdown"]
+    headers = [ws.cell(row=1, column=c).value for c in range(1, 13)]
+    assert headers[0] == "Month-Week"
+    assert headers[-1] == "Equity EoW"
+    assert ws.cell(row=2, column=1).value == "2026-06 W1"   # first month-week row
