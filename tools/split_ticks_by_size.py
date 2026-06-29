@@ -29,11 +29,62 @@ import argparse
 import glob
 import re
 import sys
+import time
 from pathlib import Path
 
 _MIB = 1024 * 1024
 # Match a _pN part of ANY source tag (ELEV8, DEMO, ...); group(1) is the part num.
 _PART_RE = re.compile(r"_p(\d+)_[A-Za-z0-9]+\.csv$")
+
+# Windows sharing-violation error codes: ERROR_SHARING_VIOLATION (32) and
+# ERROR_LOCK_VIOLATION (33). A freshly-written tick part is routinely held open
+# for a beat by Windows Defender, the Search indexer, Explorer's preview pane, or
+# a parallel run, so a bare Path.unlink() raises PermissionError (WinError 32) and
+# aborts the whole sync MID-REASSEMBLE -- leaving BOTH the joined file and its
+# _pN parts on disk, which the consumer glob then DOUBLE-loads (duplicate ticks,
+# since load_ticks does not dedup). Every tick-archive delete goes through
+# robust_remove so a transient lock costs a beat, not a failed/corrupt sync.
+_WIN_SHARING_VIOLATIONS = (32, 33)
+
+
+def _is_sharing_violation(err: OSError) -> bool:
+    """True for a Windows file-in-use error (WinError 32/33). On POSIX, unlink
+    succeeds even while the file is open, so this is never true there -- a genuine
+    POSIX PermissionError (e.g. a read-only directory) is therefore NOT retried."""
+    return getattr(err, "winerror", None) in _WIN_SHARING_VIOLATIONS
+
+
+def robust_remove(path: Path, *, retries: int = 6, base_delay: float = 0.4,
+                  _sleep=time.sleep) -> None:
+    """Delete ``path``, waiting out a transient Windows file lock.
+
+    Retries ONLY a Windows sharing violation (WinError 32/33) with capped
+    exponential backoff (~0.4s doubling to 5s, ~16s worst case); an already-gone
+    file is a clean no-op (idempotent); any other error -- including a genuine
+    POSIX PermissionError -- raises immediately rather than spinning. After
+    ``retries`` failed waits it re-raises with an actionable message. This is the
+    single choke point every tick-archive unlink goes through, so no sync is
+    aborted (and no half-reassembled duplicate state is left) by an antivirus or
+    indexer momentarily holding a part open."""
+    delay = base_delay
+    for attempt in range(retries + 1):
+        try:
+            path.unlink()
+            return
+        except FileNotFoundError:
+            return  # already removed -> idempotent
+        except OSError as err:
+            if not _is_sharing_violation(err):
+                raise  # genuine error (or POSIX) -> don't spin
+            if attempt == retries:
+                raise PermissionError(
+                    f"{path.name} is still locked by another process after "
+                    f"{retries + 1} attempts. Close MetaTrader 5 / Explorer / the "
+                    f"backtest holding data/ticks, or exclude data/ticks from your "
+                    f"antivirus, then re-run."
+                ) from err
+            _sleep(delay)
+            delay = min(delay * 2, 5.0)
 # Trailing _<TAG>.csv source tag (e.g. _ELEV8, _DEMO); the live archive is ELEV8.
 # The tag must START with a letter so a purely-numeric suffix (a legacy untagged
 # ``XAUUSD_TICK_202606.csv``) is NOT mistaken for a source tag.
@@ -89,7 +140,7 @@ def join_parts(parts: list[Path], dest: Path, *, remove_parts: bool = False) -> 
     print(f"[joined] {len(parts)} part(s) -> {dest.name} ({dest.stat().st_size / _MIB:.1f} MiB)")
     if remove_parts:
         for p in parts:
-            p.unlink()
+            robust_remove(p)
         print(f"[removed parts] {len(parts)}")
     return dest
 
@@ -146,7 +197,7 @@ def split_file(src: Path, max_bytes: int, *, remove_source: bool = False,
     for p in parts:
         print(f"[part] {p.name}: {p.stat().st_size / _MIB:.1f} MiB")
     if remove_source:
-        src.unlink()
+        robust_remove(src)
         print(f"[removed source] {src.name}")
     return parts
 

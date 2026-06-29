@@ -96,7 +96,18 @@ pair is a thin package that imports it.
   `_*_ELEV8.csv` (the workflows' `_p*` were widened to `_*`) and `load_ticks`
   re-sorts every row by timestamp, so `_pN` (byte) and `_D<start>_pN` (date) parts
   concatenate correctly. `--split-days` and `--split-mb` are mutually exclusive. See
-  `cli/resync_ticks.txt`.
+  `cli/resync_ticks.txt`. **Every tick-archive delete goes through
+  `split_ticks_by_size.robust_remove`** (used by `join_parts`, `split_file`,
+  `split_file_by_days`, and `export_ticks`), which **retries a Windows sharing
+  violation (`WinError 32`) with capped backoff (~16s)** instead of aborting —
+  a part momentarily held by Windows Defender / the Search indexer / Explorer /
+  a parallel run no longer leaves a half-reassembled archive (the joined
+  `_D<start>_<TAG>.csv` **and** its `_pN` parts both on disk → the consumer glob
+  double-loads that window, since `load_ticks` doesn't dedup). A genuine POSIX
+  `PermissionError` is not retried (it re-raises at once), so Linux/CI is
+  unchanged; `tests/test_robust_remove.py` pins both. Still, **exclude
+  `data/ticks` from the AV scanner** and prefer the standalone sync so it never
+  even has to wait.
 - `listeners/` — per-platform signal-source listeners, one subfolder per source
   (`telegram/`, and future `whatsapp/`, etc.).
   `listeners/telegram/listener.py` — ingests Victor's Telegram channel into

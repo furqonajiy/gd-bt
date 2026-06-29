@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from trading.engine import Mt5Connection, POINT_VALUE  # noqa: E402
+from tools.split_ticks_by_size import robust_remove  # noqa: E402
 
 
 UTC = timezone.utc
@@ -177,13 +178,13 @@ def _export_month(conn: Mt5Connection, args: argparse.Namespace, month_start: da
     # A header-only file is a stale artifact of a prior run that hit a no-tick
     # window; drop it so it neither blocks a re-fetch nor counts as data.
     if _is_header_only_tick_file(out_path):
-        out_path.unlink()
+        robust_remove(out_path)
         print(f"[empty] removed header-only tick file: {out_path}")
 
     out_exists = out_path.exists() and out_path.stat().st_size > 0
 
     if out_exists and args.overwrite:
-        out_path.unlink()
+        robust_remove(out_path)
         out_exists = False
 
     # Merge resumes from the last stored tick and appends only newer ones, so
@@ -254,7 +255,7 @@ def _export_month(conn: Mt5Connection, args: argparse.Namespace, month_start: da
             print(f"[merge] {out_path}: up to date (+0 ticks).")
         else:
             if out_path.exists():
-                out_path.unlink()
+                robust_remove(out_path)
             print(f"[empty] {args.symbol} {month_start:%Y-%m}: no ticks; skipped file creation.")
         return 0
 
@@ -354,7 +355,7 @@ def _merge_append_split_month(conn, args, month_start: datetime, month_end: date
     # never touched. force=True writes a single _p{last_n} even if the tail is sub-cap.
     shutil.copyfile(last_part, out_path)
     _write_rows(out_path, new_rows, write_header=False)
-    last_part.unlink()
+    robust_remove(last_part)
     written = split_file(out_path, int(args.split_mb * 1024 * 1024),
                          remove_source=True, start_part=last_n, force=True)
     print(f"[merge] {args.symbol} {month_start:%Y-%m}: +{len(new_rows):,} ticks appended; "

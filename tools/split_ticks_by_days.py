@@ -52,7 +52,8 @@ if str(ROOT) not in sys.path:
 # (parts_for) and its source-tag splitter (_split_tag) so the FIRST migration from
 # a size archive can rebuild the full month AND a non-ELEV8 archive (e.g. _DEMO)
 # splits/joins with the same machinery; never re-derive the join or the size cut.
-from tools.split_ticks_by_size import _split_tag, join_parts, parts_for, split_file  # noqa: E402
+from tools.split_ticks_by_size import (  # noqa: E402
+    _split_tag, join_parts, parts_for, robust_remove, split_file)
 
 _MIB = 1024 * 1024
 # _D<start>_p<sub>_<TAG>: a date window (start day-of-month) carrying a size
@@ -113,7 +114,7 @@ def split_file_by_days(src: Path, days: int = 3, *, max_mb: float = 95.0,
     # Clean slate: drop existing date parts AND legacy size parts for this base.
     for stale in (*day_parts_for(src), *parts_for(src)):
         if stale != src and stale.exists():
-            stale.unlink()
+            robust_remove(stale)
 
     # Pass 1: route rows into one full temp file per date window.
     windows: dict[int, "_PartHandle"] = {}
@@ -150,7 +151,7 @@ def split_file_by_days(src: Path, days: int = 3, *, max_mb: float = 95.0,
             print(f"[part] {p.name}: days {start_day:02d}-{hi:02d}, {p.stat().st_size / _MIB:.1f} MiB")
         parts.extend(sub)
     if remove_source:
-        src.unlink()
+        robust_remove(src)
         print(f"[removed source] {src.name}")
     return parts
 
