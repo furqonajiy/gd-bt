@@ -240,3 +240,6 @@ data/XAUUSD_M15_*_ELEV8.csv
 # The _DEMO M1 + tick CSVs are bulky (~1 GB of ticks) and broker-specific, so
 # they are NEVER committed to main — only the demo CLI snapshots are tracked.
 /data/demo/
+
+# Scratch live-vs-backtest reconcile sims (regenerated, not committed)
+reports/SIM_*.xlsx
