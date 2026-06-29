@@ -1,0 +1,332 @@
+# =========================================================================
+# SELF-SCALPER TRAILING -- TSL18 (Trailing SLM 1.8)  | tag TSL18   *** RESEARCH ***
+# TSL18 = a SECOND deployed identity of T818 -- IDENTICAL params/feed/geometry,
+# a distinct 5-char tag so it can run BESIDE T818 (and T160/SQZ6/T18S) on one
+# account with disjoint magics/comments. Use it for an A/B sleeve or a parallel
+# demo of the same strategy without colliding on positions/orders.
+#
+# WHAT IT IS (identical to T818): the C160 self-scalper feed (RSI 70/30 +
+#   Bollinger squeeze >=0.0006 + R:R 1.2/2.5/5.0) + trailing-open/close 0.5/0.5
+#   engaged after TP2, on the Phase-2 winner geometry:
+#     entries 8 / range_to_sl / entry-sl-gap 0.7 / shared-sl off /
+#     sl-multiplier 1.8 / max-hold 150 / activation-delay 0 / final-target TP3 /
+#     lock-after-tp1+tp2 / tp1-lock-delay 24 / tp2-lock-delay 24 /
+#     tp1-lock-fraction 0.75 / trailing-close-after-stage 2. Risk 1%.
+#
+# CALIBRATED EVIDENCE (inherits T818's, risk 1% / $50k, Phase-2 tick-calibrated
+#   Jan 2026, ~10,140 signals): est. edge $108,985 / est. OOS $6,408 /
+#   est. DD 38.6% / tick_oos (real fills) ONLY $52.
+#
+# *** READ BEFORE TRUSTING THIS (same caveats as T818) ***
+#  1) tick_oos = $52 is near-zero on real fills -- the most honest forward
+#     metric. The est_edge gain comes mainly from in-sample M1 scaling.
+#  2) Numbers are TICK-CALIBRATED ESTIMATES (M1 Jan scaled by May-Jun ratio).
+#  3) ELEV8 ticks != your live/demo broker; trailing fills are broker-driven.
+#  4) BROKER MIN-STOP: trailing 0.5 must be >= SYMBOL_TRADE_STOPS_LEVEL.
+#  Decision: RESEARCH ONLY -- demo-validate (side-by-side vs T818) before live.
+#
+# IDENTITY (tag **TSL18** -- a 5-char tag; disjoint magics; runs beside
+#   T818/T160/SQZ6/T18S on one account):
+#   --strategy-tag TSL18 . --positions-json positions_tsl18.json .
+#   feed signals/tsl18.txt (static) + signals/tsl18_live.txt (live) .
+#   reports/TSL18_2026xx (Excel) . forensic_tsl18.jsonl / notifications_tsl18.jsonl.
+#
+# SECTION MAP (copy-paste 4-9 to generate archive + run backtests):
+#   1. Telegram Listener            (N/A -- self-generated feed)
+#   2. Live Loop Signal Generator   (continuous feed -> signals/tsl18_live.txt)
+#   3. Live Auto Executor           (tag TSL18, TRAILING on, risk 1%)
+#   4. Signal Generator             (one-shot static archive signals/tsl18.txt)
+#   5. Backtest from 2026-06         -> reports/TSL18_202606.xlsx  (R4; slip 2.0/1.0)
+#   6. Backtest from 2026-01         -> reports/TSL18_202601.xlsx  (R4; slip 2.0/1.0)
+#   7. Backtest 2025 (R3 strong)     -> reports/TSL18_2025.xlsx    (slip 0.9/0.45)
+#   8. Backtest 2024 (R2 bull)       -> reports/TSL18_2024.xlsx    (slip 0.5/0.25)
+#   9. Backtest 2021-2023 (R1 quiet) -> reports/TSL18_2021_2023.xlsx (slip 0.4/0.2)
+# =========================================================================
+
+# ===== 1. TELEGRAM LISTENER =====
+# N/A -- self-generated feed. Signals come from the generator (sections 2+4).
+
+# ===== 2. LIVE LOOP SIGNAL GENERATOR =====
+# C160 feed (RSI 70/30 + Bollinger >=0.0006 + R:R 1.2/2.5/5) -- IDENTICAL filter
+# to T160/T18S. Each strategy gets its own output feed so they stay independent.
+python tools/live_feed_loop.py `
+  --family scalper `
+  --interval 30 `
+  --gen-start-days 3 `
+  --gen-recent-months 2 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/tsl18_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
+
+# ===== 3. LIVE AUTO EXECUTOR =====
+# trailing-open 0.5 + trailing-close 0.5, engaged after TP2 (after_stage 2).
+# slm 1.8, entries 8, max-hold 150, activation-delay 0.
+python tools/auto_explicit.py `
+  --signals signals/tsl18_live.txt `
+  --positions-json positions_tsl18.json `
+  --strategy-tag TSL18 `
+  --forensic-log forensic_tsl18.jsonl `
+  --notifications notifications_tsl18.jsonl `
+  --watch-interval 1 `
+  --reopen-missing-positions true `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --trailing-live-entry true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
+  --lot-step 0.01 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --shared-sl false `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.8 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 24 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.75 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 2
+
+# ===== 4. SIGNAL GENERATOR (before backtest) =====
+# One-shot full static archive signals/tsl18.txt from ALL chart history.
+# C160 feed filter -- identical to T160/T18S section 4, different output file.
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/tsl18.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
+
+# ===== 5. BACKTEST FROM 2026-06 (current month) =====
+# TICK-AWARE: real fills from committed tick archive (2026-05+), M1 elsewhere.
+# slm 1.8 / entries 8 / max-hold 150 -- the Phase-2 calibrated winner geometry.
+# --lock-tp1/tp2-exit-slippage 2.0/1.0 (R4 era-matched; backtest-only realism).
+# --max-drawdown-limit-pct 200: research cell; let it run to see full picture.
+python tools/backtest_hybrid.py `
+  --signals signals/tsl18.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
+  --sync-ticks true `
+  --sync-charts true `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --shared-sl false `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.8 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 24 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.75 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 2 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --output-dir reports/TSL18_202606 `
+  --initial-capital 50000 `
+  --start-date 2026-06-01
+
+# ===== 6. BACKTEST FROM 2026-01 (current regime) =====
+python tools/backtest_hybrid.py `
+  --signals signals/tsl18.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
+  --sync-ticks true `
+  --sync-charts true `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --shared-sl false `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.8 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 24 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.75 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 2 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --output-dir reports/TSL18_202601 `
+  --initial-capital 50000 `
+  --start-date 2026-01-01
+
+# ===== 7. BACKTEST FROM 2025 (R3 strong) =====
+# Era-matched slippage 0.9/0.45 (R3). M1 only (no tick overlap).
+python tools/backtest_explicit.py `
+  --signals signals/tsl18.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --shared-sl false `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.8 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 24 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.75 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 2 `
+  --lock-tp1-exit-slippage 0.9 `
+  --lock-tp2-exit-slippage 0.45 `
+  --output-dir reports/TSL18_2025 `
+  --initial-capital 50000 `
+  --start-date 2025-01-01 `
+  --end-date 2025-12-31
+
+# ===== 8. BACKTEST FROM 2024 (R2 bull) =====
+# Era-matched slippage 0.5/0.25 (R2). M1 only.
+python tools/backtest_explicit.py `
+  --signals signals/tsl18.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --shared-sl false `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.8 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 24 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.75 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 2 `
+  --lock-tp1-exit-slippage 0.5 `
+  --lock-tp2-exit-slippage 0.25 `
+  --output-dir reports/TSL18_2024 `
+  --initial-capital 50000 `
+  --start-date 2024-01-01 `
+  --end-date 2024-12-31
+
+# ===== 9. BACKTEST FROM 2021-2023 (R1 quiet) =====
+# Era-matched slippage 0.4/0.2 (R1). M1 only.
+python tools/backtest_explicit.py `
+  --signals signals/tsl18.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --shared-sl false `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.8 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 24 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.75 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 2 `
+  --lock-tp1-exit-slippage 0.4 `
+  --lock-tp2-exit-slippage 0.2 `
+  --output-dir reports/TSL18_2021_2023 `
+  --initial-capital 50000 `
+  --start-date 2021-01-01 `
+  --end-date 2023-12-31

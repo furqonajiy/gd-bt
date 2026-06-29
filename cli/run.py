@@ -57,6 +57,7 @@ ALIASES = {
     "t160": "candidate_T160_trailing_tick",
     "t18s": "candidate_T18S_trailing_tick",
     "t818": "candidate_T818_trailing_tick",
+    "tsl18": "candidate_TSL18_trailing_tick",
     "resync": "resync_m1_from_2020",
     "resync-ticks": "resync_ticks", "ticks": "resync_ticks",
 }
