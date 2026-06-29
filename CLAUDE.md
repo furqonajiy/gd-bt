@@ -149,12 +149,16 @@ pair is a thin package that imports it.
   (header, then `[ts] Add Signal …` per new signal). `--family` picks the
   generator; args after `--` pass through. `fetch` gained `--months N` (default
   2; live loops use 1 since rolled-over months are immutable).
-- `reporting/excel_report.py` — three-sheet backtest workbook (Summary /
-  Daily Breakdown / Per-Entry Detail; the Per-Entry sheet splits ORIGINAL
-  signal vs EXECUTED result, realized risk:reward rendered as `1:N`). The
-  Summary's Monthly Breakdown carries a **Regime** column — each month is
-  classified (R1quiet/R2bull/R3strong/R4parab) from its own M1 bars. The
-  **Daily and Monthly breakdowns group by each signal's own feed-zone
+- `reporting/excel_report.py` — four-sheet backtest workbook (Summary /
+  **Weekly Breakdown** / Daily Breakdown / Per-Entry Detail; the Per-Entry sheet
+  splits ORIGINAL signal vs EXECUTED result, realized risk:reward rendered as
+  `1:N`). The Summary's Monthly Breakdown carries a **Regime** column — each
+  month is classified (R1quiet/R2bull/R3strong/R4parab) from its own M1 bars. The
+  **Weekly Breakdown** sheet is the mid-grain view between Monthly and Daily —
+  one row per **month-week** (`2026-06 W1` = days 1-7, `W2` = 8-14, … `W5` =
+  29-31, via `rows[*].weekly`), same P&L/win-rate/closed-lots/Equity-EoW columns
+  as the monthly table (minus Regime, a month-level label). The **Weekly, Daily
+  and Monthly breakdowns all group by each signal's own feed-zone
   (source) date** — the GMT+7 signal-code day (`SQZ6-0623`), via
   `rows[*].signal_time_source` — not the chart (EET/EEST) day, so a report row
   lines up with the codes the same way `--start-date`/`--end-date` do (an
