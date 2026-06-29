@@ -1,14 +1,15 @@
 # =========================================================================
-# SELF-SCALPER TRAILING -- T18S (Trailing SLM 1.8 Short)  | tag T18S   *** RESEARCH ***
-# T18S = the #1 DD<=40% TC18 cell of the TICK-CALIBRATED Jan-2026 Phase-2
-# full trailing sweep (sweep_reports/tick_cal_jan_full/tc18_phase2.csv #1).
+# SELF-SCALPER TRAILING -- T818 (Trailing E8 SLM1.8)  | tag T818   *** RESEARCH ***
+# T818 = the #1 DD<=40% TC18 cell of the TICK-CALIBRATED Jan-2026 Phase-2
+# full trailing sweep (sweep_reports/tick_cal_jan_full/tc18_phase2.csv #1),
+# promoted from T18S research into its own deployed identity.
 #
 # WHAT IT IS: the C160 self-scalper feed (RSI 70/30 + Bollinger squeeze
 #   >=0.0006 + R:R 1.2/2.5/5.0) + trailing-open/close 0.5/0.5 (after TP2),
 #   with the Phase-2 winner's levers vs deployed T160:
 #     --entries                  7 -> 8     (one more entry rung)
 #     --sl-multiplier          1.6 -> 1.8   (wider stop)
-#     --max-hold (min)         240 -> 150   (exit sooner -- the "Short" in T18S)
+#     --max-hold (min)         240 -> 150   (exit sooner)
 #   OTHERWISE IDENTICAL to T160/TC18: range_to_sl / entry-sl-gap 0.7 /
 #     shared-sl off / final-target TP3 / lock-after-tp1+tp2 / tp1-lock-delay 24 /
 #     tp2-lock-delay 24 / tp1-lock-fraction 0.75 / trailing-close-after-stage 2.
@@ -22,7 +23,7 @@
 #   tick OOS   (real fills) $52        (vs T160 $5,432 est OOS    -- MUCH WEAKER)
 #   f_edge (M1->TICK ratio) 0.402
 #
-# vs DEPLOYED T160: T18S leads on est_edge (+16%), est_oos (+18%), AND est_dd
+# vs DEPLOYED T160: T818 leads on est_edge (+16%), est_oos (+18%), AND est_dd
 #   is LOWER (38.6% vs 44.4%). HOWEVER:
 #   - tick_oos is ONLY $52 (vs T160's calibrated OOS $5,432) -- real OOS is weak
 #   - mh150 shortens hold time vs mh240; less trend-riding is the likely cause
@@ -37,21 +38,21 @@
 #  3) ELEV8 ticks != your live/demo broker; trailing fills are broker-driven.
 #  4) BROKER MIN-STOP: trailing 0.5 must be >= SYMBOL_TRADE_STOPS_LEVEL.
 #
-# IDENTITY (tag **T18S**, disjoint magics; runs beside T160/SQZ6 on one account):
-#   --strategy-tag T18S . --positions-json positions_t18s.json .
-#   feed signals/t18s.txt (static) + signals/t18s_live.txt (live) .
-#   reports/T18S_2026xx (Excel) . forensic_t18s.jsonl / notifications_t18s.jsonl.
+# IDENTITY (tag **T818**, disjoint magics; runs beside T160/SQZ6/T18S on one account):
+#   --strategy-tag T818 . --positions-json positions_t818.json .
+#   feed signals/t818.txt (static) + signals/t818_live.txt (live) .
+#   reports/T818_2026xx (Excel) . forensic_t818.jsonl / notifications_t818.jsonl.
 #
 # SECTION MAP (copy-paste 4-9 to generate archive + run backtests):
 #   1. Telegram Listener            (N/A -- self-generated feed)
-#   2. Live Loop Signal Generator   (continuous feed -> signals/t18s_live.txt)
-#   3. Live Auto Executor           (tag T18S, TRAILING on, risk 1%)
-#   4. Signal Generator             (one-shot static archive signals/t18s.txt)
-#   5. Backtest from 2026-06         -> reports/T18S_202606.xlsx  (R4; slip 2.0/1.0)
-#   6. Backtest from 2026-01         -> reports/T18S_202601.xlsx  (R4; slip 2.0/1.0)
-#   7. Backtest 2025 (R3 strong)     -> reports/T18S_2025.xlsx    (slip 0.9/0.45)
-#   8. Backtest 2024 (R2 bull)       -> reports/T18S_2024.xlsx    (slip 0.5/0.25)
-#   9. Backtest 2021-2023 (R1 quiet) -> reports/T18S_2021_2023.xlsx (slip 0.4/0.2)
+#   2. Live Loop Signal Generator   (continuous feed -> signals/t818_live.txt)
+#   3. Live Auto Executor           (tag T818, TRAILING on, risk 1%)
+#   4. Signal Generator             (one-shot static archive signals/t818.txt)
+#   5. Backtest from 2026-06         -> reports/T818_202606.xlsx  (R4; slip 2.0/1.0)
+#   6. Backtest from 2026-01         -> reports/T818_202601.xlsx  (R4; slip 2.0/1.0)
+#   7. Backtest 2025 (R3 strong)     -> reports/T818_2025.xlsx    (slip 0.9/0.45)
+#   8. Backtest 2024 (R2 bull)       -> reports/T818_2024.xlsx    (slip 0.5/0.25)
+#   9. Backtest 2021-2023 (R1 quiet) -> reports/T818_2021_2023.xlsx (slip 0.4/0.2)
 # =========================================================================
 
 # ===== 1. TELEGRAM LISTENER =====
@@ -59,7 +60,7 @@
 
 # ===== 2. LIVE LOOP SIGNAL GENERATOR =====
 # C160 feed (RSI 70/30 + Bollinger >=0.0006 + R:R 1.2/2.5/5) -- IDENTICAL filter
-# to T160. Each strategy gets its own output feed so they stay independent.
+# to T160/T18S. Each strategy gets its own output feed so they stay independent.
 python tools/live_feed_loop.py `
   --family scalper `
   --interval 30 `
@@ -67,17 +68,17 @@ python tools/live_feed_loop.py `
   --gen-recent-months 2 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
-  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/t18s_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
+  -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/t818_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
 
 # ===== 3. LIVE AUTO EXECUTOR =====
 # trailing-open 0.5 + trailing-close 0.5, engaged after TP2 (after_stage 2).
 # slm 1.8, entries 8, max-hold 150, activation-delay 0.
 python tools/auto_explicit.py `
-  --signals signals/t18s_live.txt `
-  --positions-json positions_t18s.json `
-  --strategy-tag T18S `
-  --forensic-log forensic_t18s.jsonl `
-  --notifications notifications_t18s.jsonl `
+  --signals signals/t818_live.txt `
+  --positions-json positions_t818.json `
+  --strategy-tag T818 `
+  --forensic-log forensic_t818.jsonl `
+  --notifications notifications_t818.jsonl `
   --watch-interval 1 `
   --reopen-missing-positions true `
   --mt5-symbol XAUUSD `
@@ -114,9 +115,9 @@ python tools/auto_explicit.py `
   --trailing-close-after-stage 2
 
 # ===== 4. SIGNAL GENERATOR (before backtest) =====
-# One-shot full static archive signals/t18s.txt from ALL chart history.
-# C160 feed filter -- identical to T160's section 4, different output file.
-python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/t18s.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
+# One-shot full static archive signals/t818.txt from ALL chart history.
+# C160 feed filter -- identical to T160/T18S section 4, different output file.
+python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/t818.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
 
 # ===== 5. BACKTEST FROM 2026-06 (current month) =====
 # TICK-AWARE: real fills from committed tick archive (2026-05+), M1 elsewhere.
@@ -124,7 +125,7 @@ python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --o
 # --lock-tp1/tp2-exit-slippage 2.0/1.0 (R4 era-matched; backtest-only realism).
 # --max-drawdown-limit-pct 200: research cell; let it run to see full picture.
 python tools/backtest_hybrid.py `
-  --signals signals/t18s.txt `
+  --signals signals/t818.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
   --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
   --sync-ticks true `
@@ -162,13 +163,13 @@ python tools/backtest_hybrid.py `
   --trailing-close-after-stage 2 `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
-  --output-dir reports/T18S_202606 `
+  --output-dir reports/T818_202606 `
   --initial-capital 50000 `
   --start-date 2026-06-01
 
 # ===== 6. BACKTEST FROM 2026-01 (current regime) =====
 python tools/backtest_hybrid.py `
-  --signals signals/t18s.txt `
+  --signals signals/t818.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
   --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
   --sync-ticks true `
@@ -206,14 +207,14 @@ python tools/backtest_hybrid.py `
   --trailing-close-after-stage 2 `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
-  --output-dir reports/T18S_202601 `
+  --output-dir reports/T818_202601 `
   --initial-capital 50000 `
   --start-date 2026-01-01
 
 # ===== 7. BACKTEST FROM 2025 (R3 strong) =====
 # Era-matched slippage 0.9/0.45 (R3). M1 only (no tick overlap).
 python tools/backtest_explicit.py `
-  --signals signals/t18s.txt `
+  --signals signals/t818.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
   --max-drawdown-limit-pct 200 `
   --progress-interval-seconds 30 `
@@ -249,7 +250,7 @@ python tools/backtest_explicit.py `
   --trailing-close-after-stage 2 `
   --lock-tp1-exit-slippage 0.9 `
   --lock-tp2-exit-slippage 0.45 `
-  --output-dir reports/T18S_2025 `
+  --output-dir reports/T818_2025 `
   --initial-capital 50000 `
   --start-date 2025-01-01 `
   --end-date 2025-12-31
@@ -257,7 +258,7 @@ python tools/backtest_explicit.py `
 # ===== 8. BACKTEST FROM 2024 (R2 bull) =====
 # Era-matched slippage 0.5/0.25 (R2). M1 only.
 python tools/backtest_explicit.py `
-  --signals signals/t18s.txt `
+  --signals signals/t818.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
   --max-drawdown-limit-pct 200 `
   --progress-interval-seconds 30 `
@@ -293,7 +294,7 @@ python tools/backtest_explicit.py `
   --trailing-close-after-stage 2 `
   --lock-tp1-exit-slippage 0.5 `
   --lock-tp2-exit-slippage 0.25 `
-  --output-dir reports/T18S_2024 `
+  --output-dir reports/T818_2024 `
   --initial-capital 50000 `
   --start-date 2024-01-01 `
   --end-date 2024-12-31
@@ -301,7 +302,7 @@ python tools/backtest_explicit.py `
 # ===== 9. BACKTEST FROM 2021-2023 (R1 quiet) =====
 # Era-matched slippage 0.4/0.2 (R1). M1 only.
 python tools/backtest_explicit.py `
-  --signals signals/t18s.txt `
+  --signals signals/t818.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
   --max-drawdown-limit-pct 200 `
   --progress-interval-seconds 30 `
@@ -337,7 +338,7 @@ python tools/backtest_explicit.py `
   --trailing-close-after-stage 2 `
   --lock-tp1-exit-slippage 0.4 `
   --lock-tp2-exit-slippage 0.2 `
-  --output-dir reports/T18S_2021_2023 `
+  --output-dir reports/T818_2021_2023 `
   --initial-capital 50000 `
   --start-date 2021-01-01 `
   --end-date 2023-12-31

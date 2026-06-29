@@ -1,9 +1,10 @@
 # =========================================================================
-# VICTOR TRAILING -- VS17 (Victor Slm-1.7)  | tag VS17   *** RESEARCH ***
-# VS17 = the #1 DD<=40% VIC cell of the TICK-CALIBRATED Jan-2026 Phase-2
-# full trailing sweep (sweep_reports/tick_cal_jan_full/vic_phase2.csv #1).
+# VICTOR TRAILING -- V817 (Victor E8 SLM1.7)  | tag V817   *** RESEARCH ***
+# V817 = the #1 DD<=40% VIC cell of the TICK-CALIBRATED Jan-2026 Phase-2
+# full trailing sweep (sweep_reports/tick_cal_jan_full/vic_phase2.csv #1),
+# promoted from VS17 research into its own deployed identity.
 #
-# WHAT IT IS: V116's Victor provider feed + geometry, with TRAILING ON and
+# WHAT IT IS: VCT5's Victor provider feed + geometry, with TRAILING ON and
 #   the Phase-2 winner's levers:
 #     --entries                    7 -> 8     (one more entry rung)
 #     --sl-multiplier            1.5 -> 1.7   (wider stop -- more room to breathe)
@@ -26,7 +27,7 @@
 #   f_edge (M1->TICK ratio) 0.427     (M1 overstates ~2.3x)
 #   At RISK 5% the DD scales up ~5x off this 1% base.
 #
-# vs DEPLOYED VCT5: VS17 leads on est_edge (+31%) and est_oos (+30%), but:
+# vs DEPLOYED VCT5: V817 leads on est_edge (+31%) and est_oos (+30%), but:
 #   - tick_oos is LOWER ($755 vs $977) -- real OOS fills are weaker
 #   - est_dd is HIGHER (38.4% vs 23.5% at 1% risk)
 #   - slm 1.7 (wider stop) vs 1.5 -- more aggressive
@@ -41,31 +42,31 @@
 #  3) ELEV8 ticks != your live/demo broker; trailing fills are broker-driven.
 #  4) BROKER MIN-STOP: trailing 0.5 must be >= SYMBOL_TRADE_STOPS_LEVEL.
 #
-# IDENTITY (tag **VS17**, disjoint magics from V116/VCT5; SHARES Victor feed):
-#   --strategy-tag VS17 . --positions-json positions_vs17.json .
-#   reports/VS17_2026xx (Excel) . forensic_vs17.jsonl / notifications_vs17.jsonl.
+# IDENTITY (tag **V817**, disjoint magics from V116/VCT5/VS17; SHARES Victor feed):
+#   --strategy-tag V817 . --positions-json positions_v817.json .
+#   reports/V817_2026xx (Excel) . forensic_v817.jsonl / notifications_v817.jsonl.
 #   FEED: Victor's provider feed (victor_signals.txt / signals/victor_live.txt)
-#   -- the SAME source as V116/VCT5. Run the listener+filter (sections 1-2)
+#   -- the SAME source as V116/VCT5/VS17. Run the listener+filter (sections 1-2)
 #   ONCE; all Victor executors share the one feed.
 #
 # SECTION MAP (copy-paste 5-9 for backtests; 4 is N/A for Victor):
 #   1. Telegram Listener            (Victor channel -> victor_signals.txt; SHARED)
 #   2. Live Loop Signal Generator   (provider filter --watch; SHARED with V116/VCT5)
-#   3. Live Auto Executor           (tag VS17, TRAILING on, risk 5%)
+#   3. Live Auto Executor           (tag V817, TRAILING on, risk 5%)
 #   4. Signal Generator             (N/A -- backtest reads victor_signals.txt direct)
-#   5. Backtest from 2026-06         -> reports/VS17_202606.xlsx  (R4; slip 2.0/1.0)
-#   6. Backtest from 2026-01         -> reports/VS17_202601.xlsx  (R4; slip 2.0/1.0)
-#   7. Backtest 2025 (R3 strong)     -> reports/VS17_2025.xlsx    (slip 0.9/0.45)
-#   8. Backtest 2024 (R2 bull)       -> reports/VS17_2024.xlsx    (slip 0.5/0.25)
-#   9. Backtest 2021-2023 (R1 quiet) -> reports/VS17_2021_2023.xlsx (slip 0.4/0.2)
+#   5. Backtest from 2026-06         -> reports/V817_202606.xlsx  (R4; slip 2.0/1.0)
+#   6. Backtest from 2026-01         -> reports/V817_202601.xlsx  (R4; slip 2.0/1.0)
+#   7. Backtest 2025 (R3 strong)     -> reports/V817_2025.xlsx    (slip 0.9/0.45)
+#   8. Backtest 2024 (R2 bull)       -> reports/V817_2024.xlsx    (slip 0.5/0.25)
+#   9. Backtest 2021-2023 (R1 quiet) -> reports/V817_2021_2023.xlsx (slip 0.4/0.2)
 # =========================================================================
 
 # ===== 1. TELEGRAM LISTENER =====
-# SHARED with V116/VCT5 -- run only ONE copy of the listener.
+# SHARED with V116/VCT5/VS17 -- run only ONE copy of the listener.
 python listeners\telegram\listener.py --signals-file victor_signals.txt
 
 # ===== 2. LIVE LOOP SIGNAL GENERATOR =====
-# Provider filter --watch mode. SHARED with V116/VCT5 -- run once.
+# Provider filter --watch mode. SHARED with V116/VCT5/VS17 -- run once.
 python tools/live_provider_signal_filter.py `
   --input victor_signals.txt `
   --output signals/victor_live.txt `
@@ -74,14 +75,14 @@ python tools/live_provider_signal_filter.py `
   --interval 2
 
 # ===== 3. LIVE AUTO EXECUTOR =====
-# tag VS17, trailing-open 0.5 + trailing-close 0.5 after TP1.
+# tag V817, trailing-open 0.5 + trailing-close 0.5 after TP1.
 # sl-multiplier 1.7, entries 8, max-hold 150, activation-delay 0.
 python tools/auto_explicit.py `
   --signals signals/victor_live.txt `
-  --positions-json positions_vs17.json `
-  --strategy-tag VS17 `
-  --forensic-log forensic_vs17.jsonl `
-  --notifications notifications_vs17.jsonl `
+  --positions-json positions_v817.json `
+  --strategy-tag V817 `
+  --forensic-log forensic_v817.jsonl `
+  --notifications notifications_v817.jsonl `
   --watch-interval 3 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `
@@ -163,7 +164,7 @@ python tools/backtest_hybrid.py `
   --trailing-close-after-stage 1 `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
-  --output-dir reports/VS17_202606 `
+  --output-dir reports/V817_202606 `
   --initial-capital 50000 `
   --start-date 2026-06-01
 
@@ -206,7 +207,7 @@ python tools/backtest_hybrid.py `
   --trailing-close-after-stage 1 `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
-  --output-dir reports/VS17_202601 `
+  --output-dir reports/V817_202601 `
   --initial-capital 50000 `
   --start-date 2026-01-01
 
@@ -248,7 +249,7 @@ python tools/backtest_explicit.py `
   --trailing-close-after-stage 1 `
   --lock-tp1-exit-slippage 0.9 `
   --lock-tp2-exit-slippage 0.45 `
-  --output-dir reports/VS17_2025 `
+  --output-dir reports/V817_2025 `
   --initial-capital 50000 `
   --start-date 2025-01-01 `
   --end-date 2025-12-31
@@ -291,7 +292,7 @@ python tools/backtest_explicit.py `
   --trailing-close-after-stage 1 `
   --lock-tp1-exit-slippage 0.5 `
   --lock-tp2-exit-slippage 0.25 `
-  --output-dir reports/VS17_2024 `
+  --output-dir reports/V817_2024 `
   --initial-capital 50000 `
   --start-date 2024-01-01 `
   --end-date 2024-12-31
@@ -335,7 +336,7 @@ python tools/backtest_explicit.py `
   --trailing-close-after-stage 1 `
   --lock-tp1-exit-slippage 0.4 `
   --lock-tp2-exit-slippage 0.2 `
-  --output-dir reports/VS17_2021_2023 `
+  --output-dir reports/V817_2021_2023 `
   --initial-capital 50000 `
   --start-date 2021-01-01 `
   --end-date 2023-12-31
