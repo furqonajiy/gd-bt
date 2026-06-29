@@ -226,7 +226,6 @@ trading/btcusd/runtime/
 
 # Research parameter-sweep scratch (this session) -- not part of the codebase
 /_sweep.py
-/reports/
 
 # Derived M15 resamples (regenerate via tools/resample_m1_to_m15.py)
 data/XAUUSD_M15_*_ELEV8.csv
