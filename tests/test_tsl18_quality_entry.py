@@ -298,6 +298,42 @@ def _htf_lookahead_chart() -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["time", "open", "high", "low", "close", "spread"])
 
 
+def _flat_htf_chart(n: int = 1500) -> pd.DataFrame:
+    # M1 oscillates (so the ema-pullback setup fires both ways) but with ZERO net
+    # drift, so the HTF EMA-diff hovers near 0 -> a genuinely FLAT (ranging) HTF.
+    rows = []
+    t0 = pd.Timestamp("2026-06-01 00:00:00")
+    prev_c = 2000.0
+    for i in range(n):
+        mid = 2000.0 + 8.0 * math.sin(i / 11.0)
+        o = prev_c
+        c = mid
+        rows.append((t0 + pd.Timedelta(minutes=i), o, max(o, c) + 0.4, min(o, c) - 0.4, c, 2))
+        prev_c = c
+    return pd.DataFrame(rows, columns=["time", "open", "high", "low", "close", "spread"])
+
+
+def test_flat_htf_and_range_extreme_reversal_are_reachable():
+    # Regression: the classifier's "flat" htf_state must use a NEUTRAL BAND, not an
+    # exact-zero test on the float HTF EMA-diff — otherwise flat (and the
+    # range_extreme_reversal class / the reversal_extreme & hybrid_quality ranging
+    # path) would be DEAD on real indicator output. Verify both occur when the
+    # classifier runs on actual _add_indicators output of a flat-HTF chart.
+    a = _args(entry_quality_classifier=True)
+    out = _add_indicators(_flat_htf_chart(), a)
+    htf_states = set()
+    classes = set()
+    for row in out.itertuples(index=False):
+        if pd.isna(getattr(row, "atr", float("nan"))) or pd.isna(getattr(row, "rsi", float("nan"))):
+            continue
+        qclass, _, diag = _classify_quality(row, "BUY", a)
+        htf_states.add(diag["htf_state"])
+        classes.add(qclass)
+    assert "flat" in htf_states, "flat HTF must be reachable from real indicator output"
+    assert "range_extreme_reversal" in classes, \
+        "range_extreme_reversal must be reachable (it is the flat-HTF reversal class)"
+
+
 def test_quality_htf_has_no_lookahead():
     # The late (10:55) bullish flip lives in the 10:00-11:00 bucket, which only
     # COMPLETES at 11:00. An M1 bar at 10:05 must still read the prior (bearish)

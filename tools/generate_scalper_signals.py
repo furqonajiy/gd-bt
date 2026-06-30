@@ -375,18 +375,34 @@ def _add_indicators(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
         #     the columns the pure classifier (`_classify_quality`) / extreme gate
         #     (`_extreme_eval`) read off each row. ---
         if _quality_enabled(args) or _extreme_enabled(args):
-            # No-lookahead HTF trend for the classifier (own completion-stamped
-            # series, same technique as the structure guard). An M1 bar reads only
-            # the last FULLY COMPLETED HTF candle.
+            # No-lookahead HTF trend for the classifier, normalised to HTF-ATR units
+            # so the flat band is scale-invariant -- the same technique the
+            # progress-stall detector uses (an EMA-diff / ATR with a neutral band),
+            # NOT a raw price EMA-diff with an exact-zero "flat" test (a float diff
+            # is essentially never exactly 0, so that "flat" -> range_extreme_reversal
+            # path would be unreachable on real data). Built from REAL HTF candles
+            # only (dropna), value stamped at bucket completion -> an M1 bar reads
+            # ONLY fully-completed HTF candles. min_periods=1 on the HTF ATR keeps a
+            # short chart usable; the sign (bull/bear) is the completed EMA-diff sign.
             qfreq = pd.Timedelta(minutes=args.htf_minutes)
-            qhtf = (out.set_index("time")["close"]
-                    .resample(f"{args.htf_minutes}min", label="left", closed="left")
-                    .last().dropna())
-            qdiff = (qhtf.ewm(span=args.htf_ema_fast, adjust=False).mean()
-                     - qhtf.ewm(span=args.htf_ema_slow, adjust=False).mean())
-            qdiff.index = qdiff.index + qfreq          # known only at bucket completion
-            out["qual_htf_diff"] = qdiff.reindex(pd.DatetimeIndex(out["time"]),
-                                                 method="ffill").to_numpy()
+            qfstr = f"{args.htf_minutes}min"
+            qsi = out.set_index("time")
+            qh = pd.DataFrame({
+                "high": qsi["high"].resample(qfstr, label="left", closed="left").max(),
+                "low": qsi["low"].resample(qfstr, label="left", closed="left").min(),
+                "close": qsi["close"].resample(qfstr, label="left", closed="left").last(),
+            }).dropna()
+            qef = qh["close"].ewm(span=args.htf_ema_fast, adjust=False).mean()
+            qes = qh["close"].ewm(span=args.htf_ema_slow, adjust=False).mean()
+            qprev = qh["close"].shift(1)
+            qtr = pd.concat([qh["high"] - qh["low"],
+                             (qh["high"] - qprev).abs(),
+                             (qh["low"] - qprev).abs()], axis=1).max(axis=1)
+            qatr = qtr.rolling(14, min_periods=1).mean()
+            qdiff_atr = (qef - qes) / qatr.where(qatr != 0)
+            qdiff_atr.index = qdiff_atr.index + qfreq      # known only at bucket completion
+            out["qual_htf_diff"] = qdiff_atr.reindex(pd.DatetimeIndex(out["time"]),
+                                                     method="ffill").to_numpy()
 
             # Ensure S&D demand/supply bands exist for near_demand/near_supply even
             # when --sd-mode is off (compute with the same RBR/DBD logic + sd_*
@@ -843,7 +859,18 @@ def _classify_quality(row, side: str, args: argparse.Namespace) -> tuple[str, fl
     bear_recent = bool(getattr(row, "qual_bear_recent", False))
     bull_recent = bool(getattr(row, "qual_bull_recent", False))
 
-    htf_state = "na" if pd.isna(htf) else ("bull" if htf > 0 else "bear" if htf < 0 else "flat")
+    # htf is the HTF EMA-diff in ATR units (see _add_indicators). "flat" uses a
+    # neutral band so a ranging HTF is actually reachable -- an exact-zero test
+    # would make the flat / range_extreme_reversal path dead on real float data.
+    flat_band = abs(args.quality_htf_flat_atr)
+    if pd.isna(htf):
+        htf_state = "na"
+    elif abs(htf) <= flat_band:
+        htf_state = "flat"
+    elif htf > 0:
+        htf_state = "bull"
+    else:
+        htf_state = "bear"
     vwap_side = "na" if pd.isna(vwap) else ("above" if close > vwap else "below" if close < vwap else "at")
     if pd.notna(atr):
         near_support, near_resistance, near_demand, near_supply = _near_levels(row, args, atr)
@@ -1578,6 +1605,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--quality-chase-vwap-atr", type=float, default=2.0,
                    help="distance from VWAP in ATR beyond which an extended same-trend entry "
                         "is a chase.")
+    p.add_argument("--quality-htf-flat-atr", type=float, default=0.10,
+                   help="|HTF EMA-diff| / HTF-ATR within this band = a FLAT (ranging) HTF "
+                        "(the range_extreme_reversal regime); above it = bull/bear by sign. "
+                        "A neutral band, not an exact-zero test, so 'flat' is reachable.")
     p.add_argument("--quality-proximity-atr", type=float, default=0.5,
                    help="classifier: within X*ATR of a level/zone counts as 'near'.")
     p.add_argument("--quality-round-step", type=float, default=0.0,

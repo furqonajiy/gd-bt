@@ -28,7 +28,12 @@ profile filters — see §2) with a **class** and a **0..1 score**, computed fro
   (`--htf-minutes/--htf-ema-fast/--htf-ema-slow`), so a bar reads only the last
   *fully completed* HTF candle (no in-progress-bucket leak; pinned by
   `test_quality_htf_has_no_lookahead`). This is a separate series from the plain
-  `--htf-filter` `htf_diff`, which is not completion-stamped.
+  `--htf-filter` `htf_diff`, which is not completion-stamped. The EMA-diff is in
+  **HTF-ATR units** with a **neutral flat band** (`--quality-htf-flat-atr`,
+  default 0.10): `|diff|/ATR` within the band = a **flat (ranging)** HTF, above it
+  = bull/bear by sign. The band (not an exact-zero test on a float diff) is what
+  makes `flat` / `range_extreme_reversal` actually reachable on real data (pinned
+  by `test_flat_htf_and_range_extreme_reversal_are_reachable`).
 - **RSI / Bollinger %B + bandwidth / ADX**, session **VWAP** distance, distance to
   **EMA-mid** (pullback depth), proximity to **support/resistance** (prior-day
   H/L, optional round grid, BB band edges), **supply/demand** zone bands (RBR/DBD,
