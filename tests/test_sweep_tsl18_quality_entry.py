@@ -179,3 +179,11 @@ def test_candidate_helper_rejects_unknown_collision_keys():
     # and a baseline candidate carries all the default collision keys
     base = _candidate("base")
     assert set(COLLISION_DEFAULTS) <= set(base)
+
+
+def test_hybrid_backtest_exports_collision_policy_symbol():
+    """Workflow preflight already runs this file; keep the hybrid collision import
+    regression here too so a missing root import fails before any long sweep starts."""
+    import tools.backtest_hybrid as hybrid
+
+    assert hybrid.CollisionPolicy is not None
