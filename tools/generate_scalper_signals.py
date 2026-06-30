@@ -778,13 +778,18 @@ def generate_signals(df: pd.DataFrame, args: argparse.Namespace,
 
     for i, row in enumerate(df.itertuples(index=False), start=1):
         t = row.time.to_pydatetime() if hasattr(row.time, "to_pydatetime") else row.time
-        now_clock = time.time()
-        due_by_rows = i == 1 or i % args.progress_every_rows == 0 or i == total
-        due_by_time = args.progress_interval_seconds > 0 and now_clock >= next_time_print
-        if progress_enabled and (due_by_rows or due_by_time):
-            _print_scan_progress(i, total, start_clock, len(signals), t)
-            while next_time_print <= now_clock:
-                next_time_print += max(1.0, args.progress_interval_seconds)
+        # Row-based cadence (the modulo) is only computed when progress logging is
+        # ON and progress_every_rows > 0. Evaluating `i % 0` when progress is
+        # disabled crashed the sweep with ZeroDivisionError (the TWL25 run passes
+        # --progress-every-rows 0 to silence per-row logging).
+        if progress_enabled:
+            now_clock = time.time()
+            due_by_rows = i == 1 or i % args.progress_every_rows == 0 or i == total
+            due_by_time = now_clock >= next_time_print
+            if due_by_rows or due_by_time:
+                _print_scan_progress(i, total, start_clock, len(signals), t)
+                while next_time_print <= now_clock:
+                    next_time_print += max(1.0, args.progress_interval_seconds)
 
         if start_time is not None and pd.Timestamp(t) < start_time:
             continue
