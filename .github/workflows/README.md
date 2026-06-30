@@ -88,11 +88,14 @@ of their pinned version — a safe catch-all.
   status `COLLISION_NOT_MERGED` (never a hard fail), and if the quality-entry layer
   itself is absent it writes `reports/OVERNIGHT_AUTO_SWEEP_STATUS/summary.md` and
   **exits 0**. Pipeline: preflight (compile + targeted pytest) → smoke → full_june
-  → jan_jun (`run_jan_jun=true`), writing
-  `reports/TSL18_QUALITY_{smoke,full_june,validate_top}/` and uploading them as
-  artifacts (no commit-back; `contents: read`). A `push` to `main` runs the full
-  bounded pipeline; the heavy run is also launchable via `workflow_dispatch`. It
-  never trades live and never promotes to live TSL18. The sweep script also accepts
+  → jan_jun, writing `reports/TSL18_QUALITY_{smoke,full_june,validate_top}/` and
+  uploading them as artifacts (no commit-back; `contents: read`). **Run modes
+  (the heavy overnight grid never runs on a merge):** a `push` to `main` runs
+  **SMOKE only**; the `workflow_dispatch` `mode` input selects `smoke` (default) or
+  `full` — `mode=full` runs smoke → full_june, then Jan-Jun validation only when
+  `run_jan_jun=true` (default false). An "effective mode" step forces SMOKE on
+  push regardless of inputs. It never trades live and never promotes to live TSL18.
+  The sweep script also accepts
   automation aliases (`--mode full`, `--output-dir`, `--rank-objective`,
   `--require-full-lifecycle-ticks`, `--fail-on-open-or-pending`,
   `--input-candidates`).

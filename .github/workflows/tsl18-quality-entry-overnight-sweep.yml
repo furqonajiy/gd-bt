@@ -16,16 +16,26 @@ name: TSL18 Quality Entry Overnight Sweep
 #
 # Safety: it NEVER trades live, NEVER promotes to live TSL18, and changes no strategy
 # logic. Outputs are artifacts only (permissions: contents: read -> no commit-back).
-# NOTE: a push to main runs the full bounded pipeline (smoke -> full_june ->
-# jan_jun); the heavy run is otherwise launched via workflow_dispatch.
+#
+# RUN MODES (the heavy overnight grid is NEVER triggered by a merge):
+#   * push to main      -> SMOKE ONLY (a fast structural check on every merge).
+#   * workflow_dispatch -> mode input: "smoke" (default) or "full".
+#       - mode=full runs smoke -> full_june, then Jan-Jun validation only when
+#         run_jan_jun=true. mode=smoke runs just the smoke grid.
+# The "effective mode" step forces SMOKE on push regardless of any input, so a merge
+# can never kick off the 8-hour full_june + Jan-Jun run.
 
 on:
   workflow_dispatch:
     inputs:
-      run_jan_jun:
-        description: "Run Jan-Jun validation after June full sweep"
+      mode:
+        description: "smoke | full  (full = full_june, then optional Jan-Jun)"
         required: false
-        default: "true"
+        default: "smoke"
+      run_jan_jun:
+        description: "Run Jan-Jun validation after full_june (only when mode=full)"
+        required: false
+        default: "false"
   push:
     branches: [main]
 
@@ -112,6 +122,25 @@ jobs:
           fi
           cat "$STATUS"
 
+      - name: Resolve effective mode
+        id: mode
+        run: |
+          set -uo pipefail
+          # A push to main is ALWAYS smoke-only (a merge must never launch the
+          # heavy full_june + Jan-Jun run). workflow_dispatch honours the `mode`
+          # input (smoke | full); anything other than 'full' is treated as smoke.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            EFF=smoke
+          elif [ "${{ github.event.inputs.mode }}" = "full" ]; then
+            EFF=full
+          else
+            EFF=smoke
+          fi
+          echo "effective=$EFF" >> "$GITHUB_OUTPUT"
+          STATUS=reports/OVERNIGHT_AUTO_SWEEP_STATUS/summary.md
+          { echo; echo "## Effective mode: \`$EFF\` (event: \`${{ github.event_name }}\`)"; } >> "$STATUS"
+          echo "effective mode = $EFF"
+
       - name: Preflight (compile + targeted tests)
         id: preflight
         if: success() && steps.guard.outputs.qe_present == 'true'
@@ -170,7 +199,7 @@ jobs:
 
       - name: Full June sweep
         id: fulljune
-        if: success() && steps.guard.outputs.qe_present == 'true'
+        if: success() && steps.guard.outputs.qe_present == 'true' && steps.mode.outputs.effective == 'full'
         run: |
           set -uo pipefail
           STATUS=reports/OVERNIGHT_AUTO_SWEEP_STATUS/summary.md
@@ -196,7 +225,7 @@ jobs:
 
       - name: Jan-Jun validation
         id: validate
-        if: success() && steps.guard.outputs.qe_present == 'true' && (github.event_name == 'push' || github.event.inputs.run_jan_jun == 'true')
+        if: success() && steps.guard.outputs.qe_present == 'true' && steps.mode.outputs.effective == 'full' && github.event.inputs.run_jan_jun == 'true'
         run: |
           set -uo pipefail
           STATUS=reports/OVERNIGHT_AUTO_SWEEP_STATUS/summary.md

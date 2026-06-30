@@ -128,10 +128,14 @@ Objectives (`--score-objective`):
 Pinned by `tests/test_rebate_scoring.py` (math + the negative-pure-positive-net
 flag + objective behaviour).
 
-## 5. The sweep skeleton (`tools/sweep_tsl18_quality_entry.py`)
+## 5. The sweep (`tools/sweep_tsl18_quality_entry.py`)
 
-Compares the base TSL18 feed against quality-entry variants under the SAME TSL18
-geometry, on TICK where covered, ranked by the rebate-aware objective.
+Compares the base TSL18 feed against **quality-entry AND collision-policy**
+variants under the SAME TSL18 geometry, on TICK where covered, ranked by the
+rebate-aware objective. The grid spans three families: quality-entry (feed layer),
+**collision-only** (execution layer — `--opposite-signal-policy` /
+`--same-side-overlap-policy`, the PR #329 collision layer now wired into
+`tools/backtest_hybrid.py`), and **combined**.
 
 ```bash
 # tiny structural check — emits the schema with placeholder rows, NO backtests:
@@ -142,8 +146,15 @@ python tools/sweep_tsl18_quality_entry.py --mode smoke
 ```
 
 Modes: `smoke` (2026-06-27 .. 07-01), `full_june` (06-01 .. 07-01), `validate_top`
-(01-01 .. 07-01, re-score a prior run's `top_candidates.json` via `--top-json`).
+(01-01 .. 07-01, re-score a prior run's `top_candidates.json` via `--top-json`;
+collision config — incl. the cluster sub-knobs — is preserved from the top record).
 `--end-date` is **exclusive**, so a window ends the day after the last day kept.
+
+Each candidate passes its collision flags into `backtest_hybrid.py`
+(`_collision_flags`), which applies the collision layer on BOTH the M1 and the tick
+path and emits the collision counters in its `--score-json`. A baseline candidate
+(`allow_hedge` + `allow_all`) makes zero interventions, so its collision columns are
+all zero (parity).
 
 Gates (each an explicit flag, all reflected in the results columns):
 
@@ -153,15 +164,23 @@ Gates (each an explicit flag, all reflected in the results columns):
   whole lifecycle), so only clean pure-TICK / pure-M1 windows rank.
 - **open/pending-left** (`--exclude-open-or-pending`) — drop a candidate that left
   positions OPEN/PENDING at window end (incomplete P&L).
+- **collision-metrics-present** — a NON-baseline collision candidate whose
+  `--score-json` carries no collision block (the policy did not actually run) is
+  excluded from ranking with the reason `collision metrics missing for non-baseline
+  policy`, rather than scored as if it ignored its flags.
 
-Outputs (under `reports/TSL18_QUALITY_<mode>/`): `results.csv` (full schema),
-`top_candidates.json` (ranked survivors), `summary.md`. The `collision_*` columns
-in `results.csv` are **placeholders only** — collision policy is a **separate
-branch** and is deliberately **not implemented here**.
+Outputs (under `reports/TSL18_QUALITY_<mode>/`): `results.csv` (full schema, with the
+**real** collision columns `opposite_signal_policy` / `same_side_overlap_policy` +
+the collision metrics), `top_candidates.json` (ranked survivors), `summary.md`.
 
-**Do not run the full aggressive sweep from this branch.** The skeleton +
-`--mode smoke` is the structural check; promotion follows the same forward-fit
-bar as every other strategy (`docs/SWEEP_RUNBOOK.md`).
+**The overnight sweep runs on GitHub Actions, not from this branch.** A **push to
+`main` runs SMOKE only** (a fast structural check on every merge); the heavy
+`full_june` (+ optional Jan-Jun validation) runs **only via manual
+`workflow_dispatch` with `mode=full`** (see
+`.github/workflows/tsl18-quality-entry-overnight-sweep.yml`). Promotion follows the
+same forward-fit bar as every other strategy (`docs/SWEEP_RUNBOOK.md`), and any
+collision-policy winner is **research only until a demo-validated LIVE collision
+implementation exists** — live `auto` refuses non-baseline collision flags today.
 
 ## When it is safe to promote
 

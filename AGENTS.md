@@ -261,13 +261,21 @@ pair is a thin package that imports it.
   marked to the chart price at the collision instant and reported as
   `collision_policy_pnl`; a system terminal (SL/TP/engine close) or a touched
   original SL stays terminal (never re-armed). Flags live on `backtest_explicit`
-  (inherited by `backtest_hybrid`) + `auto_explicit`; the run carries a
-  `collision_policy` summary + per-row collision columns (only when active, so
-  pure runs are unchanged). **LIVE applies only the safe reject/downsize
-  outcomes — it never auto-closes/flips an existing live position** (that needs
-  separate demo-validated wiring); the old-side P&L is a backtest model. Full
-  contract: `docs/TSL18_COLLISION_POLICIES.md`. Default off → never sweep it into
-  the generic grid; sweep it separately, one hypothesis at a time.
+  (inherited by `backtest_hybrid`) + `auto_explicit`. The layer is wired into
+  BOTH the M1 `run_backtest` AND the **hybrid/tick backtest**
+  (`backtest_hybrid._run_hybrid_loop` mirrors run_backtest: `decide` → on-accept
+  `apply_collision_to_built` → `register`; `collision_policy` summary on the
+  result + the collision counters in `--score-json` via `build_score`). The run
+  carries a `collision_policy` summary + per-row collision columns (only when
+  active, so pure runs are unchanged). **LIVE `auto` REFUSES non-baseline
+  collision policies** (`auto_explicit._validate_live_collision_policy`, before
+  any MT5 connection) — live does not enforce reject/downsize/flip/bank yet, so a
+  non-baseline `--opposite-signal-policy` / `--same-side-overlap-policy` hard-stops
+  to avoid false protection; the old-side P&L is a backtest model and a separate
+  demo-validated live implementation is required before any non-baseline policy
+  runs live. Full contract: `docs/TSL18_COLLISION_POLICIES.md`. Default off → never
+  sweep it into the generic grid; sweep it via the quality-entry sweep (below) /
+  separately, one hypothesis at a time.
 - **TSL18 quality-entry research layer** (`tools/generate_scalper_signals.py`
   `--entry-quality-classifier` / `--quality-profile` / `--min-quality-score` /
   `--extreme-entry-mode`, all **default OFF → feed byte-identical**, pinned by
@@ -286,12 +294,19 @@ pair is a thin package that imports it.
   guarded out (`pure_trading_pnl/rebate_pnl/net_pnl/closed_lots/..._per_lot/
   rebate_share_of_profit`; objectives `net_pnl|pure_pnl|edge_plus_rebate_guarded|
   dd_adjusted_net`; guards `--min-pure-trading-pnl` / `--max-rebate-share-of-profit`).
-  The sweep SKELETON `tools/sweep_tsl18_quality_entry.py` (modes
-  smoke/full_june/validate_top, partial-tick-lifecycle + open/pending-left
-  exclusion gates, `results.csv` / `top_candidates.json` / `summary.md`;
-  **placeholder collision columns only — no collision logic here**) is the
-  structural check — `--skeleton` / `--mode smoke` only, **do not run the full
-  aggressive sweep**. Contract: `docs/TSL18_QUALITY_ENTRY.md`.
+  The sweep `tools/sweep_tsl18_quality_entry.py` (modes
+  smoke/full_june/validate_top, partial-tick-lifecycle + open/pending-left +
+  collision-metrics-present exclusion gates, `results.csv` / `top_candidates.json` /
+  `summary.md`) now spans THREE families — quality-entry, **collision-only**
+  (`--opposite-signal-policy` / `--same-side-overlap-policy`, passed into
+  `backtest_hybrid` per candidate), and combined — so the **collision columns are
+  real** (`opposite_signal_policy` / `same_side_overlap_policy` + the collision
+  counters; zero for a baseline candidate). The overnight grid runs on Actions:
+  **a push to `main` runs SMOKE only**; the heavy `full_june` (+ optional Jan-Jun)
+  runs via **`workflow_dispatch mode=full`**. `--skeleton` / `--mode smoke` is the
+  fast structural check. A collision-policy winner stays research-only until a
+  demo-validated LIVE collision implementation exists. Contract:
+  `docs/TSL18_QUALITY_ENTRY.md`.
 - `docs/` — `MT5_SETUP.md`, `OPERATIONS_PLAYBOOK.md`,
   `demo_runbook_trailing_open.md`, `SWEEP_RUNBOOK.md`, `TSL18_STRUCTURE_GUARD.md`,
   `TSL18_COLLISION_POLICIES.md`, `TSL18_QUALITY_ENTRY.md`,

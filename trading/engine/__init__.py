@@ -236,7 +236,9 @@ from .strategy.collision_policy import (
 )
 from .strategy.backtest import (
     aggregate_backtest_result,
+    apply_collision_to_built,
     position_status,
+    price_lookup,
     replay_signal,
     replay_signal_rows,
     run_backtest,
@@ -316,6 +318,7 @@ __all__ = [
     "champion_config", "make_regime_config_resolver",
     "position_status", "replay_signal", "run_backtest", "write_backtest_outputs",
     "aggregate_backtest_result", "replay_signal_rows", "screen_signal", "DeploymentGate",
+    "apply_collision_to_built", "price_lookup",
     "CollisionPolicy", "CollisionDecision", "can_rearm", "status_is_terminal",
     "LiveEntryGuard",
     "GeneratedSignal", "RejectionSignalConfig", "format_generated_signals", "generate_rejection_signals",

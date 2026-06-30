@@ -42,10 +42,13 @@ for p in (str(ROOT), str(ROOT / "tools")):
         sys.path.insert(0, p)
 
 from trading.engine import (  # noqa: E402
+    CollisionPolicy,
     CsvChartSource,
     DeploymentGate,
     aggregate_backtest_result,
+    apply_collision_to_built,
     parse_signals_file,
+    price_lookup,
     replay_signal_rows,
     screen_signal,
     write_backtest_outputs,
@@ -249,6 +252,14 @@ def _run_hybrid_loop(signals, chart, chart_df, chart_start, chart_end, ticks,
     # Same object/logic as run_backtest so the tick path gates identically.
     gate = DeploymentGate.maybe(config)
 
+    # TSL18 collision policies (None unless a non-baseline opposite/same-side
+    # policy is set, so the default path is byte-identical -- parity). Mirrors
+    # run_backtest exactly so the quality sweep's collision flags are honoured on
+    # the tick path too. The price lookup (M1 closes, no lookahead) marks an open
+    # opposite side when a policy banks/closes it early.
+    collision = CollisionPolicy.maybe(config)
+    price_at = price_lookup(chart_df) if collision is not None else None
+
     for i, sig in enumerate(signals):
         screened, reason = screen_signal(
             sig, config, chart_start, chart_end, atr_at=atr_at,
@@ -284,6 +295,18 @@ def _run_hybrid_loop(signals, chart, chart_df, chart_start, chart_end, ticks,
             if greason is not None:
                 excluded.append({"signal_key": tsig.signal_key, "reason": greason})
                 continue
+
+        # Collision policy: decide BEFORE accepting (mirrors run_backtest). A
+        # reject excludes the signal without counting it as a tick/M1 inclusion;
+        # an accepted flip/bank/reduce/downsize is applied in place to ``built``.
+        dec = None
+        if collision is not None:
+            dec = collision.decide(tsig, built["entry_rows"], price_at=price_at)
+            if not dec.accept:
+                excluded.append({"signal_key": tsig.signal_key, "reason": dec.reason})
+                continue
+            apply_collision_to_built(built, dec)
+
         n_tick += int(tick_built)
         n_m1 += int(not tick_built)
 
@@ -291,8 +314,14 @@ def _run_hybrid_loop(signals, chart, chart_df, chart_start, chart_end, ticks,
         entry_rows.extend(built["entry_rows"])
         if built["status"] != "OPEN":
             equity = built["equity_after"]
+        elif dec is not None and dec.old_side_pnl_delta != 0.0:
+            # the new signal is still open, but the old side was banked/closed now
+            # -- that realized delta must move the equity curve forward.
+            equity = built["equity_after"]
         if gate is not None:
             gate.register(tsig, built)
+        if collision is not None:
+            collision.register(tsig, built, dec)
         if progress is not None:
             progress(i + 1, len(signals), n_tick, n_m1)
         if equity <= 0:
@@ -304,6 +333,8 @@ def _run_hybrid_loop(signals, chart, chart_df, chart_start, chart_end, ticks,
     result["data_sources"] = {"tick_signals": n_tick, "m1_signals": n_m1}
     if gate is not None:
         result["deployment_gate"] = gate.summary()
+    if collision is not None:
+        result["collision_policy"] = collision.summary()
     return result
 
 
@@ -414,6 +445,36 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def build_score(result: dict) -> dict:
+    """Build the machine-readable score dict written to --score-json. Includes the
+    TICK/M1 split and, ONLY when a non-baseline collision policy ran (the
+    ``collision_policy`` summary is present), the collision counters. A baseline /
+    pure-M1 run has no collision block, so its score-json is unchanged (parity)."""
+    ds = result.get("data_sources", {})
+    score = {
+        "net_profit": round(float(result["net_profit"]), 2),
+        "max_drawdown_pct": round(abs(float(result["max_drawdown_pct"])), 2),
+        "win_rate_pct": round(float(result.get("win_rate_pct", 0.0)), 1),
+        "signals_included": int(result.get("signals_included", 0)),
+        "tick_signals": int(ds.get("tick_signals", 0)),
+        "m1_signals": int(ds.get("m1_signals", 0)),
+        "wins": int(result.get("wins", 0)),
+        "losses": int(result.get("losses", 0)),
+    }
+    cp = result.get("collision_policy")
+    if cp is not None:
+        score["collision_policy_pnl"] = round(float(cp.get("collision_policy_pnl", 0.0)), 2)
+        for k in ("opposite_collisions_total", "opposite_collisions_allowed",
+                  "opposite_collisions_rejected", "opposite_collisions_flipped",
+                  "opposite_collisions_profit_bank_rearmed",
+                  "same_side_clusters_total", "same_side_clusters_accepted",
+                  "same_side_clusters_rejected", "same_side_clusters_downsized"):
+            score[k] = int(cp.get(k, 0))
+        score["max_same_side_cluster_risk"] = round(float(cp.get("max_same_side_cluster_risk", 0.0)), 2)
+        score["max_opposite_exposure"] = round(float(cp.get("max_opposite_exposure", 0.0)), 2)
+    return score
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = bx.config_from_args(args)
@@ -470,17 +531,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if getattr(args, "score_json", None):
         import json as _json
-        ds = result.get("data_sources", {})
-        score = {
-            "net_profit": round(float(result["net_profit"]), 2),
-            "max_drawdown_pct": round(abs(float(result["max_drawdown_pct"])), 2),
-            "win_rate_pct": round(float(result.get("win_rate_pct", 0.0)), 1),
-            "signals_included": int(result.get("signals_included", 0)),
-            "tick_signals": int(ds.get("tick_signals", 0)),
-            "m1_signals": int(ds.get("m1_signals", 0)),
-            "wins": int(result.get("wins", 0)),
-            "losses": int(result.get("losses", 0)),
-        }
+        score = build_score(result)
         Path(args.score_json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.score_json).write_text(_json.dumps(score), encoding="utf-8")
         print(f"  score: {args.score_json} -> {score}")

@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
-"""TSL18 quality-entry research sweep — SKELETON.
+"""TSL18 quality-entry + collision-policy research sweep.
 
 Compares the base TSL18 self-scalper feed against **quality-entry** variants
 (`--quality-profile`, `--min-quality-score`, `--extreme-entry-mode` on
-`tools/generate_scalper_signals.py`) under the SAME TSL18 execution geometry, on
-TICK where the archive covers the lifecycle. It scores candidates with the
-**rebate-aware** objective (`tools/rebate_scoring.py`) so a dense feed that is
-green only on the $3/closed-lot rebate — but flat/negative on pure trading P&L —
-is never promoted.
+`tools/generate_scalper_signals.py`) AND **collision-policy** variants
+(`--opposite-signal-policy` / `--same-side-overlap-policy`, the TSL18 collision
+layer from PR #329, now wired into `tools/backtest_hybrid.py`) under the SAME
+TSL18 execution geometry, on TICK where the archive covers the lifecycle. It
+scores candidates with the **rebate-aware** objective (`tools/rebate_scoring.py`)
+so a dense feed that is green only on the $3/closed-lot rebate — but flat/negative
+on pure trading P&L — is never promoted.
 
-This is a SKELETON: the orchestration, windows, exclusion gates, and the
-results/summary/JSON writers are complete and runnable, but it is **not** meant
-to be run as a full aggressive sweep in this branch (per the task contract). Use
-the tiny `--mode smoke` (or `--skeleton`, which emits the schema with placeholder
-rows and runs no backtests) for a fast structural check.
+It is a bounded research sweep (a small smoke grid + a curated full/validate grid,
+not the full aggressive cross-product). Use the tiny `--mode smoke` (or
+`--skeleton`, which emits the schema with placeholder rows and runs no backtests)
+for a fast structural check.
+
+Collision metrics are REAL whenever a non-baseline collision policy is active:
+each candidate passes its `--opposite-signal-policy` / `--same-side-overlap-policy`
+into `backtest_hybrid.py`, which now applies the collision layer on BOTH the M1
+and the tick path and emits the collision counters in its `--score-json`. A
+baseline candidate (`allow_hedge` + `allow_all`) makes zero interventions, so its
+collision columns are all zero (parity). A non-baseline candidate whose score-json
+carries no collision block is excluded from the ranking with a clear reason.
 
 Modes / windows (``--end-date`` is EXCLUSIVE in backtest_hybrid, so a window's
 end is the day AFTER the last day kept):
@@ -24,8 +33,8 @@ end is the day AFTER the last day kept):
 
 Outputs (under ``reports/TSL18_QUALITY_<mode>/``):
 
-    results.csv          one row per candidate, full schema (incl. placeholder
-                         collision columns — collision logic is NOT in this branch)
+    results.csv          one row per candidate, full schema (incl. the real
+                         collision-policy columns + metrics)
     top_candidates.json  ranked survivors (gates passed) by score
     summary.md           human-readable leaderboard + the rebate-guard notes
 
@@ -80,9 +89,10 @@ WINDOWS = {
 }
 MODE_WINDOW = {"smoke": "smoke", "full_june": "june", "validate_top": "jan_jun"}
 
-# Results schema. Placeholder collision columns are intentionally present but
-# UNPOPULATED here — collision policy/logic is owned by a separate branch and is
-# explicitly NOT implemented in this one.
+# Results schema. The collision columns are REAL: ``opposite_signal_policy`` /
+# ``same_side_overlap_policy`` record the candidate's policy, and the metrics are
+# read from backtest_hybrid's --score-json (zeros for a baseline candidate, which
+# makes no interventions; populated for a non-baseline policy).
 RESULTS_COLUMNS = [
     "label", "quality_profile", "min_quality_score", "extreme_entry_mode",
     "window", "window_start", "window_end",
@@ -93,38 +103,136 @@ RESULTS_COLUMNS = [
     "max_drawdown_pct", "win_rate_pct", "signals_included",
     "tick_signals", "m1_signals", "data_source_mixed",
     "partial_tick_lifecycle_excluded", "open_or_pending_left", "included_in_ranking",
-    # --- placeholder collision metrics (NOT implemented in this branch) ---
-    "collision_policy", "collisions_detected", "collision_pnl_delta",
+    # --- real collision-policy columns + metrics (PR #329, wired in #331-followup) ---
+    "opposite_signal_policy", "same_side_overlap_policy", "collision_policy_pnl",
+    "opposite_collisions_total", "opposite_collisions_allowed",
+    "opposite_collisions_rejected", "opposite_collisions_flipped",
+    "opposite_collisions_profit_bank_rearmed",
+    "same_side_clusters_total", "same_side_clusters_accepted",
+    "same_side_clusters_rejected", "same_side_clusters_downsized",
+    "max_same_side_cluster_risk", "max_opposite_exposure",
 ]
+
+# The collision counters read from backtest_hybrid's --score-json (order matches
+# the CollisionPolicy.summary() keys; collision_policy_pnl is handled separately).
+COLLISION_METRIC_COLUMNS = [
+    "collision_policy_pnl",
+    "opposite_collisions_total", "opposite_collisions_allowed",
+    "opposite_collisions_rejected", "opposite_collisions_flipped",
+    "opposite_collisions_profit_bank_rearmed",
+    "same_side_clusters_total", "same_side_clusters_accepted",
+    "same_side_clusters_rejected", "same_side_clusters_downsized",
+    "max_same_side_cluster_risk", "max_opposite_exposure",
+]
+
+# Baseline (parity) collision config: the layer makes zero interventions here.
+COLLISION_DEFAULTS = {
+    "opposite_signal_policy": "allow_hedge",
+    "same_side_overlap_policy": "allow_all",
+    "same_side_cluster_window_minutes": 30,
+    "same_side_cluster_entry_gap": 5.0,
+    "max_cluster_risk_multiple": 1.0,
+    "opposite_profit_threshold_r": 0.5,
+    "hedge_lot_fraction": 0.5,
+}
 
 QUALITY_PROFILES = ["off", "trend_only", "reversal_extreme", "hybrid_quality",
                     "high_frequency_quality"]
 EXTREME_MODES = ["support_demand", "supply_resistance", "both"]
 
 
+def _candidate(label: str, *, quality_profile: str = "off",
+               min_quality_score: float = 0.0, extreme_entry_mode: str = "off",
+               **collision) -> dict:
+    """Build a candidate dict: quality-layer keys + collision keys (baseline
+    defaults filled, then overridden by ``collision``). One source of truth so a
+    grid entry, the validate_top reconstruction, and ``_blank_row`` all agree."""
+    cand = {"label": label, "quality_profile": quality_profile,
+            "min_quality_score": min_quality_score,
+            "extreme_entry_mode": extreme_entry_mode}
+    cand.update(COLLISION_DEFAULTS)
+    bad = set(collision) - set(COLLISION_DEFAULTS)
+    if bad:
+        raise ValueError(f"unknown collision keys for {label}: {sorted(bad)}")
+    cand.update(collision)
+    return cand
+
+
+def _collision_is_baseline(cand: dict) -> bool:
+    """True when the candidate runs the baseline (parity) collision policy, so its
+    collision columns are all zero and no collision block is expected in score-json."""
+    return (cand.get("opposite_signal_policy", "allow_hedge") == "allow_hedge"
+            and cand.get("same_side_overlap_policy", "allow_all") == "allow_all")
+
+
 def build_candidate_grid(mode: str) -> list[dict]:
-    """Return the candidate list for a mode. ``base`` (no quality layer) is always
-    first so the report can read every variant against it."""
-    base = {"label": "base", "quality_profile": "off", "min_quality_score": 0.0,
-            "extreme_entry_mode": "off"}
+    """Return the candidate list for a mode. ``base`` (no quality layer, baseline
+    collision) is always first so the report can read every variant against it.
+
+    The grid spans three families: quality-entry (feed-layer), collision-only
+    (execution-layer, PR #329), and combined. It is a bounded curated grid, not
+    the full aggressive cross-product."""
     if mode == "smoke":
         return [
-            base,
-            {"label": "trend_only", "quality_profile": "trend_only",
-             "min_quality_score": 0.0, "extreme_entry_mode": "off"},
-            {"label": "extreme_both", "quality_profile": "off",
-             "min_quality_score": 0.0, "extreme_entry_mode": "both"},
+            _candidate("base"),
+            _candidate("hybrid_quality", quality_profile="hybrid_quality"),
+            _candidate("profit_bank_rearm",
+                       opposite_signal_policy="profit_bank_rearm",
+                       opposite_profit_threshold_r=0.5),
+            _candidate("hybrid_quality_profit_bank_scale_better",
+                       quality_profile="hybrid_quality",
+                       opposite_signal_policy="profit_bank_rearm",
+                       opposite_profit_threshold_r=0.5,
+                       same_side_overlap_policy="scale_in_better_entry_only",
+                       same_side_cluster_entry_gap=5.0, max_cluster_risk_multiple=1.0),
         ]
-    # full_june / validate_top: a bounded research grid (still NOT the full
-    # aggressive cross-product — that is deferred per the task contract).
-    grid = [base]
-    for prof in QUALITY_PROFILES[1:]:
-        for score in (0.0, 0.4, 0.6):
-            grid.append({"label": f"{prof}_s{score}", "quality_profile": prof,
-                         "min_quality_score": score, "extreme_entry_mode": "off"})
-    for em in EXTREME_MODES:
-        grid.append({"label": f"extreme_{em}", "quality_profile": "off",
-                     "min_quality_score": 0.0, "extreme_entry_mode": em})
+    # full_june / validate_top: a curated research grid (quality + collision +
+    # combined), still NOT the full aggressive cross-product.
+    grid = [_candidate("base")]
+    # --- quality-entry family ---
+    grid += [
+        _candidate("trend_only", quality_profile="trend_only"),
+        _candidate("reversal_extreme", quality_profile="reversal_extreme"),
+        _candidate("hybrid_quality", quality_profile="hybrid_quality"),
+        _candidate("high_frequency_quality", quality_profile="high_frequency_quality"),
+        _candidate("extreme_support_demand", extreme_entry_mode="support_demand"),
+        _candidate("extreme_supply_resistance", extreme_entry_mode="supply_resistance"),
+        _candidate("extreme_both", extreme_entry_mode="both"),
+    ]
+    # --- collision-only family (execution layer; feed unchanged) ---
+    grid += [
+        _candidate("reject_opposite", opposite_signal_policy="reject_opposite"),
+        _candidate("profit_bank_rearm", opposite_signal_policy="profit_bank_rearm",
+                   opposite_profit_threshold_r=0.5),
+        _candidate("same_reject_overlap", same_side_overlap_policy="reject_overlap"),
+        _candidate("same_scale_better_only",
+                   same_side_overlap_policy="scale_in_better_entry_only",
+                   same_side_cluster_entry_gap=5.0, max_cluster_risk_multiple=1.0),
+        _candidate("same_scale_fixed_risk",
+                   same_side_overlap_policy="scale_in_fixed_risk",
+                   max_cluster_risk_multiple=1.0),
+    ]
+    # --- combined (quality feed + collision execution) family ---
+    grid += [
+        _candidate("hybrid_quality_profit_bank", quality_profile="hybrid_quality",
+                   opposite_signal_policy="profit_bank_rearm",
+                   opposite_profit_threshold_r=0.5),
+        _candidate("hybrid_quality_scale_better", quality_profile="hybrid_quality",
+                   same_side_overlap_policy="scale_in_better_entry_only",
+                   same_side_cluster_entry_gap=5.0, max_cluster_risk_multiple=1.0),
+        _candidate("hybrid_quality_profit_bank_scale_better",
+                   quality_profile="hybrid_quality",
+                   opposite_signal_policy="profit_bank_rearm",
+                   opposite_profit_threshold_r=0.5,
+                   same_side_overlap_policy="scale_in_better_entry_only",
+                   same_side_cluster_entry_gap=5.0, max_cluster_risk_multiple=1.0),
+        _candidate("hybrid_quality_extreme_both_profit_bank_scale_better",
+                   quality_profile="hybrid_quality", extreme_entry_mode="both",
+                   opposite_signal_policy="profit_bank_rearm",
+                   opposite_profit_threshold_r=0.5,
+                   same_side_overlap_policy="scale_in_better_entry_only",
+                   same_side_cluster_entry_gap=5.0, max_cluster_risk_multiple=1.0),
+    ]
     return grid
 
 
@@ -137,6 +245,35 @@ def _quality_flags(cand: dict) -> list[str]:
             flags += ["--min-quality-score", str(cand["min_quality_score"])]
     if cand["extreme_entry_mode"] != "off":
         flags += ["--extreme-entry-mode", str(cand["extreme_entry_mode"])]
+    return flags
+
+
+def _collision_flags(cand: dict) -> list[str]:
+    """Render a candidate's collision-policy flags for backtest_hybrid (empty for a
+    baseline candidate, so a baseline run's command stays byte-identical). Only the
+    flags relevant to the active policy are emitted, but explicitly enough that the
+    run reproduces (the cluster sub-knobs that govern the chosen same-side mode and
+    the profit/hedge knobs for the chosen opposite mode)."""
+    flags: list[str] = []
+    opp = cand.get("opposite_signal_policy", "allow_hedge")
+    if opp != "allow_hedge":
+        flags += ["--opposite-signal-policy", str(opp)]
+        if opp == "profit_bank_rearm":
+            flags += ["--opposite-profit-threshold-r",
+                      str(cand.get("opposite_profit_threshold_r", 0.5))]
+        elif opp == "reduce_then_hedge":
+            flags += ["--hedge-lot-fraction", str(cand.get("hedge_lot_fraction", 0.5))]
+    same = cand.get("same_side_overlap_policy", "allow_all")
+    if same != "allow_all":
+        flags += ["--same-side-overlap-policy", str(same)]
+        flags += ["--same-side-cluster-window-minutes",
+                  str(cand.get("same_side_cluster_window_minutes", 30))]
+        if same in ("scale_in_better_entry_only", "scale_in_fixed_risk"):
+            flags += ["--max-cluster-risk-multiple",
+                      str(cand.get("max_cluster_risk_multiple", 1.0))]
+        if same == "scale_in_better_entry_only":
+            flags += ["--same-side-cluster-entry-gap",
+                      str(cand.get("same_side_cluster_entry_gap", 5.0))]
     return flags
 
 
@@ -155,12 +292,13 @@ def _gen_feed(out_txt: Path, charts: list[str], start: str, cand: dict) -> None:
 
 
 def _run_backtest(feed: Path, charts: list[str], ticks: list[str],
-                  start: str, end: str, out_dir: Path, score_json: Path) -> Path:
+                  start: str, end: str, out_dir: Path, score_json: Path,
+                  collision_flags: list[str] | None = None) -> Path:
     cmd = [sys.executable, "tools/backtest_hybrid.py", "--signals", str(feed),
            "--charts", *charts, "--ticks", *ticks,
            "--sync-ticks", "false", "--sync-charts", "false",
            "--max-drawdown-limit-pct", "9999", "--progress-interval-seconds", "0",
-           *TSL18_GEOMETRY, *ERA_SLIP,
+           *TSL18_GEOMETRY, *ERA_SLIP, *(collision_flags or []),
            "--output-dir", str(out_dir), "--initial-capital", "50000",
            "--score-json", str(score_json),
            "--start-date", start, "--end-date", end]
@@ -223,8 +361,13 @@ def _money(val) -> float:
 
 
 def _blank_row(cand: dict, window: str, span: tuple[str, str], objective: str) -> dict:
-    """A schema-complete placeholder row (skeleton / no-backtest mode)."""
-    return {
+    """A schema-complete placeholder row (skeleton / no-backtest mode). The
+    collision policy columns reflect the candidate's policy; the metric columns are
+    blank until a real run populates them. The full collision CONFIG (incl. the
+    cluster sub-knobs that are not CSV columns) is stashed as extra keys so
+    ``top_candidates.json`` preserves them for ``validate_top`` (write_results_csv
+    only emits RESULTS_COLUMNS, so the extras are JSON-only)."""
+    row = {
         "label": cand["label"], "quality_profile": cand["quality_profile"],
         "min_quality_score": cand["min_quality_score"],
         "extreme_entry_mode": cand["extreme_entry_mode"],
@@ -237,8 +380,17 @@ def _blank_row(cand: dict, window: str, span: tuple[str, str], objective: str) -
         "tick_signals": "", "m1_signals": "", "data_source_mixed": "",
         "partial_tick_lifecycle_excluded": "", "open_or_pending_left": "",
         "included_in_ranking": "",
-        "collision_policy": "", "collisions_detected": "", "collision_pnl_delta": "",
+        "opposite_signal_policy": cand.get("opposite_signal_policy", "allow_hedge"),
+        "same_side_overlap_policy": cand.get("same_side_overlap_policy", "allow_all"),
     }
+    for col in COLLISION_METRIC_COLUMNS:
+        row[col] = ""
+    # JSON-only collision sub-config (not CSV columns) so validate_top reproduces
+    # the exact candidate.
+    for k in COLLISION_DEFAULTS:
+        if k not in row:
+            row[k] = cand.get(k, COLLISION_DEFAULTS[k])
+    return row
 
 
 def evaluate_candidate(cand: dict, window: str, span: tuple[str, str], *,
@@ -252,7 +404,9 @@ def evaluate_candidate(cand: dict, window: str, span: tuple[str, str], *,
     feed = out_root / f"feed_{cand['label']}.txt"
     score_json = out_root / f"score_{cand['label']}.json"
     _gen_feed(feed, charts, gen_start, cand)
-    xlsx = _run_backtest(feed, charts, ticks, start, end, out_root / f"bt_{cand['label']}", score_json)
+    xlsx = _run_backtest(feed, charts, ticks, start, end,
+                         out_root / f"bt_{cand['label']}", score_json,
+                         collision_flags=_collision_flags(cand))
 
     score = json.loads(score_json.read_text(encoding="utf-8"))
     pure, rebate = _read_summary_pnl(xlsx)
@@ -271,8 +425,27 @@ def evaluate_candidate(cand: dict, window: str, span: tuple[str, str], *,
     mixed = tick_n > 0 and m1_n > 0
     partial_excluded = bool(args.require_full_tick_lifecycle and mixed)
     open_left = _count_open_pending(xlsx) > 0
-    included = (guard_ok and not partial_excluded
+
+    # Collision metrics: baseline candidates make zero interventions, so the
+    # score-json carries no collision block -> populate zeros. A NON-baseline
+    # candidate whose score-json has no collision block is broken (the policy did
+    # not run): exclude it from ranking with a clear reason rather than score a
+    # signal that silently ignored its collision flags.
+    is_baseline = _collision_is_baseline(cand)
+    has_block = "collision_policy_pnl" in score
+    collision_metrics: dict = {}
+    collision_missing = (not is_baseline) and (not has_block)
+    if collision_missing:
+        for col in COLLISION_METRIC_COLUMNS:
+            collision_metrics[col] = ""
+    else:
+        for col in COLLISION_METRIC_COLUMNS:
+            collision_metrics[col] = score.get(col, 0)
+
+    included = (guard_ok and not partial_excluded and not collision_missing
                 and not (args.exclude_open_or_pending and open_left))
+    if collision_missing:
+        guard_reason = "collision metrics missing for non-baseline policy"
 
     row = _blank_row(cand, window, span, args.score_objective)
     row.update({
@@ -288,6 +461,7 @@ def evaluate_candidate(cand: dict, window: str, span: tuple[str, str], *,
         "partial_tick_lifecycle_excluded": partial_excluded,
         "open_or_pending_left": open_left, "included_in_ranking": included,
     })
+    row.update(collision_metrics)
     return row
 
 
@@ -313,25 +487,38 @@ def write_top_candidates_json(rows: list[dict], path: Path) -> list[dict]:
 def write_summary_md(rows: list[dict], ranked: list[dict], path: Path,
                      mode: str, span: tuple[str, str], objective: str) -> None:
     lines = [
-        f"# TSL18 quality-entry sweep — {mode} ({span[0]}..{span[1]})",
+        f"# TSL18 quality-entry + collision sweep — {mode} ({span[0]}..{span[1]})",
         "",
-        f"Score objective: **{objective}**. Base TSL18 feed vs quality-entry variants, "
-        "same TSL18 geometry, TICK where covered. **Rebate-aware**: a candidate green "
-        "only on the $3/closed-lot rebate (bad pure P&L) is guarded out, never promoted.",
+        f"Score objective: **{objective}**. Base TSL18 feed vs quality-entry AND "
+        "collision-policy variants, same TSL18 geometry, TICK where covered. "
+        "**Rebate-aware**: a candidate green only on the $3/closed-lot rebate (bad pure "
+        "P&L) is guarded out, never promoted. **Collision policies are real** here — the "
+        "opposite/same-side metrics come from backtest_hybrid's collision layer (zero for "
+        "a baseline candidate, populated for a non-baseline policy).",
         "",
-        "| label | profile | minScore | extreme | pure $ | rebate $ | net $ | "
-        "rebate share | score | guards | DD% | mixed | open | ranked |",
-        "|---|---|--:|---|--:|--:|--:|--:|--:|:--:|--:|:--:|:--:|:--:|",
+        "| label | profile | extreme | opp policy | same policy | pure $ | net $ | "
+        "score | guards | DD% | coll $ | opp tot/rej/bank | same tot/rej/dsz | ranked |",
+        "|---|---|---|---|---|--:|--:|--:|:--|--:|--:|:--:|:--:|:--:|",
     ]
     for r in rows:
+        opp = (f"{r.get('opposite_collisions_total', '')}/"
+               f"{r.get('opposite_collisions_rejected', '')}/"
+               f"{r.get('opposite_collisions_profit_bank_rearmed', '')}")
+        same = (f"{r.get('same_side_clusters_total', '')}/"
+                f"{r.get('same_side_clusters_rejected', '')}/"
+                f"{r.get('same_side_clusters_downsized', '')}")
         lines.append(
-            f"| {r['label']} | {r['quality_profile']} | {r['min_quality_score']} | "
-            f"{r['extreme_entry_mode']} | {r['pure_trading_pnl']} | {r['rebate_pnl']} | "
-            f"{r['net_pnl']} | {r['rebate_share_of_profit']} | {r['score']} | "
+            f"| {r['label']} | {r['quality_profile']} | {r['extreme_entry_mode']} | "
+            f"{r.get('opposite_signal_policy', '')} | {r.get('same_side_overlap_policy', '')} | "
+            f"{r['pure_trading_pnl']} | {r['net_pnl']} | {r['score']} | "
             f"{r['rebate_guard_reason']} | {r['max_drawdown_pct']} | "
-            f"{r['data_source_mixed']} | {r['open_or_pending_left']} | "
+            f"{r.get('collision_policy_pnl', '')} | {opp} | {same} | "
             f"{r['included_in_ranking']} |")
     lines += [
+        "",
+        "Collision columns: **opp tot/rej/bank** = opposite collisions total / rejected / "
+        "profit-bank-rearmed; **same tot/rej/dsz** = same-side clusters total / rejected / "
+        "downsized; **coll $** = collision_policy_pnl (banked old-side delta).",
         "",
         "## Ranked survivors (gates passed)",
         "",
@@ -339,16 +526,18 @@ def write_summary_md(rows: list[dict], ranked: list[dict], path: Path,
     if ranked:
         for i, r in enumerate(ranked, start=1):
             lines.append(f"{i}. **{r['label']}** — score {r['score']} "
-                         f"(net ${r['net_pnl']}, pure ${r['pure_trading_pnl']})")
+                         f"(net ${r['net_pnl']}, pure ${r['pure_trading_pnl']}, "
+                         f"opp={r.get('opposite_signal_policy', '')}, "
+                         f"same={r.get('same_side_overlap_policy', '')})")
     else:
         lines.append("_No survivors (skeleton run, or all candidates failed the gates)._")
     lines += [
         "",
         "Gates: **rebate guards** (pure-P&L floor + max rebate share), "
         "**partial-tick-lifecycle exclusion** (mixed TICK/M1 windows when "
-        "`--require-full-tick-lifecycle`), and **open/pending-left** "
-        "(`--exclude-open-or-pending`). The `collision_*` columns are placeholders — "
-        "collision policy is a SEPARATE branch and is not implemented here.",
+        "`--require-full-tick-lifecycle`), **open/pending-left** "
+        "(`--exclude-open-or-pending`), and **collision-metrics-present** (a "
+        "non-baseline policy whose run emitted no collision block is excluded).",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -418,16 +607,26 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.mode == "validate_top" and args.top_json:
         prior = json.loads(Path(args.top_json).read_text(encoding="utf-8"))
-        candidates = [{"label": c["label"], "quality_profile": c["quality_profile"],
-                       "min_quality_score": c["min_quality_score"],
-                       "extreme_entry_mode": c["extreme_entry_mode"]} for c in prior]
+        # Preserve BOTH the quality-layer AND the collision config from each top
+        # record (the collision sub-knobs are stored in top_candidates.json even
+        # though they are not CSV columns), so validate_top re-scores the EXACT
+        # candidate that won full_june.
+        candidates = [
+            _candidate(c["label"], quality_profile=c.get("quality_profile", "off"),
+                       min_quality_score=c.get("min_quality_score", 0.0),
+                       extreme_entry_mode=c.get("extreme_entry_mode", "off"),
+                       **{k: c[k] for k in COLLISION_DEFAULTS if k in c})
+            for c in prior
+        ]
     else:
         candidates = build_candidate_grid(args.mode)
 
     rows: list[dict] = []
     for cand in candidates:
         print(f"[quality-sweep] {cand['label']}: profile={cand['quality_profile']} "
-              f"score>={cand['min_quality_score']} extreme={cand['extreme_entry_mode']}"
+              f"score>={cand['min_quality_score']} extreme={cand['extreme_entry_mode']} "
+              f"opp={cand.get('opposite_signal_policy', 'allow_hedge')} "
+              f"same={cand.get('same_side_overlap_policy', 'allow_all')}"
               f"{' [skeleton]' if args.skeleton else ''}", flush=True)
         rows.append(evaluate_candidate(cand, window, span, charts=args.charts,
                                        ticks=args.ticks, gen_start=args.gen_start,

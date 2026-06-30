@@ -220,21 +220,26 @@ def build_parser() -> argparse.ArgumentParser:
                            "ceiling =100). A new signal whose ladder would push total open lots "
                            "over this is skipped. 0=unlimited.")
 
-    col = p.add_argument_group("TSL18 collision policies (default off)")
+    col = p.add_argument_group("TSL18 collision policies (BACKTEST/SWEEP ONLY; live refuses non-baseline)")
     col.add_argument("--opposite-signal-policy",
                      choices=["allow_hedge", "reject_opposite", "profit_bank_rearm",
                               "close_then_flip", "reduce_then_hedge"],
                      default="allow_hedge",
                      help="Resolve a NEW signal opposite to an active one (default allow_hedge = "
-                          "keep both). RESEARCH/backtest layer: live only applies the safe "
-                          "REJECT/DOWNSIZE outcomes; it never auto-closes/flips an existing live "
-                          "position. See docs/TSL18_COLLISION_POLICIES.md.")
+                          "keep both). BACKTEST/SWEEP-ONLY research layer: live execution does "
+                          "NOT yet enforce collision policy, so live `auto` REFUSES any "
+                          "non-baseline value (anything other than allow_hedge) to avoid false "
+                          "protection -- a separate demo-validated live implementation is "
+                          "required first. See docs/TSL18_COLLISION_POLICIES.md.")
     col.add_argument("--same-side-overlap-policy",
                      choices=["allow_all", "reject_overlap", "scale_in_better_entry_only",
                               "scale_in_fixed_risk"],
                      default="allow_all",
                      help="Resolve a NEW same-side signal overlapping an active cluster "
-                          "(default allow_all). reject/scale-in as in backtest_explicit.")
+                          "(default allow_all). BACKTEST/SWEEP-ONLY: live `auto` REFUSES any "
+                          "non-baseline value (anything other than allow_all) -- live does not "
+                          "enforce collision policy yet. reject/scale-in apply only in "
+                          "backtest_explicit / the quality-entry sweep.")
     col.add_argument("--same-side-cluster-window-minutes", type=_positive_int, default=30,
                      help="Same-side signals within this many minutes form one cluster (default 30).")
     col.add_argument("--same-side-cluster-entry-gap", type=_positive_float, default=5.0,
@@ -344,9 +349,32 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
     )
 
 
+def _validate_live_collision_policy(args: argparse.Namespace) -> None:
+    """Refuse non-baseline TSL18 collision flags in LIVE auto.
+
+    The collision layer (PR #329) is backtest/sweep-only: live execution does NOT
+    enforce reject/downsize/flip/bank outcomes yet. Accepting a non-baseline flag
+    here would let an operator believe the account is protected when it is not, so
+    we hard-stop before connecting to MT5. (Backtests/sweeps pass these via
+    backtest_explicit / sweep_tsl18_quality_entry, which DO apply the policy.)"""
+    if (
+        getattr(args, "opposite_signal_policy", "allow_hedge") != "allow_hedge"
+        or getattr(args, "same_side_overlap_policy", "allow_all") != "allow_all"
+    ):
+        raise SystemExit(
+            "TSL18 collision policies are currently backtest/sweep only. "
+            "Live auto does not enforce non-baseline collision policies yet, so "
+            "non-baseline --opposite-signal-policy / --same-side-overlap-policy "
+            "are refused to avoid false protection."
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = config_from_args(args)
+    # Live safety: collision policies are backtest/sweep-only; refuse non-baseline
+    # flags BEFORE we touch MT5 (see _validate_live_collision_policy).
+    _validate_live_collision_policy(args)
 
     signals_path = Path(args.signals)
     if not signals_path.exists():

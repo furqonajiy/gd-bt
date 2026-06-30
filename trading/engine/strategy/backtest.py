@@ -50,10 +50,13 @@ def _atr_lookup(chart_df, period: int):
     return at
 
 
-def _price_lookup(chart_df):
+def price_lookup(chart_df):
     """Return ``at(time) -> close`` of the last bar at-or-before ``time`` (no
     lookahead), or None before the first bar. Used by the collision policy to
-    mark an open opposite-side position when it banks/closes it early."""
+    mark an open opposite-side position when it banks/closes it early.
+
+    Public (re-exported from the engine root) so the hybrid/tick backtest can
+    build the SAME price source for its collision wiring as the M1 ``run_backtest``."""
     import numpy as np
     times = chart_df["time"].values  # datetime64[ns]
     closes = chart_df["close"].values
@@ -66,7 +69,11 @@ def _price_lookup(chart_df):
     return at
 
 
-def _apply_collision_to_built(built: dict, dec) -> float:
+# Backward-compatible private alias (older imports / tests may reference it).
+_price_lookup = price_lookup
+
+
+def apply_collision_to_built(built: dict, dec) -> float:
     """Apply an accepted CollisionDecision to a built signal in place: scale its
     lots/P&L by ``dec.lot_scale`` (a downsized scale-in), fold the old-side banked
     P&L delta into this colliding signal's realized P&L, and stamp the collision
@@ -115,6 +122,10 @@ def _apply_collision_to_built(built: dict, dec) -> float:
         er.update(fields)
     built["equity_after"] = equity_after
     return equity_after
+
+
+# Backward-compatible private alias (older imports / tests may reference it).
+_apply_collision_to_built = apply_collision_to_built
 
 
 def apply_signal_rr_policy(sig, config: StrategyConfig, atr_value: float | None = None):
@@ -725,7 +736,7 @@ def run_backtest(
     # policy is set, so the default path is byte-identical -- parity). The price
     # lookup marks an open opposite side when a policy banks/closes it early.
     collision = CollisionPolicy.maybe(config, contract_size)
-    price_at = _price_lookup(chart_df) if collision is not None else None
+    price_at = price_lookup(chart_df) if collision is not None else None
 
     for sig in signals:
         screened, reason = screen_signal(
@@ -755,7 +766,7 @@ def run_backtest(
             if not dec.accept:
                 excluded.append({"signal_key": sig.signal_key, "reason": dec.reason})
                 continue
-            _apply_collision_to_built(built, dec)
+            apply_collision_to_built(built, dec)
         rows.append(built["row"])
         entry_rows.extend(built["entry_rows"])
         if built["status"] != "OPEN":
