@@ -249,6 +249,34 @@ realistic slippage. Backtest‑realism only — never a live order.
   `self-regime-grid.yml`): it sweeps one regime at a time (R4 → R3 → R2 → R1),
   risk 1–5%, and ranks DD‑≤‑40% champions on compounded net + bonus.
 
+### TSL18 quality‑entry research sweep (rebate‑aware)
+
+A **targeted, NOT a generic profit** sweep — the sibling of the structure‑guard
+sweep — for the TSL18 self‑scalper feed. Instead of re‑tuning RSI/BB/SL/TP it
+classifies each entry by **quality** and asks two new questions:
+
+1. **Which entries are worth taking?** `tools/generate_scalper_signals.py` gains a
+   no‑lookahead **quality classifier** (`--entry-quality-classifier`), quality
+   **profiles** (`--quality-profile off|trend_only|reversal_extreme|hybrid_quality|
+   high_frequency_quality` + `--min-quality-score`), and a buy‑bottom / sell‑top
+   **extreme‑entry mode** (`--extreme-entry-mode`). All default OFF → feed
+   byte‑identical. Full contract: `docs/TSL18_QUALITY_ENTRY.md`.
+2. **Is the profit real edge or just rebate?** `tools/rebate_scoring.py` splits a
+   run into **pure trading P&L** vs the **$3/closed‑lot rebate**, and the sweep
+   ranks on a **rebate‑aware objective** (`--score-objective`, default
+   `edge_plus_rebate_guarded`) with guards (`--min-pure-trading-pnl`,
+   `--max-rebate-share-of-profit`) so a **rebate‑farm with bad pure P&L is never
+   promoted**.
+
+Run it from `tools/sweep_tsl18_quality_entry.py` (modes `smoke` / `full_june` /
+`validate_top`, with partial‑tick‑lifecycle and open/pending‑left exclusion gates,
+writing `results.csv` / `top_candidates.json` / `summary.md`). The `--skeleton`
+flag emits the schema with placeholder rows and runs **no** backtests — use it (or
+`--mode smoke`) for a fast structural check. **Do not run the full aggressive
+sweep on this branch.** Promotion follows the same edge+OOS forward‑fit bar as
+every other strategy. (The `collision_*` columns in `results.csv` are placeholders
+for a separate branch — no collision logic lives here.)
+
 ---
 
 ## 6. Execution model — how to run it unattended **(ASK the user)**
