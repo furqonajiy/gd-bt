@@ -219,6 +219,20 @@ pair is a thin package that imports it.
   to keep it calibrated (broker spec via `tools/dump_mt5_spec.py`, a clean
   `ReportHistory` HTML to reconcile via `tools/reconcile_report_html.py`). Read
   it instead of re-asking what we need.
+  `tools/reconcile_live_vs_backtest.py` — the **per-signal** live↔backtest
+  reconcile: same MT5 `ReportHistory` HTML + the per-strategy **Per-Entry
+  Detail** workbook, matched by the `[TAG-]MMDD#DD.N` comment, emitting a
+  **colour-coded Excel** (one row per signal: BT vs LV legs / entry / open /
+  close / exit / $, plus dEntry / dOpen / dClose / d$) with a **Description**
+  classifying each discrepancy (`Match`, `Ladder under-fill`, `Reopen / churn`,
+  `Late arm`, `Exit-time drift`, `Manual close`, `Still open`, …) and its
+  counterfactual P&L ("if left alone the model banks $X"). It **recomputes the
+  backtest $ at the LIVE lot from prices** (`--lot` → `--usd-per-point`), so the
+  compare is apples-to-apples whether the workbook was risk-sized or fixed-lot
+  (generate the workbook with `--sizing-mode fixed --lot <live lot>` to match
+  live exactly). Where `reconcile_report_html.py` gives the aggregate/exit-type
+  bottom line, this gives the per-signal "what differed and why" the operator
+  reads.
 
 ## Architecture conventions — follow these
 
