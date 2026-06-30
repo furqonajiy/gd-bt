@@ -1,0 +1,322 @@
+name: TSL18 Quality Entry Overnight Sweep
+
+# Runs the TSL18 quality-entry smoke/full sweep on GitHub Actions instead of a
+# long-lived Claude terminal session (replaces "Session 5"). It is GUARDED: the
+# sweep only runs once `main` carries the prerequisite features:
+#   1. collision policies      (CLI flags opposite-signal-policy / same-side-overlap-policy)
+#   2. quality-entry research  (entry-quality-classifier / quality-profile / tools/sweep_tsl18_quality_entry.py)
+#   3. refreshed backtest reports for V817 and TSL18/T818 (2026, sections 5/6)
+# If ANY prerequisite is missing it writes reports/OVERNIGHT_AUTO_SWEEP_STATUS/summary.md,
+# uploads it as an artifact, and exits 0 (success) -- never a noisy failure. This
+# makes the workflow safe to merge/start BEFORE the prerequisite PRs land.
+#
+# It NEVER trades live and NEVER promotes to live TSL18 -- it only produces sweep
+# reports + artifacts. Strategy logic is not changed here.
+#
+# Effective mode by trigger:
+#   * workflow_dispatch -> honours the `mode` (smoke|full) + `run_jan_jun` inputs.
+#   * push to main      -> SMOKE ONLY (cheap pipeline self-test). The expensive
+#                          full 8h sweep is reserved for an explicit manual
+#                          dispatch so a routine push can never auto-start an 8h run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "smoke | full"
+        default: "full"
+      run_jan_jun:
+        description: "Run Jan-Jun validation after June full sweep"
+        default: "true"
+  push:
+    branches: [main]
+
+concurrency:
+  group: tsl18-quality-entry-overnight-sweep
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  # Catch-all so any JS action still shipping a Node-20 major runs on Node 24.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # full history so the feature-branch commit-back can push
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install requirements
+        run: pip install -r requirements.txt
+
+      - name: Resolve effective mode
+        id: mode
+        run: |
+          set -uo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            EFF="smoke"   # a routine push never auto-starts the 8h full sweep
+          else
+            EFF="${{ github.event.inputs.mode }}"; EFF="${EFF:-full}"
+          fi
+          RJJ="${{ github.event.inputs.run_jan_jun }}"; RJJ="${RJJ:-true}"
+          case "$EFF" in smoke|full) ;; *) EFF="full" ;; esac
+          echo "effective=$EFF" >> "$GITHUB_OUTPUT"
+          echo "run_jan_jun=$RJJ" >> "$GITHUB_OUTPUT"
+          echo "event=${{ github.event_name }} effective_mode=$EFF run_jan_jun=$RJJ"
+
+      - name: Prerequisite guard
+        id: guard
+        run: |
+          set -uo pipefail
+          STATUS_DIR=reports/OVERNIGHT_AUTO_SWEEP_STATUS
+          mkdir -p "$STATUS_DIR"
+          STATUS="$STATUS_DIR/summary.md"
+          MISSING=()
+
+          # search tracked source (current OR restructured layout) for a CLI flag/string
+          have_str() { grep -rqsE -- "$1" tools/ xauusd_trading/ trading/ 2>/dev/null; }
+          have_file() { [ -e "$1" ]; }
+
+          # 1) collision policy support
+          have_str 'opposite-signal-policy'   || MISSING+=("collision policy: --opposite-signal-policy not found in source")
+          have_str 'same-side-overlap-policy' || MISSING+=("collision policy: --same-side-overlap-policy not found in source")
+          # 2) quality-entry support
+          have_str 'entry-quality-classifier' || MISSING+=("quality-entry: entry-quality-classifier not found in source")
+          have_str 'quality-profile'          || MISSING+=("quality-entry: quality-profile not found in source")
+          have_file tools/sweep_tsl18_quality_entry.py || MISSING+=("quality-entry: tools/sweep_tsl18_quality_entry.py is missing")
+          # 3) refreshed backtest reports (V817 + TSL18/T818, 2026, incl. 50K and _5k
+          #    variants). -ipath matches the WHOLE path case-insensitively, so it
+          #    catches the id whether it sits in the dir name or the file name, in
+          #    any order (e.g. reports/V817_2026_sec56/section5.md or
+          #    reports/2026/v817_5k_section6.md).
+          find reports -type f -ipath '*v817*' -a -ipath '*2026*' 2>/dev/null | grep -q . \
+            || MISSING+=("reports: refreshed V817 2026 (sections 5/6) not found under reports/")
+          find reports -type f \( -ipath '*tsl18*' -o -ipath '*t818*' \) -a -ipath '*2026*' 2>/dev/null | grep -q . \
+            || MISSING+=("reports: refreshed TSL18/T818 2026 (sections 5/6) not found under reports/")
+
+          {
+            echo "# Overnight Auto Sweep — Status"
+            echo
+            echo "- Workflow: **TSL18 Quality Entry Overnight Sweep**"
+            echo "- Commit: \`${GITHUB_SHA:-?}\`  |  Ref: \`${GITHUB_REF:-?}\`"
+            echo "- Event: \`${{ github.event_name }}\`  |  Effective mode: \`${{ steps.mode.outputs.effective }}\`  |  run_jan_jun: \`${{ steps.mode.outputs.run_jan_jun }}\`"
+            echo "- Run: \`${GITHUB_RUN_ID:-?}\`  |  Attempt: \`${GITHUB_RUN_ATTEMPT:-?}\`"
+            echo
+          } > "$STATUS"
+
+          if [ "${#MISSING[@]}" -eq 0 ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            { echo "## Prerequisites: ALL PRESENT ✅"; echo; echo "Proceeding: preflight → smoke → (full → Jan-Jun)."; } >> "$STATUS"
+            echo "Prerequisites present; proceeding."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Prerequisites: MISSING ⛔ — sweep skipped (exit 0, by design)"
+              echo
+              echo "This run exited early **on purpose** (safe-before-prerequisites). Missing:"
+              echo
+              for m in "${MISSING[@]}"; do echo "- $m"; done
+              echo
+              echo "Re-run after the collision-policy, quality-entry research, and"
+              echo "backtest-report-refresh PRs are merged into \`main\`."
+            } >> "$STATUS"
+            echo "Prerequisites missing; skipping sweep (exit 0). See $STATUS"
+          fi
+          echo "----- status summary -----"; cat "$STATUS"
+
+      - name: Preflight (compile + targeted tests)
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          set -uo pipefail
+          STATUS=reports/OVERNIGHT_AUTO_SWEEP_STATUS/summary.md
+          { echo; echo "## Preflight"; } >> "$STATUS"
+          fail=0
+
+          # Compile listed tools: fail on a real syntax error, skip ones not present
+          # in this layout (the quality-entry PR may restructure paths).
+          for f in tools/generate_scalper_signals.py tools/sweep_tsl18_quality_entry.py \
+                   tools/backtest_hybrid.py tools/backtest_explicit.py tools/auto_explicit.py \
+                   trading/engine/core/config.py; do
+            if [ -e "$f" ]; then
+              if python -m py_compile "$f"; then echo "- compile OK: $f" >> "$STATUS";
+              else echo "- compile FAIL: $f" >> "$STATUS"; fail=1; fi
+            else
+              echo "- compile SKIP (missing): $f" >> "$STATUS"
+            fi
+          done
+
+          # Explicit preflight tests: run those that exist; a present test that FAILS
+          # fails the workflow (do not hide real failures); a missing one is noted only.
+          for t in tests/test_structure_guard.py tests/test_progress_stall.py \
+                   tests/test_live_entry_guard.py tests/test_manual_close_rearm_nochase.py \
+                   tests/test_deployment_gate.py tests/test_reconcile.py; do
+            if [ -e "$t" ]; then
+              if python -m pytest -q "$t"; then echo "- pytest OK: $t" >> "$STATUS";
+              else echo "- pytest FAIL: $t" >> "$STATUS"; fail=1; fi
+            else
+              echo "- pytest SKIP (missing): $t" >> "$STATUS"
+            fi
+          done
+
+          # New collision/quality/sweep tests: tolerate "no tests collected" (rc 5),
+          # but fail on a real failure.
+          set +e
+          python -m pytest -q tests -k "collision or quality or rebate or sweep_tsl18"
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then echo "- pytest -k collision/quality/rebate/sweep_tsl18: OK" >> "$STATUS";
+          elif [ "$rc" -eq 5 ]; then echo "- pytest -k collision/quality/rebate/sweep_tsl18: no matching tests (ok)" >> "$STATUS";
+          else echo "- pytest -k collision/quality/rebate/sweep_tsl18: FAIL (rc=$rc)" >> "$STATUS"; fail=1; fi
+
+          if [ "$fail" -ne 0 ]; then echo "Preflight FAILED — see status summary"; exit 1; fi
+          echo "Preflight OK"
+
+      - name: Smoke sweep (June)
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          set -uo pipefail
+          STATUS=reports/OVERNIGHT_AUTO_SWEEP_STATUS/summary.md
+          { echo; echo "## Smoke sweep (June)"; } >> "$STATUS"
+          set +e
+          python tools/sweep_tsl18_quality_entry.py \
+            --window june --mode smoke --max-candidates 3 \
+            --output-dir reports/TSL18_QE_SMOKE_JUNE --expected-rows 0
+          rc=$?
+          set -e
+          ok=1
+          [ "$rc" -eq 0 ] || ok=0
+          for f in reports/TSL18_QE_SMOKE_JUNE/summary.md reports/TSL18_QE_SMOKE_JUNE/results.csv; do
+            if [ -f "$f" ]; then echo "- present: $f" >> "$STATUS"; else echo "- MISSING: $f" >> "$STATUS"; ok=0; fi
+          done
+          if [ "$ok" -ne 1 ]; then echo "- Smoke: FAILED (rc=$rc)" >> "$STATUS"; echo "Smoke FAILED"; exit 1; fi
+          echo "- Smoke: OK" >> "$STATUS"; echo "Smoke OK"
+
+      - name: Full June sweep
+        if: steps.guard.outputs.ready == 'true' && steps.mode.outputs.effective == 'full'
+        run: |
+          set -uo pipefail
+          STATUS=reports/OVERNIGHT_AUTO_SWEEP_STATUS/summary.md
+          { echo; echo "## Full June sweep"; } >> "$STATUS"
+          set +e
+          python tools/sweep_tsl18_quality_entry.py \
+            --window june --mode full \
+            --start-date 2026-06-01 --end-date 2026-07-01 \
+            --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_202606*_ELEV8.csv \
+            --output-dir reports/TSL18_QE_FULL_JUNE \
+            --expected-rows auto \
+            --require-full-lifecycle-ticks true \
+            --fail-on-open-or-pending true \
+            --rank-objective dd_adjusted_net
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then echo "- Full June: FAILED (rc=$rc)" >> "$STATUS"; echo "Full June FAILED"; exit 1; fi
+          echo "- Full June: OK" >> "$STATUS"; echo "Full June OK"
+
+      - name: Jan-Jun validation
+        if: steps.guard.outputs.ready == 'true' && steps.mode.outputs.effective == 'full' && steps.mode.outputs.run_jan_jun == 'true'
+        run: |
+          set -uo pipefail
+          STATUS=reports/OVERNIGHT_AUTO_SWEEP_STATUS/summary.md
+          { echo; echo "## Jan-Jun validation"; } >> "$STATUS"
+          if [ ! -f reports/TSL18_QE_FULL_JUNE/top_candidates.json ]; then
+            echo "- SKIPPED: reports/TSL18_QE_FULL_JUNE/top_candidates.json not found" >> "$STATUS"
+            echo "Jan-Jun skipped (no top_candidates.json)"; exit 0
+          fi
+          set +e
+          python tools/sweep_tsl18_quality_entry.py \
+            --window jan_jun --mode validate-top \
+            --start-date 2026-01-01 --end-date 2026-07-01 \
+            --charts data/XAUUSD_M1_2026*_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_20260*_ELEV8.csv \
+            --input-candidates reports/TSL18_QE_FULL_JUNE/top_candidates.json \
+            --output-dir reports/TSL18_QE_VALIDATE_JAN_JUN \
+            --expected-rows auto \
+            --require-full-lifecycle-ticks true \
+            --fail-on-open-or-pending true \
+            --rank-objective dd_adjusted_net
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then echo "- Jan-Jun: FAILED (rc=$rc)" >> "$STATUS"; echo "Jan-Jun FAILED"; exit 1; fi
+          echo "- Jan-Jun: OK" >> "$STATUS"; echo "Jan-Jun OK"
+
+      - name: Assemble final report
+        if: steps.guard.outputs.ready == 'true' && steps.mode.outputs.effective == 'full'
+        run: |
+          set -uo pipefail
+          STATUS=reports/OVERNIGHT_AUTO_SWEEP_STATUS/summary.md
+          FINAL=reports/TSL18_QE_FINAL
+          mkdir -p "$FINAL"
+          # Prefer the Jan-Jun validation outputs as the final ranking; else June full.
+          SRC=""
+          if [ -d reports/TSL18_QE_VALIDATE_JAN_JUN ]; then SRC=reports/TSL18_QE_VALIDATE_JAN_JUN; fi
+          if [ -z "$SRC" ] && [ -d reports/TSL18_QE_FULL_JUNE ]; then SRC=reports/TSL18_QE_FULL_JUNE; fi
+          copy_if() { [ -f "$1" ] && cp "$1" "$2" && echo "  copied $1 -> $2"; }
+          if [ -n "$SRC" ]; then
+            # final ranking: prefer the tool's own final_rank.csv, else its results.csv
+            if [ -f "$SRC/final_rank.csv" ]; then copy_if "$SRC/final_rank.csv" "$FINAL/final_rank.csv";
+            else copy_if "$SRC/results.csv" "$FINAL/final_rank.csv"; fi
+            copy_if "$SRC/top_candidates.json"    "$FINAL/top_candidates.json"
+            copy_if "$SRC/rejected_candidates.md" "$FINAL/rejected_candidates.md"
+          fi
+          [ -f "$FINAL/rejected_candidates.md" ] || printf '# Rejected candidates\n\n(none recorded by the sweep tool)\n' > "$FINAL/rejected_candidates.md"
+          {
+            echo "# TSL18 Quality-Entry Sweep — Final"
+            echo
+            echo "Source ranking: \`${SRC:-<none>}\`"
+            echo
+            echo "Artifacts produced:"
+            for f in final_rank.csv top_candidates.json rejected_candidates.md; do
+              [ -f "$FINAL/$f" ] && echo "- $FINAL/$f" || echo "- (missing) $FINAL/$f"
+            done
+            echo
+            echo "> Decision is research-only. Do NOT promote directly to live TSL18."
+          } > "$FINAL/summary.md"
+          { echo; echo "## Final report assembled"; echo "- source: \`${SRC:-<none>}\` → $FINAL/"; } >> "$STATUS"
+          cat "$FINAL/summary.md"
+
+      - name: Commit results back (feature branch only)
+        if: steps.guard.outputs.ready == 'true' && github.ref != 'refs/heads/main'
+        run: |
+          set -uo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add reports/OVERNIGHT_AUTO_SWEEP_STATUS reports/TSL18_QE_SMOKE_JUNE \
+                  reports/TSL18_QE_FULL_JUNE reports/TSL18_QE_VALIDATE_JAN_JUN \
+                  reports/TSL18_QE_FINAL 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No report changes to commit"
+          else
+            git commit -m "Overnight TSL18 quality-entry sweep results [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Upload status artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: overnight-sweep-status
+          path: reports/OVERNIGHT_AUTO_SWEEP_STATUS/**
+          if-no-files-found: warn
+
+      - name: Upload sweep report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsl18-qe-reports
+          path: |
+            reports/TSL18_QE_SMOKE_JUNE/**
+            reports/TSL18_QE_FULL_JUNE/**
+            reports/TSL18_QE_VALIDATE_JAN_JUN/**
+            reports/TSL18_QE_FINAL/**
+          if-no-files-found: ignore

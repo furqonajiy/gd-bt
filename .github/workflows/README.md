@@ -77,4 +77,17 @@ of their pinned version — a safe catch-all.
   the DD25/DD40 loss-first gates AND a demo-forward run confirms broker behaviour;
   it does not replace TSL18/T818. See `../../docs/TWL25_LOSS_SWEEP.md`.
 
+- `tsl18-quality-entry-overnight-sweep.yml` — **TSL18 Quality Entry Overnight
+  Sweep**: runs the quality-entry smoke/full June sweep (+ optional Jan–Jun
+  validation) on Actions instead of a long warm Claude session. **Guarded** — it
+  only runs once `main` carries the collision policies (`--opposite-signal-policy`
+  / `--same-side-overlap-policy`), the quality-entry research layer
+  (`tools/sweep_tsl18_quality_entry.py`, `entry-quality-classifier` /
+  `quality-profile`), and refreshed V817 + TSL18/T818 2026 reports; otherwise it
+  writes `reports/OVERNIGHT_AUTO_SWEEP_STATUS/summary.md`, uploads it, and **exits
+  0** (safe to merge/start before the prerequisite PRs land). A `push` to `main`
+  runs a **smoke-only** self-test; the full ~8 h sweep is a manual
+  `workflow_dispatch` with `mode=full`. It never trades live and never promotes to
+  live TSL18.
+
 _Reference: <https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/>_
