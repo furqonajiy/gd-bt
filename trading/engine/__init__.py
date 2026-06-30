@@ -291,6 +291,7 @@ from .execution.mt5_executor import (
     signal_to_magic,
 )
 from .execution.mt5_executor_trailing import Mt5Executor
+from .execution.live_entry_guard import LiveEntryGuard
 
 
 __all__ = [
@@ -309,6 +310,7 @@ __all__ = [
     "champion_config", "make_regime_config_resolver",
     "position_status", "replay_signal", "run_backtest", "write_backtest_outputs",
     "aggregate_backtest_result", "replay_signal_rows", "screen_signal", "DeploymentGate",
+    "LiveEntryGuard",
     "GeneratedSignal", "RejectionSignalConfig", "format_generated_signals", "generate_rejection_signals",
     "MomentumSignalConfig", "generate_momentum_signals",
     "Mt5ChartSource", "Mt5Connection", "archive_m1_by_month", "mt5_equity",

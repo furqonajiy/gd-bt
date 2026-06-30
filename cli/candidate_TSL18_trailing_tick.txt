@@ -73,6 +73,10 @@ python tools/auto_explicit.py `
   --mt5-server-offset 3 `
   --mt5-history-bars 5000 `
   --trailing-live-entry true `
+  --max-live-signal-age-minutes 20 `
+  --min-live-entry-rr 1.0 `
+  --min-live-entry-reward-distance 2.0 `
+  --max-live-spread-fraction-of-risk 0.25 `
   --sizing-mode risk `
   --lot 0.01 `
   --risk 0.01 `

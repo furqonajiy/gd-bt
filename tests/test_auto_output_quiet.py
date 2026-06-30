@@ -94,6 +94,10 @@ class _FakeExecutor:
     def open_lots(self):
         return 0.0
 
+    def cancel_signal_pendings(self, signal_key, *, reason="terminal_sl"):
+        type(self).cancel_calls = getattr(type(self), "cancel_calls", 0) + 1
+        return ExecutionLog()
+
 
 class _FakeForensic:
     enabled = False
@@ -522,7 +526,11 @@ def test_trailing_live_entry_places_a_replay_played_out_signal(tmp_path, monkeyp
     monkeypatch.setattr(cli, "decide", lambda *a, **k: _skip_invalidated_rec())
     cfg = replace(DEFAULT_CONFIG, trailing_open_distance=0.2)
     _FakeExecutor.place_log = ExecutionLog(actions=["  placed trailing-open STOP #0"], placed=1)
+    # The played-out revival is now DANGEROUS + opt-in; this test exercises that
+    # gated path, so it sets the flag. (The default-OFF safe behavior is covered
+    # by test_trailing_live_entry_played_out_not_revived_by_default below.)
     args = _args(tmp_path); args.trailing_live_entry = "true"
+    args.allow_live_replay_played_out_legs = "true"
 
     rc = cli._auto_pass(args, cfg, _FakeConn(), _FakeChart(datetime(2026, 6, 2, 6, 0)),
                         sp, iteration=2, candidate_console_state={})
@@ -531,6 +539,28 @@ def test_trailing_live_entry_places_a_replay_played_out_signal(tmp_path, monkeyp
     assert "placed trailing-open STOP" in out
     assert "already played out" not in out
     assert _FakeRegistry.entries  # tracked after a live placement
+
+
+def test_trailing_live_entry_played_out_not_revived_by_default(tmp_path, monkeypatch, capsys):
+    """SAFE DEFAULT: without --allow-live-replay-played-out-legs, a replay
+    played-out (SKIP_INVALIDATED) signal is NOT revived live -- it falls through
+    to the normal played-out skip and place_signal is never called."""
+    signal = _signal()
+    sp = tmp_path / "signals.txt"; sp.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda p, **k: [signal])
+    monkeypatch.setattr(cli, "decide", lambda *a, **k: _skip_invalidated_rec())
+    cfg = replace(DEFAULT_CONFIG, trailing_open_distance=0.2)
+    _FakeExecutor.place_calls = 0
+    _FakeExecutor.place_log = ExecutionLog(actions=["  placed trailing-open STOP #0"], placed=1)
+    args = _args(tmp_path); args.trailing_live_entry = "true"  # no allow flag -> safe
+
+    rc = cli._auto_pass(args, cfg, _FakeConn(), _FakeChart(datetime(2026, 6, 2, 6, 0)),
+                        sp, iteration=2, candidate_console_state={})
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "placed trailing-open STOP" not in out
+    assert _FakeExecutor.place_calls == 0
+    assert "already played out" in out
 
 
 def _partial_follow_rec(signal):
@@ -561,7 +591,9 @@ def test_trailing_live_entry_full_ladder_restore_logs_once_across_cycles(tmp_pat
     monkeypatch.setattr(cli, "decide", lambda *a, **k: _partial_follow_rec(signal))
     cfg = replace(DEFAULT_CONFIG, entry_count=7, trailing_open_distance=0.5)
     _FakeExecutor.place_log = ExecutionLog()  # placed=0 -> signal stays an untracked candidate
+    # full-ladder restore of played-out legs is the gated dangerous path
     args = _args(tmp_path); args.trailing_live_entry = "true"
+    args.allow_live_replay_played_out_legs = "true"
     nk = {"detected": set(), "skipped": set()}
     state: dict = {}
 
@@ -691,6 +723,79 @@ def test_gate_off_by_default_places_normally(tmp_path, monkeypatch, capsys):
     assert "deployment gate" not in out
     assert "BUY LIMIT placed" in out
     assert _FakeExecutor.place_calls == 1
+
+
+def test_stale_price_below_original_sl_blocks_follow_placement(tmp_path, monkeypatch, capsys):
+    """A FOLLOW BUY whose live price has already collapsed below the signal's
+    original SL must be skipped (the core 2026-07-01 bug): the trailing-open STOP
+    would force-fill far below context. _FakeTick is 4500/4500.2; the signal SL is
+    4511, so ask 4500.2 < 4511 -> 'current Ask at/through the original SL'."""
+    signal = _signal()
+    sp = tmp_path / "signals.txt"; sp.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda p, **k: [signal])
+    monkeypatch.setattr(cli, "decide", lambda *a, **k: _follow_rec_with_order(entry_price=4518.0, initial_sl=4511.0))
+    cfg = replace(DEFAULT_CONFIG, trailing_open_distance=0.5)
+    _FakeExecutor.place_calls = 0
+    _FakeExecutor.place_log = ExecutionLog(actions=["  placed"], placed=1)
+    args = _args(tmp_path)
+    args.trailing_live_entry = "true"
+    # Enable the guard via the spread knob, age OFF, so the PRICE-CONTEXT check
+    # (not the age check) is what fires here.
+    args.max_live_spread_fraction_of_risk = 0.25
+
+    rc = cli._auto_pass(args, cfg, _FakeConn(), _FakeChart(datetime(2026, 6, 2, 6, 0)),
+                        sp, iteration=1, candidate_console_state={})
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert _FakeExecutor.place_calls == 0
+    assert "original SL" in out
+
+
+def test_terminal_tracked_signal_is_not_rearmed_and_pendings_cancelled(tmp_path, monkeypatch):
+    """A TRACKED signal whose original SL was touched after the signal time (chart
+    low <= SL) is terminal: its pendings are cancelled and it is excluded from the
+    reopen/re-arm pass -- a missing live order can't revive a stopped-out signal
+    (the #04 re-arm bug)."""
+    from trading.engine import Bar
+    signal = _signal()  # BUY ... SL 4511
+    sp = tmp_path / "signals.txt"; sp.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda p, **k: [])  # no candidates
+
+    # One tracked signal; replay holds it OPEN so reopen would normally re-arm it.
+    _FakeRegistry.entries = [{"signal_key": signal.signal_key}]
+    tracked_pos = SimpleNamespace(
+        signal=signal,
+        entries=[SimpleNamespace(status="OPEN")],
+    )
+    monkeypatch.setattr(cli, "_replay_tracked_signal",
+                        lambda item, chart, end, cfg: (tracked_pos, tracked_pos, None))
+
+    # Chart bar AFTER the signal time with low through the original SL -> terminal.
+    sl_bar = Bar(time=datetime(2026, 6, 2, 9, 0), open=4515.0, high=4516.0,
+                 low=4505.0, close=4510.0, spread_points=20, spread_price=0.2)
+
+    class _TouchChart(_FakeChart):
+        def bars_between(self, start, end):
+            return [sl_bar]
+
+    class _Exec(_FakeExecutor):
+        def reopen_missing_open_positions(self, actual, config):
+            type(self).reopen_calls = getattr(type(self), "reopen_calls", 0) + 1
+            return ExecutionLog()
+    _Exec.reopen_calls = 0
+    _Exec.cancel_calls = 0
+    monkeypatch.setattr("trading.engine.Mt5Executor", _Exec)
+
+    args = _args(tmp_path)
+    args.reopen_missing_positions = "true"
+    args.trailing_live_entry = "true"
+
+    rc = cli._auto_pass(args, cfg if (cfg := replace(DEFAULT_CONFIG, trailing_open_distance=0.5)) else None,
+                        _FakeConn(), _TouchChart(datetime(2026, 6, 2, 10, 0)),
+                        sp, iteration=1, candidate_console_state={})
+    assert rc == 0
+    assert _Exec.cancel_calls >= 1      # pendings cancelled for the terminal signal
+    assert _Exec.reopen_calls == 0      # excluded from the reopen/re-arm pass
 
 
 def test_trailing_live_entry_off_keeps_replay_played_out_skip(tmp_path, monkeypatch, capsys):

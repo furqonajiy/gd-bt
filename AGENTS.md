@@ -534,7 +534,24 @@ pair is a thin package that imports it.
   drops legs the operator never traded (the reported #07 #1/#2 drop). The history gate +
   `find_orders` still keep it to one live placement.
   Default OFF → backtests/parity unchanged; these fills are broker/tick-driven, so
-  demo-validate + calibrate before trusting trailing live↔backtest parity. The late TP1/TP2 catch-up (a leg the
+  demo-validate + calibrate before trusting trailing live↔backtest parity.
+  **Live stale/terminal protection (`trading/engine/execution/live_entry_guard.py`,
+  LIVE-ONLY, default-off → parity untouched).** Reviving a replay-**played-out**
+  signal is now gated behind the dangerous **`--allow-live-replay-played-out-legs`**
+  (default OFF; NOT set in the TSL18 live snapshot), so by default a played-out
+  signal is never restored live (the 2026-07-01 stale-revival fix: 39 BUY legs
+  force-filled ~4012 vs ~4030 context, stopped out in ~15s, −$3,062). A
+  **signal-level TERMINAL-SL** check is ALWAYS on for live opens AND re-arms: if a
+  signal's original SL (or final target) was touched between its time and now it is
+  terminal — never opened/re-armed, its pendings cancelled, and excluded from
+  reopen/replace/re-arm (a missing live order is a *repair candidate, not a licence*
+  to recreate a stopped-out signal; the #04 re-arm bug). `LiveEntryGuard` (opt-in via
+  `--max-live-signal-age-minutes` / `--min-live-entry-rr` /
+  `--min-live-entry-reward-distance` / `--max-live-spread-fraction-of-risk`, set
+  conservatively in `tsl18 3`) additionally skips stale-by-age, price-through-SL,
+  thin-RR, high-friction, and immediate-close (trailing-close inside spread+freeze)
+  entries, each logged with its reason. **Keep `tsl18 3` running continuously; a late
+  restart must not back-fill resolved signals.** The late TP1/TP2 catch-up (a leg the
   replay already lock-exited but live still holds open) protects the leg: if price
   is still beyond the lock the stop moves to the lock level (parity); if price has
   retraced **back through the lock but the leg is still in profit** the closest

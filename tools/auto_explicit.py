@@ -74,6 +74,28 @@ def build_parser() -> argparse.ArgumentParser:
                               "on the SL. Once it trades and closes live, the history gate blocks "
                               "re-entry. Lets fast-exit trailing signals trade live; those fills are "
                               "broker/tick-driven, so demo-validate + calibrate before trusting parity.")
+
+    stale = p.add_argument_group("live stale-signal protection (terminal-SL always on; guards default off)")
+    stale.add_argument("--allow-live-replay-played-out-legs", choices=["true", "false"], default="false",
+                       help="DANGEROUS, default OFF. When true, --trailing-live-entry may RESTORE "
+                            "replay-played-out legs / revive a SKIP_INVALIDATED signal as fresh live "
+                            "trailing-open STOPs. OFF (the safe default) means a played-out signal is "
+                            "NEVER restored live. Do NOT enable in a production/live snapshot — it is "
+                            "what caused the 2026-07-01 stale-revival incident.")
+    stale.add_argument("--max-live-signal-age-minutes", type=_positive_int, default=0,
+                       help="Skip placing/arming a live trailing-open order for a signal older than "
+                            "this many minutes (separate from --pending-expiry, which is too broad for "
+                            "live startup replay). 0=off. TSL18 live uses 20.")
+    stale.add_argument("--min-live-entry-rr", type=_positive_float, default=0.0,
+                       help="Reject a live entry whose reward(final)/risk at the price it would fill is "
+                            "below this. 0=off.")
+    stale.add_argument("--min-live-entry-reward-distance", type=_positive_float, default=0.0,
+                       help="Reject a live entry whose TP1 reward distance (price units) is below this "
+                            "(too thin vs friction). 0=off.")
+    stale.add_argument("--max-live-spread-fraction-of-risk", type=_positive_float, default=0.0,
+                       help="Reject a live entry when the current spread exceeds this fraction of the "
+                            "planned risk (and block trailing-close that sits inside spread+freeze, the "
+                            "immediate-close micro-trade). 0=off.")
     runtime.add_argument("--apply-signal-edits", choices=["true", "false"], default="false",
                          help="Consume the listener's signal-overrides journal each cycle: on a "
                               "provider EDIT flatten the live order and re-place it at the corrected "
