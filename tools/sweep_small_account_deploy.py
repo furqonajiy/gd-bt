@@ -270,6 +270,7 @@ def metrics(result, config) -> dict:
         # distributions (kept for the floor calc + report)
         "_leg_risk": leg_risk,
         "_zone_risk": zvals,
+        "_monthly": result.get("monthly", []),
     }
 
 
@@ -437,6 +438,33 @@ def _write_reports(window, out_dir, results, feed="self"):
                      f"{ts[1]['max_drawdown_pct']:.1f}%; worst day "
                      f"{b2k[1]['max_daily_loss_pct']:.1f}% -> {ts[1]['max_daily_loss_pct']:.1f}%.")
     lines.append("")
+
+    # $2K equity journey (monthly) for every $2k cell -- the "start with $2k, end
+    # with $X" progression the operator asked for. equity_end compounds month over
+    # month; the dollar level is a model upper bound (reinvests at the lot floor).
+    lines.append("## $2K equity journey (monthly, compounded)")
+    lines.append("")
+    for name, (cfg, m) in results.items():
+        if cfg.initial_capital > 2_000.0 or not m.get("_monthly"):
+            continue
+        lines.append(f"### {name}")
+        lines.append("")
+        lines.append("| month | signals | win% | month P&L | equity end |")
+        lines.append("|---|---|---|---|---|")
+        start = cfg.initial_capital
+        lines.append(f"| (start) | - | - | - | ${start:,.0f} |")
+        for mo in m["_monthly"]:
+            lines.append(f"| {mo.get('month','?')} | {mo.get('signals',0)} | "
+                         f"{mo.get('win_rate_pct',0):.0f} | ${mo.get('pnl',0):,.0f} | "
+                         f"${mo.get('equity_end',start):,.0f} |")
+        lines.append(f"| **final** | - | - | **${m['net_pnl']:,.0f} net** | "
+                     f"**${m['final_equity']:,.0f}** |")
+        lines.append("")
+    lines.append("> Dollar levels compound from the $2K base at the 0.01-lot floor and are a "
+                 "MODEL UPPER BOUND, not a forecast. Read the ratios (max DD, worst day, win "
+                 "rate) as the real signal; realistic live is ~5-15%/month with losing months.")
+    lines.append("")
+
     (out_dir / "summary.md").write_text("\n".join(lines))
     print(f"[small-acct] wrote {out_dir/'summary.md'} and metrics.csv", flush=True)
 
