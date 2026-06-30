@@ -92,14 +92,26 @@ def _compact_comment_ref(signal_key: str) -> str:
     return f"{prefix}{m.group('md').replace('-', '')}#{m.group('sig')}"
 
 
-def mt5_entry_comment(signal_key: str, entry_index: int, max_len: int = 31) -> str:
-    """MT5-safe per-entry comment preserving the one-based entry suffix.
+# Elev8 (and similar) reject an order comment longer than ~16 chars with
+# (-2, 'Invalid "comment" argument'); both the entry-place comment and the
+# close/exit comment are clamped to this so the broker never rejects them.
+_BROKER_COMMENT_MAX = 16
+
+
+def mt5_entry_comment(signal_key: str, entry_index: int,
+                      max_len: int = _BROKER_COMMENT_MAX) -> str:
+    """Broker-safe per-entry comment preserving the one-based entry suffix.
 
     Renders the compact ``[TAG-]MMDD#DD.N`` form (e.g. ``VIC-0615#05.2`` /
     ``SC24-0615#05.2`` / ``0615#05.2`` untagged) so the tag, date, signal-of-day,
-    and entry index all stay visible even when a broker truncates the comment.
-    The ``.N`` suffix is never trimmed — partial fills and reconciliation map back
-    to the engine entry via that suffix.
+    and entry index all stay visible. Clamped to ``max_len`` (default the broker's
+    16-char limit) by trimming the leading REF — the ``.N`` suffix is NEVER
+    trimmed, so partial fills and reconciliation always map back to the engine
+    entry. This is what makes a 5-char strategy tag safe: a comment that would
+    overflow 16 truncates the ref (keeping ``.N``) instead of being rejected by
+    the broker. With a <=4-char tag the natural length is already <=16, so this
+    clamp is a no-op and existing comments are byte-identical. Pass ``max_len=31``
+    for MT5's full native room.
     """
     ref = _compact_comment_ref(signal_key)
     suffix = f".{entry_index + 1}"
@@ -107,11 +119,6 @@ def mt5_entry_comment(signal_key: str, entry_index: int, max_len: int = 31) -> s
     if prefix_len <= 0:
         return suffix[-max_len:]
     return f"{ref[:prefix_len]}{suffix}"
-
-
-# Elev8 (and similar) reject an order comment longer than ~16 chars with
-# (-2, 'Invalid "comment" argument'); the compact place comment is built to fit.
-_BROKER_COMMENT_MAX = 16
 
 
 def mt5_close_comment(signal_key: str, action_name: str,

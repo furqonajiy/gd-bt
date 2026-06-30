@@ -257,7 +257,191 @@ def _add_indicators(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
             out["sd_supply_low"] = base_low_prev.where(dn_impulse).ffill(limit=age)
             out["sd_supply_high"] = base_high_prev.where(dn_impulse).ffill(limit=age)
 
+        # --- ANTI-WRONG-SIDE-STRUCTURE features (only when --structure-filter).
+        #     Reuses the session VWAP computed above and the swing_low/high already
+        #     present; adds an INDEPENDENT higher-timeframe trend EMA (its own
+        #     resample minutes / EMA spans, separate from --htf-filter's htf_diff)
+        #     and a recent opposite-impulse flag. The impulse window includes only
+        #     the current and prior bars. ---
+        if args.structure_filter:
+            # Resample to HTF buckets labelled at the bucket START (left edge).
+            # The EMA at a bucket uses that bucket's close, which is only KNOWN
+            # once the bucket COMPLETES (bucket_start + freq). Stamping each
+            # bucket's value at its completion time and then ffill'ing onto the M1
+            # bars makes every M1 bar see ONLY fully-completed HTF candles -- a
+            # bar at 10:05 reads the 09:00-10:00 candle, never the in-progress
+            # 10:00-11:00 one. This is the same data live has at that instant, so
+            # live and backtest stay in parity and there is no lookahead.
+            freq = pd.Timedelta(minutes=args.structure_htf_minutes)
+            shtf = (out.set_index("time")["close"]
+                    .resample(f"{args.structure_htf_minutes}min", label="left", closed="left")
+                    .last().dropna())
+            sdiff = (shtf.ewm(span=args.structure_ema_fast, adjust=False).mean()
+                     - shtf.ewm(span=args.structure_ema_slow, adjust=False).mean())
+            sdiff.index = sdiff.index + freq          # value available only at bucket completion
+            out["struct_htf_diff"] = sdiff.reindex(pd.DatetimeIndex(out["time"]),
+                                                   method="ffill").to_numpy()
+            if args.structure_impulse_atr > 0.0 and args.structure_impulse_cooldown_bars > 0:
+                body_signed = out["close"] - out["open"]
+                thr = args.structure_impulse_atr * out["atr"]
+                # a bearish impulse = a large down candle OR a break below the prior
+                # swing low; bullish = large up candle OR break above swing high.
+                bear_imp = (body_signed <= -thr) | (out["close"] < out["swing_low"])
+                bull_imp = (body_signed >= thr) | (out["close"] > out["swing_high"])
+                w = max(1, args.structure_impulse_cooldown_bars)
+                out["struct_bear_recent"] = (bear_imp.rolling(w, min_periods=1).max() > 0)
+                out["struct_bull_recent"] = (bull_imp.rolling(w, min_periods=1).max() > 0)
+            else:
+                out["struct_bear_recent"] = False
+                out["struct_bull_recent"] = False
+
+        # --- TREND-PROGRESS STALL features (only when --progress-stall-filter).
+        #     Targets HTF-ALIGNED same-side pullback clusters that fire while the
+        #     trend has STOPPED making new extremes. All from COMPLETED HTF candles
+        #     + completed M1 bars (prior extreme excludes the current bar); the
+        #     current bar's own close may only CONFIRM a break (live sees it at
+        #     emission). The per-signal stall COUNT is carried statefully in
+        #     generate_signals (it depends on which bars actually signal); here we
+        #     materialise the no-lookahead context columns it reads. ---
+        if getattr(args, "progress_stall_filter", False):
+            # 1) HTF regime from COMPLETED candles (value stamped at bucket
+            #    completion, like the structure guard -- no in-progress candle).
+            freq = pd.Timedelta(minutes=args.progress_htf_minutes)
+            fstr = f"{args.progress_htf_minutes}min"
+            si = out.set_index("time")
+            # Build the H1 series from REAL candles only (dropna), so empty buckets
+            # (weekends / session gaps) can't poison the rolling ATR window. TR/EMA
+            # are then computed on consecutive real H1 candles.
+            h1 = pd.DataFrame({
+                "high": si["high"].resample(fstr, label="left", closed="left").max(),
+                "low": si["low"].resample(fstr, label="left", closed="left").min(),
+                "close": si["close"].resample(fstr, label="left", closed="left").last(),
+            }).dropna()
+            ef = h1["close"].ewm(span=args.progress_ema_fast, adjust=False).mean()
+            es = h1["close"].ewm(span=args.progress_ema_slow, adjust=False).mean()
+            prev_hc = h1["close"].shift(1)
+            htr = pd.concat([h1["high"] - h1["low"],
+                             (h1["high"] - prev_hc).abs(),
+                             (h1["low"] - prev_hc).abs()], axis=1).max(axis=1)
+            hatr = htr.rolling(14, min_periods=14).mean()
+            hdiff_atr = (ef - es) / hatr
+            hdiff_atr.index = hdiff_atr.index + freq          # known only at bucket completion
+            out["prog_htf_diff_atr"] = hdiff_atr.reindex(pd.DatetimeIndex(out["time"]),
+                                                         method="ffill").to_numpy()
+            d = out["prog_htf_diff_atr"]
+            md = args.progress_min_diff_atr
+            regime = pd.Series("flat", index=out.index, dtype=object)
+            regime[d > md] = "bull"
+            regime[d < -md] = "bear"
+            regime[d.isna()] = "nan"
+            out["prog_regime"] = regime
+            # 2) HTF leg id = contiguous same-regime run (flat/opposite ends a leg).
+            out["prog_leg_id"] = (regime != regime.shift()).cumsum()
+            # 3) LOCAL progress reference (NOT the whole-leg cumulative extreme,
+            #    which made progress far too rare ~900 bars apart and let the stall
+            #    go dark for most of a leg). A rolling local high/low over the last
+            #    --progress-local-lookback-bars, EXCLUDING the current bar (shift 1).
+            lb = max(1, args.progress_local_lookback_bars)
+            local_hi = out["high"].rolling(lb, min_periods=1).max().shift(1)
+            local_lo = out["low"].rolling(lb, min_periods=1).min().shift(1)
+            atr14 = out["atr"]
+            thr = (args.progress_min_atr * atr14).clip(lower=args.progress_min_points)
+            cc = args.progress_close_confirm_atr * atr14
+            up_ok = (out["high"] >= local_hi + thr) & (out["close"] >= local_hi + cc)
+            dn_ok = (out["low"] <= local_lo - thr) & (out["close"] <= local_lo - cc)
+            valid = ((regime == "bull") & up_ok.fillna(False)) | ((regime == "bear") & dn_ok.fillna(False))
+            out["prog_valid_progress"] = valid
+            out["prog_local_ref"] = local_hi.where(regime == "bull", local_lo)
+            # 4) progress "epoch" within a leg (increments at each valid progress),
+            #    so two same-side signals share a (leg, epoch) key iff no progress
+            #    happened between them -> the stall counter resets without having to
+            #    re-scan skipped bars.
+            out["prog_epoch"] = valid.astype(int).groupby(out["prog_leg_id"], sort=False).cumsum()
+            # 5) bars since the last valid progress within the leg (default: bars
+            #    since leg start, before any progress).
+            pos = pd.Series(range(len(out)), index=out.index)
+            leg_start_pos = pos.groupby(out["prog_leg_id"], sort=False).transform("min")
+            prog_pos = pos.where(valid)
+            last_prog = prog_pos.groupby(out["prog_leg_id"], sort=False).ffill()
+            last_prog = last_prog.fillna(leg_start_pos)
+            out["prog_bars_since_progress"] = (pos - last_prog).astype(float)
+
     return out
+
+
+# Reject-reason codes emitted by the structure guard (also the diagnostics column).
+_STRUCT_ACCEPT = "accept"
+
+
+def _structure_enabled(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "structure_filter", False))
+
+
+def _structure_eval(row, side: str, args: argparse.Namespace) -> tuple[bool, str, dict]:
+    """Evaluate the anti-wrong-side-structure guard for one candidate bar+side.
+
+    Returns ``(ok, reject_reason, diag)``. ``diag`` carries the human-readable
+    state used both for the veto decision and the diagnostics CSV. Pure: no I/O,
+    no lookahead -- it reads only columns already materialised on ``row``.
+    Veto order (first failing wins): HTF trend -> VWAP side -> impulse cooldown
+    -> structure score. The HTF-trend veto is the always-on core; the rest are
+    gated by their flags.
+    """
+    buy = side == "BUY"
+    close = float(row.close)
+    htf = float(getattr(row, "struct_htf_diff", float("nan")))
+    vwap = float(getattr(row, "vwap", float("nan")))
+    bear_recent = bool(getattr(row, "struct_bear_recent", False))
+    bull_recent = bool(getattr(row, "struct_bull_recent", False))
+    swing_low = float(getattr(row, "swing_low", float("nan")))
+    swing_high = float(getattr(row, "swing_high", float("nan")))
+
+    htf_state = "na" if pd.isna(htf) else ("bull" if htf > 0 else "bear" if htf < 0 else "flat")
+    vwap_side = "na" if pd.isna(vwap) else ("above" if close > vwap else "below" if close < vwap else "at")
+    imp = []
+    if bear_recent:
+        imp.append("bear")
+    if bull_recent:
+        imp.append("bull")
+    impulse_state = "+".join(imp) if imp else "none"
+
+    impulse_on = args.structure_impulse_atr > 0.0 and args.structure_impulse_cooldown_bars > 0
+
+    # structure score (0..4): trend agree + vwap side + no opposite impulse + swing intact
+    score = 0
+    if buy:
+        score += int(not pd.isna(htf) and htf > 0)
+        score += int(not pd.isna(vwap) and close > vwap)
+        score += int(not bear_recent)
+        score += int(not pd.isna(swing_low) and close >= swing_low)
+    else:
+        score += int(not pd.isna(htf) and htf < 0)
+        score += int(not pd.isna(vwap) and close < vwap)
+        score += int(not bull_recent)
+        score += int(not pd.isna(swing_high) and close <= swing_high)
+
+    reason = _STRUCT_ACCEPT
+    if pd.isna(htf):
+        reason = "htf_nan"                       # cannot confirm structure -> veto
+    elif buy and htf < 0:
+        reason = "htf_bearish_buy"               # core veto: BUY into bearish HTF
+    elif not buy and htf > 0:
+        reason = "htf_bullish_sell"              # core veto: SELL into bullish HTF
+    elif args.structure_require_vwap_side and (
+            pd.isna(vwap) or (buy and close < vwap) or (not buy and close > vwap)):
+        reason = "vwap_wrong_side"
+    elif impulse_on and ((buy and bear_recent) or (not buy and bull_recent)):
+        reason = "impulse_cooldown"
+    elif args.structure_min_score > 0 and score < args.structure_min_score:
+        reason = "score_below_min"
+
+    diag = {
+        "htf_state": htf_state,
+        "vwap_side": vwap_side,
+        "impulse_state": impulse_state,
+        "score": score,
+    }
+    return reason == _STRUCT_ACCEPT, reason, diag
 
 
 def _in_session(t: datetime, session_start: int, session_end: int) -> bool:
@@ -378,7 +562,107 @@ def _any_entry_filter(args: argparse.Namespace) -> bool:
         or args.adx_min > 0.0 or args.vwap_filter or args.htf_filter
         or args.sr_proximity_atr > 0.0 or args.min_vol_mult > 0.0
         or args.sd_mode != "off"
+        or getattr(args, "structure_filter", False)
+        or getattr(args, "progress_stall_filter", False)
     )
+
+
+def _progress_enabled(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "progress_stall_filter", False))
+
+
+class _ProgressStall:
+    """Stateful LOCAL-progress stall cap with probe decay (one per run).
+
+    Caps HTF-ALIGNED same-side pullback CLUSTERS that keep firing while the trend
+    has stopped making LOCAL new extremes (a rolling local high/low, not the
+    whole-leg cumulative extreme -- the latter made progress too rare and let the
+    filter go dark for a whole leg). Aligned-only (BUY in bull / SELL in bear);
+    wrong-side / flat / NaN pass through (the structure guard handles wrong-side).
+    It can only REMOVE signals.
+
+    Per (leg_id, side) state: non_progressing_count, stall_blocked, last_probe_pos.
+    A same-side aligned signal:
+      * valid progress         -> reset (count=0, unblock), allow.
+      * not blocked yet        -> count++; block+veto when count>=stall_n AND
+                                  bars_since_progress>=min_no_progress_bars; else allow.
+      * blocked                -> allow ONE probe every progress_probe_interval_bars
+                                  (so it never goes fully dark), else veto. A probe
+                                  does NOT unblock; only valid progress / a new leg
+                                  resets. The first same-side signal of a new leg is
+                                  always allowed (fresh state). The counter is frozen
+                                  once blocked (counted once).
+    """
+
+    def __init__(self, args: argparse.Namespace):
+        self.stall_n = max(1, args.progress_stall_n)
+        self.min_bars = max(0, args.progress_min_no_progress_bars)
+        self.probe_interval = max(1, args.progress_probe_interval_bars)
+        self._st: dict[tuple, dict] = {}     # (leg, side) -> {count, blocked, last_probe_pos}
+
+    def decide(self, row, side: str, pos: int) -> tuple[bool, str, dict]:
+        regime = str(getattr(row, "prog_regime", "nan"))
+        leg = getattr(row, "prog_leg_id", -1)
+        epoch = int(getattr(row, "prog_epoch", 0) or 0)
+        valid = bool(getattr(row, "prog_valid_progress", False))
+        bars_since = float(getattr(row, "prog_bars_since_progress", 0.0) or 0.0)
+        local_ref = getattr(row, "prog_local_ref", float("nan"))
+        buy = side == "BUY"
+        aligned = (buy and regime == "bull") or (not buy and regime == "bear")
+
+        diag = {"htf_regime": regime, "htf_leg_id": leg,
+                "local_ref": (round(float(local_ref), 2) if pd.notna(local_ref) else ""),
+                "current_extreme": round(float(getattr(row, "high" if buy else "low")), 2),
+                "valid_progress": int(valid),
+                "bars_since_valid_progress": int(bars_since),
+                "non_progressing_count": 0, "stall_blocked": 0,
+                "bars_since_last_probe": "", "probe_allowed": 0}
+
+        # out of scope -> pass through (not progress-stall's job)
+        if regime == "nan":
+            return True, "htf_nan", diag
+        if regime == "flat":
+            return True, "htf_flat", diag
+        if not aligned:
+            return True, "htf_opposite", diag
+
+        st = self._st.setdefault((leg, side),
+                                 {"count": 0, "blocked": False, "last_probe_pos": None,
+                                  "last_epoch": epoch})
+
+        # RE-ARM when local progress happened on ANY bar since the last same-side
+        # signal (epoch advanced) or on this bar (valid). This is the key fix:
+        # signals are PULLBACKS, so 'valid' is rarely true AT a signal bar -- the
+        # trend's progress shows up on the breakout bars BETWEEN signals, which the
+        # progress epoch (cumsum over all bars) captures.
+        if valid or epoch != st["last_epoch"]:
+            st["count"] = 0
+            st["blocked"] = False
+            st["last_probe_pos"] = None
+            st["last_epoch"] = epoch
+            return True, "accept", diag
+
+        if st["blocked"]:
+            since_probe = (pos - st["last_probe_pos"]) if st["last_probe_pos"] is not None else self.probe_interval
+            diag["stall_blocked"] = 1
+            diag["bars_since_last_probe"] = int(since_probe)
+            diag["non_progressing_count"] = st["count"]
+            if since_probe >= self.probe_interval:  # let exactly one probe through
+                st["last_probe_pos"] = pos
+                diag["probe_allowed"] = 1
+                return True, "accept", diag
+            return False, "progress_stall", diag
+
+        # not blocked yet: count this non-progressing same-side signal (then freeze)
+        st["count"] += 1
+        diag["non_progressing_count"] = st["count"]
+        if st["count"] >= self.stall_n and bars_since >= self.min_bars:
+            st["blocked"] = True
+            st["last_probe_pos"] = pos            # next probe allowed probe_interval bars later
+            diag["stall_blocked"] = 1
+            diag["bars_since_last_probe"] = 0
+            return False, "progress_stall", diag
+        return True, "accept", diag
 
 
 def _entry_filters_ok(row, side: str, args: argparse.Namespace) -> bool:
@@ -463,10 +747,17 @@ def _entry_filters_ok(row, side: str, args: argparse.Namespace) -> bool:
             zh = getattr(row, "sd_supply_high", float("nan"))
         if pd.isna(zl) or pd.isna(zh) or close < (zl - prox) or close > (zh + prox):
             return False
+    # Anti-wrong-side-structure guard (HTF trend / VWAP / impulse / score vetoes)
+    if _structure_enabled(args):
+        ok, _reason, _diag = _structure_eval(row, side, args)
+        if not ok:
+            return False
     return True
 
 
-def generate_signals(df: pd.DataFrame, args: argparse.Namespace) -> list[GeneratedSignal]:
+def generate_signals(df: pd.DataFrame, args: argparse.Namespace,
+                     struct_records: list[dict] | None = None,
+                     prog_records: list[dict] | None = None) -> list[GeneratedSignal]:
     progress_enabled = args.progress_interval_seconds > 0 and args.progress_every_rows > 0
     with _Heartbeat("indicator calculation", args.progress_interval_seconds, enabled=args.progress_interval_seconds > 0):
         df = _add_indicators(df, args)
@@ -474,6 +765,7 @@ def generate_signals(df: pd.DataFrame, args: argparse.Namespace) -> list[Generat
     signals: list[GeneratedSignal] = []
     last_signal_time: datetime | None = None
     per_day_count: dict[str, int] = {}
+    prog_stall = _ProgressStall(args) if _progress_enabled(args) else None
 
     start_time = pd.Timestamp(args.start) if args.start else None
     end_time = pd.Timestamp(args.end) if args.end else None
@@ -539,11 +831,42 @@ def generate_signals(df: pd.DataFrame, args: argparse.Namespace) -> list[Generat
         sell_pullback = high >= ema_mid - atr * args.pullback_atr
         sell_confirm = close < open_ and close < ema_mid
 
+        buy_setup = buy_trend and buy_pullback and buy_confirm
+        sell_setup = sell_trend and sell_pullback and sell_confirm
+
+        # Structure diagnostics: record the guard decision for every base-setup
+        # bar (regardless of the other filters), so a rejection can be explained.
+        if struct_records is not None and _structure_enabled(args) and (buy_setup or sell_setup):
+            d_side = "BUY" if buy_setup else "SELL"
+            _ok, _reason, _diag = _structure_eval(row, d_side, args)
+            struct_records.append({
+                "time": t.isoformat(sep=" "), "side": d_side, "close": round(close, 2),
+                "htf_state": _diag["htf_state"], "vwap_side": _diag["vwap_side"],
+                "impulse_state": _diag["impulse_state"], "score": _diag["score"],
+                "reject_reason": _reason,
+            })
+
         sig: GeneratedSignal | None = None
-        if buy_trend and buy_pullback and buy_confirm and _entry_filters_ok(row, "BUY", args):
-            sig = _build_buy(row, args)
-        elif sell_trend and sell_pullback and sell_confirm and _entry_filters_ok(row, "SELL", args):
-            sig = _build_sell(row, args)
+        sig_side: str | None = None
+        if buy_setup and _entry_filters_ok(row, "BUY", args):
+            sig, sig_side = _build_buy(row, args), "BUY"
+        elif sell_setup and _entry_filters_ok(row, "SELL", args):
+            sig, sig_side = _build_sell(row, args), "SELL"
+
+        # Trend-progress stall cap: last gate, on the would-be-taken signal (after
+        # the base setup + RSI/BB/structure filters). It only caps HTF-ALIGNED
+        # same-side clusters; wrong-side/flat/NaN pass through (tagged). The stall
+        # COUNT increments only for these would-be-taken aligned same-side signals,
+        # so it reflects the cluster of trades actually taken.
+        if sig is not None and prog_stall is not None:
+            p_ok, p_reason, p_diag = prog_stall.decide(row, sig_side, i)
+            if prog_records is not None:
+                prog_records.append({
+                    "time": t.isoformat(sep=" "), "side": sig_side, "close": round(close, 2),
+                    **p_diag, "reject_reason": p_reason,
+                })
+            if not p_ok:
+                sig = None
 
         if sig is None:
             continue
@@ -608,6 +931,29 @@ def _write_diagnostics(signals: list[GeneratedSignal], path: Path) -> None:
             row = asdict(sig)
             row["time"] = sig.time.isoformat(sep=" ")
             writer.writerow(row)
+
+
+def _write_structure_diagnostics(records: list[dict], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = ["time", "side", "close", "htf_state", "vwap_side",
+                  "impulse_state", "score", "reject_reason"]
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(records)
+
+
+def _write_progress_diagnostics(records: list[dict], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = ["time", "side", "close", "htf_regime", "htf_leg_id",
+                  "local_ref", "current_extreme", "valid_progress",
+                  "bars_since_valid_progress", "non_progressing_count",
+                  "stall_blocked", "bars_since_last_probe", "probe_allowed",
+                  "reject_reason"]
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(records)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -701,6 +1047,83 @@ def build_parser() -> argparse.ArgumentParser:
                    help="S&D: entry must be within X*ATR of the demand/supply zone band.")
     p.add_argument("--sd-max-age-bars", type=int, default=240,
                    help="S&D: a zone stays valid for at most N bars after it activates.")
+
+    # --- ANTI-WRONG-SIDE-STRUCTURE guard (all default OFF -> parity preserved).
+    #     This is NOT another generic RSI/BB/SL/TP sweep: it targets the specific
+    #     failure mode of scalping AGAINST the larger structure -- BUY signals when
+    #     the higher timeframe is bearish, SELL signals when it is bullish, and
+    #     entries right after a large opposite-side impulse. It gates the EXISTING
+    #     ema-pullback entry with side-specific vetoes; it never creates entries.
+    #     The master switch is --structure-filter; the HTF-trend veto is the core
+    #     and is always active when on, the VWAP / impulse / score vetoes layer on
+    #     via their own flags. See docs/TSL18_STRUCTURE_GUARD.md. ---
+    p.add_argument("--structure-filter", action=argparse.BooleanOptionalAction, default=False,
+                   help="anti-wrong-side-structure guard: reject BUY when HTF structure is "
+                        "bearish and SELL when bullish. OFF by default (feed unchanged).")
+    p.add_argument("--structure-htf-minutes", type=int, default=60,
+                   help="resample minutes for the structure HTF trend EMA (e.g. 60 = H1).")
+    p.add_argument("--structure-ema-fast", type=int, default=20,
+                   help="fast EMA span on the structure HTF series.")
+    p.add_argument("--structure-ema-slow", type=int, default=50,
+                   help="slow EMA span on the structure HTF series (fast-slow sign = trend).")
+    p.add_argument("--structure-require-vwap-side", action=argparse.BooleanOptionalAction, default=False,
+                   help="also veto when price is on the wrong side of session VWAP "
+                        "(BUY below / SELL above).")
+    p.add_argument("--structure-impulse-cooldown-bars", type=int, default=0,
+                   help="bars to look back for an opposite-side impulse; 0 = impulse veto off.")
+    p.add_argument("--structure-impulse-atr", type=float, default=0.0,
+                   help="impulse candle threshold: |close-open| >= X*ATR (or swing break) marks "
+                        "an impulse. 0 = impulse veto off. Reject BUY after a recent bearish "
+                        "impulse/breakdown, SELL after a recent bullish impulse/breakout.")
+    p.add_argument("--structure-min-score", type=int, default=0,
+                   help="minimum structure score (0..4) required to keep the entry; 0 = off. "
+                        "Score = HTF-agree + VWAP-side + no-opposite-impulse + swing-intact.")
+    p.add_argument("--structure-diagnostics", default=None,
+                   help="optional CSV: one row per base-setup bar with the structure decision "
+                        "(time, side, close, htf_state, vwap_side, impulse_state, score, "
+                        "reject_reason) -- so you can see WHY a signal was rejected.")
+
+    # --- TREND-PROGRESS STALL CAP (all default OFF -> parity preserved). Targets
+    #     the OTHER failure mode the structure guard cannot reach: HTF-ALIGNED
+    #     same-side pullback CLUSTERS that keep firing while the trend has stopped
+    #     making new extremes (SELL pullbacks near a down-leg low that stops making
+    #     new lows, etc.). It vetoes a same-side signal only when BOTH the
+    #     consecutive non-progressing same-side count >= stall_n AND enough no-
+    #     progress bars have elapsed. Aligned-only; wrong-side is the structure
+    #     guard's job. No-lookahead (completed HTF + prior extreme excludes the
+    #     current bar; the current bar's close may only CONFIRM a break). It only
+    #     REMOVES signals. See docs/TSL18_STRUCTURE_GUARD.md. ---
+    p.add_argument("--progress-stall-filter", action=argparse.BooleanOptionalAction, default=False,
+                   help="cap HTF-aligned same-side pullback clusters that fire while the trend "
+                        "stops making new extremes. OFF by default (feed unchanged).")
+    p.add_argument("--progress-htf-minutes", type=int, default=60,
+                   help="resample minutes for the progress HTF regime (e.g. 60 = H1).")
+    p.add_argument("--progress-ema-fast", type=int, default=20)
+    p.add_argument("--progress-ema-slow", type=int, default=50)
+    p.add_argument("--progress-min-diff-atr", type=float, default=0.10,
+                   help="|HTF EMA diff| / HTF ATR above this = trend regime; within = flat.")
+    p.add_argument("--progress-local-lookback-bars", type=int, default=30,
+                   help="LOCAL rolling window (M1 bars, excl current) whose high/low is the "
+                        "progress reference -- NOT the whole-leg cumulative extreme.")
+    p.add_argument("--progress-stall-n", type=int, default=3,
+                   help="veto after this many consecutive non-progressing same-side signals.")
+    p.add_argument("--progress-min-no-progress-bars", type=int, default=20,
+                   help="also require this many M1 bars since the last valid progress before vetoing.")
+    p.add_argument("--progress-probe-interval-bars", type=int, default=30,
+                   help="while stalled, let exactly ONE probe signal through every this many bars "
+                        "(so the filter never goes dark for a whole leg).")
+    p.add_argument("--progress-min-atr", type=float, default=0.50,
+                   help="a new extreme must beat the prior by >= X*M1_ATR14 to count as progress.")
+    p.add_argument("--progress-close-confirm-atr", type=float, default=0.10,
+                   help="the current bar's CLOSE must also break the prior extreme by >= X*M1_ATR14 "
+                        "(so a wick-only new extreme does not re-arm the filter).")
+    p.add_argument("--progress-min-points", type=float, default=1.0,
+                   help="absolute XAUUSD-point floor on the progress threshold (guards tiny-ATR over-reset).")
+    p.add_argument("--progress-stall-diagnostics", default=None,
+                   help="optional CSV: one row per would-be-taken signal with the progress-stall "
+                        "decision (time, side, close, htf_regime, htf_leg_id, prior_extreme, "
+                        "current_extreme, valid_progress, bars_since_valid_progress, "
+                        "non_progressing_count, reject_reason).")
     return p
 
 
@@ -724,7 +1147,19 @@ def main(argv: list[str] | None = None) -> int:
         flush=True,
     )
 
-    signals = generate_signals(chart.dataframe, args)
+    struct_records: list[dict] | None = [] if (args.structure_diagnostics and _structure_enabled(args)) else None
+    prog_records: list[dict] | None = [] if (args.progress_stall_diagnostics and _progress_enabled(args)) else None
+    signals = generate_signals(chart.dataframe, args, struct_records=struct_records,
+                               prog_records=prog_records)
+
+    if struct_records is not None:
+        print(f"[{_stamp()}] Writing structure diagnostics to {args.structure_diagnostics} "
+              f"({len(struct_records)} base-setup rows)", file=sys.stderr, flush=True)
+        _write_structure_diagnostics(struct_records, Path(args.structure_diagnostics))
+    if prog_records is not None:
+        print(f"[{_stamp()}] Writing progress-stall diagnostics to {args.progress_stall_diagnostics} "
+              f"({len(prog_records)} would-be-taken rows)", file=sys.stderr, flush=True)
+        _write_progress_diagnostics(prog_records, Path(args.progress_stall_diagnostics))
 
     output = Path(args.output)
     print(f"[{_stamp()}] Writing signals to {output}", file=sys.stderr, flush=True)

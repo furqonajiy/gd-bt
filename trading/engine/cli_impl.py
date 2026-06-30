@@ -1125,7 +1125,7 @@ def _consume_signal_overrides(args, executor, registry, *, log) -> set[str]:
     if not records:
         return set()
 
-    tag = (getattr(args, "strategy_tag", "") or "")[:4]
+    tag = (getattr(args, "strategy_tag", "") or "")[:5]
 
     def _tagged(skey: str) -> str:
         return f"{tag}-{skey}" if tag else skey
