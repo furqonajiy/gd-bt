@@ -33,14 +33,23 @@ between signals. This layer makes the interaction an explicit, swept choice.
   allow_all`) reproduce current behavior exactly; `run_backtest` does zero extra
   work and emits no collision columns/summary
   (`tests/test_collision_policy.py::test_run_backtest_collision_off_is_byte_identical`).
-- It is a **research/backtest layer.** The same shared object is wired into
-  `run_backtest`, the hybrid tick backtest (via `backtest_explicit`'s parser /
-  config), and is plumbed into the live `auto` config. **Live applies only the
-  safe acceptance outcomes (reject / downsize); it never auto-closes or flips an
-  existing live position** — that irreversible action needs separate,
-  demo-validated wiring. The old-side banked P&L is a backtest model. Treat any
-  promising configuration as a **fresh research result: forward-validate on
-  demo before trusting it live.**
+- It is a **backtest/sweep layer.** The same shared object is wired into BOTH
+  the M1 `run_backtest` AND the **hybrid/tick backtest** (`tools/backtest_hybrid.py`'s
+  `_run_hybrid_loop`, mirroring `run_backtest` exactly: `decide` before accept,
+  `apply_collision_to_built` on accept, `register` after, summary on the result,
+  collision counters in `--score-json`). Because the TSL18 quality-entry sweep
+  scores through `backtest_hybrid.py`, this is what makes its collision-policy
+  candidates real.
+- **Live `auto` REFUSES non-baseline collision policies (for now).** Live
+  execution does **not** yet enforce reject/downsize/flip/bank outcomes, so
+  `tools/auto_explicit.py` hard-stops (`_validate_live_collision_policy`, before
+  any MT5 connection) if `--opposite-signal-policy` ≠ `allow_hedge` or
+  `--same-side-overlap-policy` ≠ `allow_all` — accepting them would give false
+  protection. The flags are still parsed for config consistency; only the live
+  path refuses non-baseline values. The old-side banked P&L is a backtest model.
+  Treat any promising configuration as a **fresh research result, and the live
+  enforcement as unbuilt: a separate, demo-validated live implementation is
+  required before any non-baseline policy can run live.**
 
 ## The policies
 

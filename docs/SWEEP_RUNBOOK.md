@@ -268,14 +268,27 @@ classifies each entry by **quality** and asks two new questions:
    `--max-rebate-share-of-profit`) so a **rebate‑farm with bad pure P&L is never
    promoted**.
 
+3. **Does resolving signal *interactions* help?** The sweep now also includes the
+   **TSL18 collision policies** (`--opposite-signal-policy` /
+   `--same-side-overlap-policy`, PR #329) as first‑class candidates — a
+   collision‑only family and a combined (quality + collision) family. The collision
+   layer is now wired into `tools/backtest_hybrid.py` (M1 **and** tick path), so
+   these candidates' collision metrics are **real**, not placeholders, and a
+   baseline candidate (`allow_hedge` + `allow_all`) stays byte‑identical (parity).
+
 Run it from `tools/sweep_tsl18_quality_entry.py` (modes `smoke` / `full_june` /
-`validate_top`, with partial‑tick‑lifecycle and open/pending‑left exclusion gates,
-writing `results.csv` / `top_candidates.json` / `summary.md`). The `--skeleton`
-flag emits the schema with placeholder rows and runs **no** backtests — use it (or
-`--mode smoke`) for a fast structural check. **Do not run the full aggressive
-sweep on this branch.** Promotion follows the same edge+OOS forward‑fit bar as
-every other strategy. (The `collision_*` columns in `results.csv` are placeholders
-for a separate branch — no collision logic lives here.)
+`validate_top`, with partial‑tick‑lifecycle, open/pending‑left, and
+collision‑metrics‑present exclusion gates, writing `results.csv` /
+`top_candidates.json` / `summary.md`; the real collision columns
+`opposite_signal_policy` / `same_side_overlap_policy` + the collision counters are
+in `results.csv`). The `--skeleton` flag emits the schema with placeholder rows and
+runs **no** backtests — use it (or `--mode smoke`) for a fast structural check.
+**The overnight sweep runs on Actions, not from this branch** (a push to `main`
+runs **smoke only**; the heavy `full_june` runs via `workflow_dispatch mode=full`).
+Promotion follows the same edge+OOS forward‑fit bar as every other strategy, and a
+collision‑policy winner stays **research‑only until a demo‑validated LIVE collision
+implementation exists** — live `auto` refuses non‑baseline collision flags today
+(`_validate_live_collision_policy`).
 
 ---
 
@@ -318,10 +331,12 @@ layer (#328) and the collision policies (#329); **collision policies may be abse
 until #329 is merged**, in which case it still runs quality-entry-only and marks
 the status `COLLISION_NOT_MERGED` rather than failing; if the quality-entry layer
 is absent it writes the status artifact and exits 0. Preflight (compile + targeted
-pytest) runs before the sweep and a failed test blocks it. A `push` to `main` runs
-the full bounded pipeline (smoke → full_june → jan_jun); the heavy run is also
-launchable via `workflow_dispatch` (`run_jan_jun=true`). It **never trades live and
-never promotes to live TSL18** — research artifacts only.
+pytest) runs before the sweep and a failed test blocks it. **Run modes (the heavy
+overnight grid never runs on a merge):** a `push` to `main` runs **SMOKE only**;
+the `workflow_dispatch` `mode` input selects `smoke` (default) or `full` —
+`mode=full` runs smoke → full_june, then Jan-Jun validation only when
+`run_jan_jun=true` (default false). It **never trades live and never promotes to
+live TSL18** — research artifacts only.
 
 ---
 
