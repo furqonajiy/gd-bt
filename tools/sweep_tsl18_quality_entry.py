@@ -357,9 +357,15 @@ def write_summary_md(rows: list[dict], ranked: list[dict], path: Path,
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--mode", choices=list(MODE_WINDOW), default="smoke")
+    # `full` is an automation alias for `full_june` (normalized in main()).
+    ap.add_argument("--mode", choices=list(MODE_WINDOW) + ["full"], default="smoke",
+                    help="smoke | full_june | validate_top ('full' = automation alias for full_june).")
     ap.add_argument("--window", choices=list(WINDOWS), default=None,
                     help="override the mode's default window.")
+    ap.add_argument("--start-date", default=None,
+                    help="override the scoring-window START (YYYY-MM-DD); default = the mode/window start.")
+    ap.add_argument("--end-date", default=None,
+                    help="override the scoring-window END (YYYY-MM-DD, EXCLUSIVE); default = the mode/window end.")
     ap.add_argument("--skeleton", action="store_true",
                     help="emit the results schema with placeholder rows; run NO backtests.")
     ap.add_argument("--charts", nargs="+",
@@ -367,29 +373,46 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--ticks", nargs="+", default=["data/ticks/XAUUSD_TICK_*_ELEV8.csv"])
     ap.add_argument("--gen-start", default="2026-06-01",
                     help="feed-generation start (indicator warmup precedes the window).")
-    ap.add_argument("--top-json", default=None,
-                    help="validate_top: a prior run's top_candidates.json to re-score.")
-    ap.add_argument("--out-root", default="reports")
+    # --input-candidates is an automation alias for --top-json.
+    ap.add_argument("--top-json", "--input-candidates", dest="top_json", default=None,
+                    help="validate_top: a prior run's top_candidates.json to re-score "
+                         "(--input-candidates is an automation alias).")
+    # --output-dir is an automation alias for --out-root; the script ALWAYS writes
+    # <out-root>/TSL18_QUALITY_<mode>/, so --output-dir is the ROOT, not the literal
+    # final directory (kept simple + explicit to avoid confusing nested paths).
+    ap.add_argument("--out-root", "--output-dir", dest="out_root", default="reports",
+                    help="output ROOT; the script writes <out-root>/TSL18_QUALITY_<mode>/. "
+                         "--output-dir is an automation alias (still creates the subfolder).")
     # rebate-aware scoring knobs (see tools/rebate_scoring.py)
     ap.add_argument("--rebate-per-lot", type=float, default=DEFAULT_REBATE_PER_LOT)
     ap.add_argument("--min-pure-trading-pnl", type=float, default=0.0,
                     help="reject candidates whose pure trading P&L < X.")
     ap.add_argument("--max-rebate-share-of-profit", type=float, default=0.50,
                     help="reject candidates whose net profit is >X rebate.")
-    ap.add_argument("--score-objective", choices=list(SCORE_OBJECTIVES),
-                    default="edge_plus_rebate_guarded")
-    # exclusion gates
-    ap.add_argument("--require-full-tick-lifecycle", action="store_true",
-                    help="exclude candidates whose window mixes TICK and M1 (partial coverage).")
-    ap.add_argument("--exclude-open-or-pending", action="store_true",
-                    help="exclude candidates that left positions OPEN/PENDING at window end.")
+    # --rank-objective is an automation alias for --score-objective.
+    ap.add_argument("--score-objective", "--rank-objective", dest="score_objective",
+                    choices=list(SCORE_OBJECTIVES), default="edge_plus_rebate_guarded",
+                    help="rebate-aware ranking objective (--rank-objective is an automation alias).")
+    # exclusion gates (each carries an automation-friendly alias).
+    ap.add_argument("--require-full-tick-lifecycle", "--require-full-lifecycle-ticks",
+                    dest="require_full_tick_lifecycle", action="store_true",
+                    help="exclude candidates whose window mixes TICK and M1 (partial coverage). "
+                         "(--require-full-lifecycle-ticks is an automation alias.)")
+    ap.add_argument("--exclude-open-or-pending", "--fail-on-open-or-pending",
+                    dest="exclude_open_or_pending", action="store_true",
+                    help="exclude candidates that left positions OPEN/PENDING at window end. "
+                         "(--fail-on-open-or-pending is an automation alias.)")
     return ap
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.mode == "full":            # automation alias for full_june
+        args.mode = "full_june"
     window = args.window or MODE_WINDOW[args.mode]
     span = WINDOWS[window]
+    if args.start_date or args.end_date:   # explicit window overrides (--end-date EXCLUSIVE)
+        span = (args.start_date or span[0], args.end_date or span[1])
     out_root = Path(args.out_root) / f"TSL18_QUALITY_{args.mode}"
     out_root.mkdir(parents=True, exist_ok=True)
 
