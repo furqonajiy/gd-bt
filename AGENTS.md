@@ -335,6 +335,52 @@ pair is a thin package that imports it.
   These are **backtest-only** and never change live order placement. From the
   2026-06-16 reconciliation: at equal lot, live tracks the backtest on entries,
   TP3, and SL to the cent; the only gap is locked exits, which this models.
+- **Small-account deployment-safety gates** (`strategy/deployment_gate.py`,
+  `DeploymentGate`; **all default OFF/0 → byte-identical parity**, pinned by
+  `tests/test_deployment_gate.py`). These exist for the 0.01-lot floor: a $2k
+  account can't size below one min-lot leg, so an 8-entry zone can over-risk.
+  A single shared gate enforces three signal-acceptance filters **identically in
+  `run_backtest`, the hybrid tick backtest, AND the live executor** (`auto`, via
+  `DeploymentGate.live_check`; live↔backtest decision parity pinned by
+  `test_live_check_matches_backtest_gate_decisions`): **risk-budget gate**
+  (`risk_budget_gate`,
+  `max_single_entry_risk_pct`, `max_zone_risk_pct` — reject when worst-case
+  min-lot single-leg / whole-ladder risk exceeds a fraction of equity, computed
+  from the PLANNED ladder), **daily-loss circuit breaker** (`daily_loss_limit_pct`
+  — once a feed-zone day's realized P&L hits −pct×start-of-day equity, reject NEW
+  signals that day; open positions keep being managed; resets next day), and
+  **max concurrent open signals** (`max_open_signals` — cap open signal GROUPS,
+  not entries; a group holds the slot from placement to close/expiry). They only
+  REJECT/PAUSE signals (never add/modify geometry, lot, SL/TP, or trailing). CLI:
+  `--risk-budget-gate / --max-single-entry-risk-pct / --max-zone-risk-pct /
+  --daily-loss-limit-pct / --max-open-signals` on `backtest_explicit` (inherited
+  by `backtest_hybrid`). The **TS2K** candidate
+  (`cli/candidate_TS2K_small_account_tick.txt`, tag **TS2K**, *research/demo*) is
+  T818/TSL18 feed+geometry at **$2k** with **entries 2 / max-open 1 / daily 5% /
+  risk-budget zone 6%·single 4%**; validate with `tools/sweep_small_account_deploy.py`
+  (TICK; writes `reports/SMALL_ACCOUNT_<window>/summary.md` + the account-size
+  floor). **The gates are wired into the live executor too** (`auto_explicit` flags
+  → `DeploymentGate.live_check`: planned ladder from `rec.new_signal.orders`,
+  open-group count from `tracked`, account-level today-realized P&L from
+  `Mt5Executor.realized_pnl_since`); the gate only ever REJECTS a placement (never
+  adds orders). **DEMO-validate before real money.** The **entry count is a MANUAL,
+  capital-staged knob** — nothing auto-scales it; lot sizing (risk%×equity) and the
+  equity-relative risk-budget gate ARE automatic, but the gate is *reject-only*
+  (never trims 8→2). Measured ladder (V817, TICK): full 8-entry rides a
+  ~capital-independent **−30% DD** ($2K→$20K, only the $ grows), gated 2-entry
+  holds **~−18%** at higher PF, one worst-case zone ≈ 73% of a $2K account — so run
+  **limited 2-entry from $2K, switch to full 8-entry ~$10K** (stop → change
+  `--entries` → restart). **Don't pool TSL18+V817 on one small account** (combined
+  DD −41.6%; TSL18 starves V817 via the shared concurrency cap). VS2K is the V817
+  analogue of TS2K. See `docs/SMALL_ACCOUNT_DEPLOYMENT.md`; profile a workbook with
+  `tools/strategy_profile.py`, simulate both books pooled with
+  `tools/sim_portfolio_small_account.py`.
+- **Drawdown is reported in USD *and* %** everywhere (standing rule):
+  `aggregate_backtest_result` carries `max_drawdown_usd` + a `drawdown_trough`
+  (when it happened + how many signals/entries had executed by then), and the
+  Excel **Summary** (`% ($)` + a Max-DD trough line) and **Daily / Weekly /
+  Monthly** sheets each show per-period **Drawdown % / Drawdown $ / Entries**.
+  Additive → parity preserved.
 - **Signal R:R / SL-source policy** (`strategy/backtest.apply_signal_rr_policy`,
   applied per-signal in `run_backtest`; **all default OFF → parity**). For
   provider feeds whose posted TP/SL vary in quality — Victor's 2024–25 signals

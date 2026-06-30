@@ -1,0 +1,63 @@
+name: Backtest reports (TSL18 / V817)
+
+# Runs the deployed-book 2026 TICK backtests on a runner (the tick archive is
+# committed, so no MT5 is needed -- the --sync flags soft-fail and fall back to
+# the committed data) and commits the refreshed Excel workbooks -- which now carry
+# the USD + % drawdown columns -- back to the branch. This offloads the slow
+# tick replays (T818 Jan-Jun is ~10k signals) off a laptop / the dev container.
+#
+# It does NOT merge code -- code lands on main only through the normal --no-ff PR
+# review flow. This workflow only regenerates + commits report ARTIFACTS.
+
+on:
+  workflow_dispatch:
+    inputs:
+      strategies:
+        description: "Which books (space-separated cli/run.py names)"
+        default: "t818 v817"
+      sections:
+        description: "Which backtest sections (5=Jun 2026, 6=Jan-Jun 2026)"
+        default: "5 6"
+
+# Allow the job to push the regenerated reports back to the branch.
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run backtests (TICK; sync soft-fails -> committed data)
+        run: |
+          set -o pipefail
+          for s in ${{ github.event.inputs.strategies }}; do
+            for sec in ${{ github.event.inputs.sections }}; do
+              echo "===== cli/run.py $s $sec ====="
+              python cli/run.py "$s" "$sec" 2>&1 | tail -25
+            done
+          done
+
+      - name: Commit refreshed reports back to the branch
+        run: |
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+          git add reports/T818_2026*.xlsx reports/V817_2026*.xlsx 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No report changes to commit."
+          else
+            git commit -m "report: refresh TSL18 (T818) + V817 2026 TICK backtests with drawdown [skip ci]"
+            for i in 1 2 3 4; do git push && break || sleep $((2**i)); done
+          fi

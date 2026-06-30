@@ -43,6 +43,7 @@ for p in (str(ROOT), str(ROOT / "tools")):
 
 from trading.engine import (  # noqa: E402
     CsvChartSource,
+    DeploymentGate,
     aggregate_backtest_result,
     parse_signals_file,
     replay_signal_rows,
@@ -244,6 +245,10 @@ def _run_hybrid_loop(signals, chart, chart_df, chart_start, chart_end, ticks,
     excluded: list[dict] = []
     n_tick = n_m1 = 0
 
+    # Deployment-safety gates (None unless enabled -> byte-identical parity).
+    # Same object/logic as run_backtest so the tick path gates identically.
+    gate = DeploymentGate.maybe(config)
+
     for i, sig in enumerate(signals):
         screened, reason = screen_signal(
             sig, config, chart_start, chart_end, atr_at=atr_at,
@@ -253,6 +258,11 @@ def _run_hybrid_loop(signals, chart, chart_df, chart_start, chart_end, ticks,
             excluded.append({"signal_key": sig.signal_key, "reason": reason})
             continue
         tsig, sig_config = screened
+        if gate is not None:
+            greason = gate.pre_check(tsig, equity)
+            if greason is not None:
+                excluded.append({"signal_key": tsig.signal_key, "reason": greason})
+                continue
 
         built = None
         if tick_times.size and _covered(tick_times, tsig, sig_config, chart_end):
@@ -264,14 +274,24 @@ def _run_hybrid_loop(signals, chart, chart_df, chart_start, chart_end, ticks,
             built["row"]["data_source"] = "M1"
             for er in built["entry_rows"]:
                 er["data_source"] = "M1"
-            n_m1 += 1
+            tick_built = False
         else:
-            n_tick += 1
+            tick_built = True
+
+        if gate is not None:
+            greason = gate.risk_budget_check(built["entry_rows"], equity)
+            if greason is not None:
+                excluded.append({"signal_key": tsig.signal_key, "reason": greason})
+                continue
+        n_tick += int(tick_built)
+        n_m1 += int(not tick_built)
 
         rows.append(built["row"])
         entry_rows.extend(built["entry_rows"])
         if built["status"] != "OPEN":
             equity = built["equity_after"]
+        if gate is not None:
+            gate.register(tsig, built)
         if progress is not None:
             progress(i + 1, len(signals), n_tick, n_m1)
         if equity <= 0:
@@ -281,6 +301,8 @@ def _run_hybrid_loop(signals, chart, chart_df, chart_start, chart_end, ticks,
         rows, entry_rows, excluded, config, chart_df, chart_start, chart_end,
         equity, len(signals))
     result["data_sources"] = {"tick_signals": n_tick, "m1_signals": n_m1}
+    if gate is not None:
+        result["deployment_gate"] = gate.summary()
     return result
 
 

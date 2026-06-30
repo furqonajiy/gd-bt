@@ -173,6 +173,33 @@ class StrategyConfig:
     atr_period: int = 14
     atr_sl_mult: float = 1.5
 
+    # SMALL-ACCOUNT DEPLOYMENT-SAFETY GATES (backtest + live; all default OFF/0 so
+    # parity + DEFAULT_CONFIG behavior are byte-identical). These never change a
+    # signal's geometry, lot sizing, SL/TP, or trailing -- they only REJECT/PAUSE
+    # signals an under-capitalized account cannot safely take. See
+    # docs/SMALL_ACCOUNT_DEPLOYMENT.md. A single shared DeploymentGate
+    # (strategy.deployment_gate) enforces them identically in run_backtest, the
+    # hybrid tick backtest, and the live executor.
+    #
+    # RISK-BUDGET gate: reject a signal whose worst-case MIN-LOT risk is too large
+    # for current equity. single = max over planned ladder legs of
+    # |entry-effective_SL| x minimum_lot x contract; zone = sum over legs. The 0.01
+    # lot floor means a small account cannot scale risk down past one min-lot leg,
+    # so a wide-stop signal can over-risk -- this gate refuses it. Caps are fractions
+    # of equity (0.04 = 4%); 0 disables that cap.
+    risk_budget_gate: bool = False
+    max_single_entry_risk_pct: float = 0.0   # reject if single-leg min-lot risk > equity x this
+    max_zone_risk_pct: float = 0.0           # reject if full-ladder min-lot risk > equity x this
+    # DAILY-LOSS circuit breaker: once realized P&L for a feed-zone (source) day
+    # reaches -daily_loss_limit_pct x start-of-day equity, stop ACCEPTING new
+    # signals for the rest of that day. Already-open positions are NOT force-closed
+    # (the engine keeps managing them). Fraction of equity; 0 disables.
+    daily_loss_limit_pct: float = 0.0
+    # MAX CONCURRENT OPEN SIGNALS: cap how many signal GROUPS (not entries) may be
+    # open at once. A signal with up to entry_count legs still counts as ONE. A new
+    # signal arriving while >= this many groups are open is rejected. 0 = unlimited.
+    max_open_signals: int = 0
+
 
 DEFAULT_CONFIG = StrategyConfig()
 

@@ -228,11 +228,21 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
         ("Trading P&L", f"${result.get('trading_pnl', 0):,.2f}"),
         ("Closed-lot bonus", f"${result.get('bonus', 0):,.2f}"),
         ("Return", f"{return_pct:+.2f}%"),
-        ("Max drawdown", f"{result.get('max_drawdown_pct', 0):.2f}%"),
+        ("Max drawdown", f"{result.get('max_drawdown_pct', 0):.2f}%  "
+                         f"(${abs(result.get('max_drawdown_usd', 0) or 0):,.2f})"),
         ("Signals included", result.get("signals_included")),
         ("Signal wins / losses", f"{result.get('wins', 0)} / {result.get('losses', 0)}"),
         ("Signal win rate", f"{result.get('win_rate_pct', 0):.2f}%"),
     ]
+    # Drawdown trough context: WHEN the worst drawdown happened and how much had
+    # executed by then (only when the engine recorded a trough).
+    tr = result.get("drawdown_trough")
+    if tr:
+        overall_pairs.append(
+            ("Max-DD trough",
+             f"{tr.get('time_chart') or '?'}  "
+             f"({tr.get('signals_executed_through', 0)} signals / "
+             f"{tr.get('entries_filled_through', 0)} entries executed by then)"))
     # Hybrid (tick-preferred / M1-fallback) backtests carry a per-source split;
     # only shown when present, so pure M1/tick reports are unchanged.
     ds = result.get("data_sources")
@@ -283,11 +293,11 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
     # Monthly breakdown table.
     ws.cell(row=row, column=1, value="Monthly Breakdown").font = SUBHEADER_FONT
     ws.cell(row=row, column=1).fill = SUBHEADER_FILL
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=13)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=16)
     row += 1
     headers = ["Month", "Regime", "Signals", "Wins", "Losses", "No-fills",
                "Win rate", "Trading P&L", "Bonus", "Closed lots",
-               "Net P&L", "P&L %", "Equity EoM"]
+               "Net P&L", "P&L %", "Equity EoM", "Entries", "Drawdown %", "Drawdown $"]
     _write_header(ws, row, headers)
     row += 1
     for m in result.get("monthly", []) or []:
@@ -295,12 +305,15 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
         pnl_pct = m.get("pnl_pct", 0.0) or 0.0
         signals = m.get("signals", 0) or 0
         equity_end = m.get("equity_end", 0.0) or 0.0
+        dd_pct = m.get("max_drawdown_pct", 0.0) or 0.0
+        dd_usd = m.get("max_drawdown_usd", 0.0) or 0.0
         cells = [
             m.get("month"), m.get("regime", "") or "-",
             signals, m.get("wins"), m.get("losses"), m.get("no_fills"),
             f"{m.get('win_rate_pct', 0):.1f}%",
             m.get("trading_pnl", 0.0), m.get("bonus", 0.0), m.get("closed_lots", 0.0),
             pnl, f"{pnl_pct:+.2f}%", equity_end,
+            m.get("entries", 0) or 0, f"{dd_pct:.2f}%", dd_usd,
         ]
         if signals == 0:
             _apply_row_fill(ws, row, len(headers), QUIET_DAY_FILL)
@@ -323,6 +336,10 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
                 # Equity at end of month, mirroring the Daily sheet's
                 # Equity EoD column; no red-negative semantics, it's a level.
                 cell.number_format = MONEY_FMT
+            elif c == 15:                    # Drawdown % (worst during the month)
+                _style_pct_cell(cell, dd_pct)
+            elif c == 16:                    # Drawdown $ (matching the %)
+                _style_money_cell(cell, dd_usd)
         row += 1
 
     ws.freeze_panes = "A2"
@@ -340,7 +357,7 @@ def _write_weekly_sheet(ws: Worksheet, result: dict) -> None:
     ws.title = "Weekly Breakdown"
     headers = ["Month-Week", "Signals", "Wins", "Losses", "No-fills",
                "Win rate", "Trading P&L", "Bonus", "Closed lots",
-               "Net P&L", "P&L %", "Equity EoW"]
+               "Net P&L", "P&L %", "Equity EoW", "Entries", "Drawdown %", "Drawdown $"]
     _write_header(ws, 1, headers)
 
     weekly = result.get("weekly", []) or []
@@ -348,11 +365,14 @@ def _write_weekly_sheet(ws: Worksheet, result: dict) -> None:
         pnl = w.get("pnl", 0.0) or 0.0
         pnl_pct = w.get("pnl_pct", 0.0) or 0.0
         signals = w.get("signals", 0) or 0
+        dd_pct = w.get("max_drawdown_pct", 0.0) or 0.0
+        dd_usd = w.get("max_drawdown_usd", 0.0) or 0.0
         cells = [
             w.get("week"), signals, w.get("wins"), w.get("losses"), w.get("no_fills"),
             f"{w.get('win_rate_pct', 0):.1f}%",
             w.get("trading_pnl", 0.0), w.get("bonus", 0.0), w.get("closed_lots", 0.0),
             pnl, f"{pnl_pct:+.2f}%", w.get("equity_end", 0.0) or 0.0,
+            w.get("entries", 0) or 0, f"{dd_pct:.2f}%", dd_usd,
         ]
         if signals == 0:
             _apply_row_fill(ws, r_idx, len(headers), QUIET_DAY_FILL)
@@ -371,6 +391,10 @@ def _write_weekly_sheet(ws: Worksheet, result: dict) -> None:
                 _style_pct_cell(cell, pnl_pct)
             elif c == 12:                    # Equity end-of-week (a level, no red)
                 cell.number_format = MONEY_FMT
+            elif c == 14:                    # Drawdown % (worst during the week)
+                _style_pct_cell(cell, dd_pct)
+            elif c == 15:                    # Drawdown $ (matching the %)
+                _style_money_cell(cell, dd_usd)
 
     ws.freeze_panes = "A2"
     if weekly:
@@ -387,7 +411,7 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
     statuses = result.get("entry_statuses_present", []) or []
     base = ["Date", "Signals", "Wins", "Losses"]
     tail = ["Entries", "Avg R:R", "Avg R", "Trading P&L", "Bonus", "Closed lots",
-            "Net P&L", "P&L %", "Equity EoD", "Drawdown %"]
+            "Net P&L", "P&L %", "Equity EoD", "Drawdown %", "Drawdown $"]
     headers = base + statuses + tail
     _write_header(ws, 1, headers)
 
@@ -406,6 +430,7 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
         if equity_end > peak_equity:
             peak_equity = equity_end
         drawdown_pct = (equity_end - peak_equity) / peak_equity * 100.0 if peak_equity else 0.0
+        drawdown_usd = equity_end - peak_equity        # USD alongside %, matches the % shown
         pnl_pct = d.get("pnl_pct", 0.0) or 0.0
         rr_avg = d.get("entry_rr_avg")
         rrp_avg = d.get("entry_rrp_avg")
@@ -417,7 +442,7 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
             d.get("entry_total", 0),
             _fmt_rr_planned(rrp_avg), _fmt_rr_realized(rr_avg),
             trading_pnl, bonus, closed_lots, pnl,
-            f"{pnl_pct:+.2f}%", equity_end, f"{drawdown_pct:.2f}%",
+            f"{pnl_pct:+.2f}%", equity_end, f"{drawdown_pct:.2f}%", drawdown_usd,
         ]
 
         if signals == 0:
@@ -437,6 +462,7 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
         pnlpct_col = entries_col + 7
         eq_col = entries_col + 8
         dd_col = entries_col + 9
+        dd_usd_col = entries_col + 10
         for c_idx, v in enumerate(cells, start=1):
             cell = ws.cell(row=r_idx, column=c_idx, value=v)
             cell.border = GRID
@@ -450,6 +476,8 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
                 cell.number_format = LOT_FMT
             elif c_idx == eq_col:
                 cell.number_format = MONEY_FMT
+            elif c_idx == dd_usd_col:
+                _style_money_cell(cell, drawdown_usd)
             elif c_idx in (pnlpct_col, dd_col):
                 _style_pct_cell(cell, pnl_pct if c_idx == pnlpct_col else drawdown_pct)
 
