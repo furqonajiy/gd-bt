@@ -96,6 +96,34 @@ The validation report computes `D` at p50/p75/p90/p95/max from the **actual
 backtest signals** (not assumed) and prints all three floors per percentile —
 see `reports/SMALL_ACCOUNT_<window>/summary.md`.
 
+## Measured result — June 2026 (TICK, `reports/SMALL_ACCOUNT_june/`)
+
+The validation confirms the thesis decisively:
+
+| variant | cap | maxDD | worst day | maxLoseStreak | peak concurrent | net (ret%) |
+|---|---|---|---|---|---|---|
+| base_8entry_50k | $50k | −16.3% | −30.1% | 17 | **17** | $189k (378%) |
+| **base_8entry_2k** | $2k | **−37.3%** | **−98.0%** | 17 | **17** | $14.5k |
+| **ts2k_e2_c1_d5_z6** | $2k | **−11.5%** | **−6.4%** | 6 | **1** | $396 (19.8%) |
+| ts2k_e2_c1_d6_z6 | $2k | −11.5% | −6.0% | 6 | 1 | $404 (20.2%) |
+| ts2k_e3_c1_d5_z6 | $2k | −14.6% | −8.2% | 6 | 1 | $508 (25.4%) |
+
+- **Full 8-entry TSL18 at $2K is NOT deployable**: one day lost **98%** of the
+  account (max DD −37%), because up to **17** signal groups stacked at once and a
+  failed wide-stop zone has no min-lot escape.
+- **TS2K makes it survivable**: worst day **−98% → −6.4%**, max DD **−37% → −11.5%**,
+  max losing-signal streak **17 → 6**, peak concurrency **17 → 1**. It does this by
+  rejecting **~1,526** of 1,744 signals on the concurrency cap (one-at-a-time) and
+  **14** on the daily breaker — i.e. it trades far less, which is the point.
+- **Cost**: net drops to ~+20% for the month (still positive in a strong month);
+  upside is capped, exactly as designed. Entries 3 (`ts2k_e3`) earns a bit more
+  (+25%) at a slightly deeper DD (−14.6%).
+- **Account-size floor (p95 stop D=$19.8)**: full-8-entry ≤4% needs **~$4,000**
+  (≈$8k at the max stop); the safe 2-entry ≤6% posture needs only **~$660** — so
+  $2K comfortably carries 2 entries but is far under the 8-entry posture.
+
+Jan–Jun confirmation run: `python tools/sweep_small_account_deploy.py --window jan_jun`.
+
 ## How to validate (always TICK)
 
 ```bash
