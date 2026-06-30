@@ -284,7 +284,8 @@ class Mt5Executor(_Tp2Mt5Executor):
                 if self._market_fill_passed_trailing_open(
                         signal, order, trigger, rounded_lots[order.entry_index],
                         stop_distance, float(plan.final_target_price),
-                        magic, comment, digits, log, reason):
+                        magic, comment, digits, log, reason,
+                        original_entry=float(order.entry_price)):
                     market_fill_indices.append(order.entry_index)
                     log.placed += 1
                     log.placed_entry_indices.append(order.entry_index)
@@ -359,7 +360,8 @@ class Mt5Executor(_Tp2Mt5Executor):
     def _market_fill_passed_trailing_open(self, signal, order, trigger: float, lot: float,
                                           stop_distance: float, tp: float, magic: int,
                                           comment: str, digits: int, log: ExecutionLog,
-                                          reject_reason: str) -> bool:
+                                          reject_reason: str,
+                                          original_entry: float | None = None) -> bool:
         """Open a rejected trailing-open leg at market -- only if the trigger was passed.
 
         Re-reads the tick: for a BUY the fallback fires only when Ask >= trigger
@@ -372,15 +374,27 @@ class Mt5Executor(_Tp2Mt5Executor):
         tick = self.mt5.symbol_info_tick(self.symbol)
         if tick is None or tick.bid <= 0 or tick.ask <= 0:
             return False
+        entry_key = signal_entry_key(signal.signal_key, order.entry_index)
         if signal.side == "BUY":
             if float(tick.ask) < trigger:
+                return False
+            # No-chase ceiling: never market-fill a BUY ABOVE its original planned
+            # entry (a manually-closed leg must re-enter at the original or better).
+            if original_entry is not None and float(tick.ask) > float(original_entry):
+                log.actions.append(
+                    f"  {entry_key}: skipped trailing-open market fallback -- BUY fill "
+                    f"{float(tick.ask):g} would be worse than original entry {float(original_entry):g}.")
                 return False
             order_type, price = self.mt5.ORDER_TYPE_BUY, float(tick.ask)
         else:
             if float(tick.bid) > trigger:
                 return False
+            if original_entry is not None and float(tick.bid) < float(original_entry):
+                log.actions.append(
+                    f"  {entry_key}: skipped trailing-open market fallback -- SELL fill "
+                    f"{float(tick.bid):g} would be worse than original entry {float(original_entry):g}.")
+                return False
             order_type, price = self.mt5.ORDER_TYPE_SELL, float(tick.bid)
-        entry_key = signal_entry_key(signal.signal_key, order.entry_index)
         request = {
             "action":       self.mt5.TRADE_ACTION_DEAL,
             "symbol":       self.symbol,
@@ -447,8 +461,12 @@ class Mt5Executor(_Tp2Mt5Executor):
                 continue
             used.add(idx)
             entry = engine_pos.entries[idx]
+            # Trail/arm against the ORIGINAL planned entry, never the post-fill
+            # mutated entry_price -- so a manually-closed leg's re-arm trigger can
+            # never chase past its original entry (no-chase invariant).
+            planned_entry = float(getattr(entry, "original_entry_price", None) or entry.entry_price)
             trigger = self._candidate_trailing_open_price(
-                engine_pos.signal.side, float(entry.entry_price), bid, ask, distance
+                engine_pos.signal.side, planned_entry, bid, ask, distance
             )
             if trigger is None:
                 continue
@@ -530,7 +548,9 @@ class Mt5Executor(_Tp2Mt5Executor):
             lot = round_lot(e.lot, self.min_lot, self.lot_step)
             if lot <= 0:
                 continue
-            entry_price = float(e.entry_price)
+            # ORIGINAL planned ladder entry, NOT the mutated fill -- the re-arm
+            # no-chase guard and the STOP/market-fallback ceiling both key off this.
+            entry_price = float(getattr(e, "original_entry_price", None) or e.entry_price)
             trigger = self._candidate_trailing_open_price(side, entry_price, bid, ask, distance)
             if trigger is None:
                 waiting.append(e.entry_index)  # price hasn't pulled back enough to arm yet
@@ -569,7 +589,8 @@ class Mt5Executor(_Tp2Mt5Executor):
                 # (never below the trigger), the same fallback as a fresh arm.
                 if self._market_fill_passed_trailing_open(
                         signal, e, trigger, lot, stop_distance, float(tp),
-                        magic, comment, digits, log, reason):
+                        magic, comment, digits, log, reason,
+                        original_entry=entry_price):
                     log.placed += 1
                 else:
                     log.actions.append(
