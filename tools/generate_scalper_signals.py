@@ -366,6 +366,59 @@ def _add_indicators(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
             last_prog = last_prog.fillna(leg_start_pos)
             out["prog_bars_since_progress"] = (pos - last_prog).astype(float)
 
+        # --- QUALITY-ENTRY CLASSIFIER + EXTREME-ENTRY features (only when the
+        #     quality classifier or extreme-entry mode is on). All no-lookahead:
+        #     the HTF trend is COMPLETION-stamped (unlike the plain htf_diff above,
+        #     which is left-labelled + ffilled and can leak the in-progress bucket),
+        #     S&D bands are confirmed K bars after the base (shift), and the recent
+        #     impulse window includes only current + prior bars. These materialise
+        #     the columns the pure classifier (`_classify_quality`) / extreme gate
+        #     (`_extreme_eval`) read off each row. ---
+        if _quality_enabled(args) or _extreme_enabled(args):
+            # No-lookahead HTF trend for the classifier (own completion-stamped
+            # series, same technique as the structure guard). An M1 bar reads only
+            # the last FULLY COMPLETED HTF candle.
+            qfreq = pd.Timedelta(minutes=args.htf_minutes)
+            qhtf = (out.set_index("time")["close"]
+                    .resample(f"{args.htf_minutes}min", label="left", closed="left")
+                    .last().dropna())
+            qdiff = (qhtf.ewm(span=args.htf_ema_fast, adjust=False).mean()
+                     - qhtf.ewm(span=args.htf_ema_slow, adjust=False).mean())
+            qdiff.index = qdiff.index + qfreq          # known only at bucket completion
+            out["qual_htf_diff"] = qdiff.reindex(pd.DatetimeIndex(out["time"]),
+                                                 method="ffill").to_numpy()
+
+            # Ensure S&D demand/supply bands exist for near_demand/near_supply even
+            # when --sd-mode is off (compute with the same RBR/DBD logic + sd_*
+            # params, confirmed K bars after the base so there is no lookahead).
+            if "sd_demand_low" not in out.columns:
+                B = max(1, args.sd_base_bars)
+                K = max(1, args.sd_impulse_bars)
+                base_high = high.rolling(B, min_periods=B).max()
+                base_low = low.rolling(B, min_periods=B).min()
+                tight = (base_high - base_low) <= args.sd_base_max_atr * out["atr"]
+                base_high_prev = base_high.shift(K)
+                base_low_prev = base_low.shift(K)
+                tight_prev = tight.shift(K).fillna(False)
+                imp = args.sd_impulse_min_atr * out["atr"]
+                up_impulse = tight_prev & ((close - base_high_prev) >= imp)
+                dn_impulse = tight_prev & ((base_low_prev - close) >= imp)
+                age = max(1, args.sd_max_age_bars)
+                out["sd_demand_low"] = base_low_prev.where(up_impulse).ffill(limit=age)
+                out["sd_demand_high"] = base_high_prev.where(up_impulse).ffill(limit=age)
+                out["sd_supply_low"] = base_low_prev.where(dn_impulse).ffill(limit=age)
+                out["sd_supply_high"] = base_high_prev.where(dn_impulse).ffill(limit=age)
+
+            # Recent opposite impulse for the classifier (own threshold/window;
+            # current + prior bars only -> no lookahead).
+            body_signed = out["close"] - out["open"]
+            qthr = args.quality_impulse_atr * out["atr"]
+            qbear = (body_signed <= -qthr) | (out["close"] < out["swing_low"])
+            qbull = (body_signed >= qthr) | (out["close"] > out["swing_high"])
+            qw = max(1, args.quality_impulse_lookback_bars)
+            out["qual_bear_recent"] = (qbear.rolling(qw, min_periods=1).max() > 0)
+            out["qual_bull_recent"] = (qbull.rolling(qw, min_periods=1).max() > 0)
+
     return out
 
 
@@ -564,7 +617,23 @@ def _any_entry_filter(args: argparse.Namespace) -> bool:
         or args.sd_mode != "off"
         or getattr(args, "structure_filter", False)
         or getattr(args, "progress_stall_filter", False)
+        or _quality_enabled(args) or _extreme_enabled(args)
     )
+
+
+def _quality_enabled(args: argparse.Namespace) -> bool:
+    """True when the quality classifier should run (annotate and/or filter).
+
+    The classifier runs when its switch is on (diagnostics only) OR a
+    ``--quality-profile`` is selected (which also needs the classification to
+    filter). Both default off, so the feed is byte-identical when omitted.
+    """
+    return bool(getattr(args, "entry_quality_classifier", False)
+                or getattr(args, "quality_profile", "off") != "off")
+
+
+def _extreme_enabled(args: argparse.Namespace) -> bool:
+    return getattr(args, "extreme_entry_mode", "off") != "off"
 
 
 def _progress_enabled(args: argparse.Namespace) -> bool:
@@ -665,6 +734,297 @@ class _ProgressStall:
         return True, "accept", diag
 
 
+# --- TSL18 QUALITY-ENTRY CLASSIFIER ----------------------------------------
+# A research layer that LABELS every would-be ema-pullback entry with a quality
+# class + a 0..1 score, then optionally filters the feed by a quality PROFILE.
+# It only REMOVES signals (never invents one). No-lookahead: it reads only the
+# completion-stamped / prior-bar columns materialised in `_add_indicators`.
+
+# The classes (also the diagnostics column).
+_QUALITY_CLASSES = (
+    "trend_pullback", "deep_trend_pullback", "countertrend_reversal",
+    "range_extreme_reversal", "low_quality_chase", "unknown",
+)
+# Trend-side classes vs reversal-side classes (used by the profile gate).
+_TREND_CLASSES = ("trend_pullback", "deep_trend_pullback")
+_REVERSAL_CLASSES = ("countertrend_reversal", "range_extreme_reversal")
+
+# ADX above this is "trend strength present"; below + live band = ranging. A
+# heuristic context constant for the volatility component of the score.
+_QUALITY_ADX_HEALTHY = 20.0
+
+
+def _near_levels(row, args: argparse.Namespace, atr: float) -> tuple[bool, bool, bool, bool]:
+    """(near_support, near_resistance, near_demand, near_supply) for the bar.
+
+    No-lookahead: prior-day H/L, an optional round-number grid, the Bollinger band
+    edges, and the S&D zone bands are all from completed/known data. "near" = the
+    close is within ``--quality-proximity-atr * ATR`` of a level (or inside a zone
+    band ± that tolerance, or at a Bollinger band extreme).
+    """
+    close = float(row.close)
+    tol = args.quality_proximity_atr * atr
+    supports: list[float] = []
+    resistances: list[float] = []
+    pdl = getattr(row, "pday_low", float("nan"))
+    pdh = getattr(row, "pday_high", float("nan"))
+    if pd.notna(pdl):
+        supports.append(float(pdl))
+    if pd.notna(pdh):
+        resistances.append(float(pdh))
+    if args.quality_round_step > 0.0:
+        step = args.quality_round_step
+        supports.append(math.floor(close / step) * step)
+        resistances.append(math.ceil(close / step) * step)
+    pctb = getattr(row, "bb_pctb", float("nan"))
+    near_lower_bb = bool(pd.notna(pctb) and pctb <= args.quality_bb_extreme_pctb)
+    near_upper_bb = bool(pd.notna(pctb) and pctb >= (1.0 - args.quality_bb_extreme_pctb))
+    near_support = near_lower_bb or any(0.0 <= (close - lv) <= tol for lv in supports)
+    near_resistance = near_upper_bb or any(0.0 <= (lv - close) <= tol for lv in resistances)
+    dl = getattr(row, "sd_demand_low", float("nan"))
+    dh = getattr(row, "sd_demand_high", float("nan"))
+    spl = getattr(row, "sd_supply_low", float("nan"))
+    sph = getattr(row, "sd_supply_high", float("nan"))
+    near_demand = bool(pd.notna(dl) and pd.notna(dh) and (float(dl) - tol) <= close <= (float(dh) + tol))
+    near_supply = bool(pd.notna(spl) and pd.notna(sph) and (float(spl) - tol) <= close <= (float(sph) + tol))
+    return near_support, near_resistance, near_demand, near_supply
+
+
+def _quality_score(*, aligned: bool, opposed: bool, flat: bool, at_extreme: bool,
+                   near_level: bool, near_zone: bool, overextended: bool,
+                   reversal_rsi: bool, recent_opposite_impulse: bool, chase: bool,
+                   is_chase_class: bool, adx: float, bb_bandwidth: float) -> float:
+    """A 0..1 heuristic quality score for a classified entry (research signal).
+
+    Weighted sum of "good entry" components minus chase penalties, clamped to
+    [0, 1]. It RANKS candidates within a feed; it is not a probability. The
+    weights are deliberately simple and documented in docs/TSL18_QUALITY_ENTRY.md.
+    """
+    score = 0.0
+    if near_level:
+        score += 0.20                      # entering at a support/resistance level
+    if near_zone:
+        score += 0.15                      # ... or inside a supply/demand zone
+    if aligned and not overextended:
+        score += 0.25                      # trend entry that is not chasing
+    if (opposed or flat) and reversal_rsi:
+        score += 0.25                      # reversal with an oversold/overbought trigger
+    elif (opposed or flat) and at_extreme:
+        score += 0.10                      # reversal at a level but no RSI trigger (weaker)
+    if not recent_opposite_impulse:
+        score += 0.15                      # not entering straight into an opposite impulse
+    if pd.notna(adx) and adx >= _QUALITY_ADX_HEALTHY:
+        score += 0.10                      # trend strength present
+    elif pd.notna(bb_bandwidth) and bb_bandwidth > 0.0:
+        score += 0.05                      # at least a live (non-dead) band
+    if chase:
+        score -= 0.20
+    if is_chase_class:
+        score = min(score, 0.25)           # a chase is capped low regardless
+    return max(0.0, min(1.0, score))
+
+
+def _classify_quality(row, side: str, args: argparse.Namespace) -> tuple[str, float, dict]:
+    """Classify a base-setup bar+side into a quality class + 0..1 score (no lookahead).
+
+    Returns ``(quality_class, quality_score, diag)``. ``diag`` carries every
+    feature column for the diagnostics CSV. Pure: reads only materialised columns.
+    """
+    buy = side == "BUY"
+    close = float(row.close)
+    atr = float(getattr(row, "atr", float("nan")))
+    ema_mid = float(getattr(row, "ema_mid", float("nan")))
+    vwap = float(getattr(row, "vwap", float("nan")))
+    rsi = float(getattr(row, "rsi", float("nan")))
+    bb_pctb = float(getattr(row, "bb_pctb", float("nan")))
+    bb_bw = float(getattr(row, "bb_bandwidth", float("nan")))
+    adx = float(getattr(row, "adx", float("nan")))
+    htf = float(getattr(row, "qual_htf_diff", float("nan")))
+    bear_recent = bool(getattr(row, "qual_bear_recent", False))
+    bull_recent = bool(getattr(row, "qual_bull_recent", False))
+
+    htf_state = "na" if pd.isna(htf) else ("bull" if htf > 0 else "bear" if htf < 0 else "flat")
+    vwap_side = "na" if pd.isna(vwap) else ("above" if close > vwap else "below" if close < vwap else "at")
+    if pd.notna(atr):
+        near_support, near_resistance, near_demand, near_supply = _near_levels(row, args, atr)
+    else:
+        near_support = near_resistance = near_demand = near_supply = False
+    recent_opposite_impulse = bear_recent if buy else bull_recent
+    dist_vwap_atr = ((close - vwap) / atr) if (pd.notna(vwap) and pd.notna(atr) and atr > 0) else float("nan")
+    dist_ema_mid_atr = ((close - ema_mid) / atr) if (pd.notna(ema_mid) and pd.notna(atr) and atr > 0) else float("nan")
+
+    diag = {
+        "htf_state": htf_state, "vwap_side": vwap_side,
+        "rsi": round(rsi, 2) if pd.notna(rsi) else "",
+        "bb_pctb": round(bb_pctb, 4) if pd.notna(bb_pctb) else "",
+        "bb_bandwidth": round(bb_bw, 6) if pd.notna(bb_bw) else "",
+        "adx": round(adx, 2) if pd.notna(adx) else "",
+        "near_support": int(near_support), "near_resistance": int(near_resistance),
+        "near_demand": int(near_demand), "near_supply": int(near_supply),
+        "recent_opposite_impulse": int(recent_opposite_impulse),
+        "distance_to_vwap_atr": round(dist_vwap_atr, 3) if pd.notna(dist_vwap_atr) else "",
+        "distance_to_ema_mid_atr": round(dist_ema_mid_atr, 3) if pd.notna(dist_ema_mid_atr) else "",
+    }
+
+    # Cannot classify without the HTF context or core momentum/volatility inputs.
+    if htf_state == "na" or pd.isna(rsi) or pd.isna(atr):
+        diag["quality_class"] = "unknown"
+        diag["quality_score"] = 0.0
+        return "unknown", 0.0, diag
+
+    aligned = (buy and htf_state == "bull") or (not buy and htf_state == "bear")
+    opposed = (buy and htf_state == "bear") or (not buy and htf_state == "bull")
+    flat = htf_state == "flat"
+    near_level = near_support if buy else near_resistance
+    near_zone = near_demand if buy else near_supply
+    at_extreme = bool(near_level or near_zone)
+    # overbought BUY / oversold SELL = chasing an extended move in the entry dir
+    overextended = (buy and rsi >= args.quality_rsi_overbought) or (not buy and rsi <= args.quality_rsi_oversold)
+    # oversold BUY / overbought SELL = a reversal trigger for a counter move
+    reversal_rsi = (buy and rsi <= args.quality_rsi_oversold) or (not buy and rsi >= args.quality_rsi_overbought)
+    deep_pullback = bool(pd.notna(dist_ema_mid_atr) and abs(dist_ema_mid_atr) >= args.quality_deep_pullback_atr)
+    far_from_vwap = bool(pd.notna(dist_vwap_atr) and (
+        (buy and dist_vwap_atr >= args.quality_chase_vwap_atr)
+        or (not buy and dist_vwap_atr <= -args.quality_chase_vwap_atr)))
+    chase = bool(overextended or far_from_vwap)
+
+    if aligned:
+        if chase and not at_extreme:
+            qclass = "low_quality_chase"
+        elif deep_pullback or at_extreme:
+            qclass = "deep_trend_pullback"
+        else:
+            qclass = "trend_pullback"
+    elif opposed:
+        qclass = "countertrend_reversal" if at_extreme else "low_quality_chase"
+    else:  # flat HTF -> ranging
+        qclass = "range_extreme_reversal" if at_extreme else "low_quality_chase"
+
+    score = _quality_score(
+        aligned=aligned, opposed=opposed, flat=flat, at_extreme=at_extreme,
+        near_level=near_level, near_zone=near_zone, overextended=overextended,
+        reversal_rsi=reversal_rsi, recent_opposite_impulse=recent_opposite_impulse,
+        chase=chase, is_chase_class=(qclass == "low_quality_chase"), adx=adx, bb_bandwidth=bb_bw)
+    diag["quality_class"] = qclass
+    diag["quality_score"] = round(score, 4)
+    return qclass, score, diag
+
+
+def _quality_profile_ok(qclass: str, qscore: float, args: argparse.Namespace) -> tuple[bool, str]:
+    """Per-profile feed filter: (ok, reject_reason).
+
+    ``off`` never filters. The ``--min-quality-score`` floor is the "high-quality"
+    lever; it applies where the profile spec calls for it (always for
+    reversal_extreme / high_frequency_quality; only to the reversal classes for
+    hybrid_quality so trend pullbacks are always kept; to the trend classes for
+    trend_only when set). Default floor 0 keeps every in-class candidate.
+    """
+    profile = getattr(args, "quality_profile", "off")
+    floor = args.min_quality_score
+    if profile == "off":
+        return True, "accept"
+    trend = qclass in _TREND_CLASSES
+    reversal = qclass in _REVERSAL_CLASSES
+    if profile == "trend_only":
+        if not trend:
+            return False, "not_trend_pullback"
+        if floor > 0.0 and qscore < floor:
+            return False, "score_below_min"
+        return True, "accept"
+    if profile == "reversal_extreme":
+        if not reversal:
+            return False, "not_reversal_extreme"
+        if qscore < floor:                 # high-quality only (floor 0 keeps all)
+            return False, "score_below_min"
+        return True, "accept"
+    if profile == "hybrid_quality":
+        if qclass == "low_quality_chase":
+            return False, "low_quality_chase"
+        if qclass == "unknown":
+            return False, "unknown_class"
+        if reversal and floor > 0.0 and qscore < floor:
+            return False, "score_below_min"   # high-score reversal/extreme only
+        return True, "accept"              # trend pullbacks always kept
+    if profile == "high_frequency_quality":
+        if qclass == "low_quality_chase":
+            return False, "low_quality_chase"
+        if floor > 0.0 and qscore < floor:
+            return False, "score_below_min"   # min_quality_score is the lever
+        return True, "accept"
+    return True, "accept"
+
+
+# --- EXTREME-ENTRY MODE (buy-bottom / sell-top scalping) --------------------
+
+def _extreme_eval(row, side: str, args: argparse.Namespace
+                  ) -> tuple[bool, str, str, float, float]:
+    """Evaluate the extreme-entry gate for one bar+side.
+
+    Returns ``(ok, reason, level_type, level_price, distance_to_extreme_atr)``.
+    The mode decides which side is in scope (``support_demand`` = BUY bottoms,
+    ``supply_resistance`` = SELL tops, ``both`` = each side at its extreme); an
+    in-scope entry is kept only when the close is within
+    ``--extreme-proximity-atr * ATR`` of a matching extreme (demand/supply zone,
+    prior day low/high, optional round level, Bollinger band edge, or swing
+    extreme). No-lookahead -- all levels are completed/known data.
+    """
+    mode = args.extreme_entry_mode
+    buy = side == "BUY"
+    close = float(row.close)
+    atr = float(getattr(row, "atr", float("nan")))
+    wants_buy = mode in ("support_demand", "both")
+    wants_sell = mode in ("supply_resistance", "both")
+    if (buy and not wants_buy) or (not buy and not wants_sell):
+        return False, "wrong_side_for_mode", "", float("nan"), float("nan")
+    if pd.isna(atr) or atr <= 0:
+        return False, "no_atr", "", float("nan"), float("nan")
+    tol = args.extreme_proximity_atr * atr
+    candidates: list[tuple[str, float]] = []
+    if buy:
+        dl = getattr(row, "sd_demand_low", float("nan"))
+        dh = getattr(row, "sd_demand_high", float("nan"))
+        if pd.notna(dl) and pd.notna(dh) and (float(dl) - tol) <= close <= (float(dh) + tol):
+            candidates.append(("demand_zone", float(dh)))
+        pdl = getattr(row, "pday_low", float("nan"))
+        if pd.notna(pdl) and abs(close - float(pdl)) <= tol:
+            candidates.append(("prior_low", float(pdl)))
+        if args.extreme_round_step > 0.0:
+            lv = math.floor(close / args.extreme_round_step) * args.extreme_round_step
+            if abs(close - lv) <= tol:
+                candidates.append(("round_support", lv))
+        pctb = getattr(row, "bb_pctb", float("nan"))
+        if pd.notna(pctb) and pctb <= args.quality_bb_extreme_pctb:
+            candidates.append(("lower_bb", close))
+        swl = getattr(row, "swing_low", float("nan"))
+        if pd.notna(swl) and abs(close - float(swl)) <= tol:
+            candidates.append(("swing_low", float(swl)))
+        reason_no = "no_support_extreme"
+    else:
+        spl = getattr(row, "sd_supply_low", float("nan"))
+        sph = getattr(row, "sd_supply_high", float("nan"))
+        if pd.notna(spl) and pd.notna(sph) and (float(spl) - tol) <= close <= (float(sph) + tol):
+            candidates.append(("supply_zone", float(spl)))
+        pdh = getattr(row, "pday_high", float("nan"))
+        if pd.notna(pdh) and abs(close - float(pdh)) <= tol:
+            candidates.append(("prior_high", float(pdh)))
+        if args.extreme_round_step > 0.0:
+            lv = math.ceil(close / args.extreme_round_step) * args.extreme_round_step
+            if abs(close - lv) <= tol:
+                candidates.append(("round_resistance", lv))
+        pctb = getattr(row, "bb_pctb", float("nan"))
+        if pd.notna(pctb) and pctb >= (1.0 - args.quality_bb_extreme_pctb):
+            candidates.append(("upper_bb", close))
+        swh = getattr(row, "swing_high", float("nan"))
+        if pd.notna(swh) and abs(close - float(swh)) <= tol:
+            candidates.append(("swing_high", float(swh)))
+        reason_no = "no_resistance_extreme"
+    if not candidates:
+        return False, reason_no, "", float("nan"), float("nan")
+    level_type, level_price = min(candidates, key=lambda c: abs(close - c[1]))
+    dist_atr = abs(close - level_price) / atr
+    return True, "accept", level_type, level_price, round(dist_atr, 3)
+
+
 def _entry_filters_ok(row, side: str, args: argparse.Namespace) -> bool:
     """Apply the enabled entry-feature filters to a candidate bar. A disabled
     filter is skipped entirely; an enabled filter rejects on NaN (can't confirm)."""
@@ -752,12 +1112,25 @@ def _entry_filters_ok(row, side: str, args: argparse.Namespace) -> bool:
         ok, _reason, _diag = _structure_eval(row, side, args)
         if not ok:
             return False
+    # Quality-classifier profile gate (only filters when a profile is selected;
+    # the bare --entry-quality-classifier annotates without filtering).
+    if getattr(args, "quality_profile", "off") != "off":
+        qclass, qscore, _qdiag = _classify_quality(row, side, args)
+        ok, _reason = _quality_profile_ok(qclass, qscore, args)
+        if not ok:
+            return False
+    # Extreme-entry mode (buy-bottom / sell-top): keep only entries near an extreme.
+    if _extreme_enabled(args):
+        ok, _reason, _t, _p, _d = _extreme_eval(row, side, args)
+        if not ok:
+            return False
     return True
 
 
 def generate_signals(df: pd.DataFrame, args: argparse.Namespace,
                      struct_records: list[dict] | None = None,
-                     prog_records: list[dict] | None = None) -> list[GeneratedSignal]:
+                     prog_records: list[dict] | None = None,
+                     quality_records: list[dict] | None = None) -> list[GeneratedSignal]:
     progress_enabled = args.progress_interval_seconds > 0 and args.progress_every_rows > 0
     with _Heartbeat("indicator calculation", args.progress_interval_seconds, enabled=args.progress_interval_seconds > 0):
         df = _add_indicators(df, args)
@@ -849,6 +1222,31 @@ def generate_signals(df: pd.DataFrame, args: argparse.Namespace,
                 "htf_state": _diag["htf_state"], "vwap_side": _diag["vwap_side"],
                 "impulse_state": _diag["impulse_state"], "score": _diag["score"],
                 "reject_reason": _reason,
+            })
+
+        # Quality-entry diagnostics: one row per base-setup bar with the full
+        # classifier + extreme-mode decision (regardless of the other filters), so
+        # a rejection can be explained. Recorded for the would-be-taken setup side.
+        if (quality_records is not None and (_quality_enabled(args) or _extreme_enabled(args))
+                and (buy_setup or sell_setup)):
+            q_side = "BUY" if buy_setup else "SELL"
+            q_class, q_score, q_diag = _classify_quality(row, q_side, args)
+            if getattr(args, "quality_profile", "off") != "off":
+                _q_ok, q_reason = _quality_profile_ok(q_class, q_score, args)
+            else:
+                q_reason = "annotate_only"
+            if _extreme_enabled(args):
+                _e_ok, e_reason, e_type, e_price, e_dist = _extreme_eval(row, q_side, args)
+            else:
+                e_reason, e_type, e_price, e_dist = "off", "", float("nan"), float("nan")
+            quality_records.append({
+                "time": t.isoformat(sep=" "), "side": q_side, "close": round(close, 2),
+                **q_diag,
+                "quality_reject_reason": q_reason,
+                "extreme_mode_reason": e_reason,
+                "extreme_level_type": e_type,
+                "extreme_level_price": (round(float(e_price), 2) if pd.notna(e_price) else ""),
+                "distance_to_extreme_atr": (e_dist if pd.notna(e_dist) else ""),
             })
 
         sig: GeneratedSignal | None = None
@@ -957,6 +1355,25 @@ def _write_progress_diagnostics(records: list[dict], path: Path) -> None:
                   "reject_reason"]
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(records)
+
+
+# Diagnostics column order for the quality-entry classifier + extreme-entry mode.
+QUALITY_DIAGNOSTICS_FIELDS = [
+    "time", "side", "close", "quality_class", "quality_score",
+    "htf_state", "vwap_side", "rsi", "bb_pctb", "bb_bandwidth", "adx",
+    "near_support", "near_resistance", "near_demand", "near_supply",
+    "recent_opposite_impulse", "distance_to_vwap_atr", "distance_to_ema_mid_atr",
+    "quality_reject_reason", "extreme_mode_reason", "extreme_level_type",
+    "extreme_level_price", "distance_to_extreme_atr",
+]
+
+
+def _write_quality_diagnostics(records: list[dict], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=QUALITY_DIAGNOSTICS_FIELDS)
         writer.writeheader()
         writer.writerows(records)
 
@@ -1129,6 +1546,67 @@ def build_parser() -> argparse.ArgumentParser:
                         "decision (time, side, close, htf_regime, htf_leg_id, prior_extreme, "
                         "current_extreme, valid_progress, bars_since_valid_progress, "
                         "non_progressing_count, reject_reason).")
+
+    # --- TSL18 QUALITY-ENTRY RESEARCH LAYER (all default OFF/0 -> parity preserved).
+    #     A no-lookahead classifier that LABELS every would-be ema-pullback entry
+    #     with a quality class + 0..1 score, an optional quality PROFILE that
+    #     filters the feed by class/score, and an extreme-entry mode for
+    #     buy-bottom / sell-top scalping. It only REMOVES signals (never invents
+    #     one). See docs/TSL18_QUALITY_ENTRY.md. ---
+    p.add_argument("--entry-quality-classifier", action=argparse.BooleanOptionalAction, default=False,
+                   help="annotate every base-setup bar with a no-lookahead quality class/score "
+                        "(diagnostics only unless --quality-profile filters). OFF by default.")
+    p.add_argument("--quality-profile",
+                   choices=["off", "trend_only", "reversal_extreme", "hybrid_quality",
+                            "high_frequency_quality"],
+                   default="off",
+                   help="quality-class feed filter. off=no filtering; trend_only=keep "
+                        "trend/deep-trend pullbacks; reversal_extreme=keep high-quality "
+                        "countertrend/range-extreme reversals; hybrid_quality=trend pullbacks + "
+                        "high-score reversal/extreme, reject low-quality chases; "
+                        "high_frequency_quality=allow more but require --min-quality-score and "
+                        "drop obvious chases.")
+    p.add_argument("--min-quality-score", type=float, default=0.0,
+                   help="reject entries whose quality_score < X (0=off). The 'high-quality' "
+                        "lever; applied per --quality-profile (off ignores it).")
+    p.add_argument("--quality-rsi-overbought", type=float, default=70.0,
+                   help="RSI >= X marks an overbought BUY (a chase) / a SELL reversal trigger.")
+    p.add_argument("--quality-rsi-oversold", type=float, default=30.0,
+                   help="RSI <= X marks an oversold SELL (a chase) / a BUY reversal trigger.")
+    p.add_argument("--quality-deep-pullback-atr", type=float, default=1.0,
+                   help="|close-ema_mid| >= X*ATR marks a DEEP trend pullback.")
+    p.add_argument("--quality-chase-vwap-atr", type=float, default=2.0,
+                   help="distance from VWAP in ATR beyond which an extended same-trend entry "
+                        "is a chase.")
+    p.add_argument("--quality-proximity-atr", type=float, default=0.5,
+                   help="classifier: within X*ATR of a level/zone counts as 'near'.")
+    p.add_argument("--quality-round-step", type=float, default=0.0,
+                   help="classifier: round-number S/R grid step, e.g. 10 (0=off).")
+    p.add_argument("--quality-bb-extreme-pctb", type=float, default=0.15,
+                   help="BB %%B <= X (lower) / >= 1-X (upper) counts as a band extreme.")
+    p.add_argument("--quality-impulse-atr", type=float, default=0.8,
+                   help="|close-open| >= X*ATR (or swing break) marks a recent impulse for the "
+                        "classifier's recent_opposite_impulse feature.")
+    p.add_argument("--quality-impulse-lookback-bars", type=int, default=5,
+                   help="bars to look back (incl current) for a recent opposite impulse.")
+    p.add_argument("--quality-diagnostics", default=None,
+                   help="optional CSV: one row per base-setup bar with the full quality + "
+                        "extreme-entry decision (quality_class, quality_score, htf_state, "
+                        "vwap_side, rsi, bb_pctb, bb_bandwidth, adx, near_*, "
+                        "recent_opposite_impulse, distance_to_*, quality_reject_reason, "
+                        "extreme_mode_reason, extreme_level_type, extreme_level_price, "
+                        "distance_to_extreme_atr).")
+
+    p.add_argument("--extreme-entry-mode",
+                   choices=["off", "support_demand", "supply_resistance", "both"],
+                   default="off",
+                   help="buy-bottom / sell-top scalping gate: support_demand keeps BUYs near "
+                        "support/demand, supply_resistance keeps SELLs near resistance/supply, "
+                        "both keeps each side at its extreme. off=disabled (feed unchanged).")
+    p.add_argument("--extreme-proximity-atr", type=float, default=0.5,
+                   help="extreme-entry: entry must be within X*ATR of an extreme level.")
+    p.add_argument("--extreme-round-step", type=float, default=0.0,
+                   help="extreme-entry: round-number support/resistance grid step (0=off).")
     return p
 
 
@@ -1154,8 +1632,10 @@ def main(argv: list[str] | None = None) -> int:
 
     struct_records: list[dict] | None = [] if (args.structure_diagnostics and _structure_enabled(args)) else None
     prog_records: list[dict] | None = [] if (args.progress_stall_diagnostics and _progress_enabled(args)) else None
+    quality_records: list[dict] | None = (
+        [] if (args.quality_diagnostics and (_quality_enabled(args) or _extreme_enabled(args))) else None)
     signals = generate_signals(chart.dataframe, args, struct_records=struct_records,
-                               prog_records=prog_records)
+                               prog_records=prog_records, quality_records=quality_records)
 
     if struct_records is not None:
         print(f"[{_stamp()}] Writing structure diagnostics to {args.structure_diagnostics} "
@@ -1165,6 +1645,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[{_stamp()}] Writing progress-stall diagnostics to {args.progress_stall_diagnostics} "
               f"({len(prog_records)} would-be-taken rows)", file=sys.stderr, flush=True)
         _write_progress_diagnostics(prog_records, Path(args.progress_stall_diagnostics))
+    if quality_records is not None:
+        print(f"[{_stamp()}] Writing quality-entry diagnostics to {args.quality_diagnostics} "
+              f"({len(quality_records)} base-setup rows)", file=sys.stderr, flush=True)
+        _write_quality_diagnostics(quality_records, Path(args.quality_diagnostics))
 
     output = Path(args.output)
     print(f"[{_stamp()}] Writing signals to {output}", file=sys.stderr, flush=True)
