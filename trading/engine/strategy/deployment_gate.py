@@ -149,6 +149,38 @@ class DeploymentGate:
             return "risk_budget_zone"
         return None
 
+    # -- daily-loss predicate (shared by backtest + live) ---------------------
+    def daily_blocked(self, day_realized_pnl: float, day_start_equity: float | None) -> bool:
+        """True when the day's realized P&L has breached the loss limit. The SAME
+        test the backtest breaker uses internally -- factored out so the live
+        executor decides identically from live state."""
+        if self.daily_limit <= 0 or not day_start_equity:
+            return False
+        return day_realized_pnl <= -self.daily_limit * day_start_equity
+
+    # -- LIVE one-shot decision (mirrors the backtest loop gates) -------------
+    def live_check(self, *, planned_legs: list[dict], equity: float,
+                   open_groups: int, day_realized_pnl: float,
+                   day_start_equity: float | None) -> str | None:
+        """Return a reject reason (or None to place) for the LIVE executor, using
+        the SAME predicates as the backtest/tick path. State is supplied from live
+        sources rather than reconstructed: ``open_groups`` = currently-open tracked
+        signal GROUPS (+ any placed earlier this cycle); ``day_realized_pnl`` /
+        ``day_start_equity`` = today's realized P&L and start-of-day equity;
+        ``planned_legs`` = the would-be ladder as [{entry_price, effective_SL}, ...].
+        Order matches the backtest loop: daily -> concurrency -> risk-budget."""
+        if self.daily_limit > 0 and self.daily_blocked(day_realized_pnl, day_start_equity):
+            self.rejected["daily_loss_breaker"] += 1
+            return "daily_loss_breaker"
+        if self.max_open > 0 and open_groups >= self.max_open:
+            self._peak_concurrency = max(self._peak_concurrency, open_groups)
+            self.rejected["max_open_signals"] += 1
+            return "max_open_signals"
+        rb = self.risk_budget_check(planned_legs, equity)
+        if rb is not None:
+            return rb
+        return None
+
     # -- register an ACCEPTED signal ------------------------------------------
     def register(self, sig, built: dict) -> None:
         """Record an accepted signal's realized day P&L + open window. Call only

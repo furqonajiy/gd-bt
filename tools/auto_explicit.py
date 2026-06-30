@@ -176,6 +176,24 @@ def build_parser() -> argparse.ArgumentParser:
                        help="RUN legs engage their trailing stop when this TP is touched (never "
                             "from entry), then trail by --trailing-close-distance. Default TP3.")
 
+    gate = p.add_argument_group("small-account deployment-safety gates (default off)")
+    gate.add_argument("--risk-budget-gate", choices=["true", "false"], default="false",
+                      help="Reject a signal whose worst-case MIN-LOT risk is too big for live "
+                           "equity. Needs --max-single-entry-risk-pct and/or --max-zone-risk-pct.")
+    gate.add_argument("--max-single-entry-risk-pct", type=_positive_float, default=0.0,
+                      help="Risk-budget cap: reject if ONE min-lot leg, stopped out, loses > this "
+                           "fraction of equity (0.04=4%%). 0=disabled.")
+    gate.add_argument("--max-zone-risk-pct", type=_positive_float, default=0.0,
+                      help="Risk-budget cap: reject if the WHOLE min-lot ladder, stopped out, loses "
+                           "> this fraction of equity (0.06=6%%). 0=disabled.")
+    gate.add_argument("--daily-loss-limit-pct", type=_positive_float, default=0.0,
+                      help="Daily-loss circuit breaker: once today's realized P&L reaches this "
+                           "fraction of start-of-day equity in the red (0.05=5%%), stop placing NEW "
+                           "signals for the rest of the day (open positions keep being managed). 0=off.")
+    gate.add_argument("--max-open-signals", type=_positive_int, default=0,
+                      help="Cap concurrent OPEN signal GROUPS (not entries); a multi-entry signal "
+                           "counts as one. New signals are skipped while >= this many are open. 0=unlimited.")
+
     obs = p.add_argument_group("observability")
     obs.add_argument("--notifications", default=None)
     obs.add_argument("--no-notifications", action="store_true")
@@ -255,6 +273,11 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         per_entry_targets=_parse_entry_targets(args.entry_targets, args.entries),
         bep_after_move=args.bep_after_move,
         runner_trail_from=args.runner_trail_from,
+        risk_budget_gate=_bool_text(getattr(args, "risk_budget_gate", "false")),
+        max_single_entry_risk_pct=getattr(args, "max_single_entry_risk_pct", 0.0),
+        max_zone_risk_pct=getattr(args, "max_zone_risk_pct", 0.0),
+        daily_loss_limit_pct=getattr(args, "daily_loss_limit_pct", 0.0),
+        max_open_signals=getattr(args, "max_open_signals", 0),
     )
 
 

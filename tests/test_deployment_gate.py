@@ -239,6 +239,79 @@ def test_run_backtest_gate_off_is_byte_identical():
 
 
 @_SKIP
+def test_live_check_matches_backtest_gate_decisions():
+    """The live executor's gate (DeploymentGate.live_check) must reject exactly
+    the same signals, for the same reasons, as the backtest/tick loop gate
+    (pre_check + risk_budget_check) when fed equivalent live state. This is the
+    live<->tick-sim parity contract: the tick hybrid uses the loop gate, live uses
+    live_check, so proving them equivalent proves a TS2K tick backtest predicts
+    live placement."""
+    sigs, chart = _slice()
+    cfg = StrategyConfig(
+        initial_capital=2000.0, max_open_signals=1, risk_budget_gate=True,
+        max_zone_risk_pct=0.06, max_single_entry_risk_pct=0.04,
+        daily_loss_limit_pct=0.05, **_GEO)
+
+    # backtest gate: drive the stateful loop gate exactly like run_backtest
+    from trading.engine import replay_signal_rows, screen_signal
+    bt = DeploymentGate(cfg)
+    # live gate: drive live_check like the auto loop (supply equivalent state)
+    lv = DeploymentGate(cfg)
+
+    cs, ce = chart.first_time(), chart.last_time()
+    cdf = chart.dataframe
+    eq_bt = eq_lv = 2000.0
+    # live-side reconstruction of state
+    lv_windows = []          # (arrival, end) of accepted groups
+    lv_day = None; lv_sod = None; lv_daypnl = 0.0
+
+    bt_reasons, lv_reasons = [], []
+    for sig in sigs:
+        scr, _ = screen_signal(sig, cfg, cs, ce)
+        if scr is None:
+            continue
+        s, sc = scr
+
+        # --- backtest loop gate ---
+        r = bt.pre_check(s, eq_bt)
+        if r is None:
+            built = replay_signal_rows(s, cdf, eq_bt, sc, cfg)
+            r = bt.risk_budget_check(built["entry_rows"], eq_bt)
+            if r is None:
+                if built["status"] != "OPEN":
+                    eq_bt = built["equity_after"]
+                bt.register(s, built)
+        bt_reasons.append((s.signal_key, r))
+
+        # --- live gate (same data, state supplied) ---
+        day = s.signal_time_source.date()
+        if day != lv_day:
+            lv_day, lv_sod, lv_daypnl = day, eq_lv, 0.0
+        t = s.signal_time_chart
+        lv_windows[:] = [w for w in lv_windows if w[1] is None or w[1] > t]
+        open_groups = sum(1 for w in lv_windows if w[0] <= t)
+        builtl = replay_signal_rows(s, cdf, eq_lv, sc, cfg)
+        planned = [{"entry_price": er["entry_price"], "effective_SL": er["effective_SL"]}
+                   for er in builtl["entry_rows"]]
+        rl = lv.live_check(planned_legs=planned, equity=eq_lv, open_groups=open_groups,
+                           day_realized_pnl=lv_daypnl, day_start_equity=lv_sod)
+        if rl is None:
+            if builtl["status"] != "OPEN":
+                eq_lv = builtl["equity_after"]
+                lv_daypnl += builtl["equity_after"] - builtl["row"]["equity_before"]
+            # register a finite window mirroring the backtest end rule
+            from datetime import timedelta
+            hold = timedelta(minutes=cfg.max_hold_minutes)
+            ends = [er["exit_time"] if er.get("exit_time") else er["fill_time"] + hold
+                    for er in builtl["entry_rows"] if er.get("fill_time")]
+            end = max(ends) if ends else t + timedelta(minutes=cfg.pending_expiry_minutes)
+            lv_windows.append((t, max(end, t)))
+        lv_reasons.append((s.signal_key, rl))
+
+    assert bt_reasons == lv_reasons, "live gate diverged from backtest/tick gate"
+
+
+@_SKIP
 def test_run_backtest_gate_only_removes_signals():
     from trading.engine import run_backtest
     sigs, chart = _slice()

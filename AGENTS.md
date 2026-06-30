@@ -290,8 +290,10 @@ pair is a thin package that imports it.
   `tests/test_deployment_gate.py`). These exist for the 0.01-lot floor: a $2k
   account can't size below one min-lot leg, so an 8-entry zone can over-risk.
   A single shared gate enforces three signal-acceptance filters **identically in
-  `run_backtest` and the hybrid tick backtest** (and is the basis for the planned
-  live wiring): **risk-budget gate** (`risk_budget_gate`,
+  `run_backtest`, the hybrid tick backtest, AND the live executor** (`auto`, via
+  `DeploymentGate.live_check`; live↔backtest decision parity pinned by
+  `test_live_check_matches_backtest_gate_decisions`): **risk-budget gate**
+  (`risk_budget_gate`,
   `max_single_entry_risk_pct`, `max_zone_risk_pct` — reject when worst-case
   min-lot single-leg / whole-ladder risk exceeds a fraction of equity, computed
   from the PLANNED ladder), **daily-loss circuit breaker** (`daily_loss_limit_pct`

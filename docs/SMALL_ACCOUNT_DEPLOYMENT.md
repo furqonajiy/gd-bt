@@ -161,18 +161,37 @@ the 0.01-lot floor it runs *hotter* than the $50K backtest shows.
   existing low-WR/high-payoff edge and makes it survivable; it does not convert it
   into a high-WR grinder.
 
-## Live enforcement gap (must close before any real-account run)
+## Live enforcement (wired) — backtest ↔ live ↔ tick-sim parity
 
-The three gates are enforced in the **backtest** today. They are **not yet wired
-into the live executor** (`tools/auto_explicit.py`). Until that lands and a demo
-A/B confirms the live guarded feed matches the backtest:
+The three gates are enforced in **all three** paths via the SAME
+`DeploymentGate`: `run_backtest`, the hybrid **tick** backtest, and the **live**
+executor (`auto`, through `DeploymentGate.live_check`). The live decision is
+proven identical to the backtest/tick decision by
+`tests/test_deployment_gate.py::test_live_check_matches_backtest_gate_decisions`
+(same signal slice → identical accept/reject reasons), so a **TS2K tick backtest
+predicts live placement**.
 
-- the TS2K live section enforces only `--entries 2` (plain config);
-- **TS2K is DEMO-ONLY**;
-- the next implementation step is to run the same `DeploymentGate` in the
-  executor's per-cycle signal-acceptance path (equity, day P&L, open-group count
-  from the positions registry) so live matches backtest, then add a live↔backtest
-  parity test.
+How the live executor sources the gate state each cycle (in
+`trading/engine/cli_impl.py`'s `auto` candidate loop):
+
+- **risk-budget** — the planned ladder from `rec.new_signal.orders`
+  (`entry_price` / `initial_sl` per leg) → `worst_case_risk` vs live equity.
+  Identical math to the backtest.
+- **max-open-signals** — currently-open tracked signal groups
+  (`len(tracked)`) plus any placed earlier this cycle.
+- **daily-loss breaker** — today's realized P&L from MT5 deal history
+  (`Mt5Executor.realized_pnl_since`, OUT deals since server-midnight),
+  **account-level** (suits a dedicated small account); start-of-day equity ≈
+  current equity − today's realized (floating ignored — a coarse circuit-breaker
+  basis). Best-effort: if MT5 history is unavailable the breaker simply does not
+  fire (conservative).
+
+Two documented divergences (immaterial to a coarse safety gate): live uses the
+**server day** for the breaker boundary vs the backtest's feed-zone (source) day;
+and the live start-of-day-equity is an approximation. The gate **only ever
+rejects** a placement — it can never send an extra order, so it cannot increase
+exposure. Still **DEMO-validate** first (ELEV8 ticks ≠ your broker; the live
+daily-P&L read depends on MT5 history).
 
 ## What must be true before promoting TS2K to a real $2K account
 
@@ -180,6 +199,6 @@ A/B confirms the live guarded feed matches the backtest:
    `base_8entry_2k`, on **both** windows.
 2. The account-size floor confirms the **2-entry ≤6%** posture fits $2K (it should)
    while the **8-entry** posture does not.
-3. The gates are **wired into the live executor** and a **demo A/B** matches the
-   backtest.
+3. The gates are wired into the live executor (done) and a **demo A/B** confirms
+   the live guarded feed matches the backtest.
 4. You accept the capped upside and the 2–4-year (not 1-year) growth horizon.

@@ -1421,6 +1421,21 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     ]
     candidates.sort(key=lambda s: s.signal_time_chart)
 
+    # 13b. Deployment-safety gate (None unless a small-account gate is enabled).
+    # Mirrors the backtest/tick loop gate (trading.engine.DeploymentGate) using
+    # LIVE state, so a TS2K tick backtest predicts live placement decisions.
+    from trading.engine import DeploymentGate
+    gate = DeploymentGate.maybe(config)
+    placed_this_cycle = 0
+    gate_day_start = replay_end.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Account-level realized P&L today (TS2K runs one strategy per small account;
+    # the breaker is intentionally account-wide). Best-effort: 0.0 without history.
+    gate_day_pnl = (executor.realized_pnl_since(gate_day_start)
+                    if gate is not None else 0.0)
+    # start-of-day equity ~= now minus what was realized today (floating ignored;
+    # a coarse circuit-breaker basis, documented in SMALL_ACCOUNT_DEPLOYMENT.md).
+    gate_day_start_equity = equity - gate_day_pnl
+
     # 14. Process candidates.
     for signal in candidates:
         positions_source = ManualPositionSource(
@@ -1450,7 +1465,26 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             ))
             continue
 
-        # FOLLOW (possibly partial).
+        # FOLLOW (possibly partial). Deployment-safety gate (same DeploymentGate
+        # predicates as the backtest/tick loop): reject before placing if today's
+        # loss limit is hit, the concurrency cap is full, or the planned min-lot
+        # risk is too big for live equity. Gate-only REJECTS -- it never places
+        # extra orders, so it cannot increase exposure.
+        if gate is not None:
+            open_groups = len(tracked) + placed_this_cycle
+            planned_legs = [{"entry_price": o.entry_price, "effective_SL": o.initial_sl}
+                            for o in getattr(rec.new_signal, "orders", []) or []]
+            greason = gate.live_check(
+                planned_legs=planned_legs, equity=equity, open_groups=open_groups,
+                day_realized_pnl=gate_day_pnl, day_start_equity=gate_day_start_equity)
+            if greason is not None:
+                forensic.decision(signal_key=signal.signal_key, action="SKIP_GATE",
+                                  rationale=greason)
+                log.actions.append(
+                    f"Signal {signal.signal_key}: SKIPPED by deployment gate "
+                    f"({greason}); open_groups={open_groups}, equity=${equity:,.0f}.")
+                continue
+
         if _is_partial_placement(rec):
             log.actions.append("\n".join(
                 _partial_placement_log_lines(signal.signal_key, rec)
@@ -1458,6 +1492,8 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
 
         plog = executor.place_signal(signal, rec.new_signal)
         log.merge(plog)
+        if plog.placed > 0:
+            placed_this_cycle += 1
 
         if plog.placed > 0:
             executed_at = _chart_now()

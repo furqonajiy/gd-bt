@@ -379,6 +379,38 @@ class Mt5Executor:
             magics.add(p.magic)
         return magics
 
+    def realized_pnl_since(self, since, *, magics: set[int] | None = None) -> float:
+        """Sum realized P&L (deal profit + swap + commission) of CLOSE deals since
+        ``since`` (a chart/server-time datetime), optionally restricted to a set of
+        magics. Feeds the live daily-loss circuit breaker. Best-effort: a stub/old
+        MT5 build without history_deals_get, or a call failure, returns 0.0 (the
+        breaker simply does not fire -- same conservative fallback as the other
+        history reads)."""
+        getter = getattr(self.mt5, "history_deals_get", None)
+        if getter is None:
+            return 0.0
+        try:
+            deals = getter(since, self._history_now()) or []
+        except Exception:
+            return 0.0
+        out_entry = int(getattr(self.mt5, "DEAL_ENTRY_OUT", 1))
+        total = 0.0
+        for d in deals:
+            if int(getattr(d, "entry", -1)) != out_entry:
+                continue
+            if magics is not None and int(getattr(d, "magic", -1) or -1) not in magics:
+                continue
+            total += (float(getattr(d, "profit", 0.0) or 0.0)
+                      + float(getattr(d, "swap", 0.0) or 0.0)
+                      + float(getattr(d, "commission", 0.0) or 0.0))
+        return total
+
+    def _history_now(self):
+        """Upper bound for history queries; overridable. Defaults to a wide
+        future window so all of today's deals are captured."""
+        from datetime import datetime, timedelta
+        return datetime.now() + timedelta(days=1)
+
     def warn_on_unknown(self, known_magics: set[int]) -> list[str]:
         warnings: list[str] = []
         for o in (self.mt5.orders_get(symbol=self.symbol) or []):

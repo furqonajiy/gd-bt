@@ -113,23 +113,26 @@ def _peak_concurrency_and_lots(entry_rows):
         lot = float(er.get("lot") or 0.0)
         if xt is not None and lot:
             leg_events.append((ft, lot)); leg_events.append((xt, -lot))
-    # signal-group concurrency
+    # signal-group concurrency. A group with an unexited leg (still open at the
+    # END of the data) must extend only to the last observed timestamp -- NOT be
+    # counted as "open forever overlapping every other group" (that inflated the
+    # peak to ~#open-at-end). Bound a None close at the max observed time.
+    all_times = [t for t in grp_open.values()]
+    all_times += [c for c in grp_close.values() if c is not None]
+    horizon = max(all_times) if all_times else None
     sig_events = []
-    BIG = max([t for t in grp_open.values()], default=None)
     for key, o in grp_open.items():
         c = grp_close.get(key)
         sig_events.append((o, 1))
-        sig_events.append((c if c is not None else None, -1))
+        sig_events.append((c if c is not None else horizon, -1))
     def _sweep(events):
-        opens = sorted((t, d) for t, d in events if t is not None)
-        # None-close events (still open at end) never decrement -> contribute to peak
-        n_open_forever = sum(1 for t, d in events if t is None and d == -1)
         cur = peak = 0
-        # process decrements after increments at same timestamp (exit then re-enter)
-        for t, d in sorted(opens, key=lambda e: (e[0], e[1])):
+        # at equal timestamps, apply CLOSES (-1) before OPENS (+1) so a back-to-back
+        # exit/entry doesn't read as 2 concurrent
+        for t, d in sorted(events, key=lambda e: (e[0], e[1])):
             cur += d
             peak = max(peak, cur)
-        return peak + n_open_forever
+        return peak
     peak_sig = _sweep(sig_events)
     # lots: sum of +lot/-lot
     lot_events = sorted(leg_events, key=lambda e: (e[0], e[1]))
@@ -156,15 +159,24 @@ def metrics(result, config) -> dict:
         else:
             streak = 0
 
-    # daily P&L (feed-zone/source day, matching the breaker + report)
+    # daily P&L (feed-zone/source day, matching the breaker + report). Worst-day %
+    # is measured against THAT day's start-of-day equity (the first signal's
+    # equity_before that day) -- not the initial base -- so compounding doesn't
+    # inflate a late-series dollar loss into a huge % of the tiny starting capital.
     daily = defaultdict(float)
+    day_sod = {}
     for r in rows:
-        if r["pnl"] is not None:
-            daily[r["signal_time_source"].date()] += r["pnl"]
+        if r["pnl"] is None:
+            continue
+        d = r["signal_time_source"].date()
+        daily[d] += r["pnl"]
+        if d not in day_sod:
+            day_sod[d] = r.get("equity_before") or config.initial_capital
     dvals = list(daily.values())
     day_win = sum(1 for v in dvals if v > 0)
+    worst_day_pct = min((daily[d] / day_sod[d] * 100.0 for d in daily), default=0.0)
     start_cap = config.initial_capital
-    max_daily_loss_pct = (min(dvals) / start_cap * 100.0) if dvals else 0.0
+    max_daily_loss_pct = worst_day_pct
 
     # entry-level outcomes
     filled = [er for er in entry_rows if er.get("fill_time") is not None

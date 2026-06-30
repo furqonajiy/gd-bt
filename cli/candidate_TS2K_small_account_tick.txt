@@ -27,13 +27,14 @@
 #  1) This does NOT create a new edge. It REDUCES tail risk / cluster exposure and
 #     WILL cap upside. Judge it by max drawdown, worst daily loss, and SURVIVAL
 #     first -- not net profit. Validate on the report (section 10) and demo.
-#  2) The three gates (daily-loss, max-open-signals, risk-budget) are enforced in
-#     the BACKTEST today (run_backtest + backtest_hybrid, via trading.engine
-#     DeploymentGate). They are NOT yet wired into the live executor
-#     (tools/auto_explicit.py). Until that wiring lands + is demo-validated, the
-#     LIVE section below enforces only --entries 2 (config); the daily-loss /
-#     concurrency / risk-budget gates must be added to the executor before any
-#     real-account run. TS2K is DEMO-ONLY until then.
+#  2) The three gates (daily-loss, max-open-signals, risk-budget) are now enforced
+#     in BOTH the backtest (run_backtest + backtest_hybrid) AND the live executor
+#     (auto, via the same trading.engine DeploymentGate.live_check), proven to make
+#     identical decisions (tests/test_deployment_gate.py::
+#     test_live_check_matches_backtest_gate_decisions). The live daily breaker is
+#     ACCOUNT-level (today's realized P&L on the symbol vs start-of-day equity),
+#     which suits a dedicated small account. Still DEMO-validate first: ELEV8 ticks
+#     != your broker, and the live daily-P&L read needs MT5 history.
 #  3) Numbers are tick-preferred but ELEV8 ticks != your live/demo broker.
 #
 # IDENTITY (tag **TS2K**, disjoint magics; never collides with T818/TSL18):
@@ -70,9 +71,9 @@ python tools/live_feed_loop.py `
   --mt5-server-offset 3 `
   -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/ts2k_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
 
-# ===== 3. LIVE AUTO EXECUTOR  (DEMO-ONLY -- see READ note 2) =====
-# entries 2 (enforced via config). The daily-loss / max-open-signals / risk-budget
-# gates are NOT yet enforced here -- wire them into auto_explicit before any real run.
+# ===== 3. LIVE AUTO EXECUTOR  (DEMO first -- see READ note 2) =====
+# entries 2 + all three deployment-safety gates enforced live (same DeploymentGate
+# as the backtest). Demo-validate before any real-account run.
 python tools/auto_explicit.py `
   --signals signals/ts2k_live.txt `
   --positions-json positions_ts2k.json `
@@ -112,7 +113,12 @@ python tools/auto_explicit.py `
   --runner-after-tp3 false `
   --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
-  --trailing-close-after-stage 2
+  --trailing-close-after-stage 2 `
+  --risk-budget-gate true `
+  --max-single-entry-risk-pct 0.04 `
+  --max-zone-risk-pct 0.06 `
+  --daily-loss-limit-pct 0.05 `
+  --max-open-signals 1
 
 # ===== 4. SIGNAL GENERATOR (before backtest) =====
 # One-shot full static archive signals/ts2k.txt -- identical C160 filter to T818.
