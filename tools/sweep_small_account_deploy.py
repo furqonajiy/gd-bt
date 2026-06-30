@@ -88,6 +88,9 @@ DEFAULT_FEED_SIGNALS = {"self": "signals/t818.txt", "victor": "victor_signals.tx
 WINDOWS = {  # end is EXCLUSIVE (backtest_hybrid --end-date), so 07-01 keeps Jun 30
     "june": ("2026-06-01", "2026-07-01"),
     "jan_jun": ("2026-01-01", "2026-07-01"),
+    # pure-TICK window: the committed ELEV8 tick archive spans 2026-05-11..06-29,
+    # so this is ~100% real-tick (no M1 fallback) -- the closest-to-live read.
+    "tick_only": ("2026-05-11", "2026-07-01"),
 }
 
 
