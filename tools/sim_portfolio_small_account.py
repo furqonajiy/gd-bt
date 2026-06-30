@@ -102,8 +102,8 @@ def _report(window, label, cfg, m, by_tag, result):
     print(f"  data: {ds.get('tick_signals',0)} TICK / {ds.get('m1_signals',0)} M1 signals")
     print(f"  net ${m['net_pnl']:,.0f}  ({m['return_pct']:.0f}% on ${cfg.initial_capital:,.0f})  "
           f"final equity ${m['final_equity']:,.0f}")
-    print(f"  max DD {m['max_drawdown_pct']:.1f}%   worst day {m['max_daily_loss_pct']:.1f}%   "
-          f"daily WR {m['daily_win_rate']:.0f}%")
+    print(f"  max DD {m['max_drawdown_pct']:.1f}% (${abs(m['max_drawdown_usd']):,.0f})   "
+          f"worst day {m['max_daily_loss_pct']:.1f}%   daily WR {m['daily_win_rate']:.0f}%")
     print(f"  signal WR {m['signal_win_rate']:.0f}%   payoff 1:{m['payoff_ratio']:.2f}   "
           f"PF {m['profit_factor']:.2f}   max losing-signal streak {m['max_consecutive_losing_signals']}")
     print(f"  PEAK CONCURRENT signals (both books) {m['max_concurrent_open_signals_seen']}   "

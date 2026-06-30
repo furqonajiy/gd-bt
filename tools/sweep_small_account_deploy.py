@@ -175,6 +175,22 @@ def metrics(result, config) -> dict:
     entry_rows = result["entry_rows"]
     min_lot, contract = config.minimum_lot, CONTRACT_SIZE_OZ
 
+    # Max drawdown in USD that matches the engine's max_drawdown_pct: same
+    # equity-curve peak-tracking, recording the peak->trough dollar drop at the
+    # worst-% point (reported alongside the % always).
+    peak = config.initial_capital
+    dd_pct = dd_usd = 0.0
+    for r in rows:
+        eq = r.get("equity_after")
+        if eq is None:
+            continue
+        if eq > peak:
+            peak = eq
+        if peak > 0:
+            d = (eq - peak) / peak * 100.0
+            if d < dd_pct:
+                dd_pct, dd_usd = d, eq - peak  # dd_usd negative
+
     # signal-level P&L + streak (a signal loses if its total P&L < 0)
     sig_pnls = [(r["signal_time_source"], r["pnl"]) for r in rows if r["pnl"] is not None]
     sig_wins = sum(1 for _, p in sig_pnls if p > 0)
@@ -248,6 +264,7 @@ def metrics(result, config) -> dict:
         "net_pnl": result["net_profit"],
         "return_pct": result["net_profit"] / start_cap * 100.0,
         "max_drawdown_pct": result["max_drawdown_pct"],
+        "max_drawdown_usd": dd_usd,
         "max_daily_loss_pct": max_daily_loss_pct,
         "daily_win_rate": day_win / len(dvals) * 100.0 if dvals else 0.0,
         "trading_days": len(dvals),
@@ -318,7 +335,8 @@ def run(window: str, signals_path: str, charts, ticks, variant_names, watch_seco
         m = metrics(res, cfg)
         results[name] = (cfg, m)
         ds = m["data_sources"]
-        print(f"[small-acct]   {name}: net ${m['net_pnl']:,.0f}  DD {m['max_drawdown_pct']:.1f}%  "
+        print(f"[small-acct]   {name}: net ${m['net_pnl']:,.0f}  "
+              f"DD {m['max_drawdown_pct']:.1f}% (${abs(m['max_drawdown_usd']):,.0f})  "
               f"maxDayLoss {m['max_daily_loss_pct']:.1f}%  dailyWR {m['daily_win_rate']:.0f}%  "
               f"sigWR {m['signal_win_rate']:.0f}%  maxLoseStreak {m['max_consecutive_losing_signals']}  "
               f"peakConc {m['max_concurrent_open_signals_seen']}  "
@@ -360,6 +378,7 @@ def _write_reports(window, out_dir, results, feed="self"):
     # headline table
     cols = [("variant", "variant"), ("initial_capital", "cap"), ("net_pnl", "net"),
             ("return_pct", "ret%"), ("max_drawdown_pct", "maxDD%"),
+            ("max_drawdown_usd", "maxDD$"),
             ("max_daily_loss_pct", "worstDay%"), ("daily_win_rate", "dailyWR%"),
             ("signal_win_rate", "sigWR%"), ("entry_win_rate", "entryWR%"),
             ("payoff_ratio", "payoff"), ("profit_factor", "PF"),
@@ -377,6 +396,8 @@ def _write_reports(window, out_dir, results, feed="self"):
                 cells.append(f"${m[key]:,.0f}")
             elif key == "net_pnl":
                 cells.append(f"${m[key]:,.0f}")
+            elif key == "max_drawdown_usd":
+                cells.append(f"${abs(m[key]):,.0f}")
             elif key.endswith("_pct") or key.endswith("_rate"):
                 cells.append(f"{m[key]:.1f}")
             elif key in ("payoff_ratio", "profit_factor"):
@@ -431,14 +452,17 @@ def _write_reports(window, out_dir, results, feed="self"):
     b2k = next((v for k, v in results.items() if k.endswith("_2k")), None)
     ts = next((v for k, v in results.items() if "_e2_c1_d5_z6" in k), None)
     if b2k and ts:
-        lines.append(f"- Full 8-entry {feed_name} at $2k: worst day {b2k[1]['max_daily_loss_pct']:.1f}%, "
-                     f"max DD {b2k[1]['max_drawdown_pct']:.1f}%, max losing-signal streak "
+        lines.append(f"- Full 8-entry {feed_name} at $2k: max DD "
+                     f"{b2k[1]['max_drawdown_pct']:.1f}% (${abs(b2k[1]['max_drawdown_usd']):,.0f}), "
+                     f"worst day {b2k[1]['max_daily_loss_pct']:.1f}%, max losing-signal streak "
                      f"{b2k[1]['max_consecutive_losing_signals']}.")
-        lines.append(f"- {tag} (e2/conc1/daily5/zone6) at $2k: worst day {ts[1]['max_daily_loss_pct']:.1f}%, "
-                     f"max DD {ts[1]['max_drawdown_pct']:.1f}%, net {_fmt(ts[1]['net_pnl'], money=True)}, "
+        lines.append(f"- {tag} (e2/conc1/daily5/zone6) at $2k: max DD "
+                     f"{ts[1]['max_drawdown_pct']:.1f}% (${abs(ts[1]['max_drawdown_usd']):,.0f}), "
+                     f"worst day {ts[1]['max_daily_loss_pct']:.1f}%, net {_fmt(ts[1]['net_pnl'], money=True)}, "
                      f"return {ts[1]['return_pct']:.1f}%, daily win rate {ts[1]['daily_win_rate']:.0f}%.")
-        lines.append(f"- Drawdown reduction: {b2k[1]['max_drawdown_pct']:.1f}% -> "
-                     f"{ts[1]['max_drawdown_pct']:.1f}%; worst day "
+        lines.append(f"- Drawdown reduction: {b2k[1]['max_drawdown_pct']:.1f}% "
+                     f"(${abs(b2k[1]['max_drawdown_usd']):,.0f}) -> {ts[1]['max_drawdown_pct']:.1f}% "
+                     f"(${abs(ts[1]['max_drawdown_usd']):,.0f}); worst day "
                      f"{b2k[1]['max_daily_loss_pct']:.1f}% -> {ts[1]['max_daily_loss_pct']:.1f}%.")
     lines.append("")
 
