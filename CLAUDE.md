@@ -202,8 +202,40 @@ pair is a thin package that imports it.
   `tools/regime_router.py` is a back-compat shim; `tools/regime_auto.py` is the
   one-shot advisory CLI.
 - `tests/` — `pytest` suite, heavy on live/backtest parity.
+- **Anti-wrong-side-structure guard** (`tools/generate_scalper_signals.py`
+  `--structure-*` flags, all **default OFF → feed byte-identical**): a feed layer
+  that vetoes the self-scalper's entries taken AGAINST the larger structure —
+  reject BUY when the HTF (own `--structure-htf-minutes`/`-ema-fast`/`-ema-slow`)
+  is bearish, SELL when bullish, plus optional VWAP-side / opposite-impulse-cooldown
+  (`--structure-impulse-atr` + `--structure-impulse-cooldown-bars`) / structure-score
+  (`--structure-min-score`, 0..4) vetoes. It only REMOVES signals (never invents
+  one). `--structure-diagnostics` logs the per-base-setup decision (htf_state /
+  vwap_side / impulse_state / score / reject_reason). It targets TSL18's
+  sequential wrong-side losses — **not another generic RSI/BB/SL/TP sweep**. Shadow
+  strategy `cli/candidate_TSL18_structure_guard_tick.txt` (**tag TSG18**, identical
+  TSL18 geometry, guard ON; SHADOW/RESEARCH, not a live replacement, no `run.py`
+  alias until validated). Compare base vs guarded variants with
+  `tools/sweep_structure_guard.py --window june|jan_jun` (scores max-consecutive-
+  losses, max-daily-loss, BUY-loss-in-bearish-HTF, filtered-winners-vs-losers — not
+  profit alone). Full contract + promote bar: `docs/TSL18_STRUCTURE_GUARD.md`.
+  A second filter family, the **trend-progress stall cap** (`--progress-stall-*`,
+  default OFF), targets the OTHER cluster the HTF veto can't reach: HTF-ALIGNED
+  same-side pullbacks that keep firing while the trend stops making new extremes.
+  Completed-H1 regime + no-lookahead "valid progress" = a **local rolling**
+  high/low (`--progress-local-lookback-bars`, excludes the current bar,
+  close-confirmed, not wick-only — NOT the whole-leg cumulative extreme, which
+  made progress too rare); vetoes only when BOTH the consecutive non-progressing
+  same-side count ≥ `--progress-stall-n` AND `bars_since_valid_progress ≥
+  --progress-min-no-progress-bars`, re-arming when progress happens on ANY bar
+  between signals (progress epoch), with a **probe** allowed every
+  `--progress-probe-interval-bars` so a leg never goes fully dark. The sweep runs 8
+  variants (structure × progress, base first) + a progress-stall-specifics table;
+  a **T819 candidate** (`cli/candidate_T819_progress_stall_structure_tick.txt`)
+  is created only if a combined variant lowers `max_consecutive_losing_signals`
+  vs base with filtered-losers > winners. `.github/workflows/structure-guard-sweep.yml`
+  runs it manually (workflow_dispatch).
 - `docs/` — `MT5_SETUP.md`, `OPERATIONS_PLAYBOOK.md`,
-  `demo_runbook_trailing_open.md`, `SWEEP_RUNBOOK.md`,
+  `demo_runbook_trailing_open.md`, `SWEEP_RUNBOOK.md`, `TSL18_STRUCTURE_GUARD.md`,
   `VICTOR_SWEEP_RUNBOOK.md`, `REGIME_ASSESSMENT.md` (the price-normalized
   regime-determination assessment + the volatility-scale-invariance verdict:
   the champion absorbs volatility, so finer regimes don't change champion
@@ -214,6 +246,24 @@ pair is a thin package that imports it.
   to keep it calibrated (broker spec via `tools/dump_mt5_spec.py`, a clean
   `ReportHistory` HTML to reconcile via `tools/reconcile_report_html.py`). Read
   it instead of re-asking what we need.
+  `tools/reconcile_live_vs_backtest.py` — the **per-signal** live↔backtest
+  reconcile: same MT5 `ReportHistory` HTML + the per-strategy **Per-Entry
+  Detail** workbook, matched by the `[TAG-]MMDD#DD.N` comment, emitting a
+  **colour-coded Excel** (one row per signal: BT vs LV legs / entry / open /
+  close / exit / $, plus dEntry / dOpen / dClose / d$) with a **Description**
+  classifying each discrepancy (`Match`, `Ladder under-fill`, `Reopen / churn`,
+  `Late arm`, `Exit-time drift`, `Manual close`, `Still open`, …) and its
+  counterfactual P&L ("if left alone the model banks $X"). It **recomputes the
+  backtest $ at the LIVE lot from prices** (`--lot` → `--usd-per-point`), so the
+  compare is apples-to-apples whether the workbook was risk-sized or fixed-lot
+  (generate the workbook with `--sizing-mode fixed --lot <live lot>` to match
+  live exactly). The backtest must be a **TICK** run (`backtest_hybrid.py
+  --ticks …` covering the live window) — the tool surfaces each signal's
+  backtest **Data Source** in a **BT src** column (non-TICK flagged red), prints
+  the TICK/M1 split, and **`--require-tick`** fails the run if any matched signal
+  fell back to M1. Where `reconcile_report_html.py` gives the aggregate/exit-type
+  bottom line, this gives the per-signal "what differed and why" the operator
+  reads.
 
 ## Architecture conventions — follow these
 
