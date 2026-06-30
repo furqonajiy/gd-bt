@@ -1,0 +1,143 @@
+name: TSL18 Full Sweep After Backtests
+
+# Runs the full TSL18 quality-entry + collision sweep after the V817/TSL18
+# 5K/50K backtest workflow succeeds, or manually via workflow_dispatch.
+# It never trades live and uploads artifacts only.
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["V817 TSL18 Backtests 5K 50K"]
+    types: [completed]
+
+concurrency:
+  group: tsl18-full-sweep-after-backtests
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  full-sweep:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 540
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install requirements
+        run: pip install -r requirements.txt
+
+      - name: Preflight compile and targeted tests
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            tools/sweep_tsl18_quality_entry.py \
+            tools/backtest_hybrid.py \
+            tools/backtest_explicit.py \
+            tools/auto_explicit.py \
+            trading/engine/strategy/collision_policy.py
+          pytest tests/test_sweep_tsl18_quality_entry.py
+          pytest tests/test_backtest_hybrid_collision_policy.py
+          pytest tests/test_auto_explicit_collision_live_guard.py
+          pytest tests/test_collision_policy.py
+          pytest tests/test_backtest_hybrid_parity.py
+
+      - name: Smoke sweep
+        run: |
+          set -euo pipefail
+          python tools/sweep_tsl18_quality_entry.py \
+            --mode smoke \
+            --out-root reports \
+            --require-full-tick-lifecycle \
+            --exclude-open-or-pending \
+            --score-objective edge_plus_rebate_guarded
+          test -f reports/TSL18_QUALITY_smoke/results.csv
+          test -f reports/TSL18_QUALITY_smoke/top_candidates.json
+          test -f reports/TSL18_QUALITY_smoke/summary.md
+
+      - name: Full June sweep
+        run: |
+          set -euo pipefail
+          python tools/sweep_tsl18_quality_entry.py \
+            --mode full_june \
+            --out-root reports \
+            --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_202606*_ELEV8.csv \
+            --gen-start 2026-05-01 \
+            --require-full-tick-lifecycle \
+            --exclude-open-or-pending \
+            --score-objective edge_plus_rebate_guarded
+          test -f reports/TSL18_QUALITY_full_june/results.csv
+          test -f reports/TSL18_QUALITY_full_june/top_candidates.json
+          test -f reports/TSL18_QUALITY_full_june/summary.md
+
+      - name: Jan-Jun validation of top candidates
+        run: |
+          set -euo pipefail
+          TOPJSON=reports/TSL18_QUALITY_full_june/top_candidates.json
+          if [ ! -f "$TOPJSON" ]; then
+            echo "No full_june top_candidates.json; cannot validate Jan-Jun." >&2
+            exit 1
+          fi
+          python tools/sweep_tsl18_quality_entry.py \
+            --mode validate_top \
+            --top-json "$TOPJSON" \
+            --out-root reports \
+            --charts data/XAUUSD_M1_2026*_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_20260*_ELEV8.csv \
+            --gen-start 2026-01-01 \
+            --require-full-tick-lifecycle \
+            --exclude-open-or-pending \
+            --score-objective edge_plus_rebate_guarded
+          test -f reports/TSL18_QUALITY_validate_top/results.csv
+          test -f reports/TSL18_QUALITY_validate_top/top_candidates.json
+          test -f reports/TSL18_QUALITY_validate_top/summary.md
+
+      - name: Assemble final status
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p reports/OVERNIGHT_AUTO_SWEEP_STATUS
+          STATUS=reports/OVERNIGHT_AUTO_SWEEP_STATUS/summary.md
+          {
+            echo "# TSL18 Full Sweep After Backtests"
+            echo
+            echo "- Run ID: ${GITHUB_RUN_ID:-?}"
+            echo "- SHA: ${GITHUB_SHA:-?}"
+            echo "- Trigger: ${{ github.event_name }}"
+            echo
+            echo "## Artifacts"
+            echo "- reports/TSL18_QUALITY_smoke/"
+            echo "- reports/TSL18_QUALITY_full_june/"
+            echo "- reports/TSL18_QUALITY_validate_top/"
+            echo "- reports/OVERNIGHT_AUTO_SWEEP_STATUS/"
+          } > "$STATUS"
+          if [ -f reports/TSL18_QUALITY_full_june/summary.md ]; then
+            echo >> "$STATUS"
+            echo "## Full June summary" >> "$STATUS"
+            cat reports/TSL18_QUALITY_full_june/summary.md >> "$STATUS"
+          fi
+          if [ -f reports/TSL18_QUALITY_validate_top/summary.md ]; then
+            echo >> "$STATUS"
+            echo "## Jan-Jun validation summary" >> "$STATUS"
+            cat reports/TSL18_QUALITY_validate_top/summary.md >> "$STATUS"
+          fi
+
+      - name: Upload sweep artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsl18-full-quality-collision-sweep
+          path: |
+            reports/OVERNIGHT_AUTO_SWEEP_STATUS/**
+            reports/TSL18_QUALITY_smoke/**
+            reports/TSL18_QUALITY_full_june/**
+            reports/TSL18_QUALITY_validate_top/**
+          if-no-files-found: warn
