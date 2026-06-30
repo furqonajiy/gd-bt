@@ -240,6 +240,9 @@ def _new_bucket(key_name: str, key_value: str, equity_start: float) -> dict:
         "breakevens": 0, "no_fills": 0, "open": 0,
         "pnl": 0.0, "trading_pnl": 0.0, "bonus": 0.0, "closed_lots": 0.0,
         "equity_start": equity_start, "equity_end": equity_start,
+        # worst running drawdown (vs all-time peak) seen during this period
+        "max_drawdown_pct": 0.0, "max_drawdown_usd": 0.0,
+        "entries": 0,
     }
 
 
@@ -383,16 +386,47 @@ def aggregate_backtest_result(rows, entry_rows, excluded, config, chart_df,
     total_bonus = sum((r.get("bonus") or 0.0) for r in rows if r["pnl"] is not None)
     total_closed_lots = sum((r.get("closed_lots") or 0.0) for r in rows)
 
+    # Max drawdown on the realized equity curve -- tracked in BOTH percent and
+    # USD, plus the trough context (when it happened and how much had executed by
+    # then), so the report can always show "$ and %" and what was in play.
+    filled_by_gid: dict = {}
+    for er in entry_rows:
+        if er.get("fill_time") is not None:
+            gid = er.get("global_id")
+            filled_by_gid[gid] = filled_by_gid.get(gid, 0) + 1
+
     max_dd_pct = 0.0
+    max_dd_usd = 0.0
     peak = config.initial_capital
+    drawdown_trough = None
+    cum_signals = 0
+    cum_entries = 0
     for r in rows:
+        cum_signals += 1
+        cum_entries += filled_by_gid.get(r.get("global_id"), 0)
         eq = r["equity_after"]
         if eq > peak:
             peak = eq
+        # stamp each row's RUNNING drawdown (vs all-time peak) so the Daily/Weekly/
+        # Monthly buckets can each report the worst drawdown seen during them.
+        r_dd = (eq - peak) / peak * 100.0 if peak > 0 else 0.0
+        r["running_drawdown_pct"] = r_dd
+        r["running_drawdown_usd"] = eq - peak
         if peak > 0:
-            dd = (eq - peak) / peak * 100.0
+            dd = r_dd
             if dd < max_dd_pct:
                 max_dd_pct = dd
+                max_dd_usd = eq - peak  # negative
+                _tc = r.get("signal_time_chart")
+                _ts = r.get("signal_time_source")
+                drawdown_trough = {
+                    "time_chart": _tc.isoformat(sep=" ") if _tc else None,
+                    "time_source": _ts.isoformat(sep=" ") if _ts else None,
+                    "signals_executed_through": cum_signals,
+                    "entries_filled_through": cum_entries,
+                    "peak_equity": peak,
+                    "trough_equity": eq,
+                }
 
     monthly: dict[str, dict] = {}
     for r in rows:
@@ -410,6 +444,10 @@ def aggregate_backtest_result(rows, entry_rows, excluded, config, chart_df,
             bucket["bonus"] += r.get("bonus") or 0.0
             bucket["closed_lots"] += r.get("closed_lots") or 0.0
         bucket["equity_end"] = r["equity_after"]
+        bucket["entries"] += filled_by_gid.get(r.get("global_id"), 0)
+        if r.get("running_drawdown_pct", 0.0) < bucket["max_drawdown_pct"]:
+            bucket["max_drawdown_pct"] = r["running_drawdown_pct"]
+            bucket["max_drawdown_usd"] = r["running_drawdown_usd"]
     monthly_rows = sorted(monthly.values(), key=lambda b: b["month"])
     for b in monthly_rows:
         _finalize_bucket(b)
@@ -439,6 +477,10 @@ def aggregate_backtest_result(rows, entry_rows, excluded, config, chart_df,
             bucket["bonus"] += r.get("bonus") or 0.0
             bucket["closed_lots"] += r.get("closed_lots") or 0.0
         bucket["equity_end"] = r["equity_after"]
+        bucket["entries"] += filled_by_gid.get(r.get("global_id"), 0)
+        if r.get("running_drawdown_pct", 0.0) < bucket["max_drawdown_pct"]:
+            bucket["max_drawdown_pct"] = r["running_drawdown_pct"]
+            bucket["max_drawdown_usd"] = r["running_drawdown_usd"]
     weekly_rows = sorted(weekly.values(), key=lambda b: b["week"])
     for b in weekly_rows:
         _finalize_bucket(b)
@@ -472,6 +514,10 @@ def aggregate_backtest_result(rows, entry_rows, excluded, config, chart_df,
             bucket["bonus"] += r.get("bonus") or 0.0
             bucket["closed_lots"] += r.get("closed_lots") or 0.0
         bucket["equity_end"] = r["equity_after"]
+        bucket["entries"] += filled_by_gid.get(r.get("global_id"), 0)
+        if r.get("running_drawdown_pct", 0.0) < bucket["max_drawdown_pct"]:
+            bucket["max_drawdown_pct"] = r["running_drawdown_pct"]
+            bucket["max_drawdown_usd"] = r["running_drawdown_usd"]
 
     def _attach_entry_detail(bucket: dict, dk: str) -> None:
         de = daily_entry.get(dk)
@@ -534,6 +580,8 @@ def aggregate_backtest_result(rows, entry_rows, excluded, config, chart_df,
         "no_fills": no_fills, "open": open_count,
         "win_rate_pct": wins / (wins + losses) * 100.0 if (wins + losses) else 0.0,
         "max_drawdown_pct": max_dd_pct,
+        "max_drawdown_usd": max_dd_usd,
+        "drawdown_trough": drawdown_trough,
         # Entry-level outcome breakdown + realized R:R.
         "entry_total": len(entry_rows),
         "entry_status_counts": dict(entry_status_counts),
