@@ -121,6 +121,7 @@ the engine treats each row as one minute, so a daily bar corrupts the backtest.
 | OOS | held‑out tail | `--validate-months 6` for the long full‑history sweep; **`2` for the regime grid** (short regime windows — e.g. R4 is only 2026, so the OOS tail is its last 2 months). Used as the OOS > 0 gate **and** the promote‑decision metric. |
 | Feeds | scalper24, scalperwide24, risk02allhours (3 HIGH‑FREQ self‑scalpers) + adaptive / breakout / meanrev | high‑frequency, 24h, loose filters → more closed lots |
 | Candidates/feed | 300 (Phase 1) | **(ASK)** bump to 600 for denser coverage |
+| Collision policies | **OFF** (`opposite_signal_policy=allow_hedge`, `same_side_overlap_policy=allow_all`) | NOT part of the standard parameter grid. The TSL18 collision layer (`docs/TSL18_COLLISION_POLICIES.md`) resolves opposite‑side hedges + same‑side clusters; it ships OFF (byte‑identical parity) and is swept **separately**, one hypothesis at a time, scored on the sequential‑loss / hedge‑churn it targets — not the generic edge grid. Don't fold it into the SC24 neighborhood grid. |
 | Run model | in‑container (free) OR GitHub‑paid | **(ASK)** — see §6 |
 
 ---

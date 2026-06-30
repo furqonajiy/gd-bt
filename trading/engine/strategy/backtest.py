@@ -25,6 +25,7 @@ from trading.engine import Signal
 from trading.engine import iter_bars, slice_bars
 from trading.engine.core.trend_runner import prewarm_indicators_from_dataframe
 from .deployment_gate import DeploymentGate
+from .collision_policy import CollisionPolicy
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +48,73 @@ def _atr_lookup(chart_df, period: int):
         v = atr[idx]
         return None if v != v else float(v)  # NaN -> None
     return at
+
+
+def _price_lookup(chart_df):
+    """Return ``at(time) -> close`` of the last bar at-or-before ``time`` (no
+    lookahead), or None before the first bar. Used by the collision policy to
+    mark an open opposite-side position when it banks/closes it early."""
+    import numpy as np
+    times = chart_df["time"].values  # datetime64[ns]
+    closes = chart_df["close"].values
+
+    def at(t):
+        idx = int(np.searchsorted(times, np.datetime64(t), side="right")) - 1
+        if idx < 0:
+            return None
+        return float(closes[idx])
+    return at
+
+
+def _apply_collision_to_built(built: dict, dec) -> float:
+    """Apply an accepted CollisionDecision to a built signal in place: scale its
+    lots/P&L by ``dec.lot_scale`` (a downsized scale-in), fold the old-side banked
+    P&L delta into this colliding signal's realized P&L, and stamp the collision
+    reporting fields onto the row + every entry row. Returns the new equity_after.
+
+    P&L scales linearly with lot, so a downsize is exact without re-replaying.
+    When ``lot_scale`` is 1.0 and the delta is 0.0 (a no-collision ``allow``) the
+    recomputed equity is byte-identical to the original build -- the only change
+    is the additive collision fields. Collision is None on the default path, so
+    this is never called there (parity)."""
+    scale = dec.lot_scale
+    delta = dec.old_side_pnl_delta
+    row = built["row"]
+    eq_before = row["equity_before"]
+    if scale != 1.0:
+        for key in ("trading_pnl", "bonus", "pnl"):
+            if row.get(key) is not None:
+                row[key] *= scale
+        row["closed_lots"] = (row.get("closed_lots") or 0.0) * scale
+        for er in built["entry_rows"]:
+            er["lot"] = float(er.get("lot") or 0.0) * scale
+            for key in ("trading_pnl", "bonus", "pnl", "closed_lots"):
+                if er.get(key) is not None:
+                    er[key] *= scale
+    # The colliding signal's realized P&L now carries the old-side banked delta
+    # (so the equity curve + net_profit reflect the intervention, and
+    # equity_after - equity_before stays exactly == the row's realized total).
+    # The delta is the old side's TRADING P&L (no bonus), so fold it into both
+    # pnl and trading_pnl -- that keeps the Summary's Trading P&L + Bonus
+    # reconciled to Net (realized = trading + bonus) on a collision run. The
+    # per-entry leg rows stay the new signal's own (the delta is the OTHER
+    # signal's), and `collision_pnl` reports it explicitly.
+    realized = row.get("pnl")
+    if delta != 0.0:
+        row["pnl"] = (realized or 0.0) + delta
+        realized = row["pnl"]
+        row["trading_pnl"] = (row.get("trading_pnl") or 0.0) + delta
+    equity_after = eq_before + (realized or 0.0)
+    row["equity_after"] = equity_after
+    fields = dec.as_row_fields()
+    if delta != 0.0:
+        fields["collision_pnl"] = delta
+    row.update(fields)
+    for er in built["entry_rows"]:
+        er["equity_after"] = equity_after
+        er.update(fields)
+    built["equity_after"] = equity_after
+    return equity_after
 
 
 def apply_signal_rr_policy(sig, config: StrategyConfig, atr_value: float | None = None):
@@ -653,6 +721,12 @@ def run_backtest(
     # the default path is byte-identical -- parity).
     gate = DeploymentGate.maybe(config, contract_size)
 
+    # TSL18 collision policies (None unless a non-baseline opposite/same-side
+    # policy is set, so the default path is byte-identical -- parity). The price
+    # lookup marks an open opposite side when a policy banks/closes it early.
+    collision = CollisionPolicy.maybe(config, contract_size)
+    price_at = _price_lookup(chart_df) if collision is not None else None
+
     for sig in signals:
         screened, reason = screen_signal(
             sig, config, chart_start, chart_end, atr_at=atr_at,
@@ -675,12 +749,25 @@ def run_backtest(
             if greason is not None:
                 excluded.append({"signal_key": sig.signal_key, "reason": greason})
                 continue
+        dec = None
+        if collision is not None:
+            dec = collision.decide(sig, built["entry_rows"], price_at=price_at)
+            if not dec.accept:
+                excluded.append({"signal_key": sig.signal_key, "reason": dec.reason})
+                continue
+            _apply_collision_to_built(built, dec)
         rows.append(built["row"])
         entry_rows.extend(built["entry_rows"])
         if built["status"] != "OPEN":
             equity = built["equity_after"]
+        elif dec is not None and dec.old_side_pnl_delta != 0.0:
+            # the new signal is still open, but the old side was banked/closed
+            # now -- that realized delta must move the equity curve forward.
+            equity = built["equity_after"]
         if gate is not None:
             gate.register(sig, built)
+        if collision is not None:
+            collision.register(sig, built, dec)
         if equity <= 0:
             break
 
@@ -689,6 +776,8 @@ def run_backtest(
         equity, len(signals))
     if gate is not None:
         result["deployment_gate"] = gate.summary()
+    if collision is not None:
+        result["collision_policy"] = collision.summary()
     return result
 
 

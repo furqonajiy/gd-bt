@@ -423,6 +423,51 @@ def add_scale_out_args(p: argparse.ArgumentParser) -> None:
                         "this is rejected. 0=unlimited.")
 
 
+def add_collision_policy_args(p: argparse.ArgumentParser) -> None:
+    """TSL18 collision policies (research/backtest layer; default = current
+    behavior). Resolve OPPOSITE-side hedges and SAME-side overlaps. The two policy
+    flags default to the baseline (allow_hedge / allow_all) so omitting them keeps
+    the run byte-identical. See docs/TSL18_COLLISION_POLICIES.md."""
+    g = p.add_argument_group("TSL18 collision policies (default off)")
+    g.add_argument("--opposite-signal-policy",
+                   choices=["allow_hedge", "reject_opposite", "profit_bank_rearm",
+                            "close_then_flip", "reduce_then_hedge"],
+                   default="allow_hedge",
+                   help="What to do with a NEW signal opposite to an active one. "
+                        "allow_hedge=baseline (keep both); reject_opposite=skip it; "
+                        "profit_bank_rearm=bank the old side if it is >= "
+                        "--opposite-profit-threshold-r in profit, then allow (old side "
+                        "rearmable only at its original entry or better); "
+                        "close_then_flip=close the old side, open the new; "
+                        "reduce_then_hedge=keep both but cut the old side to --hedge-lot-fraction.")
+    g.add_argument("--same-side-overlap-policy",
+                   choices=["allow_all", "reject_overlap", "scale_in_better_entry_only",
+                            "scale_in_fixed_risk"],
+                   default="allow_all",
+                   help="What to do with a NEW same-side signal overlapping an active cluster. "
+                        "allow_all=baseline; reject_overlap=skip it; "
+                        "scale_in_better_entry_only=allow only a strictly better entry "
+                        "(BUY lower / SELL higher by --same-side-cluster-entry-gap) within the "
+                        "cluster risk cap; scale_in_fixed_risk=allow but DOWNSIZE so cluster risk "
+                        "<= anchor risk x --max-cluster-risk-multiple (reject below min lot).")
+    g.add_argument("--same-side-cluster-window-minutes", type=_positive_int, default=30,
+                   help="Same-side signals within this many minutes form one cluster (default 30).")
+    g.add_argument("--same-side-cluster-entry-gap", type=_positive_float, default=5.0,
+                   help="Min price improvement (price units) for scale_in_better_entry_only "
+                        "(default 5.0).")
+    g.add_argument("--same-side-cluster-sl-gap", type=_positive_float, default=10.0,
+                   help="Reserved: min SL separation within a cluster (price units, default 10.0).")
+    g.add_argument("--max-cluster-risk-multiple", type=_positive_float, default=1.0,
+                   help="Cluster total risk must stay <= the cluster anchor's risk x this "
+                        "(default 1.0).")
+    g.add_argument("--opposite-profit-threshold-r", type=_positive_float, default=0.5,
+                   help="profit_bank_rearm banks the old opposite side only when it is at least "
+                        "this many R in profit (default 0.5).")
+    g.add_argument("--hedge-lot-fraction", type=_positive_float, default=0.5,
+                   help="reduce_then_hedge keeps this fraction of the old side's exposure and "
+                        "sizes the new hedge at it (default 0.5).")
+
+
 def _add_adaptive_flags(p: argparse.ArgumentParser) -> None:
     g = p.add_argument_group("regime-adaptive (mirror auto --adaptive)")
     g.add_argument("--adaptive", type=_bool_text, default=False,
@@ -469,6 +514,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--progress-interval-seconds", type=float, required=True)
     add_required_strategy_args(p)
     add_scale_out_args(p)
+    add_collision_policy_args(p)
     add_chart_sync_args(p)
     _add_adaptive_flags(p)
     return p
@@ -550,6 +596,14 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         daily_loss_limit_pct=getattr(args, "daily_loss_limit_pct", 0.0),
         max_open_signals=getattr(args, "max_open_signals", 0),
         max_open_lots=getattr(args, "max_open_lots", 0.0),
+        opposite_signal_policy=getattr(args, "opposite_signal_policy", "allow_hedge"),
+        same_side_overlap_policy=getattr(args, "same_side_overlap_policy", "allow_all"),
+        same_side_cluster_window_minutes=getattr(args, "same_side_cluster_window_minutes", 30),
+        same_side_cluster_entry_gap=getattr(args, "same_side_cluster_entry_gap", 5.0),
+        same_side_cluster_sl_gap=getattr(args, "same_side_cluster_sl_gap", 10.0),
+        max_cluster_risk_multiple=getattr(args, "max_cluster_risk_multiple", 1.0),
+        opposite_profit_threshold_r=getattr(args, "opposite_profit_threshold_r", 0.5),
+        hedge_lot_fraction=getattr(args, "hedge_lot_fraction", 0.5),
     )
 
 

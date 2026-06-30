@@ -228,6 +228,12 @@ from .strategy.regime_adaptive import champion_config, make_regime_config_resolv
 
 # 8. strategy.backtest
 from .strategy.deployment_gate import DeploymentGate
+from .strategy.collision_policy import (
+    CollisionDecision,
+    CollisionPolicy,
+    can_rearm,
+    status_is_terminal,
+)
 from .strategy.backtest import (
     aggregate_backtest_result,
     position_status,
@@ -310,6 +316,7 @@ __all__ = [
     "champion_config", "make_regime_config_resolver",
     "position_status", "replay_signal", "run_backtest", "write_backtest_outputs",
     "aggregate_backtest_result", "replay_signal_rows", "screen_signal", "DeploymentGate",
+    "CollisionPolicy", "CollisionDecision", "can_rearm", "status_is_terminal",
     "LiveEntryGuard",
     "GeneratedSignal", "RejectionSignalConfig", "format_generated_signals", "generate_rejection_signals",
     "MomentumSignalConfig", "generate_momentum_signals",
