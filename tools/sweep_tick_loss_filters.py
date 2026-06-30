@@ -114,12 +114,21 @@ def strategy_config(overrides: dict[str, Any]) -> StrategyConfig:
     payload = asdict(DEFAULT_CONFIG)
     payload.update(BASE_TSL18)
     payload.update(overrides)
-    payload["lock_tp1_exit_slippage_points"] = 0.0
-    payload["lock_tp2_exit_slippage_points"] = 0.0
+    # R4 backtest/sweep scoring uses the measured locked-exit realism model
+    # (docs/BACKTEST_REALISM.md): a LOCK_TP1/LOCK_TP2 protective stop fills at
+    # market on the retrace, costing ~2.0/1.0 points. This is a BACKTEST-ONLY
+    # realism knob -- DEFAULT_CONFIG and the live executor keep it at 0 (the
+    # broker adds the real slippage on the live fill), so live order placement is
+    # unchanged. Scoring TWL25 candidates without it would over-reward locked
+    # exits and pick an over-optimistic champion. Kept explicit here (not via env
+    # vars) so the sweep config is reproducible regardless of shell state.
+    payload["lock_tp1_exit_slippage_points"] = 2.0
+    payload["lock_tp2_exit_slippage_points"] = 1.0
     return StrategyConfig(**payload)
 
 
-def curve_stats(pnls: list[float], initial_capital: float) -> dict[str, Any]:
+def curve_stats(pnls: list[float], initial_capital: float,
+                days: list[Any] | None = None) -> dict[str, Any]:
     wins = sum(p > 0 for p in pnls)
     losses = sum(p < 0 for p in pnls)
     flats = sum(p == 0 for p in pnls)
@@ -135,12 +144,39 @@ def curve_stats(pnls: list[float], initial_capital: float) -> dict[str, Any]:
         trough = min(trough, equity)
     closed = wins + losses
     pf = gross_win / gross_loss if gross_loss else (99.0 if gross_win > 0 else 0.0)
+
+    # --- Loss-quality metrics (TWL25 is loss-first: the remaining TSL18 problem
+    #     is STRUCTURAL/SEQUENTIAL loss, not generic tuning -- see
+    #     docs/TSL18_STRUCTURE_GUARD.md). Rank on these, not just total P&L/DD.
+    max_consec = cur_consec = 0
+    for p in pnls:
+        if p < 0:
+            cur_consec += 1
+            max_consec = max(max_consec, cur_consec)
+        else:
+            cur_consec = 0
+    # worst single losing signal (positive magnitude; 0 if no losing signal)
+    worst_single = max(0.0, -min(pnls)) if pnls else 0.0
+    # worst calendar (feed-zone) day's net P&L -> positive magnitude of the loss
+    max_daily_loss = 0.0
+    if days is not None and len(days) == len(pnls) and pnls:
+        by_day: dict[Any, float] = {}
+        for p, d in zip(pnls, days):
+            by_day[d] = by_day.get(d, 0.0) + p
+        worst_day_net = min(by_day.values()) if by_day else 0.0
+        max_daily_loss = round(-worst_day_net, 2) if worst_day_net < 0 else 0.0
+
     return {
         "tick_pnl": round(sum(pnls), 2), "wins": wins, "losses": losses, "flats": flats,
         "win_rate_pct": round(wins / closed * 100.0, 2) if closed else 0.0,
         "profit_factor": round(min(pf, 99.0), 3), "max_drawdown": round(max_dd, 2),
         "max_drawdown_pct": round(max_dd / initial_capital * 100.0, 2),
         "max_loss_signal": round(min(pnls or [0.0]), 2), "min_equity": round(trough, 2),
+        # loss-first metrics
+        "loss_count": losses,
+        "max_consecutive_losing_signals": max_consec,
+        "max_daily_loss": max_daily_loss,
+        "worst_single_signal_loss": round(worst_single, 2),
     }
 
 
@@ -157,6 +193,7 @@ def evaluate(c: dict[str, Any], *, chart: CsvChartSource, ticks, charts: list[st
     cfg = strategy_config(c["strategy_overrides"])
     clock = tk._install_sim_clock()
     pnls: list[float] = []
+    days: list[Any] = []
     no_ticks = no_fill = open_left = covered = 0
     for sig in signals:
         res = tk.run_signal(sig, cfg, chart, ticks, "XAUUSD", watch_seconds, clock)
@@ -169,10 +206,28 @@ def evaluate(c: dict[str, Any], *, chart: CsvChartSource, ticks, charts: list[st
             no_fill += 1
         open_left += int(res.get("open_left") or 0) + int(res.get("pending_left") or 0)
         pnls.append(total)
-    stats = curve_stats(pnls, cfg.initial_capital)
+        # Group by the signal's feed-zone (source) day -- the same day key the
+        # report's Daily breakdown uses -- so max_daily_loss lines up with the codes.
+        src = getattr(sig, "signal_time_source", None) or getattr(sig, "signal_time_chart", None)
+        days.append(src.date() if src is not None else None)
+    stats = curve_stats(pnls, cfg.initial_capital, days=days)
     coverage = covered / len(signals) * 100.0 if signals else 0.0
     dd = stats["max_drawdown_pct"]
-    score = stats["tick_pnl"] + stats["win_rate_pct"] * 25 + min(stats["profit_factor"], 5) * 250 - max(0.0, dd - 25) * 2000 - stats["losses"] * 25 - abs(stats["max_loss_signal"]) * 0.1
+    # Loss-FIRST scoring: heavily penalize SEQUENTIAL losses and the worst single
+    # day (the structural TSL18 failure mode, docs/TSL18_STRUCTURE_GUARD.md), not
+    # just total P&L / DD / win-rate. The DD25/DD40 gates remain the primary rank
+    # key (see leaderboard()), but among gate-equal cells the one with fewer
+    # consecutive losers and a smaller worst day wins.
+    score = (
+        stats["tick_pnl"]
+        + stats["win_rate_pct"] * 20
+        + min(stats["profit_factor"], 5) * 200
+        - max(0.0, dd - 25) * 2000
+        - stats["max_consecutive_losing_signals"] * 400
+        - stats["max_daily_loss"] * 2.0
+        - stats["loss_count"] * 15
+        - stats["worst_single_signal_loss"] * 0.5
+    )
     return {**c, **stats, "phase": phase, "generated_signals": len(signals), "tick_covered_signals": covered, "tick_coverage_pct": round(coverage, 2), "no_tick_signals": no_ticks, "no_fill_signals": no_fill, "open_or_pending_left": open_left, "passes_dd25_gate": stats["tick_pnl"] > 0 and dd <= 25 and stats["win_rate_pct"] >= 45, "passes_dd40_gate": stats["tick_pnl"] > 0 and dd <= 40 and stats["win_rate_pct"] >= 40, "score": round(score, 2), "config_json": json.dumps(c, sort_keys=True)}
 
 
@@ -196,10 +251,20 @@ def leaderboard(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda r: (bool(r.get("passes_dd25_gate")), bool(r.get("passes_dd40_gate")), float(r.get("score") or -1e18)), reverse=True)
 
 
+def duplicate_keys(rows: list[dict[str, Any]]) -> dict[tuple, int]:
+    """Count rows sharing the same (phase, candidate_id). A candidate is sweep-
+    once per phase, so any count > 1 means the aggregate inputs double-counted
+    (e.g. globbing all_results_*/top_candidates.jsonl in addition to the raw
+    shard results) -- the 432-row vs 144-row bug."""
+    from collections import Counter
+    counts = Counter((r.get("phase"), r.get("candidate_id")) for r in rows)
+    return {k: n for k, n in counts.items() if n > 1}
+
+
 def write_board(rows: list[dict[str, Any]], out_dir: Path, phase: str, top_n: int) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     board = leaderboard(rows)
-    cols = ["rank", "candidate_id", "phase", "signal_name", "strategy_name", "score", "tick_pnl", "max_drawdown_pct", "win_rate_pct", "profit_factor", "wins", "losses", "flats", "generated_signals", "tick_covered_signals", "tick_coverage_pct", "no_tick_signals", "no_fill_signals", "max_loss_signal", "passes_dd25_gate", "passes_dd40_gate"]
+    cols = ["rank", "candidate_id", "phase", "signal_name", "strategy_name", "score", "tick_pnl", "max_drawdown_pct", "win_rate_pct", "profit_factor", "max_consecutive_losing_signals", "max_daily_loss", "loss_count", "worst_single_signal_loss", "wins", "losses", "flats", "generated_signals", "tick_covered_signals", "tick_coverage_pct", "no_tick_signals", "no_fill_signals", "max_loss_signal", "passes_dd25_gate", "passes_dd40_gate", "error"]
     with (out_dir / f"leaderboard_{phase}.csv").open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
         writer.writeheader()
@@ -244,8 +309,24 @@ def aggregate(args: argparse.Namespace) -> int:
     rows = load_jsonl(args.inputs)
     if not rows:
         raise SystemExit("No JSONL rows found")
+    # Fail LOUDLY on double-counting. Aggregate inputs must be ONLY the raw shard
+    # result files (results_<phase>_shard*.jsonl); globbing the per-shard
+    # all_results_*/top_candidates.jsonl too counted every candidate 3x (432 rows
+    # instead of 3 sessions x 6 filters x 8 strategies = 144).
+    dups = duplicate_keys(rows)
+    if dups:
+        sample = list(dups.items())[:5]
+        raise SystemExit(
+            f"Duplicate candidate rows detected: {len(dups)} (phase, candidate_id) keys "
+            f"appear more than once (e.g. {sample}). Aggregate --inputs must match ONLY "
+            f"the raw shard files (results_<phase>_shard*.jsonl), not all_results_* or "
+            f"top_candidates.jsonl.")
+    errored = sum(1 for r in rows if r.get("error"))
+    if errored == len(rows):
+        raise SystemExit(f"All {len(rows)} aggregated candidates errored; refusing to "
+                         f"publish a leaderboard of pure errors. See the JSONL 'error' field.")
     write_board(rows, Path(args.output_dir), args.phase, args.top_n)
-    print(f"[twl25] aggregated {len(rows)} rows into {args.output_dir}")
+    print(f"[twl25] aggregated {len(rows)} rows ({errored} errored) into {args.output_dir}")
     return 0
 
 
@@ -258,11 +339,35 @@ def validate_top(args: argparse.Namespace) -> int:
     rows: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="twl25_val_") as td:
         for row in top:
-            cell = json.loads(row["config_json"])
+            # Per-candidate try/except (mirrors run_shard): one bad candidate must
+            # not crash the whole Jan-Jun validation job. Preserve identity +
+            # config so the errored row is still traceable in the leaderboard.
+            try:
+                cell = json.loads(row["config_json"])
+            except Exception:
+                cell = {k: row.get(k) for k in ("signal_name", "signal_flags",
+                                                "strategy_name", "strategy_overrides",
+                                                "candidate_id")}
             cell["candidate_id"] = row.get("candidate_id", cell.get("candidate_id", sw._json_hash(cell)))
-            rows.append(evaluate(cell, chart=chart, ticks=ticks, charts=charts, phase=args.phase, start=start, end=end, tmp=Path(td), watch_seconds=args.watch_seconds, min_signals=args.min_signals, max_signals=args.max_signals))
+            try:
+                rows.append(evaluate(cell, chart=chart, ticks=ticks, charts=charts, phase=args.phase, start=start, end=end, tmp=Path(td), watch_seconds=args.watch_seconds, min_signals=args.min_signals, max_signals=args.max_signals))
+            except Exception as exc:
+                rows.append({
+                    "candidate_id": cell.get("candidate_id"),
+                    "signal_name": cell.get("signal_name"),
+                    "strategy_name": cell.get("strategy_name"),
+                    "phase": args.phase,
+                    "config_json": json.dumps(cell, sort_keys=True),
+                    "error": repr(exc), "score": -1e18, "tick_pnl": -1e18,
+                })
     write_jsonl(Path(args.output_dir) / f"results_{args.phase}_validation.jsonl", rows)
     write_board(rows, Path(args.output_dir), args.phase, args.top_n)
+    if rows and all(r.get("error") for r in rows):
+        raise SystemExit(f"All {len(rows)} validation candidates errored; see the "
+                         f"'error' column in leaderboard_{args.phase}.csv.")
+    if not any(r.get("passes_dd40_gate") for r in rows):
+        print(f"[twl25] WARNING: no validation candidate passed the DD40 loss-first gate "
+              f"({len(rows)} evaluated). TWL25 stays research.", flush=True)
     return 0
 
 

@@ -106,9 +106,13 @@ jobs:
       - name: Aggregate June candidates
         run: |
           set -euo pipefail
+          # ONLY the raw per-shard result files. Globbing **/*.jsonl also pulled in
+          # each shard's all_results_*.jsonl + top_candidates.jsonl, counting every
+          # candidate 3x (432 rows instead of 144). top_candidates.jsonl is an
+          # OUTPUT of this step, never an input.
           python tools/sweep_tick_loss_filters.py aggregate \
             --phase june \
-            --inputs 'artifacts/june/**/*.jsonl' \
+            --inputs 'artifacts/june/**/results_june_shard*.jsonl' \
             --output-dir sweep_reports/twl25_loss_sweep/june \
             --top-n "$VALIDATE_TOP_N"
           echo "===== JUNE LEADERBOARD ====="
@@ -153,13 +157,20 @@ jobs:
 
   commit_reports:
     needs: [aggregate_june, validate_jan_jun]
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'sweep:')) }}
+    # Only publish on push / manual dispatch for the feature branch. On a
+    # pull_request, github.ref is the PR MERGE ref (not a pushable branch), so a
+    # commit there would either fail or land nowhere useful -- PR runs just
+    # upload artifacts. The head_commit guard avoids re-triggering on our own
+    # "sweep:" publish commit.
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/feature/twl25-loss-sweep' && !contains(github.event.head_commit.message, 'sweep:'))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.ref }}
+          # The branch we can actually push back to. For workflow_dispatch this is
+          # the selected ref; for push it is the feature branch above.
+          ref: ${{ github.head_ref || github.ref_name }}
       - uses: actions/download-artifact@v4
         with:
           name: twl25-june-leaderboard
@@ -174,5 +185,17 @@ jobs:
           git config user.name "C - Furqon Aji Yudhistira"
           git config user.email "furqonajiy@gmail.com"
           git add sweep_reports/twl25_loss_sweep
-          git commit -m "sweep: publish TWL25 loss-filter tick results" || echo "nothing to commit"
-          git push || echo "push failed"
+          if git diff --cached --quiet; then
+            echo "No report changes to commit."
+            exit 0
+          fi
+          git commit -m "sweep: publish TWL25 loss-filter tick results"
+          # Do NOT hide a push failure -- publishing reports is the point of this job.
+          pushed=0
+          for i in 1 2 3 4; do
+            if git push; then pushed=1; break; fi
+            echo "push attempt $i failed; retrying"; sleep $((2**i))
+          done
+          if [ "$pushed" -ne 1 ]; then
+            echo "ERROR: git push failed after retries; reports not published"; exit 1
+          fi

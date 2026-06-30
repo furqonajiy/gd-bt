@@ -8,11 +8,17 @@
 #   - ADX + HTF EMA agreement + VWAP side filter reduces chop
 #   - quicker TP geometry (1.0 / 1.8 / 3.0R) and TP2 final target improves hit-rate
 #
-# This file is a deployable research candidate.  The real decision source is the
-# workflow `.github/workflows/twl25-loss-tick-sweep.yml`, which sweeps this idea
-# and its neighbours on June 2026 ticks first, then validates winners on Jan-Jun
-# available ticks.  Do not replace TSL18 live money with TWL25 until that report
-# passes the DD25/DD40 gates and you demo-forward it.
+# This file is a RESEARCH/DRAFT candidate -- NOT a deployed strategy.  The real
+# decision source is the workflow `.github/workflows/twl25-loss-tick-sweep.yml`,
+# which sweeps this idea and its neighbours on June 2026 ticks first, then
+# validates winners on Jan-Jun available ticks.  TWL25 stays research until: the
+# June sweep succeeds; Jan-Jun validation succeeds; a candidate passes the
+# DD25/DD40 loss-first gates; and a demo-forward run confirms broker behaviour.
+# Do not replace TSL18 live money with TWL25 before all four hold.
+#
+# Backtest/sweep scoring uses the R4 measured locked-exit slippage (TP1 2.0 /
+# TP2 1.0 pts, docs/BACKTEST_REALISM.md) -- a backtest-only realism knob. Live
+# order placement is UNCHANGED (the broker adds the real slippage on the fill).
 # =========================================================================
 
 # ===== 1. TELEGRAM LISTENER =====
