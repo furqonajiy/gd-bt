@@ -223,6 +223,22 @@ python tools/sweep_self_limit.py \
 - **Single writer only.** Never run two orchestrators (local + CI) on the same
   branch — concurrent pushes diverge and silently lose work (non‑fast‑forward).
 
+### Dedicated CI: the TSL18 quality‑entry overnight sweep
+
+`.github/workflows/tsl18-quality-entry-overnight-sweep.yml` runs the quality‑entry
+sweep on GitHub Actions so it no longer needs a warm Claude session. It is
+**guarded**: it runs the sweep only once `main` carries the collision policies, the
+quality‑entry research layer (`tools/sweep_tsl18_quality_entry.py` plus the
+`entry-quality-classifier` / `quality-profile` support), and refreshed V817 +
+TSL18/T818 2026 reports — otherwise it writes
+`reports/OVERNIGHT_AUTO_SWEEP_STATUS/summary.md`, uploads it as an artifact, and
+exits 0 (so it is safe to merge/start **before** the prerequisite PRs land). A
+`push` to `main` runs a **smoke‑only** self‑test; the full ~8 h June sweep (+
+optional Jan–Jun validation) is a manual `workflow_dispatch` with
+`mode=full run_jan_jun=true`. Results are uploaded as artifacts (and committed back
+only when the run is on a feature branch, never on `main`). It **never trades live
+and never promotes to live TSL18** — research artifacts only.
+
 ---
 
 ## 7. Search strategy — be smart, don't brute‑force
