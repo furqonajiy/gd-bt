@@ -100,4 +100,18 @@ of their pinned version — a safe catch-all.
   `--require-full-lifecycle-ticks`, `--fail-on-open-or-pending`,
   `--input-candidates`).
 
+- `v817-tsl18-backtests-5k-50k.yml` — runs V817 and TSL18 (`cli/run.py` aliases)
+  section 5 and 6 backtests, producing both the canonical `$50,000` report and a
+  `$5,000` variant by rewriting `--initial-capital` and suffixing the output dir
+  with `_5k`. It uploads report/log artifacts only and does not commit reports.
+  The workflow can be run manually; the first merge that adds/edits this workflow
+  also triggers it once via a path-limited `push` rule.
+
+- `tsl18-full-sweep-after-backtests.yml` — dependent full research sweep. It runs
+  after `V817 TSL18 Backtests 5K 50K` succeeds (`workflow_run`) or manually via
+  `workflow_dispatch`. It performs targeted preflight tests, then runs smoke,
+  `full_june`, and `validate_top` for `tools/sweep_tsl18_quality_entry.py`, uploading
+  `reports/TSL18_QUALITY_{smoke,full_june,validate_top}/` and final status artifacts.
+  It never trades live and never promotes a candidate.
+
 _Reference: <https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/>_
