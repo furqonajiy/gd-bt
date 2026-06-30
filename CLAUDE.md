@@ -202,8 +202,24 @@ pair is a thin package that imports it.
   `tools/regime_router.py` is a back-compat shim; `tools/regime_auto.py` is the
   one-shot advisory CLI.
 - `tests/` — `pytest` suite, heavy on live/backtest parity.
+- **Anti-wrong-side-structure guard** (`tools/generate_scalper_signals.py`
+  `--structure-*` flags, all **default OFF → feed byte-identical**): a feed layer
+  that vetoes the self-scalper's entries taken AGAINST the larger structure —
+  reject BUY when the HTF (own `--structure-htf-minutes`/`-ema-fast`/`-ema-slow`)
+  is bearish, SELL when bullish, plus optional VWAP-side / opposite-impulse-cooldown
+  (`--structure-impulse-atr` + `--structure-impulse-cooldown-bars`) / structure-score
+  (`--structure-min-score`, 0..4) vetoes. It only REMOVES signals (never invents
+  one). `--structure-diagnostics` logs the per-base-setup decision (htf_state /
+  vwap_side / impulse_state / score / reject_reason). It targets TSL18's
+  sequential wrong-side losses — **not another generic RSI/BB/SL/TP sweep**. Shadow
+  strategy `cli/candidate_TSL18_structure_guard_tick.txt` (**tag TSG18**, identical
+  TSL18 geometry, guard ON; SHADOW/RESEARCH, not a live replacement, no `run.py`
+  alias until validated). Compare base vs guarded variants with
+  `tools/sweep_structure_guard.py --window june|jan_jun` (scores max-consecutive-
+  losses, max-daily-loss, BUY-loss-in-bearish-HTF, filtered-winners-vs-losers — not
+  profit alone). Full contract + promote bar: `docs/TSL18_STRUCTURE_GUARD.md`.
 - `docs/` — `MT5_SETUP.md`, `OPERATIONS_PLAYBOOK.md`,
-  `demo_runbook_trailing_open.md`, `SWEEP_RUNBOOK.md`,
+  `demo_runbook_trailing_open.md`, `SWEEP_RUNBOOK.md`, `TSL18_STRUCTURE_GUARD.md`,
   `VICTOR_SWEEP_RUNBOOK.md`, `REGIME_ASSESSMENT.md` (the price-normalized
   regime-determination assessment + the volatility-scale-invariance verdict:
   the champion absorbs volatility, so finer regimes don't change champion
