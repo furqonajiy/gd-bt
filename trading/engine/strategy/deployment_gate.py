@@ -63,6 +63,7 @@ class DeploymentGate:
         self.daily_limit = float(getattr(c, "daily_loss_limit_pct", 0.0) or 0.0)
         self.max_open = int(getattr(c, "max_open_signals", 0) or 0)
         self.pending_expiry = int(getattr(c, "pending_expiry_minutes", 0) or 0)
+        self.max_hold = int(getattr(c, "max_hold_minutes", 0) or 0)
 
     # -- construction ---------------------------------------------------------
     @property
@@ -107,8 +108,11 @@ class DeploymentGate:
 
         if self.max_open > 0:
             t = sig.signal_time_chart
-            n_open = sum(1 for w in self._windows
-                         if w.start <= t and (w.end is None or t < w.end))
+            # signals are chronological, so a window that closed at/before t can
+            # never block t or any later signal -- drop it (keeps the scan O(open),
+            # not O(all-history)).
+            self._windows = [w for w in self._windows if w.end is None or w.end > t]
+            n_open = sum(1 for w in self._windows if w.start <= t)
             self._peak_concurrency = max(self._peak_concurrency, n_open)
             if n_open >= self.max_open:
                 self.rejected["max_open_signals"] += 1
@@ -160,25 +164,25 @@ class DeploymentGate:
 
         if self.max_open > 0:
             # A signal occupies the one slot from PLACEMENT (its arrival) until it
-            # is fully closed OR its pending orders expire -- a laddered signal
-            # rests as pending LIMITs before any leg fills, so concurrency is
-            # measured from arrival, not first fill (else a second signal slips in
-            # during the pending window and the cap is breached). End:
-            #   * still-open filled leg  -> None (open to end of data / now)
-            #   * any filled leg         -> last exit
-            #   * all NO_FILL            -> arrival + pending_expiry (orders rested
-            #                               then cancelled; the slot was held)
+            # is fully closed -- a laddered signal rests as pending LIMITs before
+            # any leg fills, so concurrency is measured from arrival, not first
+            # fill (else a second signal slips in during the pending window and the
+            # cap is breached). The end is ALWAYS finite (no None): a filled leg is
+            # force-closed by the engine at fill + max_hold at the latest, so even a
+            # signal the replay leaves OPEN (e.g. an anomalous one near a data gap)
+            # frees the slot after max_hold instead of blocking the rest of the run.
+            #   * per filled leg -> exit_time if it closed, else fill + max_hold
+            #   * all NO_FILL    -> arrival + pending_expiry (orders rested, expired)
             start = sig.signal_time_chart
-            ers = built["entry_rows"]
-            open_leg = any(er.get("fill_time") and not er.get("exit_time") for er in ers)
-            exits = [er["exit_time"] for er in ers if er.get("fill_time") and er.get("exit_time")]
-            if open_leg:
-                end = None
-            elif exits:
-                end = max(exits)
+            hold = timedelta(minutes=self.max_hold)
+            leg_ends = [er["exit_time"] if er.get("exit_time") else er["fill_time"] + hold
+                        for er in built["entry_rows"] if er.get("fill_time")]
+            if leg_ends:
+                end = max(leg_ends)
             else:
-                end = start + timedelta(minutes=self.pending_expiry) if self.pending_expiry else start
-            self._windows.append(_OpenWindow(start, end))
+                end = start + timedelta(minutes=self.pending_expiry)
+            # never let a degenerate row produce a zero/negative window
+            self._windows.append(_OpenWindow(start, max(end, start)))
 
     # -- reporting ------------------------------------------------------------
     def summary(self) -> dict:
