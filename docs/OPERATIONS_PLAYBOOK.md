@@ -110,6 +110,20 @@ the planned stop distance anchored on the actual fill. Any other rejection
 keeps the all-or-nothing failure path — the executor never market-fills below
 the trigger, because that would open a trade the model never had.
 
+**Manual-close re-arm never chases (no-chase invariant).** A manual close is
+operator exposure management, **not** terminal — the trailing-open leg may
+re-arm. But re-arm and its STOP-reject market fallback compare against the
+**original planned ladder entry** (`Entry.original_entry_price`, captured at
+construction and never patched by the fill), never the mutated `entry.entry_price`:
+a BUY re-entry can only fill **at or below** its original entry, a SELL **at or
+above**. So a BUY manually closed at 4750 whose original entry was 4700 will
+**not** be re-opened at 4750 — it waits for price to return to 4700 or better
+(the candidate-price already arms only after the pullback; the market fallback is
+skipped with `would be worse than original entry` if price jumped past it). A
+manual close (`CLIENT`/`MOBILE`/`WEB`) stays re-armable; an SL/TP/engine close —
+or an original-SL/final-target touch after the signal time — is terminal and
+cannot re-arm (the terminal-signal protection landed alongside this change).
+
 Protective trailing stop is also owned by the executor, not MT5's terminal
 native trailing feature. Each manage/Auto cycle recomputes the engine stop and
 moves MT5 SL with `TRADE_ACTION_SLTP` when needed. Leave MT5's right-click

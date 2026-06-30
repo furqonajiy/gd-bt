@@ -59,6 +59,12 @@ class Entry:
     initial_sl: float
     lot: float
     status: str = "PENDING"
+    # The ORIGINAL planned ladder entry, captured at construction and NEVER
+    # mutated. `entry_price` is patched to the actual fill price when a leg fills
+    # (core/trailing_positions.py); live trailing-open RE-ARM must compare the
+    # re-entry against this planned level, not the mutated fill, so it never
+    # chases a manually-closed BUY above (or SELL below) its original entry.
+    original_entry_price: Optional[float] = None
     fill_time: Optional[datetime] = None
     exit_time: Optional[datetime] = None
     exit_price: Optional[float] = None
@@ -76,6 +82,11 @@ class Entry:
     target_price: Optional[float] = None
     bep_after_move_armed: bool = False
     runner_engaged: bool = False
+
+    def __post_init__(self) -> None:
+        # Capture the planned entry once, before any fill patches entry_price.
+        if self.original_entry_price is None:
+            self.original_entry_price = self.entry_price
 
 
 @dataclass
