@@ -11,7 +11,7 @@ from __future__ import annotations
 import datetime as dt
 
 from tools.reconcile_live_vs_backtest import (
-    DISCREPANCY, SignalRow, _signed_pnl, classify,
+    BtLeg, DISCREPANCY, LiveFill, SignalRow, _signed_pnl, build_rows, classify,
 )
 
 
@@ -88,3 +88,22 @@ def test_description_carries_counterfactual_dollars():
     # the Description must quote both live and model dollars (the operator ask)
     _, desc = classify(_row(lv_fills=12, bt_pnl=102.0, lv_pnl=28.0))
     assert "$" in desc and "model" in desc.lower()
+
+
+# --- backtest data-source (TICK) propagation --------------------------------
+
+def _btleg(sig: int, leg: int, source: str, side: str = "SELL") -> BtLeg:
+    return BtLeg(sig, leg, side, _dtm("06:00"), 4000.0, "SL", _dtm("06:30"), 3990.0, source)
+
+
+def _live(sig: int, leg: int, side: str = "SELL") -> LiveFill:
+    return LiveFill(sig, leg, side, _dtm("06:00"), 4000.0, _dtm("06:30"), 3990.0, 10.0)
+
+
+def test_bt_source_propagates_to_signal_row():
+    # a signal with all-TICK legs reports bt_src == "TICK"; a mixed signal -> "mixed"
+    bt = [_btleg(1, n, "TICK") for n in range(1, 4)] + [_btleg(2, 1, "TICK"), _btleg(2, 2, "M1")]
+    live = [_live(1, n) for n in range(1, 4)] + [_live(2, 1), _live(2, 2)]
+    rows = {r.sig: r for r in build_rows(live, bt, 1.0, None)}
+    assert rows[1].bt_src == "TICK"
+    assert rows[2].bt_src == "mixed"

@@ -225,7 +225,11 @@ pair is a thin package that imports it.
   backtest $ at the LIVE lot from prices** (`--lot` → `--usd-per-point`), so the
   compare is apples-to-apples whether the workbook was risk-sized or fixed-lot
   (generate the workbook with `--sizing-mode fixed --lot <live lot>` to match
-  live exactly). Where `reconcile_report_html.py` gives the aggregate/exit-type
+  live exactly). The backtest must be a **TICK** run (`backtest_hybrid.py
+  --ticks …` covering the live window) — the tool surfaces each signal's
+  backtest **Data Source** in a **BT src** column (non-TICK flagged red), prints
+  the TICK/M1 split, and **`--require-tick`** fails the run if any matched signal
+  fell back to M1. Where `reconcile_report_html.py` gives the aggregate/exit-type
   bottom line, this gives the per-signal "what differed and why" the operator
   reads.
 
