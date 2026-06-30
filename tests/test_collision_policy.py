@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from trading.engine import (
-    CollisionPolicy, StrategyConfig, can_rearm, status_is_terminal,
+    CollisionDecision, CollisionPolicy, StrategyConfig, can_rearm, status_is_terminal,
 )
 from trading.engine.strategy.collision_policy import (
     OPPOSITE_POLICIES, SAME_SIDE_POLICIES,
@@ -343,6 +343,105 @@ def test_register_marks_a_stopped_out_signal_terminal():
     _register(p, "BUY1", "BUY", "2026-06-01 10:00", entries=[4700.0], sl=4690.0,
               exit="2026-06-01 10:30", status="SL", pnl=-1000.0)
     assert p._active[0].terminal is True
+
+
+# --- old-side P&L accounting (regression for the review findings) -----------
+
+def _register_legs(policy, key, side, t, legs):
+    """Register an active signal from explicit leg dicts (each: entry_price,
+    effective_SL, lot, fill_time, exit_time, status, trading_pnl)."""
+    dt = datetime.fromisoformat(t)
+    entries = [leg["entry_price"] for leg in legs]
+    sig = types.SimpleNamespace(
+        signal_key=key, side=side, signal_time_chart=dt, signal_time_source=dt,
+        range_high=max(entries), range_low=min(entries), sl=legs[0]["effective_SL"])
+    rows = [{**leg, "exit_price": None} for leg in legs]
+    policy.register(sig, {"entry_rows": rows}, policy.decide(sig, rows))
+    return sig
+
+
+def test_repeated_reduce_does_not_double_subtract_natural_pnl():
+    # A still-open old leg reduced twice must recompute `natural` off its
+    # REMAINING P&L, not the full original (the leg["trading_pnl"] re-scale fix).
+    p = CollisionPolicy.maybe(_cfg(opposite_signal_policy="reduce_then_hedge",
+                                   hedge_lot_fraction=0.5))
+    _register_legs(p, "SELL1", "SELL", "2026-06-01 10:00", [
+        {"entry_price": 4800.0, "effective_SL": 4810.0, "lot": 0.10,
+         "fill_time": datetime.fromisoformat("2026-06-01 10:00"),
+         "exit_time": None, "entry_status": "OPEN", "trading_pnl": 300.0}])
+    b1 = _sig("BUY1", "BUY", "2026-06-01 10:05", rh=4790.0, rl=4790.0, sl=4780.0)
+    p.decide(b1, _rows(entries=[4790.0], sl=4780.0), price_at=lambda t: 4790.0)
+    b2 = _sig("BUY2", "BUY", "2026-06-01 10:10", rh=4780.0, rl=4780.0, sl=4770.0)
+    p.decide(b2, _rows(entries=[4780.0], sl=4770.0), price_at=lambda t: 4780.0)
+    # delta1 = 50 - 150 = -100 ; delta2 (off the remaining 150) = 50 - 75 = -25
+    assert abs(p.summary()["collision_policy_pnl"] - (-125.0)) < 1e-6
+
+
+def test_full_close_reverses_phantom_pnl_of_a_leg_that_fills_after_t():
+    # close_then_flip cancels the old side's still-resting orders; a leg that
+    # only fills AFTER the flip must have its natural P&L reversed, not kept.
+    p = CollisionPolicy.maybe(_cfg(opposite_signal_policy="close_then_flip"))
+    _register_legs(p, "SELL1", "SELL", "2026-06-01 10:00", [
+        {"entry_price": 4800.0, "effective_SL": 4810.0, "lot": 0.05,
+         "fill_time": datetime.fromisoformat("2026-06-01 10:00"),
+         "exit_time": None, "entry_status": "OPEN", "trading_pnl": 300.0},
+        {"entry_price": 4805.0, "effective_SL": 4815.0, "lot": 0.05,
+         "fill_time": datetime.fromisoformat("2026-06-01 10:30"),    # fills AFTER t
+         "exit_time": datetime.fromisoformat("2026-06-01 11:00"),
+         "entry_status": "TP1", "trading_pnl": 200.0}])
+    buy = _sig("BUY1", "BUY", "2026-06-01 10:10", rh=4790.0, rl=4790.0, sl=4780.0)
+    dec = p.decide(buy, _rows(entries=[4790.0], sl=4780.0), price_at=lambda t: 4790.0)
+    # leg1 open: close_now 50 - natural 300 = -250 ; leg2 (fills after t): -200
+    assert abs(dec.old_side_pnl_delta - (-450.0)) < 1e-6
+
+
+def test_same_side_reject_does_not_apply_a_staged_opposite_flip():
+    # A book holding BOTH directions: a new BUY is opposite to an active SELL
+    # (close_then_flip) AND same-side to an active BUY (reject_overlap). The
+    # same-side reject must win WITHOUT the opposite flip leaking through.
+    p = CollisionPolicy.maybe(_cfg(opposite_signal_policy="close_then_flip",
+                                   same_side_overlap_policy="reject_overlap"))
+    # Seed BOTH directions directly into the active set (register, no decide), so
+    # the policy hasn't already flipped one side when the new BUY arrives.
+    def _seed(key, side, t, entries, sl):
+        dt = datetime.fromisoformat(t)
+        sig = _sig(key, side, t, rh=max(entries), rl=min(entries), sl=sl)
+        p.register(sig, {"entry_rows": _rows(entries=entries, sl=sl, fill=t)},
+                   CollisionDecision())
+    _seed("SELL1", "SELL", "2026-06-01 10:00", [4800.0], 4810.0)
+    _seed("BUY1", "BUY", "2026-06-01 10:02", [4700.0], 4694.0)
+    new = _sig("BUY2", "BUY", "2026-06-01 10:05", rh=4699.0, rl=4699.0, sl=4693.0)
+    dec = p.decide(new, _rows(entries=[4699.0], sl=4693.0), price_at=lambda t: 4799.0)
+    assert dec.accept is False
+    assert dec.action == "reject_overlap"
+    s = p.summary()
+    assert s["opposite_collisions_flipped"] == 0          # the flip did NOT happen
+    assert s["opposite_collisions_total"] == 1            # but the collision was seen
+    assert s["same_side_clusters_rejected"] == 1
+    # the old SELL is untouched: still active, not retired, not terminal.
+    old_sell = next(a for a in p._active if a.signal_key == "SELL1")
+    assert old_sell.end > new.signal_time_chart
+    assert old_sell.terminal is False
+
+
+def test_run_backtest_collision_pnl_reconciles_trading_plus_bonus(tmp_path):
+    # On a run that books an old-side delta, realized_pnl must still equal
+    # trading_pnl + bonus (the delta is folded into trading_pnl, not lost).
+    from trading.engine import run_backtest, parse_one_signal, CsvChartSource
+    rows = [_bar("2026.06.02", f"{10 + (i // 60):02d}:{i % 60:02d}:00",
+                 100 + i * 0.1, 100 + i * 0.1 + 0.2, 100 + i * 0.1 - 0.2, 100 + i * 0.1)
+            for i in range(60)]
+    p = tmp_path / "rise.csv"
+    p.write_text("\n".join([_HEADER, *rows]) + "\n", encoding="utf-8")
+    chart = CsvChartSource([p])
+    buy = parse_one_signal("1. BUY XAUUSD 100 - 100 SL 90 TP1 130 TP2 140 TP3 150 10:00 AM",
+                           source_date="2026-06-02", source_offset=3)
+    sell = parse_one_signal("2. SELL XAUUSD 105 - 105 SL 115 TP1 95 TP2 85 TP3 75 10:20 AM",
+                            source_date="2026-06-02", source_offset=3)
+    res = run_backtest([buy, sell], chart,
+                       StrategyConfig(opposite_signal_policy="close_then_flip", **_GEO))
+    assert res["collision_policy"]["collision_policy_pnl"] != 0.0     # a delta was booked
+    assert abs(res["realized_pnl"] - (res["trading_pnl"] + res["bonus"])) < 1e-6
 
 
 # --- run_backtest integration (parity + only-removes) -----------------------

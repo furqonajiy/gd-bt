@@ -302,12 +302,14 @@ class CollisionPolicy:
     # -- the one-shot decision ------------------------------------------------
     def decide(self, sig, entry_rows: list[dict], *, price_at=None) -> CollisionDecision:
         """Decide what to do with a NEW (already-built) signal given the active
-        set. Reads the currently-active signals; on an accepted old-side action
-        (flip/bank/reduce) it MUTATES the active set + accumulates the banked P&L.
+        set. The FINAL accept decision is resolved BEFORE any counter is bumped or
+        any old-side action is applied, so a signal rejected by the same-side
+        policy never leaves a half-applied opposite flip/bank/reduce behind.
         ``entry_rows`` are the new signal's built per-entry rows (planned levels +
         lots). ``price_at`` is an optional ``callable(dt) -> price`` used to mark
         the old side for profit / banked-P&L; None disables the P&L model (the
-        decision is still made). Call ``register`` afterwards on an accept."""
+        decision is still made). On an accept that flips/banks/reduces, the active
+        set is mutated + the banked P&L accumulated. Call ``register`` afterwards."""
         t = sig.signal_time_chart
         self._prune(t)
         new_risk = self.signal_risk(entry_rows, self.contract_size)
@@ -319,39 +321,34 @@ class CollisionPolicy:
 
         dec = CollisionDecision()
 
-        # --- opposite-side collision -----------------------------------------
+        # --- STAGE the opposite-side outcome (no counters/mutation yet) -------
+        opp_active = bool(opp) and self.opposite_policy != "allow_hedge"
         old_side_targets: list[tuple[_ActiveSignal, float]] = []  # (signal, close_fraction)
-        if opp and self.opposite_policy != "allow_hedge":
+        opp_exposure = 0.0
+        if opp_active:
             opp_exposure = sum(a.open_lots_at(t) for a in opp)
             dec.collision_type = "opposite"
             dec.collision_policy = self.opposite_policy
             dec.opposite_exposure_before = opp_exposure
             dec.opposite_exposure_after = opp_exposure
-            self.counters["opposite_collisions_total"] += 1
-            self.counters["max_opposite_exposure"] = max(
-                self.counters["max_opposite_exposure"], opp_exposure)
-
             if self.opposite_policy == "reject_opposite":
+                # an opposite reject is terminal: finalize immediately.
+                self.counters["opposite_collisions_total"] += 1
                 self.counters["opposite_collisions_rejected"] += 1
+                self._note_opposite_exposure(opp_exposure)
                 dec.accept = False
                 dec.action = "reject_opposite"
                 dec.reason = "collision_reject_opposite"
                 return dec
-
             if self.opposite_policy == "close_then_flip":
                 dec.action = "close_then_flip"
                 old_side_targets = [(a, 1.0) for a in opp]
                 dec.opposite_exposure_after = 0.0
-                self.counters["opposite_collisions_flipped"] += 1
-
             elif self.opposite_policy == "reduce_then_hedge":
                 dec.action = "reduce_then_hedge"
-                close_frac = max(0.0, 1.0 - self.hedge_fraction)
-                old_side_targets = [(a, close_frac) for a in opp]
+                old_side_targets = [(a, max(0.0, 1.0 - self.hedge_fraction)) for a in opp]
                 dec.opposite_exposure_after = opp_exposure * self.hedge_fraction
                 dec.lot_scale = self.hedge_fraction      # the new hedge is downsized
-                self.counters["opposite_collisions_allowed"] += 1
-
             elif self.opposite_policy == "profit_bank_rearm":
                 banked = [a for a in opp
                           if a.risk > 0
@@ -361,14 +358,16 @@ class CollisionPolicy:
                     old_side_targets = [(a, 1.0) for a in banked]
                     dec.opposite_exposure_after = opp_exposure - sum(
                         a.open_lots_at(t) for a in banked)
-                    self.counters["opposite_collisions_profit_bank_rearmed"] += 1
                 else:
-                    # not profitable enough -> hedge (never bank a loss)
-                    dec.action = "allow"
-                    self.counters["opposite_collisions_allowed"] += 1
+                    dec.action = "allow"             # not profitable -> hedge
 
-        # --- same-side overlap -----------------------------------------------
-        if dec.accept and same and self.same_side_policy != "allow_all":
+        # --- STAGE the same-side outcome (no counters/mutation yet) ----------
+        same_active = bool(same) and self.same_side_policy != "allow_all"
+        same_reject: tuple[str, str] | None = None   # (action, reason)
+        same_accept_action: str | None = None        # scale_in_allowed | scale_in_downsized
+        same_downscale = 1.0
+        cluster_risk_before = 0.0
+        if same_active:
             if not dec.collision_type:
                 dec.collision_type = "same_side"
                 dec.collision_policy = self.same_side_policy
@@ -378,60 +377,77 @@ class CollisionPolicy:
             dec.cluster_id = anchor.cluster_id
             dec.cluster_risk_before = cluster_risk_before
             dec.cluster_risk_after = cluster_risk_before     # default (reject)
-            self.counters["same_side_clusters_total"] += 1
 
             if self.same_side_policy == "reject_overlap":
-                self._reject_same(dec, "reject_overlap", "collision_reject_overlap")
-                return dec
-
-            if self.same_side_policy == "scale_in_better_entry_only":
+                same_reject = ("reject_overlap", "collision_reject_overlap")
+            elif self.same_side_policy == "scale_in_better_entry_only":
                 new_entry = self._best_entry(sig.side, entry_rows)
                 best_existing = self._cluster_best_entry(sig.side, same)
-                better = self._is_better_entry(sig.side, new_entry, best_existing)
-                if not better:
-                    self._reject_same(dec, "scale_in_rejected",
-                                      "collision_scale_in_entry_not_better")
-                    return dec
-                if cap > 0 and cluster_risk_before + new_risk > cap:
-                    self._reject_same(dec, "scale_in_rejected",
-                                      "collision_scale_in_risk_cap")
-                    return dec
-                dec.action = "scale_in_allowed"
-                dec.cluster_risk_after = cluster_risk_before + new_risk
-                self.counters["same_side_clusters_accepted"] += 1
-
+                if not self._is_better_entry(sig.side, new_entry, best_existing):
+                    same_reject = ("scale_in_rejected", "collision_scale_in_entry_not_better")
+                elif cap > 0 and cluster_risk_before + new_risk > cap:
+                    same_reject = ("scale_in_rejected", "collision_scale_in_risk_cap")
+                else:
+                    same_accept_action = "scale_in_allowed"
+                    dec.cluster_risk_after = cluster_risk_before + new_risk
             elif self.same_side_policy == "scale_in_fixed_risk":
                 allowed = max(0.0, cap - cluster_risk_before)
                 if new_risk <= allowed or new_risk <= 0:
-                    dec.action = "scale_in_allowed"
+                    same_accept_action = "scale_in_allowed"
                     dec.cluster_risk_after = cluster_risk_before + new_risk
-                    self.counters["same_side_clusters_accepted"] += 1
                 else:
                     scale = allowed / new_risk
                     if not self._downsize_keeps_min_lot(entry_rows, scale):
-                        self._reject_same(dec, "scale_in_rejected",
-                                          "collision_scale_in_below_min_lot")
-                        return dec
-                    dec.lot_scale *= scale
-                    dec.action = "scale_in_downsized"
-                    dec.cluster_risk_after = cluster_risk_before + new_risk * scale
-                    self.counters["same_side_clusters_downsized"] += 1
+                        same_reject = ("scale_in_rejected", "collision_scale_in_below_min_lot")
+                    else:
+                        same_accept_action = "scale_in_downsized"
+                        same_downscale = scale
+                        dec.cluster_risk_after = cluster_risk_before + new_risk * scale
 
+        # --- same-side reject: drop the new signal, leave the old side alone -
+        if same_reject is not None:
+            # an opposite collision (if any) was SEEN but its flip/bank/reduce is
+            # NOT applied -- the new signal never gets placed, so the old side is
+            # untouched and only a "collision seen" total is recorded.
+            if opp_active:
+                self.counters["opposite_collisions_total"] += 1
+                self._note_opposite_exposure(opp_exposure)
+                dec.opposite_exposure_after = opp_exposure
+            self.counters["same_side_clusters_total"] += 1
+            self.counters["same_side_clusters_rejected"] += 1
+            dec.accept = False
+            dec.action, dec.reason = same_reject
+            dec.cluster_risk_after = cluster_risk_before
+            return dec
+
+        # --- ACCEPTED: commit counters + apply side effects ------------------
+        if opp_active:
+            self.counters["opposite_collisions_total"] += 1
+            self._note_opposite_exposure(opp_exposure)
+            if dec.action == "close_then_flip":
+                self.counters["opposite_collisions_flipped"] += 1
+            elif dec.action == "profit_bank_rearm":
+                self.counters["opposite_collisions_profit_bank_rearmed"] += 1
+            else:                                    # reduce_then_hedge / allow (hedge)
+                self.counters["opposite_collisions_allowed"] += 1
+        if same_accept_action is not None:
+            self.counters["same_side_clusters_total"] += 1
+            if same_accept_action == "scale_in_downsized":
+                dec.lot_scale *= same_downscale
+                self.counters["same_side_clusters_downsized"] += 1
+            else:
+                self.counters["same_side_clusters_accepted"] += 1
+            if not opp_active:                       # report the opposite action when both
+                dec.action = same_accept_action
             self.counters["max_same_side_cluster_risk"] = max(
                 self.counters["max_same_side_cluster_risk"], dec.cluster_risk_after)
-
-        # --- apply accepted old-side actions (close/bank/reduce) -------------
         if old_side_targets:
             self._apply_old_side(dec, t, old_side_targets, price_at)
         return dec
 
-    # -- same-side reject bookkeeping -----------------------------------------
-    def _reject_same(self, dec: CollisionDecision, action: str, reason: str) -> None:
-        dec.accept = False
-        dec.action = action
-        dec.reason = reason
-        dec.cluster_risk_after = dec.cluster_risk_before
-        self.counters["same_side_clusters_rejected"] += 1
+    def _note_opposite_exposure(self, exposure: float) -> None:
+        self.counters["max_opposite_exposure"] = max(
+            self.counters["max_opposite_exposure"], exposure)
 
     @staticmethod
     def _cluster_best_entry(side: str, members: list[_ActiveSignal]) -> float | None:
@@ -461,9 +477,23 @@ class CollisionPolicy:
 
     def _apply_old_side(self, dec: CollisionDecision, t: datetime,
                         targets: list[tuple[_ActiveSignal, float]], price_at) -> None:
-        """Close (or partially close) the old side at ``t``: book the banked vs
-        natural P&L delta of the legs still open at t, and shrink/retire the old
-        active windows so they no longer collide."""
+        """Close (or partially close, ``frac``) the old side at ``t`` and book the
+        banked vs natural P&L delta. The OLD signal's FULL natural lifecycle P&L is
+        already in the equity curve, so the delta corrects it for the intervention:
+
+          * a leg OPEN at t -> the closed fraction is realized at the collision
+            price instead of its natural exit: delta += close_now - frac*natural.
+          * a leg that fills only AFTER t -> the closed fraction's resting order is
+            cancelled by the flip/close, so it never realizes: delta -= frac*natural
+            (reverse the phantom natural P&L); no price needed.
+          * a leg already closed before t (or never filled) -> realized/zero,
+            untouched.
+
+        Each touched leg's remaining ``lot`` AND ``trading_pnl`` are scaled to the
+        kept ``(1-frac)``, so a SECOND reduction of the same still-open leg
+        recomputes ``natural`` off the remaining P&L (not the full original) and
+        does not double-subtract. ``active.risk`` is scaled likewise; a full close
+        (``frac >= 1``) retires the window."""
         direction_for = {"BUY": 1.0, "SELL": -1.0}
         price = None if price_at is None else price_at(t)
         total_delta = 0.0
@@ -473,15 +503,24 @@ class CollisionPolicy:
             d = direction_for.get(active.side, 0.0)
             for leg in active.legs:
                 ft, xt = leg.get("fill_time"), leg.get("exit_time")
-                if ft is None or ft > t or (xt is not None and xt <= t):
-                    continue   # not open at t -> nothing to close early
-                lot = float(leg.get("lot") or 0.0) * frac
-                if price is not None:
-                    close_now = lot * self.contract_size * (price - float(leg["entry_price"])) * d
-                    natural = float(leg.get("trading_pnl") or 0.0) * frac
-                    total_delta += close_now - natural
-                # shrink the leg's remaining open lot (reduce) or retire it (close)
-                leg["lot"] = float(leg.get("lot") or 0.0) * (1.0 - frac)
+                if ft is None or (xt is not None and xt <= t):
+                    continue   # never filled, or already closed before t -> untouched
+                lot_full = float(leg.get("lot") or 0.0)
+                nat_full = float(leg.get("trading_pnl") or 0.0)
+                natural_part = nat_full * frac
+                if ft <= t:
+                    # open at t: realize the closed fraction at the collision price
+                    if price is not None:
+                        close_now = (lot_full * frac) * self.contract_size \
+                            * (price - float(leg["entry_price"])) * d
+                        total_delta += close_now - natural_part
+                else:
+                    # fills only AFTER t: the resting order is cancelled by the
+                    # close/reduce, so reverse the closed fraction's phantom P&L
+                    total_delta += -natural_part
+                # keep only the (1-frac) remainder of lot AND its natural P&L
+                leg["lot"] = lot_full * (1.0 - frac)
+                leg["trading_pnl"] = nat_full * (1.0 - frac)
             active.risk *= (1.0 - frac)
             if frac >= 1.0:
                 active.end = t                       # fully closed now

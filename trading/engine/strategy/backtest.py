@@ -94,10 +94,16 @@ def _apply_collision_to_built(built: dict, dec) -> float:
     # The colliding signal's realized P&L now carries the old-side banked delta
     # (so the equity curve + net_profit reflect the intervention, and
     # equity_after - equity_before stays exactly == the row's realized total).
+    # The delta is the old side's TRADING P&L (no bonus), so fold it into both
+    # pnl and trading_pnl -- that keeps the Summary's Trading P&L + Bonus
+    # reconciled to Net (realized = trading + bonus) on a collision run. The
+    # per-entry leg rows stay the new signal's own (the delta is the OTHER
+    # signal's), and `collision_pnl` reports it explicitly.
     realized = row.get("pnl")
     if delta != 0.0:
         row["pnl"] = (realized or 0.0) + delta
         realized = row["pnl"]
+        row["trading_pnl"] = (row.get("trading_pnl") or 0.0) + delta
     equity_after = eq_before + (realized or 0.0)
     row["equity_after"] = equity_after
     fields = dec.as_row_fields()
