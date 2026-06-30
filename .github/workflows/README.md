@@ -61,5 +61,20 @@ of their pinned version — a safe catch-all.
   (slippage-aware 2.0/1.0). Artifact-only; per-regime agg
   (`agg_entry_feature.sh R{3,2,1} selfrbr`) keeps variants that beat `base` on edge
   AND OOS at DD≤40%. Results: `self-rbr-R{3,2,1}-results`.
+- `twl25-loss-tick-sweep.yml` — the **TWL25 loss-filter** tick sweep
+  (`tools/sweep_tick_loss_filters.py`). **Research-only — NOT a live replacement.**
+  Loss-FIRST sweep of the TSL18/T818 self-scalper family: harder feed filters
+  (RSI/BB/ADX/HTF/VWAP/SR/SD) × defensive TSL18 geometry, scored on **real ticks**.
+  Two stages: **June 2026 first** (the full `3 sessions × 6 filters × 8 strategies
+  = 144`-cell grid; aggregation refuses to publish unless all 144 rows are
+  present), then **Jan-Jun validation** of the June winners on every available 2026
+  tick file. Scoring is loss-first (penalizes consecutive losers + worst day) and
+  STRICT on integrity: partial-tick-coverage signals are not scored as clean tick
+  P&L, and any unresolved exposure (`open_or_pending_left`) fails the DD25/DD40
+  gates. Publishes `sweep_reports/twl25_loss_sweep/**` **only on a push to a
+  `feature/*` branch** — manual dispatch / PR / `main` runs upload artifacts only,
+  never commit to `main`. TWL25 stays research until June + Jan-Jun artifacts pass
+  the DD25/DD40 loss-first gates AND a demo-forward run confirms broker behaviour;
+  it does not replace TSL18/T818. See `../../docs/TWL25_LOSS_SWEEP.md`.
 
 _Reference: <https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/>_

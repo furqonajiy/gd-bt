@@ -333,11 +333,26 @@ def run_signal(signal, cfg: StrategyConfig, m1: CsvChartSource, ticks: pd.DataFr
 
     # tick coverage guard -- the export can start after the signal window.
     win = ticks[(ticks["time"] >= pd.Timestamp(sim_start)) & (ticks["time"] <= pd.Timestamp(sim_end))]
+    # Full-lifecycle coverage: the loaded tick archive must SPAN the whole signal
+    # window [sim_start, sim_end]. A signal that begins before the archive's first
+    # tick or whose lifecycle runs past its last tick is only PARTIALLY covered --
+    # the tick replay then models an incomplete lifecycle and must not be scored as
+    # a clean tick result. Reported additively so non-TWL25 callers are unaffected.
+    tick_first = ticks["time"].iloc[0] if len(ticks) else None
+    tick_last = ticks["time"].iloc[-1] if len(ticks) else None
+    covers_full = bool(
+        tick_first is not None and tick_last is not None
+        and tick_first <= pd.Timestamp(sim_start)
+        and tick_last >= pd.Timestamp(sim_end)
+    )
+    coverage = {
+        "sim_start": sim_start, "sim_end": sim_end,
+        "tick_first": tick_first, "tick_last": tick_last,
+        "covers_full_lifecycle": covers_full,
+    }
     if win.empty:
-        first = ticks["time"].iloc[0] if len(ticks) else None
-        last = ticks["time"].iloc[-1] if len(ticks) else None
-        return {"key": signal.signal_key, "no_ticks": True, "first": first, "last": last,
-                "window": (sim_start, sim_end)}
+        return {"key": signal.signal_key, "no_ticks": True, "first": tick_first, "last": tick_last,
+                "window": (sim_start, sim_end), **coverage}
 
     T, B, A = _slice_ms(ticks, sim_start - timedelta(minutes=5), sim_end)
     # Decide at the signal's activation, not sim_end: decide() gates on `now`,
@@ -389,7 +404,7 @@ def run_signal(signal, cfg: StrategyConfig, m1: CsvChartSource, ticks: pd.DataFr
     return {"key": signal.signal_key, "no_ticks": False, "placed": placed, "deals": deals,
             "open_left": len(mock._positions), "pending_left": len(mock._orders),
             "trading": trading, "bonus": bonus, "total": trading + bonus,
-            "m1_status": m1_status, "m1_pnl": m1_pnl}
+            "m1_status": m1_status, "m1_pnl": m1_pnl, **coverage}
 
 
 def print_result(r: dict) -> None:

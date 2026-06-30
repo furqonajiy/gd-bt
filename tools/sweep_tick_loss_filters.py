@@ -64,6 +64,11 @@ STRATEGIES: dict[str, dict[str, Any]] = {
     "e4_scaleout_low_dd": {"entry_count": 4, "sl_multiplier": 2.3, "max_hold_minutes": 90, "final_target": "TP2", "scale_out_at_tp1": True, "bep_after_tp1": True, "bep_buffer": 0.5, "tp1_lock_delay_minutes": 0, "tp2_lock_delay_minutes": 2, "trailing_close_distance": 0.75, "trailing_close_after_stage": 1},
 }
 
+# The full grid is one cell per (session, filter, strategy). A complete June
+# aggregation must contain exactly this many candidate rows; the workflow passes
+# it to `aggregate --expected-rows` so a missing shard can't publish a partial board.
+EXPECTED_FULL_GRID = len(SESSIONS) * len(FILTERS) * len(STRATEGIES)  # 3 x 6 x 8 = 144
+
 
 def expand(patterns: Iterable[str]) -> list[str]:
     out: list[str] = []
@@ -76,8 +81,11 @@ def expand(patterns: Iterable[str]) -> list[str]:
 
 
 def phase_defaults(phase: str) -> tuple[list[str], list[str], str, str | None]:
+    # end is EXCLUSIVE (gen_args passes it to --end, and the generator excludes
+    # rows at/after it). June must stop at 2026-07-01 so a June run cannot leak
+    # July/future signals; Jan-Jun spans the whole half-year to the same bound.
     if phase == "june":
-        return ["data/XAUUSD_M1_202605_ELEV8.csv", "data/XAUUSD_M1_202606_ELEV8.csv"], ["data/ticks/XAUUSD_TICK_202606*_ELEV8.csv"], "2026-06-01", None
+        return ["data/XAUUSD_M1_202605_ELEV8.csv", "data/XAUUSD_M1_202606_ELEV8.csv"], ["data/ticks/XAUUSD_TICK_202606*_ELEV8.csv"], "2026-06-01", "2026-07-01"
     if phase == "jan_jun":
         return ["data/XAUUSD_M1_2026*_ELEV8.csv"], ["data/ticks/XAUUSD_TICK_20260*_ELEV8.csv"], "2026-01-01", "2026-07-01"
     raise SystemExit(f"unknown phase: {phase}")
@@ -180,6 +188,20 @@ def curve_stats(pnls: list[float], initial_capital: float,
     }
 
 
+def passes_gates(tick_pnl: float, dd: float, win_rate: float,
+                 open_left: int) -> tuple[bool, bool]:
+    """(passes_dd25, passes_dd40). STRICT: a candidate with ANY unresolved
+    position/order (``open_left`` > 0) is NOT deployment-ready -- it leaves live
+    exposure the model never closed -- so it fails BOTH gates regardless of how
+    good its P&L / DD / win-rate look. Partial-coverage signals are already
+    excluded from the scored curve upstream, so ``tick_pnl`` here is full-coverage
+    only."""
+    clean = open_left == 0
+    dd25 = clean and tick_pnl > 0 and dd <= 25 and win_rate >= 45
+    dd40 = clean and tick_pnl > 0 and dd <= 40 and win_rate >= 40
+    return dd25, dd40
+
+
 def evaluate(c: dict[str, Any], *, chart: CsvChartSource, ticks, charts: list[str], phase: str, start: str, end: str | None, tmp: Path, watch_seconds: int, min_signals: int, max_signals: int) -> dict[str, Any]:
     feed = tmp / f"{c['candidate_id']}.txt"
     args = gen_args(c["signal_flags"], charts, feed, start, end)
@@ -194,11 +216,20 @@ def evaluate(c: dict[str, Any], *, chart: CsvChartSource, ticks, charts: list[st
     clock = tk._install_sim_clock()
     pnls: list[float] = []
     days: list[Any] = []
-    no_ticks = no_fill = open_left = covered = 0
+    no_ticks = no_fill = open_left = covered = partial = 0
     for sig in signals:
         res = tk.run_signal(sig, cfg, chart, ticks, "XAUUSD", watch_seconds, clock)
         if res.get("no_ticks"):
             no_ticks += 1
+            continue
+        # Partial tick coverage: the archive does NOT span the signal's full
+        # lifecycle, so the replay modelled an incomplete window. Count it, surface
+        # any unresolved exposure it left, but do NOT fold its P&L into the scored
+        # curve -- a partially-covered signal must not masquerade as a clean tick
+        # result (the sweep-integrity rule).
+        if not res.get("covers_full_lifecycle"):
+            partial += 1
+            open_left += int(res.get("open_left") or 0) + int(res.get("pending_left") or 0)
             continue
         covered += 1
         total = float(res.get("total") or 0.0)
@@ -211,13 +242,17 @@ def evaluate(c: dict[str, Any], *, chart: CsvChartSource, ticks, charts: list[st
         src = getattr(sig, "signal_time_source", None) or getattr(sig, "signal_time_chart", None)
         days.append(src.date() if src is not None else None)
     stats = curve_stats(pnls, cfg.initial_capital, days=days)
+    # Coverage % = FULLY-covered signals only (partial/no-tick excluded), so the
+    # column honestly reflects how much of the feed was scored on real ticks.
     coverage = covered / len(signals) * 100.0 if signals else 0.0
     dd = stats["max_drawdown_pct"]
     # Loss-FIRST scoring: heavily penalize SEQUENTIAL losses and the worst single
     # day (the structural TSL18 failure mode, docs/TSL18_STRUCTURE_GUARD.md), not
     # just total P&L / DD / win-rate. The DD25/DD40 gates remain the primary rank
     # key (see leaderboard()), but among gate-equal cells the one with fewer
-    # consecutive losers and a smaller worst day wins.
+    # consecutive losers and a smaller worst day wins. Unresolved exposure
+    # (open_or_pending_left) and partial-coverage signals are severely penalized so
+    # an incomplete/leaky cell can never out-rank a clean one.
     score = (
         stats["tick_pnl"]
         + stats["win_rate_pct"] * 20
@@ -227,8 +262,11 @@ def evaluate(c: dict[str, Any], *, chart: CsvChartSource, ticks, charts: list[st
         - stats["max_daily_loss"] * 2.0
         - stats["loss_count"] * 15
         - stats["worst_single_signal_loss"] * 0.5
+        - open_left * 5000
+        - partial * 250
     )
-    return {**c, **stats, "phase": phase, "generated_signals": len(signals), "tick_covered_signals": covered, "tick_coverage_pct": round(coverage, 2), "no_tick_signals": no_ticks, "no_fill_signals": no_fill, "open_or_pending_left": open_left, "passes_dd25_gate": stats["tick_pnl"] > 0 and dd <= 25 and stats["win_rate_pct"] >= 45, "passes_dd40_gate": stats["tick_pnl"] > 0 and dd <= 40 and stats["win_rate_pct"] >= 40, "score": round(score, 2), "config_json": json.dumps(c, sort_keys=True)}
+    dd25, dd40 = passes_gates(stats["tick_pnl"], dd, stats["win_rate_pct"], open_left)
+    return {**c, **stats, "phase": phase, "generated_signals": len(signals), "tick_covered_signals": covered, "tick_coverage_pct": round(coverage, 2), "no_tick_signals": no_ticks, "partial_tick_signals": partial, "no_fill_signals": no_fill, "open_or_pending_left": open_left, "passes_dd25_gate": dd25, "passes_dd40_gate": dd40, "score": round(score, 2), "config_json": json.dumps(c, sort_keys=True)}
 
 
 def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
@@ -264,7 +302,7 @@ def duplicate_keys(rows: list[dict[str, Any]]) -> dict[tuple, int]:
 def write_board(rows: list[dict[str, Any]], out_dir: Path, phase: str, top_n: int) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     board = leaderboard(rows)
-    cols = ["rank", "candidate_id", "phase", "signal_name", "strategy_name", "score", "tick_pnl", "max_drawdown_pct", "win_rate_pct", "profit_factor", "max_consecutive_losing_signals", "max_daily_loss", "loss_count", "worst_single_signal_loss", "wins", "losses", "flats", "generated_signals", "tick_covered_signals", "tick_coverage_pct", "no_tick_signals", "no_fill_signals", "max_loss_signal", "passes_dd25_gate", "passes_dd40_gate", "error"]
+    cols = ["rank", "candidate_id", "phase", "signal_name", "strategy_name", "score", "tick_pnl", "max_drawdown_pct", "win_rate_pct", "profit_factor", "max_consecutive_losing_signals", "max_daily_loss", "loss_count", "worst_single_signal_loss", "open_or_pending_left", "wins", "losses", "flats", "generated_signals", "tick_covered_signals", "tick_coverage_pct", "no_tick_signals", "partial_tick_signals", "no_fill_signals", "max_loss_signal", "passes_dd25_gate", "passes_dd40_gate", "error"]
     with (out_dir / f"leaderboard_{phase}.csv").open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
         writer.writeheader()
@@ -277,7 +315,7 @@ def write_board(rows: list[dict[str, Any]], out_dir: Path, phase: str, top_n: in
         if board:
             b = board[0]
             fh.write(f"\nLeader: `{b.get('candidate_id')}` / `{b.get('signal_name')}` / `{b.get('strategy_name')}`\n")
-            fh.write(f"\nTick P&L `{b.get('tick_pnl')}`, DD `{b.get('max_drawdown_pct')}%`, win rate `{b.get('win_rate_pct')}%`, tick coverage `{b.get('tick_coverage_pct')}%`.\n")
+            fh.write(f"\nTick P&L `{b.get('tick_pnl')}`, DD `{b.get('max_drawdown_pct')}%`, win rate `{b.get('win_rate_pct')}%`, tick coverage `{b.get('tick_coverage_pct')}%`, open/pending left `{b.get('open_or_pending_left')}`, partial-tick signals `{b.get('partial_tick_signals')}`.\n")
 
 
 def run_shard(args: argparse.Namespace) -> int:
@@ -321,6 +359,17 @@ def aggregate(args: argparse.Namespace) -> int:
             f"appear more than once (e.g. {sample}). Aggregate --inputs must match ONLY "
             f"the raw shard files (results_<phase>_shard*.jsonl), not all_results_* or "
             f"top_candidates.jsonl.")
+    # Completeness gate: a FULL grid is 3 sessions x 6 filters x 8 strategies = 144
+    # candidates. If --expected-rows is set (the workflow passes 144 on full runs),
+    # refuse to publish a leaderboard that is missing or has extra rows -- a missing
+    # shard would otherwise publish a silently-incomplete board. Smoke / --max-cells
+    # runs pass 0 to skip this.
+    if args.expected_rows > 0 and len(rows) != args.expected_rows:
+        raise SystemExit(
+            f"Incomplete aggregation: got {len(rows)} candidate rows, expected exactly "
+            f"{args.expected_rows} (the full {EXPECTED_FULL_GRID}-cell grid). A shard is "
+            f"missing or duplicated -- refusing to publish a partial leaderboard. Re-run "
+            f"the failed June shard(s), or pass --expected-rows 0 for an intentional smoke.")
     errored = sum(1 for r in rows if r.get("error"))
     if errored == len(rows):
         raise SystemExit(f"All {len(rows)} aggregated candidates errored; refusing to "
@@ -396,6 +445,11 @@ def build_parser() -> argparse.ArgumentParser:
     agg.add_argument("--output-dir", required=True)
     agg.add_argument("--phase", default="june")
     agg.add_argument("--top-n", type=int, default=25)
+    agg.add_argument("--expected-rows", type=int, default=0,
+                     help="For a FULL grid run, the exact candidate count expected "
+                          "(3 sessions x 6 filters x 8 strategies = 144). Aggregate "
+                          "REFUSES to publish if the row count differs (missing/extra "
+                          "shards). 0 = no check (smoke / --max-cells runs).")
     agg.set_defaults(func=aggregate)
     val = sub.add_parser("validate-top")
     add_common(val)

@@ -22,18 +22,35 @@ on:
         default: "25"
   pull_request:
     branches: ["main"]
+    # Trigger on TWL25's REAL dependencies, not just its own files: the generator
+    # (signal feed), the tick replay engine, the shared engine, the launcher, and
+    # the TWL25 tests all change results.
     paths:
       - "tools/sweep_tick_loss_filters.py"
-      - ".github/workflows/twl25-loss-tick-sweep.yml"
+      - "tools/generate_scalper_signals.py"
+      - "tools/tick_backtest.py"
+      - "trading/engine/**"
+      - "cli/run.py"
       - "cli/candidate_TWL25_loss_filtered_tick.txt"
       - "docs/TWL25_LOSS_SWEEP.md"
+      - ".github/workflows/twl25-loss-tick-sweep.yml"
+      - "tests/test_scalper_progress_zero.py"
+      - "tests/test_tick_backtest.py"
+      - "tests/test_twl25_sweep.py"
   push:
-    branches: ["feature/twl25-loss-sweep"]
+    branches: ["feature/twl25-loss-sweep", "feature/fix-twl25-sweep-contract"]
     paths:
       - "tools/sweep_tick_loss_filters.py"
-      - ".github/workflows/twl25-loss-tick-sweep.yml"
+      - "tools/generate_scalper_signals.py"
+      - "tools/tick_backtest.py"
+      - "trading/engine/**"
+      - "cli/run.py"
       - "cli/candidate_TWL25_loss_filtered_tick.txt"
       - "docs/TWL25_LOSS_SWEEP.md"
+      - ".github/workflows/twl25-loss-tick-sweep.yml"
+      - "tests/test_scalper_progress_zero.py"
+      - "tests/test_tick_backtest.py"
+      - "tests/test_twl25_sweep.py"
 
 permissions:
   contents: write
@@ -91,7 +108,11 @@ jobs:
 
   aggregate_june:
     needs: june
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'sweep:')) }}
+    # NO always(): aggregation requires ALL June shards to have SUCCEEDED. A failed
+    # shard (fail-fast:false keeps the others running) makes `june` fail, and we
+    # must NOT publish a partial leaderboard. The head_commit guard avoids
+    # re-triggering on our own "sweep:" publish commit.
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'sweep:') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -106,6 +127,11 @@ jobs:
       - name: Aggregate June candidates
         run: |
           set -euo pipefail
+          # A FULL run (MAX_CELLS_PER_SHARD=0) must aggregate the entire
+          # 3x6x8 = 144-cell grid; pass that as --expected-rows so aggregate REFUSES
+          # to publish a board that is missing/extra rows. A smoke run
+          # (MAX_CELLS_PER_SHARD>0) has an indeterminate count, so expect 0 (no check).
+          if [ "$MAX_CELLS_PER_SHARD" = "0" ]; then EXPECTED=144; else EXPECTED=0; fi
           # ONLY the raw per-shard result files. Globbing **/*.jsonl also pulled in
           # each shard's all_results_*.jsonl + top_candidates.jsonl, counting every
           # candidate 3x (432 rows instead of 144). top_candidates.jsonl is an
@@ -114,6 +140,7 @@ jobs:
             --phase june \
             --inputs 'artifacts/june/**/results_june_shard*.jsonl' \
             --output-dir sweep_reports/twl25_loss_sweep/june \
+            --expected-rows "$EXPECTED" \
             --top-n "$VALIDATE_TOP_N"
           echo "===== JUNE LEADERBOARD ====="
           head -50 sweep_reports/twl25_loss_sweep/june/leaderboard_june.csv || true
@@ -125,7 +152,9 @@ jobs:
 
   validate_jan_jun:
     needs: aggregate_june
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'sweep:')) }}
+    # NO always(): validation requires a SUCCESSFUL June aggregation (a real,
+    # complete leaderboard) -- never validate off a partial/missing board.
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'sweep:') }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -157,20 +186,22 @@ jobs:
 
   commit_reports:
     needs: [aggregate_june, validate_jan_jun]
-    # Only publish on push / manual dispatch for the feature branch. On a
-    # pull_request, github.ref is the PR MERGE ref (not a pushable branch), so a
-    # commit there would either fail or land nowhere useful -- PR runs just
-    # upload artifacts. The head_commit guard avoids re-triggering on our own
-    # "sweep:" publish commit.
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/feature/twl25-loss-sweep' && !contains(github.event.head_commit.message, 'sweep:'))) }}
+    # Publish ONLY on a push to a feature/* branch (NO always(): requires the
+    # aggregate + validation jobs to have succeeded). This deliberately EXCLUDES:
+    #   * workflow_dispatch -- a manual run (which can target ANY ref, incl. main)
+    #     must NOT commit; it produces downloadable artifacts only.
+    #   * pull_request -- github.ref is the PR merge ref, not pushable; artifacts only.
+    #   * push to main -- startsWith(refs/heads/feature/) is false, so it never
+    #     commits reports directly to main.
+    # The head_commit guard avoids re-triggering on our own "sweep:" publish commit.
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feature/') && !contains(github.event.head_commit.message, 'sweep:') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
-          # The branch we can actually push back to. For workflow_dispatch this is
-          # the selected ref; for push it is the feature branch above.
-          ref: ${{ github.head_ref || github.ref_name }}
+          # The feature branch that was pushed -- the only branch we publish to.
+          ref: ${{ github.ref_name }}
       - uses: actions/download-artifact@v4
         with:
           name: twl25-june-leaderboard

@@ -21,9 +21,22 @@ Strategy dimensions:
 - Lower-entry defensive variants, faster TP2 variants, BEP/half-TP1 lock variants, and scale-out/BEP variants.
 - Tick-tradeable trailing-open/close distances only; no sub-min-stop trailing distances.
 
+## Phase windows
+
+Both phases are bounded so a run can never leak future signals
+(`phase_defaults` in `tools/sweep_tick_loss_filters.py`):
+
+- **June**: `2026-06-01` inclusive → `2026-07-01` **exclusive** (June only; no
+  July/future signals).
+- **Jan-Jun**: `2026-01-01` inclusive → `2026-07-01` **exclusive**.
+
+The end bound is passed to the generator's `--end` (which excludes rows at/after
+it). The `cli/candidate_TWL25_loss_filtered_tick.txt` backtest sections pass the
+matching `--end-date 2026-07-01` for the same reason.
+
 ## Ranking
 
-The first stage ranks on **June 2026 ticks**, because that is the immediate live regime.  The second stage validates the June winners on **Jan 2026 through Jun 2026 ticks where available**.  If the repository only has May/June tick files, the `tick_coverage_pct` and `no_tick_signals` columns make that explicit.
+The first stage ranks on **June 2026 ticks**, because that is the immediate live regime.  The second stage validates the June winners on **Jan 2026 through Jun 2026 ticks where available**.  If the repository only has May/June tick files, the `tick_coverage_pct`, `partial_tick_signals` and `no_tick_signals` columns make that explicit — and partial-coverage signals are **excluded** from the scored P&L rather than counted as complete tick replays.
 
 The leaderboard is loss-first:
 
@@ -47,8 +60,21 @@ Important columns:
 - `max_daily_loss`: positive magnitude of the worst feed-zone day's net P&L.
 - `loss_count`: number of losing signals.
 - `worst_single_signal_loss`: positive magnitude of the single worst signal.
-- `tick_coverage_pct`: share of generated signals that actually had tick coverage.
-- `passes_dd25_gate` / `passes_dd40_gate`: quick deployment-readiness screens, not proof of live edge.
+- `tick_coverage_pct`: share of generated signals scored on **full-lifecycle**
+  tick coverage (partial / no-tick signals are excluded from the numerator).
+- `partial_tick_signals`: count of signals the loaded tick archive only
+  **partially** covered (the window started after `sim_start` or ended before
+  `sim_end`). These are **not** scored as clean tick P&L — a partially-covered
+  signal must never masquerade as a complete tick replay — so they never inflate
+  `tick_pnl`; they are surfaced here and lightly penalize the score.
+- `open_or_pending_left`: total unresolved positions + pending orders the replay
+  left open at the end of each scored signal's lifecycle. **Any value > 0 fails
+  BOTH the DD25 and DD40 gates** (strict deployment-integrity gate — a cell that
+  leaves live exposure the model never closed is not deployment-ready) and is
+  severely penalized in the score.
+- `passes_dd25_gate` / `passes_dd40_gate`: quick deployment-readiness screens, not
+  proof of live edge. They require positive tick P&L, DD within the gate, the
+  win-rate floor, **and zero `open_or_pending_left`**.
 - `error`: populated when a cell failed to evaluate (e.g. too few signals); a
   failed cell never crashes the shard/validation job, it is logged with this field.
 
@@ -104,7 +130,21 @@ python tools/sweep_tick_loss_filters.py aggregate \
 ```
 
 The full grid is **3 sessions × 6 filters × 8 strategies = 144** candidates, so a
-correct June leaderboard has ~144 rows, not 432.
+correct June leaderboard has **exactly 144 rows, not 432**. For a full run, pass
+`--expected-rows 144`; `aggregate` then **refuses to publish** a leaderboard whose
+row count differs (a missing or duplicated shard), so a partial board can never be
+mistaken for the complete grid. The workflow sets this automatically (144 when
+`max_cells_per_shard=0`, else 0 to skip the check for smokes). Smoke runs omit it
+(or pass 0):
+
+```bash
+python tools/sweep_tick_loss_filters.py aggregate \
+  --phase june \
+  --inputs 'sweep_reports/twl25_loss_sweep/june/**/results_june_shard*.jsonl' \
+  --output-dir sweep_reports/twl25_loss_sweep/june \
+  --expected-rows 144 \
+  --top-n 25
+```
 
 Validate top June rows on Jan-Jun available ticks:
 
@@ -115,6 +155,17 @@ python tools/sweep_tick_loss_filters.py validate-top \
   --output-dir sweep_reports/twl25_loss_sweep/jan_jun \
   --top-n 25
 ```
+
+## Publishing (never to `main`)
+
+The workflow's `commit_reports` job publishes `sweep_reports/twl25_loss_sweep/**`
+**only on a push to a `feature/*` branch**, and only after the aggregate +
+validation jobs succeed (no `always()`). A **manual `workflow_dispatch`** (which
+can target any ref, including `main`), a **pull_request**, and a **push to `main`**
+all produce **downloadable artifacts only** — they never commit reports directly
+to `main`. The June aggregation and Jan-Jun validation jobs also require their
+upstream shards to have succeeded, so the workflow can never publish or validate
+off partial results.
 
 ## Research snapshot (NOT deployed)
 

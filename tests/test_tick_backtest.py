@@ -199,3 +199,80 @@ def test_run_signal_survives_expired_decide(tmp_path):
     assert res["key"] == signal.signal_key
     assert not res.get("no_ticks")
     assert "total" in res and "m1_pnl" in res   # both sides of the comparison present
+
+
+# --------------------------------------------------------------------------
+# Full-lifecycle tick coverage (TWL25 must not score partial coverage as clean)
+# --------------------------------------------------------------------------
+
+def _run_with_tick_coverage(tmp_path, tick_bar_range, *, tick_day_offset=0):
+    """Build 40 one-minute M1 bars on 2026-06-04 and a SELL signal at 07:01, then
+    emit ticks ONLY for the bar indices in ``tick_bar_range`` (optionally shifted
+    by ``tick_day_offset`` days so the window has NO ticks). Returns run_signal()."""
+    import json
+    from datetime import datetime, timedelta
+
+    import pandas as pd
+
+    from trading.engine import CsvChartSource, parse_signals_file
+    from trading.engine.core.config import StrategyConfig
+    from tools.tick_backtest import load_ticks, run_signal
+
+    cfg_d = json.load(open(_REPO_ROOT / "champions/CHAMPION_R4parab.json"))["config"]
+    cfg_d.update(entry_count=3, pending_expiry_minutes=5, max_hold_minutes=15)
+    cfg = StrategyConfig(**cfg_d)
+
+    start = datetime(2026, 6, 4, 7, 0)
+    bar_cols = ["<DATE>", "<TIME>", "<OPEN>", "<HIGH>", "<LOW>", "<CLOSE>",
+                "<TICKVOL>", "<VOL>", "<SPREAD>"]
+    tick_cols = ["<DATE>", "<TIME>", "<TIME_MSC>", "<BID>", "<ASK>", "<LAST>",
+                 "<VOLUME>", "<VOLUME_REAL>", "<FLAGS>", "<SPREAD>"]
+    bars, ticks = [], []
+    for i in range(40):
+        t = start + timedelta(minutes=i)
+        d, hms = t.strftime("%Y.%m.%d"), t.strftime("%H:%M:%S")
+        o, h, l, c = 2001.5, 2001.8, 2001.2, 2001.5
+        bars.append((d, hms, o, h, l, c, 100, 0, 20))
+        if i in tick_bar_range:
+            td = (t + timedelta(days=tick_day_offset))
+            dd, thms = td.strftime("%Y.%m.%d"), td.strftime("%H:%M:%S")
+            for off, price in zip(("000", "015", "030", "045"), (o, l, h, c)):
+                ticks.append((dd, f"{thms}.{off}", 0, round(price, 2),
+                              round(price + 0.20, 2), 0, 0, 0, 0, 20))
+    mcsv, tcsv = tmp_path / "m1.csv", tmp_path / "tick.csv"
+    pd.DataFrame(bars, columns=bar_cols).to_csv(mcsv, sep="\t", index=False)
+    pd.DataFrame(ticks, columns=tick_cols).to_csv(tcsv, sep="\t", index=False)
+
+    sig_file = tmp_path / "sig.txt"
+    sig_file.write_text("2026-06-04 GMT+3\n"
+                        "1. SELL XAUUSD 2000.00 - 2002.00 SL 2003.00 "
+                        "TP1 1997.00 TP2 1994.00 TP3 1988.00 7:01 AM\n")
+    signal = parse_signals_file(sig_file)[0]
+
+    m1 = CsvChartSource([str(mcsv)])
+    ticks_df = load_ticks([str(tcsv)])
+    clock = _install_sim_clock()
+    return run_signal(signal, cfg, m1, ticks_df, "XAUUSD", 5, clock)
+
+
+def test_run_signal_no_ticks_in_window(tmp_path):
+    # Ticks exist but on the NEXT day -> the signal window [sim_start, sim_end] has
+    # none -> no_ticks True and not full-coverage.
+    res = _run_with_tick_coverage(tmp_path, range(0, 40), tick_day_offset=1)
+    assert res.get("no_ticks") is True
+    assert res.get("covers_full_lifecycle") is False
+
+
+def test_run_signal_partial_coverage_is_flagged(tmp_path):
+    # Ticks cover only the first ~12 minutes; the lifecycle runs to sim_start+25,
+    # so the archive's last tick is BEFORE sim_end -> partial, not full.
+    res = _run_with_tick_coverage(tmp_path, range(0, 13))
+    assert res.get("no_ticks") is False          # the window is not empty...
+    assert res.get("covers_full_lifecycle") is False  # ...but coverage is partial
+
+
+def test_run_signal_full_lifecycle_coverage(tmp_path):
+    # Ticks span the entire 40-bar window, which fully contains [sim_start, sim_end].
+    res = _run_with_tick_coverage(tmp_path, range(0, 40))
+    assert res.get("no_ticks") is False
+    assert res.get("covers_full_lifecycle") is True
