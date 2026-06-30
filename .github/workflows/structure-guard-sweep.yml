@@ -19,8 +19,8 @@ on:
   workflow_dispatch:
     inputs:
       variants:
-        description: "space-separated subset of: base htf_only htf_impulse htf_vwap_score2"
-        default: "base htf_only htf_impulse htf_vwap_score2"
+        description: "space-separated subset of the 8 variants (base first)"
+        default: "base structure_htf_only structure_htf_impulse structure_htf_vwap_score2 progress_stall_only structure_htf_only_plus_progress_stall structure_htf_impulse_plus_progress_stall structure_htf_vwap_score2_plus_progress_stall"
 
 permissions:
   contents: read

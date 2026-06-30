@@ -49,6 +49,44 @@ Components (first failing veto wins):
 4. **Structure score** (`--structure-min-score`, 0..4): +1 each for HTF-agree,
    VWAP-side, no-opposite-impulse, swing-intact; reject below the threshold.
 
+### The trend-progress stall cap (the same-side-cluster filter)
+
+The structure guard above only fixes **wrong-side** clusters. The June result
+proved it sends `max_consecutive_wrong_side_losing_signals` to 0 and cuts
+drawdown, but does **not** lower the overall `max_consecutive_losing_signals` —
+because the remaining clusters are **HTF-ALIGNED** same-side pullback entries in a
+strong move (SELL pullbacks near a down-leg low that stops making new lows). An
+HTF-agreement veto keeps those by definition. The **trend-progress stall cap**
+(`--progress-stall-filter`, default OFF) targets exactly that:
+
+- **Regime (completed H1 only):** `htf_diff_atr = (EMA_fast − EMA_slow)/ATR` on
+  completed H1 candles (`--progress-htf-minutes/-ema-fast/-ema-slow`); bull/bear
+  when `|htf_diff_atr| > --progress-min-diff-atr`, else flat. **Leg** = a
+  contiguous same-regime run (flat/opposite ends it).
+- **Valid progress (no-lookahead, not wick-only):** within a leg, the *prior*
+  favorable extreme is the running high/low over bars **before** the current bar.
+  A bar is "progress" only if its extreme beats the prior by
+  `max(--progress-min-atr·ATR, --progress-min-points)` **and** its **close
+  confirms** (`--progress-close-confirm-atr·ATR` beyond) — so a wick alone never
+  re-arms. The current bar's own closed OHLC may confirm (live sees it at
+  emission); the prior extreme excludes the current bar.
+- **Stall veto (needs BOTH):** count consecutive non-progressing same-side signals
+  (keyed on leg+progress-epoch so a new progress or new leg resets it without
+  rescanning). Veto only when count ≥ `--progress-stall-n` **AND**
+  `bars_since_valid_progress ≥ --progress-min-no-progress-bars`. The count is
+  frozen once the threshold is reached (counted once, not inflated per blocked
+  candidate). **Aligned-only** — wrong-side/flat/NaN pass through (tagged); the
+  structure guard handles wrong-side. First same-side signal of a new leg is
+  always allowed.
+- **Diagnostics** (`--progress-stall-diagnostics`): `time, side, close,
+  htf_regime, htf_leg_id, prior_extreme, current_extreme, valid_progress,
+  bars_since_valid_progress, non_progressing_count, reject_reason`
+  (`accept | progress_stall | htf_nan | htf_flat | htf_opposite`).
+
+Defaults: `htf 60 / ema 20·50 / min-diff-atr 0.10 / stall-n 3 /
+min-no-progress-bars 20 / min-atr 0.50 / close-confirm-atr 0.10 / min-points 1.0`.
+It only removes signals; it does **not** replace the structure guard.
+
 All of these are **OFF by default** (`--structure-filter` defaults to off). With
 the flag absent the generator is **byte-identical** to today's TSL18 feed —
 parity is pinned by `tests/test_structure_guard.py::test_default_flags_preserve_generation_parity`.
@@ -91,6 +129,17 @@ python tools/sweep_structure_guard.py --window jan_jun
 Both windows end on **2026-07-01** internally — `backtest_hybrid` treats
 `--end-date` as **exclusive**, so this is how June 30 is kept in the window
 (`june` = 06-01→07-01, `jan_jun` = 01-01→07-01).
+
+The sweep compares **8 variants** (same TSL18 geometry, base first):
+`base · structure_htf_only · structure_htf_impulse · structure_htf_vwap_score2 ·
+progress_stall_only · structure_htf_only_plus_progress_stall ·
+structure_htf_impulse_plus_progress_stall ·
+structure_htf_vwap_score2_plus_progress_stall`. It also writes a **progress-stall
+specifics** table (`ps filtered W/L`, avg bars-since-progress, avg/max
+non-progressing count). A **T819 candidate** (`cli/candidate_T819_progress_stall_structure_tick.txt`
+= T818 + structure guard + progress-stall) is created **only if** a combined
+variant lowers `max_consecutive_losing_signals` vs base with `filtered losers >
+winners` and no material PF collapse — otherwise no T819.
 
 Output: `reports/STRUCTURE_GUARD_<window>/summary.md` with, per variant:
 net P&L, max drawdown, win rate, profit factor, total trades, loss count,

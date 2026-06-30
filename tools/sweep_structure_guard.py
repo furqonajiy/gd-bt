@@ -65,17 +65,28 @@ TSL18_GEOMETRY = [
 
 # Structure variants to compare. 'base' = no guard (the incumbent TSL18 feed).
 # These are starting points keyed to the wrong-side problem, NOT a wide grid.
+# Structure-guard flag blocks (wrong-side veto) and the progress-stall block
+# (same-side cluster cap). Combined variants stack both. Initial stall defaults
+# are the spec values; this is NOT a broad parameter grid.
+_HTF = ["--structure-filter", "--structure-htf-minutes", "60",
+        "--structure-ema-fast", "20", "--structure-ema-slow", "50"]
+_IMPULSE = ["--structure-impulse-cooldown-bars", "5", "--structure-impulse-atr", "1.5"]
+_VWAP_SCORE = ["--structure-require-vwap-side", "--structure-min-score", "2"]
+PROGRESS = ["--progress-stall-filter", "--progress-htf-minutes", "60",
+            "--progress-ema-fast", "20", "--progress-ema-slow", "50",
+            "--progress-stall-n", "3", "--progress-min-no-progress-bars", "20",
+            "--progress-min-atr", "0.50", "--progress-close-confirm-atr", "0.10",
+            "--progress-min-points", "1.0"]
+
 VARIANTS: dict[str, list[str]] = {
     "base": [],
-    "htf_only": ["--structure-filter", "--structure-htf-minutes", "60",
-                 "--structure-ema-fast", "20", "--structure-ema-slow", "50"],
-    "htf_impulse": ["--structure-filter", "--structure-htf-minutes", "60",
-                    "--structure-ema-fast", "20", "--structure-ema-slow", "50",
-                    "--structure-impulse-cooldown-bars", "5", "--structure-impulse-atr", "1.5"],
-    "htf_vwap_score2": ["--structure-filter", "--structure-htf-minutes", "60",
-                        "--structure-ema-fast", "20", "--structure-ema-slow", "50",
-                        "--structure-require-vwap-side", "--structure-impulse-cooldown-bars", "5",
-                        "--structure-impulse-atr", "1.5", "--structure-min-score", "2"],
+    "structure_htf_only": _HTF,
+    "structure_htf_impulse": _HTF + _IMPULSE,
+    "structure_htf_vwap_score2": _HTF + _IMPULSE + _VWAP_SCORE,
+    "progress_stall_only": PROGRESS,
+    "structure_htf_only_plus_progress_stall": _HTF + PROGRESS,
+    "structure_htf_impulse_plus_progress_stall": _HTF + _IMPULSE + PROGRESS,
+    "structure_htf_vwap_score2_plus_progress_stall": _HTF + _IMPULSE + _VWAP_SCORE + PROGRESS,
 }
 
 # NB: backtest_hybrid treats --end-date as EXCLUSIVE, so to include all of June 30
@@ -137,6 +148,13 @@ class Metrics:
     filtered_total: int = 0
     filtered_winners: int = 0
     filtered_losers: int = 0
+    # progress-stall-specific (only populated for variants with --progress-stall-filter)
+    progress_stall_filtered_total: int = 0
+    progress_stall_filtered_winners: int = 0
+    progress_stall_filtered_losers: int = 0
+    avg_bars_since_progress_when_filtered: float = 0.0
+    avg_non_progressing_count_when_filtered: float = 0.0
+    max_non_progressing_count_seen: int = 0
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -144,13 +162,15 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
 
 
 def _gen_feed(out_txt: Path, struct_csv: Path | None, charts: list[str],
-              start: str, structure_flags: list[str]) -> None:
+              start: str, structure_flags: list[str], prog_csv: Path | None = None) -> None:
     cmd = [sys.executable, "tools/generate_scalper_signals.py",
            "--charts", *charts, "--output", str(out_txt),
            "--start", start, "--progress-interval-seconds", "0",
            *FEED_FILTER, *structure_flags]
-    if struct_csv is not None and structure_flags:
+    if struct_csv is not None and "--structure-filter" in structure_flags:
         cmd += ["--structure-diagnostics", str(struct_csv)]
+    if prog_csv is not None and "--progress-stall-filter" in structure_flags:
+        cmd += ["--progress-stall-diagnostics", str(prog_csv)]
     r = _run(cmd)
     if r.returncode != 0:
         raise SystemExit(f"feed generation failed:\n{r.stderr[-1500:]}")
@@ -307,6 +327,45 @@ def _filtered_breakdown(base_trades: list[Trade], variant_trades: list[Trade]) -
     return len(removed), winners, losers
 
 
+def _progress_stall_metrics(m: Metrics, prog_csv: Path, base_trades: list[Trade]) -> None:
+    """Fill the progress-stall-specific fields from the variant's diagnostics CSV.
+
+    Winner/loser of a progress_stall-rejected signal is looked up in the BASE
+    backtest by chart-time+side (the signal the cap removed and what it would
+    have done if left in)."""
+    if not prog_csv.exists():
+        return
+    base_sig: dict[tuple[str, str], float] = {}
+    for t in base_trades:
+        base_sig[t.match_key] = base_sig.get(t.match_key, 0.0) + t.pnl
+    bars, counts = [], []
+    max_seen = 0
+    win = lose = total = 0
+    with prog_csv.open(encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            try:
+                max_seen = max(max_seen, int(row["non_progressing_count"]))
+            except (ValueError, KeyError):
+                pass
+            if row.get("reject_reason") != "progress_stall":
+                continue
+            total += 1
+            bars.append(float(row.get("bars_since_valid_progress") or 0))
+            counts.append(float(row.get("non_progressing_count") or 0))
+            # diag time has seconds; the backtest chart-time key is minute precision
+            key = (row["time"][:16], row["side"].upper())
+            pnl = base_sig.get(key)
+            if pnl is not None:
+                win += int(pnl > 0)
+                lose += int(pnl < 0)
+    m.progress_stall_filtered_total = total
+    m.progress_stall_filtered_winners = win
+    m.progress_stall_filtered_losers = lose
+    m.avg_bars_since_progress_when_filtered = round(sum(bars) / len(bars), 1) if bars else 0.0
+    m.avg_non_progressing_count_when_filtered = round(sum(counts) / len(counts), 2) if counts else 0.0
+    m.max_non_progressing_count_seen = max_seen
+
+
 def _write_summary(out_dir: Path, window: str, span: tuple[str, str],
                    results: list[Metrics]) -> Path:
     md = out_dir / "summary.md"
@@ -338,6 +397,31 @@ def _write_summary(out_dir: Path, window: str, span: tuple[str, str],
         "and *maxDD* while keeping *filtered losers >> filtered winners*. If it filters "
         "mostly winners, it is hurting — do not promote.",
     ]
+    # progress-stall-specific table (only variants that ran the stall cap)
+    prog = [m for m in results if m.progress_stall_filtered_total > 0
+            or m.max_non_progressing_count_seen > 0]
+    if prog:
+        lines += [
+            "",
+            "## Progress-stall specifics (same-side cluster cap)",
+            "",
+            "| variant | ps filtered (W/L of total) | avg bars-since-progress | avg non-prog count | max non-prog seen |",
+            "|---|--:|--:|--:|--:|",
+        ]
+        for m in prog:
+            lines.append(
+                f"| {m.variant} | {m.progress_stall_filtered_winners}/"
+                f"{m.progress_stall_filtered_losers} (of {m.progress_stall_filtered_total}) | "
+                f"{m.avg_bars_since_progress_when_filtered} | "
+                f"{m.avg_non_progressing_count_when_filtered} | "
+                f"{m.max_non_progressing_count_seen} |"
+            )
+        lines += [
+            "",
+            "The progress-stall cap is promotable on this window only if it LOWERS "
+            "*maxConsec losing SIG* vs base while *ps filtered losers > winners* and PF "
+            "does not materially collapse.",
+        ]
     md.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return md
 
@@ -364,38 +448,40 @@ def main(argv: list[str] | None = None) -> int:
     out_root.mkdir(parents=True, exist_ok=True)
 
     base_trades: list[Trade] = []
+    # One-time HTF label pass (htf_state per signal time is variant-independent):
+    # a guard-ON generation whose diagnostics give each base-setup signal's
+    # htf_state. Used to tag every variant's trades for the wrong-side metrics.
+    print("[structure-sweep] generating HTF labels ...", flush=True)
+    label_csv = out_root / "htf_labels.csv"
+    _gen_feed(out_root / "_label.txt", label_csv, args.charts, args.gen_start, _HTF)
+    htf = _read_htf(label_csv)
+
     results: list[Metrics] = []
     for v in args.variants:
         flags = VARIANTS[v]
+        has_prog = "--progress-stall-filter" in flags
         feed = out_root / f"feed_{v}.txt"
-        scsv = out_root / f"structure_{v}.csv"
+        prog_csv = out_root / f"progress_{v}.csv"
         print(f"[structure-sweep] {v}: generate feed ...", flush=True)
-        # always produce a structure CSV (even base) so trades can be HTF-labelled
-        label_flags = flags or ["--structure-filter", "--structure-htf-minutes", "60",
-                                "--structure-ema-fast", "20", "--structure-ema-slow", "50"]
-        if not flags:
-            # base feed has NO veto; generate it plain, but ALSO make a label-only
-            # structure CSV from a guard-on pass (diagnostics only, feed discarded).
-            _gen_feed(feed, None, args.charts, args.gen_start, [])
-            _gen_feed(out_root / f"_label_{v}.txt", scsv, args.charts, args.gen_start, label_flags)
-        else:
-            _gen_feed(feed, scsv, args.charts, args.gen_start, flags)
+        _gen_feed(feed, None, args.charts, args.gen_start, flags,
+                  prog_csv=prog_csv if has_prog else None)
         print(f"[structure-sweep] {v}: backtest {start}..{end} ...", flush=True)
         xlsx = _run_backtest(feed, args.charts, args.ticks, start, end, out_root / f"bt_{v}")
         trades = _read_trades(xlsx)
-        htf = _read_htf(scsv)
         m = _metrics(v, trades, htf)
         if v == "base":
             base_trades = trades
         else:
             m.filtered_total, m.filtered_winners, m.filtered_losers = \
                 _filtered_breakdown(base_trades, trades)
+        if has_prog:
+            _progress_stall_metrics(m, prog_csv, base_trades)
         results.append(m)
         print(f"[structure-sweep] {v}: signals={m.signals} losingSig={m.losing_signals} "
               f"maxConsecLosingSig={m.max_consecutive_losing_signals} "
               f"maxConsecWrongSideSig={m.max_consecutive_wrong_side_losing_signals} "
-              f"entries={m.trades} net=${m.net:,.0f} wrongBUY={m.buy_loss_bear_htf} "
-              f"wrongSELL={m.sell_loss_bull_htf}", flush=True)
+              f"entries={m.trades} net=${m.net:,.0f} psFiltL/W="
+              f"{m.progress_stall_filtered_losers}/{m.progress_stall_filtered_winners}", flush=True)
 
     md = _write_summary(out_root, args.window, (start, end), results)
     print(f"[structure-sweep] summary: {md}")

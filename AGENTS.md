@@ -223,6 +223,18 @@ pair is a thin package that imports it.
   `tools/sweep_structure_guard.py --window june|jan_jun` (scores max-consecutive-
   losses, max-daily-loss, BUY-loss-in-bearish-HTF, filtered-winners-vs-losers — not
   profit alone). Full contract + promote bar: `docs/TSL18_STRUCTURE_GUARD.md`.
+  A second filter family, the **trend-progress stall cap** (`--progress-stall-*`,
+  default OFF), targets the OTHER cluster the HTF veto can't reach: HTF-ALIGNED
+  same-side pullbacks that keep firing while the trend stops making new extremes.
+  Completed-H1 regime + no-lookahead "valid progress" (prior extreme excludes the
+  current bar, close-confirmed, not wick-only); vetoes only when BOTH the
+  consecutive non-progressing same-side count ≥ `--progress-stall-n` AND
+  `bars_since_valid_progress ≥ --progress-min-no-progress-bars`. The sweep runs 8
+  variants (structure × progress, base first) + a progress-stall-specifics table;
+  a **T819 candidate** (`cli/candidate_T819_progress_stall_structure_tick.txt`)
+  is created only if a combined variant lowers `max_consecutive_losing_signals`
+  vs base with filtered-losers > winners. `.github/workflows/structure-guard-sweep.yml`
+  runs it manually (workflow_dispatch).
 - `docs/` — `MT5_SETUP.md`, `OPERATIONS_PLAYBOOK.md`,
   `demo_runbook_trailing_open.md`, `SWEEP_RUNBOOK.md`, `TSL18_STRUCTURE_GUARD.md`,
   `VICTOR_SWEEP_RUNBOOK.md`, `REGIME_ASSESSMENT.md` (the price-normalized
