@@ -1,0 +1,127 @@
+name: V817 TSL18 Backtests 5K 50K
+
+# One-shot/manual report workflow for the deployed V817 and TSL18 books.
+# It runs sections 5 and 6 from cli/run.py for both strategies, and emits both
+# the canonical $50,000 workbook and a $5,000 variant by rewriting only
+# --initial-capital and --output-dir. Artifacts only; no commit-back.
+
+on:
+  workflow_dispatch:
+    inputs:
+      strategies:
+        description: "Space-separated cli/run.py strategy aliases"
+        required: false
+        default: "v817 tsl18"
+      sections:
+        description: "Space-separated backtest sections: 5=Jun 2026, 6=Jan-Jun 2026"
+        required: false
+        default: "5 6"
+      run_followup_full_sweep:
+        description: "Informational only. The follow-up workflow_run full sweep starts after this succeeds."
+        required: false
+        default: "true"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/v817-tsl18-backtests-5k-50k.yml"
+      - ".github/workflows/tsl18-full-sweep-after-backtests.yml"
+
+concurrency:
+  group: v817-tsl18-backtests-5k-50k
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  backtests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install requirements
+        run: pip install -r requirements.txt
+
+      - name: Resolve inputs
+        id: cfg
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            STRATEGIES="${{ github.event.inputs.strategies }}"
+            SECTIONS="${{ github.event.inputs.sections }}"
+          else
+            STRATEGIES="v817 tsl18"
+            SECTIONS="5 6"
+          fi
+          echo "strategies=$STRATEGIES" >> "$GITHUB_OUTPUT"
+          echo "sections=$SECTIONS" >> "$GITHUB_OUTPUT"
+          echo "Strategies: $STRATEGIES"
+          echo "Sections: $SECTIONS"
+
+      - name: Compile launcher and engines
+        run: |
+          python -m py_compile \
+            cli/run.py \
+            tools/backtest_hybrid.py \
+            tools/backtest_explicit.py \
+            tools/generate_scalper_signals.py
+
+      - name: Run V817 and TSL18 50K/5K backtests
+        run: |
+          set -euo pipefail
+          mkdir -p reports logs/backtests
+          for s in ${{ steps.cfg.outputs.strategies }}; do
+            echo "===== generate feed: cli/run.py $s 4 ====="
+            python cli/run.py "$s" 4 > "logs/backtests/${s}_section4.log" 2>&1 \
+              || echo "section 4 skipped/tolerated for $s; see logs/backtests/${s}_section4.log"
+            tail -40 "logs/backtests/${s}_section4.log" || true
+
+            for sec in ${{ steps.cfg.outputs.sections }}; do
+              cmd=$(python cli/run.py "$s" "$sec" --print 2>&1 | grep -E 'python (tools/|-m )' | head -1 || true)
+              if [ -z "$cmd" ]; then
+                echo "No command for $s section $sec; skipping."
+                continue
+              fi
+
+              echo "===== $s section $sec @ 50000 ====="
+              echo "$cmd" | tee "logs/backtests/${s}_${sec}_50k.command.txt"
+              bash -c "$cmd" > "logs/backtests/${s}_${sec}_50k.log" 2>&1
+              tail -60 "logs/backtests/${s}_${sec}_50k.log" || true
+
+              cmd5=$(echo "$cmd" | sed -E 's#--initial-capital 50000#--initial-capital 5000#; s#(--output-dir [^ ]+)#\1_5k#')
+              echo "===== $s section $sec @ 5000 ====="
+              echo "$cmd5" | tee "logs/backtests/${s}_${sec}_5k.command.txt"
+              bash -c "$cmd5" > "logs/backtests/${s}_${sec}_5k.log" 2>&1
+              tail -60 "logs/backtests/${s}_${sec}_5k.log" || true
+            done
+          done
+
+      - name: Verify report workbooks exist
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(reports/V817_2026*.xlsx reports/TSL18_2026*.xlsx reports/T818_2026*.xlsx)
+          printf '%s\n' "${files[@]}" | tee logs/backtests/generated_workbooks.txt
+          if [ "${#files[@]}" -lt 4 ]; then
+            echo "Expected at least 4 workbooks for V817/TSL18 50K+5K; found ${#files[@]}" >&2
+            exit 1
+          fi
+
+      - name: Upload backtest reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v817-tsl18-backtest-reports-5k-50k
+          path: |
+            reports/V817_2026*.xlsx
+            reports/TSL18_2026*.xlsx
+            reports/T818_2026*.xlsx
+            logs/backtests/**
+          if-no-files-found: warn
