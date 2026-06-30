@@ -290,6 +290,32 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
         ("Payoff (avg win / avg loss)", _fmt_payoff(payoff)),
     ])
 
+    # TSL18 collision policies -- only when a policy was active (the result carries
+    # a "collision_policy" block), so pure runs keep their exact Summary (parity).
+    cp = result.get("collision_policy")
+    if cp:
+        ccfg = cp.get("config", {})
+        row = _kv_section(ws, row, "TSL18 Collision Policies", [
+            ("Opposite-side policy", ccfg.get("opposite_signal_policy")),
+            ("Same-side overlap policy", ccfg.get("same_side_overlap_policy")),
+            ("Opposite collisions (total)", cp.get("opposite_collisions_total", 0)),
+            ("  allowed / rejected", f"{cp.get('opposite_collisions_allowed', 0)} / "
+                                     f"{cp.get('opposite_collisions_rejected', 0)}"),
+            ("  flipped / profit-banked",
+             f"{cp.get('opposite_collisions_flipped', 0)} / "
+             f"{cp.get('opposite_collisions_profit_bank_rearmed', 0)}"),
+            ("Same-side clusters (total)", cp.get("same_side_clusters_total", 0)),
+            ("  accepted / rejected / downsized",
+             f"{cp.get('same_side_clusters_accepted', 0)} / "
+             f"{cp.get('same_side_clusters_rejected', 0)} / "
+             f"{cp.get('same_side_clusters_downsized', 0)}"),
+            ("Max same-side cluster risk",
+             f"${cp.get('max_same_side_cluster_risk', 0):,.2f}"),
+            ("Max opposite exposure (lots)",
+             f"{cp.get('max_opposite_exposure', 0):,.2f}"),
+            ("Collision-policy P&L", f"${cp.get('collision_policy_pnl', 0):,.2f}"),
+        ])
+
     # Monthly breakdown table.
     ws.cell(row=row, column=1, value="Monthly Breakdown").font = SUBHEADER_FONT
     ws.cell(row=row, column=1).fill = SUBHEADER_FILL
@@ -522,6 +548,19 @@ ENTRY_LAYOUT = [
     ("rr", "R", "rrr", "exec"),
 ]
 
+# Appended only on a TSL18 collision-policy run (any row stamped with a
+# collision_type), so pure runs keep their exact column set (parity).
+COLLISION_LAYOUT = [
+    ("collision_type", "Collision", None),
+    ("collision_policy", "Policy", None),
+    ("collision_policy_action", "Action", None),
+    ("cluster_id", "Cluster", None),
+    ("cluster_risk_before", "Cluster Risk Before", "money"),
+    ("cluster_risk_after", "Cluster Risk After", "money"),
+    ("opposite_exposure_before", "Opp Exp Before", "lot"),
+    ("opposite_exposure_after", "Opp Exp After", "lot"),
+]
+
 # Appended only when an MT5 history was merged. Each live column that mirrors a
 # plan column names it for diff-highlighting (mismatch -> orange).
 LIVE_LAYOUT = [
@@ -555,6 +594,10 @@ def _write_entries_sheet(ws: Worksheet, result: dict) -> None:
     if any(r.get("data_source") for r in rows):
         side_i = next((i for i, (k, *_) in enumerate(layout) if k == "side"), 4)
         layout.insert(side_i + 1, ("data_source", "Data Source", None, "id", None))
+    # Collision-policy run: append a COLLISION column group ONLY when a collision
+    # policy stamped the rows, so pure runs keep their exact column set (parity).
+    if any(r.get("collision_type") for r in rows):
+        layout += [(k, h, kind, "collision", None) for k, h, kind in COLLISION_LAYOUT]
 
     groups = [g for _, _, _, g, _ in layout]
     headers = [h for _, h, _, _, _ in layout]
@@ -568,6 +611,7 @@ def _write_entries_sheet(ws: Worksheet, result: dict) -> None:
         "id": ("SIGNAL", ID_BANNER_FILL),
         "orig": ("ORIGINAL  (from the signal)", ORIG_BANNER_FILL),
         "exec": ("EXECUTED  (backtest result)", EXEC_BANNER_FILL),
+        "collision": ("COLLISION POLICY", SUBHEADER_FILL),
         "live": ("LIVE  (MT5 execution)", LIVE_BANNER_FILL),
     }
     for group, (text, fill) in banner.items():

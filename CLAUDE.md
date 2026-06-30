@@ -234,8 +234,38 @@ pair is a thin package that imports it.
   is created only if a combined variant lowers `max_consecutive_losing_signals`
   vs base with filtered-losers > winners. `.github/workflows/structure-guard-sweep.yml`
   runs it manually (workflow_dispatch).
+- **TSL18 collision policies** (`strategy/collision_policy.py`, `CollisionPolicy`;
+  **all default to the BASELINE → byte-identical parity**, pinned by
+  `tests/test_collision_policy.py`). A **research/backtest** decision layer that
+  resolves the two ways TSL18 collides with a position it already holds: an
+  OPPOSITE-side hedge (BUY 4750 while a SELL is open) and a SAME-side
+  overlap/cluster (BUY 4700, 4699, 4698). Built only when a non-baseline policy
+  is set (`CollisionPolicy.maybe` → `None` else), driven in feed order like
+  `DeploymentGate`; it only REJECTS / DOWNSIZES / BANKS-or-REDUCES an existing
+  side — never invents a trade or moves a stop/target.
+  **`--opposite-signal-policy`** `allow_hedge` (baseline) | `reject_opposite` |
+  `profit_bank_rearm` (bank the old side only if ≥ `--opposite-profit-threshold-r`
+  R in profit, then keep it rearmable ONLY at its original entry or better — the
+  live no-chase rule, `can_rearm`) | `close_then_flip` | `reduce_then_hedge`
+  (cut the old side to `--hedge-lot-fraction`). **`--same-side-overlap-policy`**
+  `allow_all` (baseline) | `reject_overlap` | `scale_in_better_entry_only`
+  (BUY lower / SELL higher by `--same-side-cluster-entry-gap`, within
+  `--max-cluster-risk-multiple` × the cluster anchor's risk) | `scale_in_fixed_risk`
+  (downsize so cluster risk ≤ that cap; reject below min lot). Cluster membership
+  is `--same-side-cluster-window-minutes` (default 30). Old-side closes are
+  marked to the chart price at the collision instant and reported as
+  `collision_policy_pnl`; a system terminal (SL/TP/engine close) or a touched
+  original SL stays terminal (never re-armed). Flags live on `backtest_explicit`
+  (inherited by `backtest_hybrid`) + `auto_explicit`; the run carries a
+  `collision_policy` summary + per-row collision columns (only when active, so
+  pure runs are unchanged). **LIVE applies only the safe reject/downsize
+  outcomes — it never auto-closes/flips an existing live position** (that needs
+  separate demo-validated wiring); the old-side P&L is a backtest model. Full
+  contract: `docs/TSL18_COLLISION_POLICIES.md`. Default off → never sweep it into
+  the generic grid; sweep it separately, one hypothesis at a time.
 - `docs/` — `MT5_SETUP.md`, `OPERATIONS_PLAYBOOK.md`,
   `demo_runbook_trailing_open.md`, `SWEEP_RUNBOOK.md`, `TSL18_STRUCTURE_GUARD.md`,
+  `TSL18_COLLISION_POLICIES.md`,
   `VICTOR_SWEEP_RUNBOOK.md`, `REGIME_ASSESSMENT.md` (the price-normalized
   regime-determination assessment + the volatility-scale-invariance verdict:
   the champion absorbs volatility, so finer regimes don't change champion

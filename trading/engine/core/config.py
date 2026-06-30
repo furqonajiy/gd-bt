@@ -206,6 +206,29 @@ class StrategyConfig:
     # rejected. 0.0 = unlimited (parity). Companion to the per-order maximum_lot.
     max_open_lots: float = 0.0
 
+    # TSL18 COLLISION POLICIES (research/backtest layer; the two policy fields
+    # default to the BASELINE so behavior + parity are byte-identical -- a
+    # CollisionPolicy is built only when a non-baseline policy is set). TSL18 can
+    # place a signal that collides with one it already holds: an OPPOSITE-side
+    # hedge (BUY 4750 while a SELL is open) or a SAME-side overlap/cluster
+    # (BUY 4700, 4699, 4698). These resolve such collisions; they only REJECT,
+    # DOWNSIZE, or BANK/REDUCE an existing side -- never invent a trade or move a
+    # stop/target. See strategy.collision_policy + docs/TSL18_COLLISION_POLICIES.md.
+    # opposite_signal_policy: allow_hedge (baseline) | reject_opposite |
+    #   profit_bank_rearm | close_then_flip | reduce_then_hedge.
+    opposite_signal_policy: str = "allow_hedge"
+    # same_side_overlap_policy: allow_all (baseline) | reject_overlap |
+    #   scale_in_better_entry_only | scale_in_fixed_risk.
+    same_side_overlap_policy: str = "allow_all"
+    # Same-side cluster definition + caps (only consulted by the same-side policies).
+    same_side_cluster_window_minutes: int = 30   # signals within this window cluster
+    same_side_cluster_entry_gap: float = 5.0     # min price improvement to scale in
+    same_side_cluster_sl_gap: float = 10.0       # reserved: min SL separation in a cluster
+    max_cluster_risk_multiple: float = 1.0       # cluster risk <= anchor risk x this
+    # Opposite-side knobs.
+    opposite_profit_threshold_r: float = 0.5     # bank old side only if >= this R in profit
+    hedge_lot_fraction: float = 0.5              # reduce_then_hedge: kept fraction of exposure
+
 
 DEFAULT_CONFIG = StrategyConfig()
 

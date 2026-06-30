@@ -220,6 +220,34 @@ def build_parser() -> argparse.ArgumentParser:
                            "ceiling =100). A new signal whose ladder would push total open lots "
                            "over this is skipped. 0=unlimited.")
 
+    col = p.add_argument_group("TSL18 collision policies (default off)")
+    col.add_argument("--opposite-signal-policy",
+                     choices=["allow_hedge", "reject_opposite", "profit_bank_rearm",
+                              "close_then_flip", "reduce_then_hedge"],
+                     default="allow_hedge",
+                     help="Resolve a NEW signal opposite to an active one (default allow_hedge = "
+                          "keep both). RESEARCH/backtest layer: live only applies the safe "
+                          "REJECT/DOWNSIZE outcomes; it never auto-closes/flips an existing live "
+                          "position. See docs/TSL18_COLLISION_POLICIES.md.")
+    col.add_argument("--same-side-overlap-policy",
+                     choices=["allow_all", "reject_overlap", "scale_in_better_entry_only",
+                              "scale_in_fixed_risk"],
+                     default="allow_all",
+                     help="Resolve a NEW same-side signal overlapping an active cluster "
+                          "(default allow_all). reject/scale-in as in backtest_explicit.")
+    col.add_argument("--same-side-cluster-window-minutes", type=_positive_int, default=30,
+                     help="Same-side signals within this many minutes form one cluster (default 30).")
+    col.add_argument("--same-side-cluster-entry-gap", type=_positive_float, default=5.0,
+                     help="Min price improvement for scale_in_better_entry_only (default 5.0).")
+    col.add_argument("--same-side-cluster-sl-gap", type=_positive_float, default=10.0,
+                     help="Reserved: min SL separation within a cluster (default 10.0).")
+    col.add_argument("--max-cluster-risk-multiple", type=_positive_float, default=1.0,
+                     help="Cluster risk must stay <= the cluster anchor's risk x this (default 1.0).")
+    col.add_argument("--opposite-profit-threshold-r", type=_positive_float, default=0.5,
+                     help="profit_bank_rearm banks the old side only at >= this many R (default 0.5).")
+    col.add_argument("--hedge-lot-fraction", type=_positive_float, default=0.5,
+                     help="reduce_then_hedge keeps this fraction of the old side's exposure (default 0.5).")
+
     obs = p.add_argument_group("observability")
     obs.add_argument("--notifications", default=None)
     obs.add_argument("--no-notifications", action="store_true")
@@ -305,6 +333,14 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         daily_loss_limit_pct=getattr(args, "daily_loss_limit_pct", 0.0),
         max_open_signals=getattr(args, "max_open_signals", 0),
         max_open_lots=getattr(args, "max_open_lots", 0.0),
+        opposite_signal_policy=getattr(args, "opposite_signal_policy", "allow_hedge"),
+        same_side_overlap_policy=getattr(args, "same_side_overlap_policy", "allow_all"),
+        same_side_cluster_window_minutes=getattr(args, "same_side_cluster_window_minutes", 30),
+        same_side_cluster_entry_gap=getattr(args, "same_side_cluster_entry_gap", 5.0),
+        same_side_cluster_sl_gap=getattr(args, "same_side_cluster_sl_gap", 10.0),
+        max_cluster_risk_multiple=getattr(args, "max_cluster_risk_multiple", 1.0),
+        opposite_profit_threshold_r=getattr(args, "opposite_profit_threshold_r", 0.5),
+        hedge_lot_fraction=getattr(args, "hedge_lot_fraction", 0.5),
     )
 
 
