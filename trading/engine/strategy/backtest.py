@@ -240,8 +240,10 @@ def _new_bucket(key_name: str, key_value: str, equity_start: float) -> dict:
         "breakevens": 0, "no_fills": 0, "open": 0,
         "pnl": 0.0, "trading_pnl": 0.0, "bonus": 0.0, "closed_lots": 0.0,
         "equity_start": equity_start, "equity_end": equity_start,
-        # worst running drawdown (vs all-time peak) seen during this period
-        "max_drawdown_pct": 0.0, "max_drawdown_usd": 0.0,
+        # worst running drawdown (vs all-time peak) seen during this period,
+        # and WHEN it hit (chart-local time of the signal at the trough) so the
+        # report shows "which day of the week / time of day" the DD occurred.
+        "max_drawdown_pct": 0.0, "max_drawdown_usd": 0.0, "max_drawdown_at": None,
         "entries": 0,
     }
 
@@ -448,6 +450,8 @@ def aggregate_backtest_result(rows, entry_rows, excluded, config, chart_df,
         if r.get("running_drawdown_pct", 0.0) < bucket["max_drawdown_pct"]:
             bucket["max_drawdown_pct"] = r["running_drawdown_pct"]
             bucket["max_drawdown_usd"] = r["running_drawdown_usd"]
+            _tt = r.get("signal_time_chart")
+            bucket["max_drawdown_at"] = _tt.isoformat(sep=" ") if _tt else None
     monthly_rows = sorted(monthly.values(), key=lambda b: b["month"])
     for b in monthly_rows:
         _finalize_bucket(b)
@@ -481,6 +485,8 @@ def aggregate_backtest_result(rows, entry_rows, excluded, config, chart_df,
         if r.get("running_drawdown_pct", 0.0) < bucket["max_drawdown_pct"]:
             bucket["max_drawdown_pct"] = r["running_drawdown_pct"]
             bucket["max_drawdown_usd"] = r["running_drawdown_usd"]
+            _tt = r.get("signal_time_chart")
+            bucket["max_drawdown_at"] = _tt.isoformat(sep=" ") if _tt else None
     weekly_rows = sorted(weekly.values(), key=lambda b: b["week"])
     for b in weekly_rows:
         _finalize_bucket(b)
@@ -518,6 +524,8 @@ def aggregate_backtest_result(rows, entry_rows, excluded, config, chart_df,
         if r.get("running_drawdown_pct", 0.0) < bucket["max_drawdown_pct"]:
             bucket["max_drawdown_pct"] = r["running_drawdown_pct"]
             bucket["max_drawdown_usd"] = r["running_drawdown_usd"]
+            _tt = r.get("signal_time_chart")
+            bucket["max_drawdown_at"] = _tt.isoformat(sep=" ") if _tt else None
 
     def _attach_entry_detail(bucket: dict, dk: str) -> None:
         de = daily_entry.get(dk)
@@ -652,7 +660,8 @@ def run_backtest(
         built = replay_signal_rows(sig, chart_df, equity, sig_config, config,
                                    contract_size=contract_size)
         if gate is not None:
-            greason = gate.risk_budget_check(built["entry_rows"], equity)
+            greason = (gate.risk_budget_check(built["entry_rows"], equity)
+                       or gate.open_lots_check(built["entry_rows"], equity))
             if greason is not None:
                 excluded.append({"signal_key": sig.signal_key, "reason": greason})
                 continue

@@ -30,6 +30,7 @@ from ..core.config import CONTRACT_SIZE_OZ, StrategyConfig
 class _OpenWindow:
     start: datetime
     end: datetime | None  # None => still open at end of data / now
+    lots: float = 0.0      # total filled lots this signal holds open during the window
 
 
 @dataclass
@@ -44,7 +45,7 @@ class DeploymentGate:
     rejected: dict[str, int] = field(
         default_factory=lambda: {
             "risk_budget_single": 0, "risk_budget_zone": 0,
-            "daily_loss_breaker": 0, "max_open_signals": 0,
+            "daily_loss_breaker": 0, "max_open_signals": 0, "max_open_lots": 0,
         })
 
     _windows: list[_OpenWindow] = field(default_factory=list)
@@ -62,13 +63,20 @@ class DeploymentGate:
         self.max_zone = float(getattr(c, "max_zone_risk_pct", 0.0) or 0.0)
         self.daily_limit = float(getattr(c, "daily_loss_limit_pct", 0.0) or 0.0)
         self.max_open = int(getattr(c, "max_open_signals", 0) or 0)
+        self.max_open_lots = float(getattr(c, "max_open_lots", 0.0) or 0.0)
         self.pending_expiry = int(getattr(c, "pending_expiry_minutes", 0) or 0)
         self.max_hold = int(getattr(c, "max_hold_minutes", 0) or 0)
 
     # -- construction ---------------------------------------------------------
     @property
     def enabled(self) -> bool:
-        return self.rb or self.daily_limit > 0 or self.max_open > 0
+        return (self.rb or self.daily_limit > 0 or self.max_open > 0
+                or self.max_open_lots > 0)
+
+    @property
+    def _track_windows(self) -> bool:
+        # window overlay is needed for both the concurrency cap and the open-lots cap
+        return self.max_open > 0 or self.max_open_lots > 0
 
     @classmethod
     def maybe(cls, config: StrategyConfig,
@@ -106,17 +114,34 @@ class DeploymentGate:
             self.rejected["daily_loss_breaker"] += 1
             return "daily_loss_breaker"
 
-        if self.max_open > 0:
+        if self._track_windows:
             t = sig.signal_time_chart
             # signals are chronological, so a window that closed at/before t can
             # never block t or any later signal -- drop it (keeps the scan O(open),
-            # not O(all-history)).
+            # not O(all-history)). Shared by the concurrency + open-lots caps.
             self._windows = [w for w in self._windows if w.end is None or w.end > t]
-            n_open = sum(1 for w in self._windows if w.start <= t)
-            self._peak_concurrency = max(self._peak_concurrency, n_open)
-            if n_open >= self.max_open:
-                self.rejected["max_open_signals"] += 1
-                return "max_open_signals"
+            if self.max_open > 0:
+                n_open = sum(1 for w in self._windows if w.start <= t)
+                self._peak_concurrency = max(self._peak_concurrency, n_open)
+                if n_open >= self.max_open:
+                    self.rejected["max_open_signals"] += 1
+                    return "max_open_signals"
+        return None
+
+    # -- open-lots cap (concurrent total volume across all open positions) ----
+    def open_lots_check(self, entry_rows: list[dict], _equity: float = 0.0) -> str | None:
+        """Reject when this signal's filled ladder would push the TOTAL open lots
+        (sum across every currently-open signal's filled legs + this signal) over
+        the broker ceiling (`max_open_lots`, ELEV8 = 100). Call after the signal is
+        built; pre_check has already pruned `_windows` to those open at its arrival."""
+        if self.max_open_lots <= 0:
+            return None
+        new_lots = sum(float(er.get("lot") or 0.0) for er in entry_rows
+                       if er.get("fill_time") is not None)
+        open_lots = sum(w.lots for w in self._windows)
+        if open_lots + new_lots > self.max_open_lots:
+            self.rejected["max_open_lots"] += 1
+            return "max_open_lots"
         return None
 
     # -- gate computing worst-case min-lot risk -------------------------------
@@ -161,7 +186,8 @@ class DeploymentGate:
     # -- LIVE one-shot decision (mirrors the backtest loop gates) -------------
     def live_check(self, *, planned_legs: list[dict], equity: float,
                    open_groups: int, day_realized_pnl: float,
-                   day_start_equity: float | None) -> str | None:
+                   day_start_equity: float | None,
+                   open_lots: float = 0.0) -> str | None:
         """Return a reject reason (or None to place) for the LIVE executor, using
         the SAME predicates as the backtest/tick path. State is supplied from live
         sources rather than reconstructed: ``open_groups`` = currently-open tracked
@@ -176,6 +202,11 @@ class DeploymentGate:
             self._peak_concurrency = max(self._peak_concurrency, open_groups)
             self.rejected["max_open_signals"] += 1
             return "max_open_signals"
+        if self.max_open_lots > 0:
+            new_lots = sum(float(leg.get("lot") or 0.0) for leg in planned_legs)
+            if open_lots + new_lots > self.max_open_lots:
+                self.rejected["max_open_lots"] += 1
+                return "max_open_lots"
         rb = self.risk_budget_check(planned_legs, equity)
         if rb is not None:
             return rb
@@ -194,7 +225,7 @@ class DeploymentGate:
                         and self._day_pnl <= -self.daily_limit * self._day_start_equity):
                     self._day_blocked = True
 
-        if self.max_open > 0:
+        if self._track_windows:
             # A signal occupies the one slot from PLACEMENT (its arrival) until it
             # is fully closed -- a laddered signal rests as pending LIMITs before
             # any leg fills, so concurrency is measured from arrival, not first
@@ -213,8 +244,10 @@ class DeploymentGate:
                 end = max(leg_ends)
             else:
                 end = start + timedelta(minutes=self.pending_expiry)
+            lots = sum(float(er.get("lot") or 0.0) for er in built["entry_rows"]
+                       if er.get("fill_time") is not None)
             # never let a degenerate row produce a zero/negative window
-            self._windows.append(_OpenWindow(start, max(end, start)))
+            self._windows.append(_OpenWindow(start, max(end, start), lots))
 
     # -- reporting ------------------------------------------------------------
     def summary(self) -> dict:
@@ -227,5 +260,6 @@ class DeploymentGate:
                 "max_zone_risk_pct": self.max_zone,
                 "daily_loss_limit_pct": self.daily_limit,
                 "max_open_signals": self.max_open,
+                "max_open_lots": self.max_open_lots,
             },
         }

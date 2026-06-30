@@ -386,6 +386,16 @@ class Mt5Executor:
             magics.add(p.magic)
         return magics
 
+    def open_lots(self) -> float:
+        """Total open volume (lots) across ALL positions on the symbol -- feeds the
+        live max-open-lots cap (ELEV8 total ceiling). Best-effort: 0.0 if MT5 is
+        unavailable (the cap then does not fire -- conservative)."""
+        try:
+            return float(sum(float(getattr(p, "volume", 0.0) or 0.0)
+                             for p in (self.mt5.positions_get(symbol=self.symbol) or [])))
+        except Exception:
+            return 0.0
+
     def realized_pnl_since(self, since, *, magics: set[int] | None = None) -> float:
         """Sum realized P&L (deal profit + swap + commission) of CLOSE deals since
         ``since`` (a chart/server-time datetime), optionally restricted to a set of
