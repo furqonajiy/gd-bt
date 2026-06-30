@@ -35,11 +35,11 @@ or ask the user to re‑explain.
   (years of compute). Parallelism is linear (≤ #cores); it cannot beat
   exponential combinatorics.
 - **Two‑stage selection — the automated *rank* vs the human *promote* decision:**
-  - **Stage 1 — automated keyfn ranks by compounded net P&L + the $3/closed‑lot
-    bonus** (`risk_net_profit_with_bonus`), among configs that pass **DD ≤ 40%**
+  - **Stage 1 — automated keyfn ranks by fixed-lot edge + the $3/closed‑lot
+    bonus** (`fixed_with_bonus_profit`), among configs that pass **DD ≤ 40%**
     **and** a positive held‑out **OOS** gate. This produces the leaderboard. The
-    compounded figure **does** reach billions/quadrillions on a dense feed — that's
-    expected; treat it as a **model upper bound that RANKS configs, not a money
+    compounded figure **can** reach billions/quadrillions on a dense feed — that's
+    expected; treat it as a **context field, not the deploy rank or a money
     forecast.**
   - **Stage 2 — PROMOTE on the reliable forward‑fit metrics, NOT the compounded
     headline.** Compounded net+bonus is hypersensitive to leverage/variance and
@@ -112,7 +112,7 @@ the engine treats each row as one minute, so a daily bar corrupts the backtest.
 
 | Item | Default | Notes |
 |---|---|---|
-| Objective | **max compounded net P&L + $3/closed‑lot bonus** at DD ≤ 40% | OOS > 0 sanity gate; edge as cross‑check |
+| Objective | **max fixed-lot edge + $3/closed‑lot bonus** at DD ≤ 40% | OOS > 0 sanity gate; compounded net as context only |
 | DD gate | **40%** | `--max-concurrent-dd-pct 40`; push risk up to this gate |
 | Regime order | **R4 → R3 → R2 → R1** (volatility order) | sweep one regime at a time |
 | Trailing | **OFF** (pinned 0) by default | proven to add no deployable edge (16‑feed sweep). To **re‑test trailing**, run `self-scalper-trailing-sweep-r4r3r2r1.yml`: a per‑regime matrix over the full cross‑product of `trailing_open {0,0.1,0.2,1,2,3,5}` × `trailing_close {0,0.1,0.2,2,3,5,8}` (49 cells/regime; `(0,0)`=base), via `sweep_self_limit.py --trailing-open/--trailing-close` which pin a fixed combo on every candidate while the SC24 grid varies. Artifact‑only, per‑regime realistic slippage; a cell wins only if it beats `base` on edge AND OOS at DD≤40%. Trailing is live‑parity‑fragile → research until forward‑validated. |
@@ -305,8 +305,8 @@ echo "$(date -u +%H:%M)Z $up <feed>=$n/300"
 ## 9. Pick the winner & call it
 
 - Among **DD ≤ gate** gate‑passers with **OOS > 0**, take the **highest
-  compounded net P&L + $3/closed‑lot bonus**; cross‑check edge.
-- "**Beats incumbent**" = higher compounded‑net‑plus‑bonus than the
+  fixed-lot edge + $3/closed‑lot bonus**; cross‑check compounded net only as context.
+- "**Beats incumbent**" = higher fixed-lot edge plus bonus than the
   incumbent (scalper24 `e6 slm2.1 d24` at 1% risk) at DD ≤ gate with OOS > 0.
   The DD ≤ 40% cap + OOS > 0 gate are what keep this honest — they reject the
   over‑levered "trillions" configs before they can rank.
@@ -328,14 +328,15 @@ echo "$(date -u +%H:%M)Z $up <feed>=$n/300"
    does not decide (see "Two‑stage selection" above; SC24T24E8 was promoted across
    R2/R3 — and initially R4 — over the net+bonus #1 on exactly this rule; R4parab
    now runs `rsi75_sqz6_rr40` on the same rule).
-   The compounded figure **does** reach billions/quadrillions on a dense feed
+   The compounded figure **can** reach billions/quadrillions on a dense feed
    (1% of a growing balance over thousands of signals) — that is expected and it
-   is a **model upper bound that RANKS configs, not a money forecast**. The
+   is a **context field, not the deploy rank or a money forecast**. The
    **DD ≤ 40% cap + OOS > 0 gate** keep the ranking honest: DD bounds the risk it
-   can chase and OOS rejects in‑sample‑only blow‑ups; edge/OOS are the deciding
-   metrics, and risk is swept 1–5% (down to 1%) up to the DD gate. A **DD 40–50%
-   "stretch" tier** is also published when a config beats the DD≤40% champion's net+bonus
-   by ≥25% (`champions_report.stretch_challenger`). Sweep one regime at a time,
+   can chase and OOS rejects in‑sample‑only blow‑ups; fixed edge+bonus/OOS are
+   the deciding metrics, and risk is swept 1–5% (down to 1%) up to the DD gate.
+   A **DD 40–50% "stretch" tier** is also published when a config beats the
+   DD≤40% champion's edge+bonus by ≥25%
+   (`champions_report.stretch_challenger`). Sweep one regime at a time,
    R4 → R3 → R2 → R1.
 4. **In‑container pauses when idle** and costs Claude tokens to keep warm;
    GitHub‑paid is the only true 24/7. State this tradeoff every time.

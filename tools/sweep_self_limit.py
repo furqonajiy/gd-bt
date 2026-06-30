@@ -15,7 +15,7 @@ Why this exists alongside tools/sweep_limit_entry.py:
 So this tool:
   * consumes a SELF-generated archive directly (no provider filtering);
   * forces trailing_open=0 (plain LIMIT/BUY-LIMIT/SELL-LIMIT entries);
-  * ranks the EDGE on FIXED-LOT, no-bonus net profit;
+  * ranks the deploy objective on FIXED-LOT edge + $3/closed-lot bonus;
   * GATES on the CONCURRENT risk-sized drawdown (default <= 30%, derated from 40
     because the backtest understates live concurrent DD);
   * GATES on monthly consistency (fixed-lot no-bonus): a minimum fraction of
@@ -135,7 +135,7 @@ def _monthly_stats(monthly: list[dict]) -> dict:
 
 
 def evaluate_self_limit(cfg: dict, *, signals, chart, validate_signals, args) -> dict:
-    """Evaluate one LIMIT candidate with fixed-lot edge + concurrent-DD gates."""
+    """Evaluate one LIMIT candidate with edge+bonus + concurrent-DD gates."""
     candidate_id = sweep._json_hash({"preset": FILTER_LABEL, "config": cfg})
 
     # Edge + consistency on FIXED LOT (sizing-independent; no compounding mirage).
@@ -176,8 +176,9 @@ def evaluate_self_limit(cfg: dict, *, signals, chart, validate_signals, args) ->
     passes_oos = (not validate_signals) or (oos is not None and oos > 0.0)
     passes = bool(passes_dd and passes_edge and passes_consistency and passes_oos)
 
-    # Among survivors, reward both edge and consistency; add a small OOS term.
-    score = edge * max(ms["stable_fraction"], 0.0) + 0.25 * (oos or 0.0)
+    # Among survivors, reward bonus-aware edge and consistency; add a small OOS
+    # term. Raw no-bonus edge remains a hard gate via passes_edge.
+    score = edge_bonus * max(ms["stable_fraction"], 0.0) + 0.25 * (oos or 0.0)
 
     return {
         "candidate_id": candidate_id,
@@ -206,7 +207,7 @@ def evaluate_self_limit(cfg: dict, *, signals, chart, validate_signals, args) ->
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Self-archive LIMIT-only sweep: fixed-lot edge ranking, "
+        description="Self-archive LIMIT-only sweep: fixed-lot edge+bonus ranking, "
                     "concurrent-DD gate, monthly-consistency gate, fixed-lot OOS.")
     p.add_argument("--signals", default="signals/self_m15_archive.txt",
                    help="Self-generated signal archive (parsed directly; no provider filter).")

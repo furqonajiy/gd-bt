@@ -29,14 +29,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tools import deploy_objective as dobj  # noqa: E402
 from tools import sweep  # noqa: E402
 
 
 def _f(v) -> float:
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return 0.0
+    return dobj.f(v)
 
 
 def load_rows(root: Path) -> list[dict]:
@@ -60,18 +58,17 @@ def _objective(r: dict) -> float:
     """Most-profitable = fixed-lot edge + the $3/closed-lot bonus (so more closed
     signals lifts the score), on the reliable fixed-lot basis (no compounding
     mirage). Falls back to edge if the bonus metric is absent."""
-    v = r.get("fixed_with_bonus_profit")
-    return _f(v) if v is not None else _f(r.get("fixed_no_bonus_profit"))
+    return dobj.fixed_with_bonus_profit(r)
 
 
 # Headline metrics to surface the per-objective best of, so the winner under
 # EACH lens can be compared ("net profit's not bad -> execute"). All share the
 # same hard gates (DD<=gate & OOS>0); they only differ in what they MAXIMIZE.
 OBJECTIVES = [
-    ("net+bonus (compounded)", lambda r: _f(r.get("risk_net_profit_with_bonus"))),
+    ("net+bonus (compounded)", dobj.compounded_net_bonus),
     ("edge+bonus (fixed)", _objective),
-    ("edge (fixed)", lambda r: _f(r.get("fixed_no_bonus_profit"))),
-    ("OOS (held-out)", lambda r: _f(r.get("oos_fixed_no_bonus_profit"))),
+    ("edge (fixed)", dobj.edge_profit),
+    ("OOS (held-out)", dobj.oos_profit),
 ]
 
 
@@ -80,21 +77,7 @@ def best_per_objective(surv: list[dict]) -> list[tuple[str, dict]]:
 
 
 def survivors(rows: list[dict], dd_gate: float) -> list[dict]:
-    out = []
-    for r in rows:
-        if r.get("error"):
-            continue
-        dd = r.get("concurrent_risk_max_dd_pct")
-        oos = r.get("oos_fixed_no_bonus_profit")
-        if dd is None or _f(dd) > dd_gate:
-            continue
-        if oos is None or _f(oos) <= 0.0:   # OOS>0 overfit guard (hard gate)
-            continue
-        out.append(r)
-    # Rank on edge+bonus (the deploy objective), tiebreak OOS then raw edge.
-    out.sort(key=lambda r: (_objective(r), _f(r.get("oos_fixed_no_bonus_profit")),
-                            _f(r.get("fixed_no_bonus_profit"))), reverse=True)
-    return out
+    return dobj.survivors(rows, dd_gate)
 
 
 def _cfg_brief(c: dict) -> str:
@@ -156,9 +139,9 @@ def main(argv: list[str] | None = None) -> int:
     for name, r in best_per_objective(surv):
         seen_obj[name] = r
         lines.append(
-            f"| **{name}** | {_f(r.get('fixed_no_bonus_profit')):,.0f} | "
+            f"| **{name}** | {dobj.edge_profit(r):,.0f} | "
             f"{_objective(r):,.0f} | {_f(r.get('oos_fixed_no_bonus_profit')):,.0f} | "
-            f"{_f(r.get('risk_net_profit_with_bonus')):,.0f} | "
+            f"{dobj.compounded_net_bonus(r):,.0f} | "
             f"{_f(r.get('concurrent_risk_max_dd_pct')):.1f} | "
             f"`{_cfg_brief(r.get('config') or {})}` |")
         # dump each objective's deployable config
@@ -174,16 +157,16 @@ def main(argv: list[str] | None = None) -> int:
     for i, r in enumerate(surv[:args.top_n], 1):
         lines.append(
             f"| {i} | {_objective(r):,.0f} | "
-            f"{_f(r.get('fixed_no_bonus_profit')):,.0f} | "
-            f"{_f(r.get('bonus_contribution')):,.0f} | "
+            f"{dobj.edge_profit(r):,.0f} | "
+            f"{dobj.bonus_profit(r):,.0f} | "
             f"{_f(r.get('oos_fixed_no_bonus_profit')):,.0f} | "
             f"{_f(r.get('concurrent_risk_max_dd_pct')):.1f} | "
-            f"{_f(r.get('risk_net_profit_with_bonus')):,.0f} | "
+            f"{dobj.compounded_net_bonus(r):,.0f} | "
             f"`{_cfg_brief(r.get('config') or {})}` |")
     lines.append("")
     lines.append(f"**WINNER:** `{_cfg_brief(bc)}` — edge+bonus "
-                 f"${_objective(best):,.0f} (edge ${_f(best.get('fixed_no_bonus_profit')):,.0f} "
-                 f"+ bonus ${_f(best.get('bonus_contribution')):,.0f}), OOS "
+                 f"${_objective(best):,.0f} (edge ${dobj.edge_profit(best):,.0f} "
+                 f"+ bonus ${dobj.bonus_profit(best):,.0f}), OOS "
                  f"${_f(best.get('oos_fixed_no_bonus_profit')):,.0f}, DD "
                  f"{_f(best.get('concurrent_risk_max_dd_pct')):.1f}%. "
                  f"Full config: `BEST_{args.regime}.json`.")
