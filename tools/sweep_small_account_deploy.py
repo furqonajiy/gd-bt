@@ -66,25 +66,49 @@ TSL18_GEOMETRY = dict(
     lock_tp1_exit_slippage_points=2.0, lock_tp2_exit_slippage_points=1.0,
 )
 
+# V817 geometry (cli/candidate_V817_victor_trailing.txt) -- the CURRENT deployed
+# Victor book: e8 / slm1.7 / mh150 / TP2 / trailing 0.5/0.5 after TP1 / risk 5% on
+# Victor's provider feed (victor_signals.txt). Same gate wrapper applies.
+V817_GEOMETRY = dict(
+    sizing_mode="risk", lot_per_entry=0.01, risk_per_signal=0.05,
+    minimum_lot=0.01, maximum_lot=500.0, lot_step=0.01, bonus_per_closed_lot=3.0,
+    entry_count=8, entry_ladder="range_to_sl", entry_sl_gap=0.5, shared_sl=False,
+    activation_delay_minutes=0, pending_expiry_minutes=180, max_hold_minutes=150,
+    sl_multiplier=1.7, final_target="TP2", lock_after_tp1=True, lock_after_tp2=True,
+    tp1_lock_delay_minutes=12, tp2_lock_delay_minutes=2, profit_lock_mode="tp_levels",
+    bep_trigger_distance=3.0, tp1_lock_fraction=0.5, tp2_lock_target="TP1",
+    tp3_lock_target="TP2", runner_after_tp3=False, trailing_open_distance=0.5,
+    trailing_close_distance=0.5, trailing_close_after_stage=1,
+    lock_tp1_exit_slippage_points=2.0, lock_tp2_exit_slippage_points=1.0,
+)
+
+GEOMETRY = {"self": TSL18_GEOMETRY, "victor": V817_GEOMETRY}
+DEFAULT_FEED_SIGNALS = {"self": "signals/t818.txt", "victor": "victor_signals.txt"}
+
 WINDOWS = {  # end is EXCLUSIVE (backtest_hybrid --end-date), so 07-01 keeps Jun 30
     "june": ("2026-06-01", "2026-07-01"),
     "jan_jun": ("2026-01-01", "2026-07-01"),
 }
 
 
-def _cfg(initial_capital, **over) -> StrategyConfig:
-    return StrategyConfig(initial_capital=initial_capital, **{**TSL18_GEOMETRY, **over})
+def _cfg(initial_capital, feed="self", **over) -> StrategyConfig:
+    return StrategyConfig(initial_capital=initial_capital,
+                          **{**GEOMETRY[feed], **over})
 
 
-def variants() -> dict[str, StrategyConfig]:
+def variants(feed: str = "self") -> dict[str, StrategyConfig]:
+    """Small-account comparison cells. ``self`` = TSL18/T818 (tag TS2K); ``victor``
+    = V817 (tag VS2K). base at full $50k and forced onto $2k, vs the gated wrappers."""
     gate2 = dict(risk_budget_gate=True, max_single_entry_risk_pct=0.04,
                  max_zone_risk_pct=0.06, max_open_signals=1)
+    pre = "ts2k" if feed == "self" else "vs2k"
+    full = "8entry"
     return {
-        "base_8entry_50k": _cfg(50_000.0),
-        "base_8entry_2k": _cfg(2_000.0),
-        "ts2k_e2_c1_d5_z6": _cfg(2_000.0, entry_count=2, daily_loss_limit_pct=0.05, **gate2),
-        "ts2k_e2_c1_d6_z6": _cfg(2_000.0, entry_count=2, daily_loss_limit_pct=0.06, **gate2),
-        "ts2k_e3_c1_d5_z6": _cfg(2_000.0, entry_count=3, daily_loss_limit_pct=0.05, **gate2),
+        f"base_{full}_50k": _cfg(50_000.0, feed),
+        f"base_{full}_2k": _cfg(2_000.0, feed),
+        f"{pre}_e2_c1_d5_z6": _cfg(2_000.0, feed, entry_count=2, daily_loss_limit_pct=0.05, **gate2),
+        f"{pre}_e2_c1_d6_z6": _cfg(2_000.0, feed, entry_count=2, daily_loss_limit_pct=0.06, **gate2),
+        f"{pre}_e3_c1_d5_z6": _cfg(2_000.0, feed, entry_count=3, daily_loss_limit_pct=0.05, **gate2),
     }
 
 
@@ -265,19 +289,21 @@ def account_floor_table(leg_risk) -> list[dict]:
     return out
 
 
-def run(window: str, signals_path: str, charts, ticks, variant_names, watch_seconds):
+def run(window: str, signals_path: str, charts, ticks, variant_names, watch_seconds,
+        feed: str = "self"):
     start, end = WINDOWS[window]
-    out_dir = ROOT / "reports" / f"SMALL_ACCOUNT_{window}"
+    suffix = "" if feed == "self" else f"_{feed}"
+    out_dir = ROOT / "reports" / f"SMALL_ACCOUNT{suffix}_{window}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     sigs_all = bx.filter_signals_by_date(parse_signals_file(Path(signals_path)), start, end)
     chart = CsvChartSource(bx._expand_chart_paths(charts))
     tick_paths = tk._expand(ticks)
     tickdf = tk.load_ticks(tick_paths) if tick_paths else None
-    print(f"[small-acct] {window}: {len(sigs_all)} signals  "
+    print(f"[small-acct] {feed}/{window}: {len(sigs_all)} signals  "
           f"ticks={0 if tickdf is None else len(tickdf)} rows", flush=True)
 
-    allv = variants()
+    allv = variants(feed)
     results = {}
     for name in variant_names:
         cfg = allv[name]
@@ -296,7 +322,7 @@ def run(window: str, signals_path: str, charts, ticks, variant_names, watch_seco
               f"rejConc {m['signals_rejected_by_concurrency']}  "
               f"[{ds.get('tick_signals',0)}T/{ds.get('m1_signals',0)}M1]", flush=True)
 
-    _write_reports(window, out_dir, results)
+    _write_reports(window, out_dir, results, feed)
     return out_dir
 
 
@@ -312,7 +338,7 @@ def _fmt(v, money=False, pct=False):
     return str(v)
 
 
-def _write_reports(window, out_dir, results):
+def _write_reports(window, out_dir, results, feed="self"):
     # metrics.csv
     keys = [k for k in next(iter(results.values()))[1] if not k.startswith("_")
             and k != "data_sources"]
@@ -322,8 +348,9 @@ def _write_reports(window, out_dir, results):
         for name, (_, m) in results.items():
             w.writerow([name] + [m[k] for k in keys])
 
-    lines = [f"# Small-account ($2K) safe-deployment validation -- {window}", ""]
-    lines.append("TSL18 / T818 feed + geometry, TICK-preferred. Only entries + the "
+    feed_label = "TSL18 / T818" if feed == "self" else "V817 (Victor)"
+    lines = [f"# Small-account ($2K) safe-deployment validation -- {feed_label} -- {window}", ""]
+    lines.append(f"{feed_label} feed + geometry, TICK-preferred. Only entries + the "
                  "deployment gates change between cells. Reporting only -- promotes nothing.")
     lines.append("")
     # headline table
@@ -368,7 +395,8 @@ def _write_reports(window, out_dir, results):
     lines.append("")
 
     # account-size floor (from the base 8-entry leg-risk distribution -- the true feed)
-    base = results.get("base_8entry_50k") or next(iter(results.values()))
+    base = (next((v for k, v in results.items() if k.endswith("_50k")), None)
+            or next(iter(results.values())))
     floor = account_floor_table(base[1]["_leg_risk"])
     zvals = base[1]["_zone_risk"]
     lines.append("## Minimum account-size floor (from observed stop distances)")
@@ -394,13 +422,15 @@ def _write_reports(window, out_dir, results):
 
     lines.append("## Verdict")
     lines.append("")
-    b2k = results.get("base_8entry_2k")
-    ts = results.get("ts2k_e2_c1_d5_z6")
+    tag = "TS2K" if feed == "self" else "VS2K"
+    feed_name = "TSL18" if feed == "self" else "V817"
+    b2k = next((v for k, v in results.items() if k.endswith("_2k")), None)
+    ts = next((v for k, v in results.items() if "_e2_c1_d5_z6" in k), None)
     if b2k and ts:
-        lines.append(f"- Full 8-entry TSL18 at $2k: worst day {b2k[1]['max_daily_loss_pct']:.1f}%, "
+        lines.append(f"- Full 8-entry {feed_name} at $2k: worst day {b2k[1]['max_daily_loss_pct']:.1f}%, "
                      f"max DD {b2k[1]['max_drawdown_pct']:.1f}%, max losing-signal streak "
                      f"{b2k[1]['max_consecutive_losing_signals']}.")
-        lines.append(f"- TS2K (e2/conc1/daily5/zone6) at $2k: worst day {ts[1]['max_daily_loss_pct']:.1f}%, "
+        lines.append(f"- {tag} (e2/conc1/daily5/zone6) at $2k: worst day {ts[1]['max_daily_loss_pct']:.1f}%, "
                      f"max DD {ts[1]['max_drawdown_pct']:.1f}%, net {_fmt(ts[1]['net_pnl'], money=True)}, "
                      f"return {ts[1]['return_pct']:.1f}%, daily win rate {ts[1]['daily_win_rate']:.0f}%.")
         lines.append(f"- Drawdown reduction: {b2k[1]['max_drawdown_pct']:.1f}% -> "
@@ -414,19 +444,25 @@ def _write_reports(window, out_dir, results):
 def build_parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--window", choices=list(WINDOWS), default="june")
-    p.add_argument("--signals", default="signals/t818.txt",
-                   help="TSL18/T818 (C160) feed; default signals/t818.txt")
+    p.add_argument("--feed", choices=["self", "victor"], default="self",
+                   help="self = TSL18/T818 (C160) -> TS2K cells; "
+                        "victor = V817 (Victor provider feed) -> VS2K cells.")
+    p.add_argument("--signals", default=None,
+                   help="signal feed; default depends on --feed "
+                        "(self: signals/t818.txt, victor: victor_signals.txt)")
     p.add_argument("--charts", nargs="+", default=["data/XAUUSD_M1_*_ELEV8.csv"])
     p.add_argument("--ticks", nargs="+", default=["data/ticks/XAUUSD_TICK_*_ELEV8.csv"])
-    p.add_argument("--variants", nargs="+", default=list(variants().keys()),
-                   help="subset of variant names to run (default: all)")
+    p.add_argument("--variants", nargs="+", default=None,
+                   help="subset of variant names to run (default: all for the feed)")
     p.add_argument("--watch-seconds", type=int, default=3)
     return p
 
 
 def main(argv=None) -> int:
     a = build_parser().parse_args(argv)
-    run(a.window, a.signals, a.charts, a.ticks, a.variants, a.watch_seconds)
+    signals = a.signals or DEFAULT_FEED_SIGNALS[a.feed]
+    variant_names = a.variants or list(variants(a.feed).keys())
+    run(a.window, signals, a.charts, a.ticks, variant_names, a.watch_seconds, a.feed)
     return 0
 
 
