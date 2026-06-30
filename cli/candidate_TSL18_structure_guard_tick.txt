@@ -49,8 +49,8 @@
 #   2. Live Loop Signal Generator   (continuous guarded feed -> signals/tsg18_live.txt)
 #   3. Live Auto Executor           (tag TSG18, TRAILING on, risk 1%) -- DEMO/SHADOW
 #   4. Signal Generator             (one-shot guarded archive + structure CSV)
-#   5. Backtest from 2026-06         -> reports/TSG18_202606.xlsx  (R4; slip 2.0/1.0)
-#   6. Backtest from 2026-01         -> reports/TSG18_202601.xlsx  (R4; slip 2.0/1.0)
+#   5. Backtest June 2026 ONLY       -> reports/TSG18_202606.xlsx  (06-01..07-01 excl; slip 2.0/1.0)
+#   6. Backtest Jan->Jun 2026        -> reports/TSG18_202601.xlsx  (01-01..07-01 excl; slip 2.0/1.0)
 #   7. Backtest 2025 (R3 strong)     -> reports/TSG18_2025.xlsx    (slip 0.9/0.45)
 #   8. Backtest 2024 (R2 bull)       -> reports/TSG18_2024.xlsx    (slip 0.5/0.25)
 #   9. Backtest 2021-2023 (R1 quiet) -> reports/TSG18_2021_2023.xlsx (slip 0.4/0.2)
@@ -120,11 +120,14 @@ python tools/auto_explicit.py `
 # C160 feed filter -- identical to T160/T18S section 4, different output file.
 python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/tsg18.txt --structure-diagnostics signals/tsg18_structure.csv --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5 --structure-filter --structure-htf-minutes 60 --structure-ema-fast 20 --structure-ema-slow 50 --structure-impulse-cooldown-bars 5 --structure-impulse-atr 1.5 --structure-min-score 2
 
-# ===== 5. BACKTEST FROM 2026-06 (current month) =====
+# ===== 5. BACKTEST FROM 2026-06 (June 2026 ONLY) =====
 # TICK-AWARE: real fills from committed tick archive (2026-05+), M1 elsewhere.
 # slm 1.8 / entries 8 / max-hold 150 -- the Phase-2 calibrated winner geometry.
 # --lock-tp1/tp2-exit-slippage 2.0/1.0 (R4 era-matched; backtest-only realism).
 # --max-drawdown-limit-pct 200: research cell; let it run to see full picture.
+# WINDOW: 2026-06-01 .. 2026-07-01. --end-date is EXCLUSIVE, so 2026-07-01 keeps
+# all of June 30 and nothing from July -- explicit so the window can't drift to
+# include July+ once that data lands.
 python tools/backtest_hybrid.py `
   --signals signals/tsg18.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -166,9 +169,13 @@ python tools/backtest_hybrid.py `
   --lock-tp2-exit-slippage 1.0 `
   --output-dir reports/TSG18_202606 `
   --initial-capital 50000 `
-  --start-date 2026-06-01
+  --start-date 2026-06-01 `
+  --end-date 2026-07-01
 
-# ===== 6. BACKTEST FROM 2026-01 (current regime) =====
+# ===== 6. BACKTEST FROM 2026-01 (Jan 2026 through Jun 2026) =====
+# WINDOW: 2026-01-01 .. 2026-07-01. --end-date is EXCLUSIVE, so 2026-07-01 keeps
+# all of June 30 and nothing from July -- explicit so the window stays Jan->Jun
+# and can't silently extend into July+ once that data lands.
 python tools/backtest_hybrid.py `
   --signals signals/tsg18.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -210,7 +217,8 @@ python tools/backtest_hybrid.py `
   --lock-tp2-exit-slippage 1.0 `
   --output-dir reports/TSG18_202601 `
   --initial-capital 50000 `
-  --start-date 2026-01-01
+  --start-date 2026-01-01 `
+  --end-date 2026-07-01
 
 # ===== 7. BACKTEST FROM 2025 (R3 strong) =====
 # Era-matched slippage 0.9/0.45 (R3). M1 only (no tick overlap).
