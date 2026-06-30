@@ -78,9 +78,11 @@ VARIANTS: dict[str, list[str]] = {
                         "--structure-impulse-atr", "1.5", "--structure-min-score", "2"],
 }
 
+# NB: backtest_hybrid treats --end-date as EXCLUSIVE, so to include all of June 30
+# the end is 2026-07-01 (the day after the last day we want to keep).
 WINDOWS = {
-    "june": ("2026-06-01", "2026-06-30"),
-    "jan_jun": ("2026-01-01", "2026-06-30"),
+    "june": ("2026-06-01", "2026-07-01"),
+    "jan_jun": ("2026-01-01", "2026-07-01"),
 }
 
 ERA_SLIP = ["--lock-tp1-exit-slippage", "2.0", "--lock-tp2-exit-slippage", "1.0"]  # R4
@@ -93,6 +95,21 @@ class Trade:
     side: str
     pnl: float
     status: str
+    signal_key: str = ""   # 'YYYY-MM-DD#NN' (the leg's signal, NN per-day index)
+
+    @property
+    def match_key(self) -> tuple[str, str]:
+        """Cross-feed signal identity = (chart timestamp, side).
+
+        We deliberately do NOT key on the Entry Key signal portion (``date#NN``):
+        the per-day index ``NN`` RENUMBERS when the guard filters signals out, so
+        ``date#NN`` is not stable between the base and a guarded feed. The chart
+        bar timestamp + side IS stable (the same chart bar produces the same
+        signal in every feed) and is zone-consistent, so it matches correctly even
+        for signals whose feed-zone (source) date differs from their chart date
+        around the GMT+7/EET midnight boundary.
+        """
+        return (self.time_chart, self.side)
 
 
 @dataclass
@@ -103,7 +120,16 @@ class Metrics:
     win_rate: float = 0.0
     profit_factor: float = 0.0
     losses: int = 0
-    max_consec_losses: int = 0
+    # entry-level streak (TSL18 opens up to 8 entries/signal, so this over-counts
+    # the user-facing 'sequential losing TRADES' problem -- keep it but name it
+    # clearly so it is not confused with the signal-level streaks below).
+    max_consecutive_losing_entries: int = 0
+    # signal-level streaks (entries grouped by signal; a losing signal = total
+    # signal P&L < 0). These are what the operator actually experiences.
+    signals: int = 0
+    losing_signals: int = 0
+    max_consecutive_losing_signals: int = 0
+    max_consecutive_wrong_side_losing_signals: int = 0
     max_daily_loss: float = 0.0
     max_drawdown: float = 0.0
     buy_loss_bear_htf: int = 0
@@ -159,12 +185,14 @@ def _read_trades(xlsx: Path) -> list[Trade]:
         pnl = ws.cell(row=r, column=hdr["P&L ($)"]).value
         if not k or pnl is None:
             continue
+        key = str(k)
         out.append(Trade(
             date=str(ws.cell(row=r, column=hdr["Date"]).value),
             time_chart=str(ws.cell(row=r, column=hdr["Time (chart EET/EEST)"]).value),
             side=str(ws.cell(row=r, column=hdr["Side"]).value).upper(),
             pnl=float(pnl),
             status=str(ws.cell(row=r, column=hdr["Status"]).value),
+            signal_key=key.rsplit(".", 1)[0] if "." in key else key,
         ))
     return out
 
@@ -190,7 +218,7 @@ def _metrics(variant: str, trades: list[Trade], htf: dict[tuple[str, str], str])
     m.win_rate = round(100.0 * len(wins) / len(trades), 1) if trades else 0.0
     gross_win, gross_loss = sum(wins), -sum(losses)
     m.profit_factor = round(gross_win / gross_loss, 2) if gross_loss > 0 else float("inf")
-    # max consecutive losses (trades are in fill order in the sheet)
+    # ENTRY-level max consecutive losses (trades are in fill order in the sheet).
     run = best = 0
     for t in trades:
         if t.pnl < 0:
@@ -198,7 +226,7 @@ def _metrics(variant: str, trades: list[Trade], htf: dict[tuple[str, str], str])
             best = max(best, run)
         else:
             run = 0
-    m.max_consec_losses = best
+    m.max_consecutive_losing_entries = best
     # max daily loss + a simple equity-curve drawdown (sequential)
     by_day: dict[str, float] = {}
     eq = peak = 0.0
@@ -210,24 +238,72 @@ def _metrics(variant: str, trades: list[Trade], htf: dict[tuple[str, str], str])
         dd = min(dd, eq - peak)
     m.max_daily_loss = round(min(by_day.values()), 2) if by_day else 0.0
     m.max_drawdown = round(dd, 2)
-    # wrong-side-HTF losses
+    # entry-level wrong-side-HTF losses
     for t in trades:
         if t.pnl >= 0:
             continue
-        state = htf.get((f"{t.time_chart[:16]}", t.side))
+        state = htf.get((t.time_chart[:16], t.side))
         if t.side == "BUY" and state == "bear":
             m.buy_loss_bear_htf += 1
         elif t.side == "SELL" and state == "bull":
             m.sell_loss_bull_htf += 1
+
+    # --- SIGNAL-level streaks (the user-facing sequential-loss view). Group the
+    #     up-to-8 entries of a signal, aggregate their P&L; a signal LOSES when
+    #     its total P&L < 0. Order signals by their (chart) entry time. A
+    #     wrong-side losing signal = a losing BUY whose HTF was bearish, or a
+    #     losing SELL whose HTF was bullish. ---
+    agg: dict[str, dict] = {}
+    for t in trades:
+        sig = agg.setdefault(t.signal_key, {"pnl": 0.0, "side": t.side,
+                                            "time": t.time_chart})
+        sig["pnl"] += t.pnl
+        sig["time"] = min(sig["time"], t.time_chart)  # earliest leg = signal time
+    ordered = sorted(agg.values(), key=lambda s: s["time"])
+    m.signals = len(ordered)
+    m.losing_signals = sum(1 for s in ordered if s["pnl"] < 0)
+
+    def _max_run(flags: list[bool]) -> int:
+        run = best = 0
+        for f in flags:
+            run = run + 1 if f else 0
+            best = max(best, run)
+        return best
+
+    losing_flags = [s["pnl"] < 0 for s in ordered]
+    wrong_side_flags = []
+    for s in ordered:
+        if s["pnl"] >= 0:
+            wrong_side_flags.append(False)
+            continue
+        state = htf.get((s["time"][:16], s["side"]))
+        wrong_side_flags.append(
+            (s["side"] == "BUY" and state == "bear")
+            or (s["side"] == "SELL" and state == "bull"))
+    m.max_consecutive_losing_signals = _max_run(losing_flags)
+    m.max_consecutive_wrong_side_losing_signals = _max_run(wrong_side_flags)
     return m
 
 
 def _filtered_breakdown(base_trades: list[Trade], variant_trades: list[Trade]) -> tuple[int, int, int]:
-    """Signals present in base but removed by the variant: winners vs losers."""
-    kept = {(t.date, t.time_chart[:16], t.side) for t in variant_trades}
-    removed = [t for t in base_trades if (t.date, t.time_chart[:16], t.side) not in kept]
-    winners = sum(1 for t in removed if t.pnl > 0)
-    losers = sum(1 for t in removed if t.pnl < 0)
+    """SIGNALS present in base but removed by the variant: winners vs losers.
+
+    Matched at the SIGNAL level on ``Trade.match_key`` (chart timestamp + side),
+    which is stable across feeds -- the Entry Key's per-day index renumbers when
+    the guard drops signals, so it can't be used for cross-feed matching. A
+    removed signal counts as a winner/loser by its aggregate P&L.
+    """
+    def by_signal(trades: list[Trade]) -> dict[tuple[str, str], float]:
+        agg: dict[tuple[str, str], float] = {}
+        for t in trades:
+            agg[t.match_key] = agg.get(t.match_key, 0.0) + t.pnl
+        return agg
+
+    base_sig = by_signal(base_trades)
+    kept = set(by_signal(variant_trades))
+    removed = {k: pnl for k, pnl in base_sig.items() if k not in kept}
+    winners = sum(1 for pnl in removed.values() if pnl > 0)
+    losers = sum(1 for pnl in removed.values() if pnl < 0)
     return len(removed), winners, losers
 
 
@@ -241,22 +317,26 @@ def _write_summary(out_dir: Path, window: str, span: tuple[str, str],
         "Base TSL18 feed vs structure-guarded variants, SAME TSL18 geometry, TICK where available.",
         "Judge on the sequential / wrong-side columns, not net alone.",
         "",
-        "| variant | trades | net $ | win% | PF | losses | maxConsecL | maxDailyLoss $ | maxDD $ | BUYloss·bearHTF | SELLloss·bullHTF | filtered(W/L) |",
-        "|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|",
+        "| variant | signals | losing sig | maxConsec losing SIG | maxConsec wrong-side losing SIG | entries | maxConsec losing ENTRIES | net $ | win% | PF | maxDailyLoss $ | maxDD $ | BUYloss·bearHTF | SELLloss·bullHTF | filtered sig (W/L) |",
+        "|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|",
     ]
     for m in results:
         pf = "inf" if m.profit_factor == float("inf") else f"{m.profit_factor:.2f}"
         lines.append(
-            f"| {m.variant} | {m.trades} | {m.net:,.0f} | {m.win_rate} | {pf} | {m.losses} | "
-            f"{m.max_consec_losses} | {m.max_daily_loss:,.0f} | {m.max_drawdown:,.0f} | "
+            f"| {m.variant} | {m.signals} | {m.losing_signals} | "
+            f"{m.max_consecutive_losing_signals} | {m.max_consecutive_wrong_side_losing_signals} | "
+            f"{m.trades} | {m.max_consecutive_losing_entries} | {m.net:,.0f} | {m.win_rate} | {pf} | "
+            f"{m.max_daily_loss:,.0f} | {m.max_drawdown:,.0f} | "
             f"{m.buy_loss_bear_htf} | {m.sell_loss_bull_htf} | "
             f"{m.filtered_winners}/{m.filtered_losers} (of {m.filtered_total}) |"
         )
     lines += [
         "",
-        "**Read:** a good guard lowers *maxConsecL*, *maxDailyLoss*, *maxDD* and the "
-        "wrong-side-HTF loss counts while keeping *filtered losers >> filtered winners*. "
-        "If it filters mostly winners, it is hurting — do not promote.",
+        "**Read this on the SIGNAL columns first** (TSL18 opens up to 8 entries per "
+        "signal, so the entry-level streak over-counts the felt pain). A good guard "
+        "lowers *maxConsec losing SIG*, *maxConsec wrong-side losing SIG*, *maxDailyLoss* "
+        "and *maxDD* while keeping *filtered losers >> filtered winners*. If it filters "
+        "mostly winners, it is hurting — do not promote.",
     ]
     md.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return md
@@ -311,8 +391,10 @@ def main(argv: list[str] | None = None) -> int:
             m.filtered_total, m.filtered_winners, m.filtered_losers = \
                 _filtered_breakdown(base_trades, trades)
         results.append(m)
-        print(f"[structure-sweep] {v}: trades={m.trades} net=${m.net:,.0f} "
-              f"maxConsecL={m.max_consec_losses} wrongBUY={m.buy_loss_bear_htf} "
+        print(f"[structure-sweep] {v}: signals={m.signals} losingSig={m.losing_signals} "
+              f"maxConsecLosingSig={m.max_consecutive_losing_signals} "
+              f"maxConsecWrongSideSig={m.max_consecutive_wrong_side_losing_signals} "
+              f"entries={m.trades} net=${m.net:,.0f} wrongBUY={m.buy_loss_bear_htf} "
               f"wrongSELL={m.sell_loss_bull_htf}", flush=True)
 
     md = _write_summary(out_root, args.window, (start, end), results)

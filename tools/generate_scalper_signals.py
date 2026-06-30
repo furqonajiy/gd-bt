@@ -261,14 +261,24 @@ def _add_indicators(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
         #     Reuses the session VWAP computed above and the swing_low/high already
         #     present; adds an INDEPENDENT higher-timeframe trend EMA (its own
         #     resample minutes / EMA spans, separate from --htf-filter's htf_diff)
-        #     and a recent opposite-impulse flag. No lookahead: the HTF series is
-        #     resampled then ffill'd onto the bar (last closed HTF value), the
-        #     impulse window includes only the current and prior bars. ---
+        #     and a recent opposite-impulse flag. The impulse window includes only
+        #     the current and prior bars. ---
         if args.structure_filter:
+            # Resample to HTF buckets labelled at the bucket START (left edge).
+            # The EMA at a bucket uses that bucket's close, which is only KNOWN
+            # once the bucket COMPLETES (bucket_start + freq). Stamping each
+            # bucket's value at its completion time and then ffill'ing onto the M1
+            # bars makes every M1 bar see ONLY fully-completed HTF candles -- a
+            # bar at 10:05 reads the 09:00-10:00 candle, never the in-progress
+            # 10:00-11:00 one. This is the same data live has at that instant, so
+            # live and backtest stay in parity and there is no lookahead.
+            freq = pd.Timedelta(minutes=args.structure_htf_minutes)
             shtf = (out.set_index("time")["close"]
-                    .resample(f"{args.structure_htf_minutes}min").last().dropna())
+                    .resample(f"{args.structure_htf_minutes}min", label="left", closed="left")
+                    .last().dropna())
             sdiff = (shtf.ewm(span=args.structure_ema_fast, adjust=False).mean()
                      - shtf.ewm(span=args.structure_ema_slow, adjust=False).mean())
+            sdiff.index = sdiff.index + freq          # value available only at bucket completion
             out["struct_htf_diff"] = sdiff.reindex(pd.DatetimeIndex(out["time"]),
                                                    method="ffill").to_numpy()
             if args.structure_impulse_atr > 0.0 and args.structure_impulse_cooldown_bars > 0:

@@ -34,7 +34,12 @@ Components (first failing veto wins):
    higher-timeframe EMA (`--structure-htf-minutes`, `--structure-ema-fast`,
    `--structure-ema-slow`; default H1 20/50). Reject **BUY when fast−slow < 0**
    (bearish HTF), **SELL when fast−slow > 0** (bullish HTF). A NaN HTF (warmup)
-   vetoes — it can't be confirmed.
+   vetoes — it can't be confirmed. **No lookahead:** each HTF bucket's value is
+   stamped at its *completion* time (bucket-start + interval) before it is
+   forward-filled onto the M1 bars, so an entry at 10:05 reads the **last fully
+   completed** H1 candle (09:00–10:00), never the in-progress 10:00–11:00 one —
+   the same data live has at that instant (pinned by
+   `test_htf_structure_has_no_lookahead`).
 2. **VWAP side** (`--structure-require-vwap-side`): reject BUY below / SELL above
    session VWAP.
 3. **Impulse cooldown** (`--structure-impulse-cooldown-bars` + `--structure-impulse-atr`):
@@ -83,19 +88,36 @@ python tools/sweep_structure_guard.py --window june
 python tools/sweep_structure_guard.py --window jan_jun
 ```
 
+Both windows end on **2026-07-01** internally — `backtest_hybrid` treats
+`--end-date` as **exclusive**, so this is how June 30 is kept in the window
+(`june` = 06-01→07-01, `jan_jun` = 01-01→07-01).
+
 Output: `reports/STRUCTURE_GUARD_<window>/summary.md` with, per variant:
 net P&L, max drawdown, win rate, profit factor, total trades, loss count,
-**max consecutive losses, max daily loss, BUY-losses-during-bearish-HTF,
-SELL-losses-during-bullish-HTF**, and **filtered winners vs filtered losers**
-(what the guard removed, looked up in the base backtest).
+max daily loss, BUY-losses-during-bearish-HTF, SELL-losses-during-bullish-HTF,
+filtered winners vs filtered losers — and, crucially, **two streak levels**:
+
+- `max_consecutive_losing_entries` — the entry-level streak (kept, but renamed:
+  TSL18 opens up to 8 entries per signal, so this **over-counts** the felt pain).
+- `max_consecutive_losing_signals` — entries grouped per signal (signal loses
+  when its total P&L < 0); this is what the operator actually experiences.
+- `max_consecutive_wrong_side_losing_signals` — consecutive losing signals that
+  were wrong-side (losing BUY in a bearish HTF / losing SELL in a bullish HTF).
+
+**Read the SIGNAL columns first.** Filtered winners/losers are matched at the
+signal level on the **chart timestamp + side** (stable across feeds — the Entry
+Key's per-day index renumbers when signals are dropped, and the source date can
+differ from the chart date around the GMT+7/EET midnight boundary).
 
 ## When it is safe to promote to live
 
 Promote TSG18's guard into TSL18 **only if all hold** on both windows:
 
-1. **It cuts the target failure mode** — lower max-consecutive-losses, lower
-   max-daily-loss, and materially fewer BUY-loss-in-bearish-HTF /
-   SELL-loss-in-bullish-HTF than base.
+1. **It cuts the target failure mode** — lower `max_consecutive_losing_signals`
+   and `max_consecutive_wrong_side_losing_signals` (the SIGNAL-level streaks),
+   lower max-daily-loss, and materially fewer BUY-loss-in-bearish-HTF /
+   SELL-loss-in-bullish-HTF than base. (Judge on the signal-level streaks, not
+   the entry-level one.)
 2. **It removes mostly losers** — `filtered losers ≫ filtered winners`. If it
    filters mostly winners it is hurting; do not promote.
 3. **No material edge/OOS regression** — net P&L and drawdown stay within the

@@ -21,7 +21,7 @@ import types
 import pandas as pd
 
 from tools.generate_scalper_signals import (
-    _structure_eval, build_parser, generate_signals,
+    _add_indicators, _structure_eval, build_parser, generate_signals,
 )
 
 
@@ -159,6 +159,64 @@ def test_structure_diagnostics_carry_reject_reasons():
         assert rec["reject_reason"] in allowed
         assert set(rec) >= {"time", "side", "close", "htf_state", "vwap_side",
                             "impulse_state", "score", "reject_reason"}
+
+
+def _htf_lookahead_chart() -> pd.DataFrame:
+    # H1 closes decline 04:00..09:00 (bearish), then the 10:00 bucket spikes UP
+    # late (at 10:55) and stays up. With a responsive fast/slow EMA the H1 trend
+    # FLIPS bullish on the 10:00 bucket -- but that bucket only COMPLETES at 11:00.
+    # We set each hour's HH:59 close to the target (resample().last() reads it).
+    hour_close = {4: 2060.0, 5: 2055.0, 6: 2050.0, 7: 2045.0, 8: 2040.0,
+                  9: 2035.0, 10: 2100.0, 11: 2105.0, 12: 2110.0}
+    rows = []
+    t0 = pd.Timestamp("2026-06-01 04:00:00")
+    for i in range(9 * 60):  # 04:00 .. 12:59
+        t = t0 + pd.Timedelta(minutes=i)
+        # within the 10:00 hour, stay low until the 10:55 spike -> the flip is LATE
+        if t.hour == 10 and t.minute < 55:
+            c = 2034.0
+        else:
+            c = hour_close[t.hour]
+        rows.append((t, c, c + 0.3, c - 0.3, c, 2))
+    return pd.DataFrame(rows, columns=["time", "open", "high", "low", "close", "spread"])
+
+
+def _htf_indicators():
+    a = _args(structure_filter=True, structure_htf_minutes=60,
+              structure_ema_fast=2, structure_ema_slow=4)
+    out = _add_indicators(_htf_lookahead_chart(), a)
+    return a, out.set_index("time")
+
+
+def test_htf_structure_has_no_lookahead():
+    # The late (10:55) bullish flip lives in the 10:00-11:00 bucket, which only
+    # completes at 11:00. An M1 bar at 10:05 must therefore still read the prior
+    # (bearish) completed bucket, NOT the future flip.
+    _, idx = _htf_indicators()
+    early = float(idx.loc[pd.Timestamp("2026-06-01 10:05:00"), "struct_htf_diff"])
+    later = float(idx.loc[pd.Timestamp("2026-06-01 11:05:00"), "struct_htf_diff"])
+    assert early < 0, f"10:05 should be bearish (pre-flip), got {early}"
+    assert later > 0, f"11:05 should be bullish (flip now completed), got {later}"
+    # and the value is flat across the whole in-progress bucket (no intra-bucket leak)
+    bucket = [idx.loc[pd.Timestamp(f"2026-06-01 10:{m:02d}:00"), "struct_htf_diff"]
+              for m in (1, 5, 30, 54, 59)]
+    assert max(bucket) - min(bucket) < 1e-9
+
+
+def test_buy_rejected_only_when_completed_htf_bearish():
+    a, idx = _htf_indicators()
+    early = idx.loc[pd.Timestamp("2026-06-01 10:05:00")]   # completed HTF bearish
+    later = idx.loc[pd.Timestamp("2026-06-01 11:05:00")]   # completed HTF bullish
+    assert not _structure_eval(early, "BUY", a)[0]          # BUY rejected (bearish)
+    assert _structure_eval(later, "BUY", a)[0]              # BUY allowed (bullish)
+
+
+def test_sell_rejected_only_when_completed_htf_bullish():
+    a, idx = _htf_indicators()
+    early = idx.loc[pd.Timestamp("2026-06-01 10:05:00")]   # completed HTF bearish
+    later = idx.loc[pd.Timestamp("2026-06-01 11:05:00")]   # completed HTF bullish
+    assert _structure_eval(early, "SELL", a)[0]             # SELL allowed (bearish)
+    assert not _structure_eval(later, "SELL", a)[0]         # SELL rejected (bullish)
 
 
 def test_structure_on_never_adds_signals():
