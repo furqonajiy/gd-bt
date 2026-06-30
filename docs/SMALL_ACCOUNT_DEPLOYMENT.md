@@ -161,6 +161,46 @@ the 0.01-lot floor it runs *hotter* than the $50K backtest shows.
   existing low-WR/high-payoff edge and makes it survivable; it does not convert it
   into a high-WR grinder.
 
+## Capital ladder — full vs limited entry (V817, measured on TICK)
+
+`tools/sweep_small_account_deploy.py --feed victor` across capital, **TICK-only
+(2026-05-11 .. 06-29), risk 5%**, full 8-entry vs gated 2-entry. Drawdown is shown
+in **% and $** (the % is roughly capital-independent; the $ scales with the base):
+
+| capital | mode | return | max DD % | max DD $ | PF | peak concurrent |
+|---|---|---|---|---|---|---|
+| $2K | full 8-entry | +205% | −30.9% | $1,338 | 1.61 | 4 |
+| $2K | **limited e2** | +108% | **−18.2%** | **$572** | **2.08** | 1 |
+| $5K | full 8-entry | +187% | −27.5% | $2,676 | 1.61 | 4 |
+| $5K | limited e2 | +114% | −18.2% | $1,430 | 2.08 | 1 |
+| $10K | full 8-entry | +233% | −30.8% | $6,690 | 1.63 | 4 |
+| $10K | limited e2 | +95% | −20.9% | $3,004 | 1.94 | 1 |
+| $20K | full 8-entry | +240% | −30.9% | $13,380 | 1.64 | 4 |
+| $20K | limited e2 | +96% | −20.9% | $6,008 | 1.93 | 1 |
+
+Read: full 8-entry rides a **permanent ~−30% drawdown at every capital** (it does
+NOT shrink with more money — only the $ figure grows); the gated 2-entry holds
+**~−18 to −21%** with a higher profit factor. At **$2K a single worst-case zone
+(~$1,469) is ~73% of the account**, so full-entry is ruin-prone there.
+
+**Decision: at $2K run LIMITED 2-entry (TS2K / VS2K). Switch to full 8-entry
+around ~$10K**, where the worst zone is ~15% of the account and full ≈ doubles the
+return for the same ~−30% DD on a comfortable base.
+
+**This is MANUAL, not automatic.** Nothing auto-scales the entry count with
+equity. What IS automatic: per-entry **lot sizing** (risk% × current equity) and
+the **risk-budget gate** (equity-relative — it rejects a signal whose min-lot zone
+risk exceeds your % of *current* equity). The gate is **reject-only**; it never
+trims a ladder from 8→2 on its own. So the posture is a staged ladder you drive by
+hand: launch with `--entries 2` from $2K, and when equity clears ~$10K, **stop the
+executor, change `--entries` to 8, and restart**. (A future capital-tiered entry
+resolver could automate this, but it is not built — change the parameter, re-run.)
+
+**Do not pool both books on one small account.** A combined TSL18+V817 $2K run
+made things *worse* (combined DD −41.6%, and TSL18's high signal rate starved
+V817 via the shared concurrency cap, dragging it to a loss). Run each book on its
+own account / slot; V817 alone is the stronger small-account vehicle.
+
 ## Live enforcement (wired) — backtest ↔ live ↔ tick-sim parity
 
 The three gates are enforced in **all three** paths via the SAME

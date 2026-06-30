@@ -310,7 +310,25 @@ pair is a thin package that imports it.
   open-group count from `tracked`, account-level today-realized P&L from
   `Mt5Executor.realized_pnl_since`); the gate only ever REJECTS a placement (never
   adds orders). **DEMO-validate before real money** (ELEV8 ticks ≠ broker; live
-  daily-P&L needs MT5 history). See `docs/SMALL_ACCOUNT_DEPLOYMENT.md`.
+  daily-P&L needs MT5 history). The **entry count is a MANUAL, capital-staged
+  knob** — nothing auto-scales it; lot sizing (risk%×equity) and the
+  equity-relative risk-budget gate ARE automatic, but the gate is *reject-only*
+  (never trims 8→2). The measured ladder (V817, TICK): full 8-entry rides a
+  ~capital-independent **−30% DD** at every base ($2K→$20K, only the $ grows),
+  gated 2-entry holds **~−18%** at higher PF, and one worst-case zone is ~73% of a
+  $2K account — so run **limited 2-entry from $2K, switch to full 8-entry ~$10K**
+  (stop → change `--entries` → restart). **Don't pool TSL18+V817 on one small
+  account** (combined DD −41.6%; TSL18 starves V817 via the shared concurrency
+  cap). VS2K is the V817 analogue of TS2K (Victor feed). See
+  `docs/SMALL_ACCOUNT_DEPLOYMENT.md`; profile any workbook with
+  `tools/strategy_profile.py`, simulate both books pooled with
+  `tools/sim_portfolio_small_account.py`.
+- **Drawdown is reported in USD *and* %** everywhere (standing rule):
+  `aggregate_backtest_result` carries `max_drawdown_usd` + a `drawdown_trough`
+  (when it happened + how many signals/entries had executed by then), and the
+  Excel **Summary** (`% ($)` + a Max-DD trough line) and **Daily / Weekly /
+  Monthly** sheets each show per-period **Drawdown % / Drawdown $ / Entries**.
+  Additive → parity preserved.
 - **Signal R:R / SL-source policy** (`strategy/backtest.apply_signal_rr_policy`,
   applied per-signal in `run_backtest`; **all default OFF → parity**). For
   provider feeds whose posted TP/SL vary in quality — Victor's 2024–25 signals

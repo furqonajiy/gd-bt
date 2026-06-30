@@ -309,10 +309,28 @@ pair is a thin package that imports it.
   T818/TSL18 feed+geometry at **$2k** with **entries 2 / max-open 1 / daily 5% /
   risk-budget zone 6%·single 4%**; validate with `tools/sweep_small_account_deploy.py`
   (TICK; writes `reports/SMALL_ACCOUNT_<window>/summary.md` + the account-size
-  floor) and profile any workbook with `tools/strategy_profile.py`. **The gates
-  are backtest-enforced today but NOT yet wired into the live executor
-  (`auto_explicit`), so TS2K is DEMO-ONLY** until that lands + a demo A/B matches.
-  See `docs/SMALL_ACCOUNT_DEPLOYMENT.md`.
+  floor). **The gates are wired into the live executor too** (`auto_explicit` flags
+  → `DeploymentGate.live_check`: planned ladder from `rec.new_signal.orders`,
+  open-group count from `tracked`, account-level today-realized P&L from
+  `Mt5Executor.realized_pnl_since`); the gate only ever REJECTS a placement (never
+  adds orders). **DEMO-validate before real money.** The **entry count is a MANUAL,
+  capital-staged knob** — nothing auto-scales it; lot sizing (risk%×equity) and the
+  equity-relative risk-budget gate ARE automatic, but the gate is *reject-only*
+  (never trims 8→2). Measured ladder (V817, TICK): full 8-entry rides a
+  ~capital-independent **−30% DD** ($2K→$20K, only the $ grows), gated 2-entry
+  holds **~−18%** at higher PF, one worst-case zone ≈ 73% of a $2K account — so run
+  **limited 2-entry from $2K, switch to full 8-entry ~$10K** (stop → change
+  `--entries` → restart). **Don't pool TSL18+V817 on one small account** (combined
+  DD −41.6%; TSL18 starves V817 via the shared concurrency cap). VS2K is the V817
+  analogue of TS2K. See `docs/SMALL_ACCOUNT_DEPLOYMENT.md`; profile a workbook with
+  `tools/strategy_profile.py`, simulate both books pooled with
+  `tools/sim_portfolio_small_account.py`.
+- **Drawdown is reported in USD *and* %** everywhere (standing rule):
+  `aggregate_backtest_result` carries `max_drawdown_usd` + a `drawdown_trough`
+  (when it happened + how many signals/entries had executed by then), and the
+  Excel **Summary** (`% ($)` + a Max-DD trough line) and **Daily / Weekly /
+  Monthly** sheets each show per-period **Drawdown % / Drawdown $ / Entries**.
+  Additive → parity preserved.
 - **Signal R:R / SL-source policy** (`strategy/backtest.apply_signal_rr_policy`,
   applied per-signal in `run_backtest`; **all default OFF → parity**). For
   provider feeds whose posted TP/SL vary in quality — Victor's 2024–25 signals
