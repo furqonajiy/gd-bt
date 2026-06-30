@@ -375,14 +375,14 @@ def _format_position_body(
     lines.append(f"    Stage:         {stage}")
 
     if pos.first_fill_time is not None:
-        lines.append(f"    First fill:    {pos.first_fill_time}  GMT+3")
+        lines.append(f"    First fill:    {pos.first_fill_time}  chart EET/EEST")
     if pos.time_exit_deadline is not None:
         delta_min = (pos.time_exit_deadline - now).total_seconds() / 60.0
         countdown = (
             f"({delta_min:+.0f} min)" if delta_min > 0 else
             f"(deadline passed by {-delta_min:.0f} min -- will close on next manage)"
         )
-        lines.append(f"    Time-exit at:  {pos.time_exit_deadline}  GMT+3  {countdown}")
+        lines.append(f"    Time-exit at:  {pos.time_exit_deadline}  chart EET/EEST  {countdown}")
 
     side = pos.signal.side
     floating_total = 0.0
@@ -413,15 +413,15 @@ def _format_position_status(
         f"  {s.signal_key}  {s.side} {s.r1:g}-{s.r2:g}  "
         f"SL={s.sl:g} TP1={s.tp1:g} TP2={s.tp2:g} TP3={s.tp3:g}"
     )
-    lines.append(f"    Issued:        {s.signal_time_chart}  GMT+3")
+    lines.append(f"    Issued:        {s.signal_time_chart}  chart EET/EEST")
 
     if executed_at is not None:
         lines.append(
-            f"    Executed:      {executed_at:%Y-%m-%d %H:%M:%S}  GMT+3  "
+            f"    Executed:      {executed_at:%Y-%m-%d %H:%M:%S}  chart EET/EEST  "
             f"{_format_lateness(executed_at, s.signal_time_chart)}"
         )
 
-    lines.append(f"    Pending until: {pos_ideal.expiry_time}  GMT+3")
+    lines.append(f"    Pending until: {pos_ideal.expiry_time}  chart EET/EEST")
 
     # Dual-view replay when actual placement was meaningfully later than ideal.
     if pos_actual is not pos_ideal:
@@ -515,11 +515,11 @@ def _parse_scenario_arg(arg: str) -> dict:
 
 
 def _filter_signals_by_start(signals: list, start_date: date) -> list:
-    """Keep signals whose signal_time_chart (GMT+3) is at or after
-    start_date 00:00 GMT+3.
+    """Keep signals whose signal_time_chart (chart EET/EEST) is at or after
+    start_date 00:00 chart-local.
 
     Boundary is chart-tz. A GMT+7 signal at 02:00 AM May 19 has
-    signal_time_chart = May 18 22:00 GMT+3 and is excluded for
+    signal_time_chart = May 18 22:00 chart-local and is excluded for
     start=2026-05-19.
     """
     threshold = datetime(start_date.year, start_date.month, start_date.day)
@@ -731,8 +731,8 @@ def cmd_decide(args: argparse.Namespace) -> int:
         elif rec.new_signal.action == "SKIP_EXPIRED":
             log.actions.append(
                 f"Signal {signal.signal_key}: pending window already closed at "
-                f"{rec.new_signal.pending_expires_at:%Y-%m-%d %H:%M} GMT+3 "
-                f"(now {rec.generated_at:%Y-%m-%d %H:%M} GMT+3). "
+                f"{rec.new_signal.pending_expires_at:%Y-%m-%d %H:%M} chart EET/EEST "
+                f"(now {rec.generated_at:%Y-%m-%d %H:%M} chart EET/EEST). "
                 f"Skipped placement to avoid orders that would be cancelled immediately."
             )
         elif rec.new_signal.action == "SKIP_INVALIDATED":
@@ -753,7 +753,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
                 lateness = _format_lateness(executed_at, signal.signal_time_chart)
                 log.actions.append(
                     f"Recorded executed_at = "
-                    f"{executed_at:%Y-%m-%d %H:%M:%S} GMT+3 {lateness}"
+                    f"{executed_at:%Y-%m-%d %H:%M:%S} chart EET/EEST {lateness}"
                 )
 
         alive = executor.all_alive_magics()
@@ -926,7 +926,7 @@ def _manage_pass(args: argparse.Namespace, config: StrategyConfig,
 
     print("=" * 70)
     print("XAUUSD POSITION MANAGEMENT")
-    print(f"Chart time:      {replay_end}  GMT+3")
+    print(f"Chart time:      {replay_end}  chart EET/EEST")
     print(f"Account equity:  ${equity:,.2f}")
     print(f"Tracked signals: {len(tracked)}")
     if bid > 0:
@@ -1344,7 +1344,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     # 8. Dashboard header.
     print("=" * 70)
     print("XAUUSD AUTO MODE  (signals + management)")
-    print(f"Chart time:      {replay_end}  GMT+3")
+    print(f"Chart time:      {replay_end}  chart EET/EEST")
     print(f"Account equity:  ${equity:,.2f}")
     print(f"Tracked signals: {len(tracked)}")
     if bid > 0:
@@ -1454,7 +1454,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         if rec.new_signal.action == "SKIP_EXPIRED":
             log.actions.append(
                 f"Signal {signal.signal_key}: pending window already closed at "
-                f"{rec.new_signal.pending_expires_at:%Y-%m-%d %H:%M} GMT+3 "
+                f"{rec.new_signal.pending_expires_at:%Y-%m-%d %H:%M} chart EET/EEST "
                 f"(now {replay_end:%H:%M}). Skipped."
             )
             continue
@@ -1503,7 +1503,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             lateness = _format_lateness(executed_at, signal.signal_time_chart)
             log.actions.append(
                 f"Signal {signal.signal_key}: recorded executed_at = "
-                f"{executed_at:%Y-%m-%d %H:%M:%S} GMT+3 {lateness}"
+                f"{executed_at:%Y-%m-%d %H:%M:%S} chart EET/EEST {lateness}"
             )
 
     # 15. Unknown-position warnings.
@@ -1770,7 +1770,14 @@ def build_parser() -> argparse.ArgumentParser:
     pmg.set_defaults(func=cmd_manage)
 
     pa = sub.add_parser("auto",
-                        help="One-command live trading: continuously read signals.txt + execute + manage.")
+                        help="One-command live trading: continuously read signals.txt + execute + manage. "
+                             "Runs DEFAULT_CONFIG; for the FULL deployed parameter surface "
+                             "(strategy geometry, trailing, AND the deployment-safety gates "
+                             "--risk-budget-gate / --max-open-signals / --max-open-lots / "
+                             "--daily-loss-limit-pct) use tools/auto_explicit.py, which is what the "
+                             "cli/*.txt deployment snapshots invoke. The gates only fire when their "
+                             "config fields are set, which this base parser does not expose -- so a "
+                             "plain `cli auto` run has every gate OFF.")
     pa.add_argument("--signals", required=True)
     pa.add_argument("--positions-json", default=None)
     pa.add_argument("--watch-interval", type=float, default=5.0)
@@ -1778,8 +1785,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Per-executor namespace prefix stamped onto each signal's "
                          "magic + MT5 comment. REQUIRED-distinct when running two "
                          "auto executors on one account (e.g. VIC vs SC24) so they "
-                         "never manage each other's orders. Capped at 4 chars "
-                         "(first 4 kept) so the compact comment fits the broker limit.")
+                         "never manage each other's orders. Capped at 5 chars "
+                         "(first 5 kept); the compact comment is independently clamped to "
+                         "the broker's 16-char limit.")
     pa.add_argument("--no-clear", action="store_true")
     pa.add_argument("--replace-missing-entries", action="store_true",
                     help="Each cycle, re-place still-pending LIMIT entries that vanished from MT5 "

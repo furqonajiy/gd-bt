@@ -771,7 +771,7 @@ file-writing code on the same convention.
 names across the board — `--strategy-tag`, `--positions-json`, the generated
 signal/feed `.txt`, the backtest report (Excel) dir, **and the live
 `--forensic-log` / `--notifications` JSONL** — all keyed off the same
-short tag (≤ 4 chars, e.g. `SQZ6`, `VIC`). **No two strategies ever share a tag,
+short tag (≤ 5 chars, capped at 5 — first 5 kept, e.g. `SQZ6`, `VIC`). **No two strategies ever share a tag,
 positions file, feed file, report name, or log file**, so live executors stay
 isolated (disjoint magics) and every artifact traces to exactly one strategy at
 a glance. Sharing one forensic/notifications path between two `auto` processes

@@ -564,6 +564,57 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
     # played out by launch, and a restart never back-fills resolved signals.
     _startup_placeable = _startup_played_out = _startup_expired = 0
 
+    # Deployment-safety gate (None unless a small-account gate is enabled, so the
+    # default-OFF live path is byte-identical). This is the ACTIVE auto path --
+    # cli.py overrides cli_impl.cmd_auto / _auto_pass -- so the gate MUST live here
+    # to actually fire live; the SAME DeploymentGate predicates the backtest/tick
+    # loop uses, fed from live state, so a TS2K/V817 tick backtest predicts live
+    # placement decisions (the live/backtest parity contract). Gate-only REJECTS a
+    # placement -- it never adds orders or touches geometry/lot/SLTP -- so it can
+    # only reduce exposure. Order matches the backtest loop: daily-loss breaker ->
+    # concurrency -> open-lots -> risk-budget.
+    from trading.engine import DeploymentGate
+    gate = DeploymentGate.maybe(config)
+    placed_this_cycle = 0
+    # Account-level realized P&L today + start-of-day equity. TS2K/V817 run one
+    # strategy per small account, so the breaker is intentionally account-wide;
+    # best-effort 0.0 without MT5 history (documented in SMALL_ACCOUNT_DEPLOYMENT.md).
+    if gate is not None:
+        gate_day_start = replay_end.replace(hour=0, minute=0, second=0, microsecond=0)
+        gate_day_pnl = executor.realized_pnl_since(gate_day_start)
+        # start-of-day equity ~= now minus what was realized today (floating P&L
+        # ignored -- a coarse circuit-breaker basis, same approximation as cli_impl).
+        gate_day_start_equity = equity - gate_day_pnl
+    else:
+        gate_day_pnl = 0.0
+        gate_day_start_equity = equity
+
+    def _gate_rejects(signal, rec) -> str | None:
+        """Run DeploymentGate.live_check for a FOLLOW candidate using live state.
+        Returns a reject reason (already logged) or None to place. open_groups is
+        the currently-open tracked groups plus anything placed earlier this cycle;
+        open_lots is the executor's live total volume. No-op when the gate is OFF."""
+        if gate is None:
+            return None
+        open_groups = len(tracked) + placed_this_cycle
+        planned_legs = [{"entry_price": o.entry_price, "effective_SL": o.initial_sl,
+                         "lot": getattr(o, "lot", 0.0)}
+                        for o in getattr(rec.new_signal, "orders", []) or []]
+        greason = gate.live_check(
+            planned_legs=planned_legs, equity=equity, open_groups=open_groups,
+            day_realized_pnl=gate_day_pnl, day_start_equity=gate_day_start_equity,
+            open_lots=executor.open_lots())
+        if greason is not None:
+            forensic.decision(signal_key=signal.signal_key, action="SKIP_GATE",
+                              rationale=greason)
+            _auto_record_candidate_action(
+                log, candidate_console_state, signal.signal_key,
+                f"Signal {signal.signal_key}: SKIPPED by deployment gate "
+                f"({greason}); open_groups={open_groups}, equity=${equity:,.0f}.",
+                dedup_text=f"SKIP_GATE:{greason}:{signal.signal_key}",
+            )
+        return greason
+
     for signal in candidates:
         positions_source = ManualPositionSource(
             equity=equity,
@@ -617,6 +668,8 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                 if (_window_open
                         and not executor.find_orders(_magic)
                         and not executor.find_positions(_magic)):
+                    if _gate_rejects(signal, rec) is not None:
+                        continue
                     plog = executor.place_signal(signal, rec.new_signal)
                     if (getattr(plog, "placed", 0) > 0 or getattr(plog, "modified", 0) > 0
                             or getattr(plog, "cancelled", 0) > 0 or getattr(plog, "closed", 0) > 0):
@@ -627,6 +680,7 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                                 log, candidate_console_state, signal.signal_key, action)
                         log.warnings.extend(getattr(plog, "warnings", []))
                     if getattr(plog, "placed", 0) > 0:
+                        placed_this_cycle += 1
                         registry.add(signal, equity, executed_at=_chart_now())
                         candidate_console_state[signal.signal_key] = "PLACED"
                     continue
@@ -684,6 +738,14 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                         f"{_added} replay-played-out leg(s) to place the FULL {len(_full)}-leg "
                         f"trailing-open ladder live.")
 
+        # Deployment-safety gate: reject the FOLLOW (including a restored full
+        # trailing ladder) before placement when today's loss limit is hit, the
+        # concurrency cap is full, the open-lots ceiling would be breached, or the
+        # planned min-lot risk is too big for live equity. Placed AFTER the ladder
+        # rebuild so the planned legs the gate scores are the ones we would send.
+        if _gate_rejects(signal, rec) is not None:
+            continue
+
         if _is_partial_placement(rec):
             status = _auto_partial_placement_status_line(signal.signal_key, rec)
             _auto_record_candidate_action(log, candidate_console_state, signal.signal_key, status)
@@ -729,6 +791,8 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             reopen_enabled and _replay_pos is not None
             and any(e.status == "OPEN" for e in _replay_pos.entries)
         )
+        if getattr(plog, "placed", 0) > 0:
+            placed_this_cycle += 1
         if getattr(plog, "placed", 0) > 0 or _track_for_reopen:
             executed_at = _chart_now()
             registry.add(signal, equity, executed_at=executed_at)

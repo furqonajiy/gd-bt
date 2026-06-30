@@ -78,6 +78,7 @@ class _FakeExecutor:
         return ExecutionLog()
 
     def place_signal(self, signal, plan):
+        type(self).place_calls = getattr(type(self), "place_calls", 0) + 1
         return self.place_log or ExecutionLog()
 
     def warn_on_unknown(self, known_magics):
@@ -85,6 +86,13 @@ class _FakeExecutor:
 
     def all_alive_magics(self):
         return set()
+
+    # Live state the DeploymentGate reads (0 unless a test overrides).
+    def realized_pnl_since(self, since, *, magics=None):
+        return 0.0
+
+    def open_lots(self):
+        return 0.0
 
 
 class _FakeForensic:
@@ -570,6 +578,119 @@ def test_trailing_live_entry_full_ladder_restore_logs_once_across_cycles(tmp_pat
     out2 = capsys.readouterr().out
     assert "restored" not in out2                          # NOT re-fired next cycle
     assert "trailing-open ladder" not in out2
+
+
+# --------------------------------------------------------------------------
+# Deployment-safety gates on the ACTIVE live auto path (cli._auto_pass).
+# cli.py overrides cli_impl.cmd_auto/_auto_pass, so the gate has to fire HERE
+# to gate live placement at all. These prove it rejects (never places) for each
+# enabled gate, using the SAME DeploymentGate predicates as the backtest/tick
+# loop. All gates default OFF, so the other tests above are unaffected.
+# --------------------------------------------------------------------------
+
+def _follow_rec_with_order(entry_price=4518.0, initial_sl=4511.0, lot=0.01):
+    from trading.engine import PlannedOrder
+    order = PlannedOrder(entry_index=0, side="BUY", entry_price=entry_price,
+                         initial_sl=initial_sl, lot=lot, risk_dollars=0.0)
+    plan = SimpleNamespace(
+        action="FOLLOW", orders=[order], replay_position=None, rationale="",
+        pending_expires_at=datetime(2026, 6, 2, 14, 30),
+        pending_activates_at=datetime(2026, 6, 2, 6, 0),
+    )
+    return SimpleNamespace(new_signal=plan)
+
+
+def test_gate_max_open_signals_rejects_live_placement(tmp_path, monkeypatch, capsys):
+    """max_open_signals=1 with one already-tracked open signal: the candidate
+    FOLLOW is rejected by the gate before place_signal, on the ACTIVE cli path."""
+    signal = _signal()
+    signals_path = tmp_path / "signals.txt"
+    signals_path.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda path, **kw: [signal])
+    monkeypatch.setattr(cli, "decide", lambda *a, **k: _follow_rec_with_order())
+    # One prior tracked signal (a DIFFERENT key, so the candidate isn't filtered
+    # out as already-tracked); the replay is stubbed so we don't need real bars.
+    _FakeRegistry.entries = [{"signal_key": "2026-06-01#99"}]
+    monkeypatch.setattr(cli, "_replay_tracked_signal",
+                        lambda item, chart, end, cfg: (None, SimpleNamespace(), None))
+    _FakeExecutor.place_calls = 0
+    _FakeExecutor.place_log = ExecutionLog(actions=["  BUY LIMIT placed"], placed=1)
+    cfg = replace(DEFAULT_CONFIG, max_open_signals=1)
+
+    rc = cli._auto_pass(_args(tmp_path), cfg, _FakeConn(),
+                        _FakeChart(datetime(2026, 6, 2, 6, 0)), signals_path,
+                        iteration=1, candidate_console_state={})
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "SKIPPED by deployment gate (max_open_signals)" in out
+    assert "BUY LIMIT placed" not in out          # never placed
+    assert _FakeExecutor.place_calls == 0
+    # Only the pre-existing tracked signal remains; the candidate was not added.
+    assert _FakeRegistry.entries == [{"signal_key": "2026-06-01#99"}]
+
+
+def test_gate_risk_budget_rejects_live_placement(tmp_path, monkeypatch, capsys):
+    """risk_budget_gate with a tiny single-entry cap: the planned min-lot worst
+    case ($7 on a 7-pt stop) exceeds equity*0.0001 = $0.10, so the gate rejects."""
+    signal = _signal()
+    signals_path = tmp_path / "signals.txt"
+    signals_path.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda path, **kw: [signal])
+    monkeypatch.setattr(cli, "decide", lambda *a, **k: _follow_rec_with_order())
+    _FakeExecutor.place_calls = 0
+    _FakeExecutor.place_log = ExecutionLog(actions=["  BUY LIMIT placed"], placed=1)
+    cfg = replace(DEFAULT_CONFIG, risk_budget_gate=True,
+                  max_single_entry_risk_pct=0.0001, max_zone_risk_pct=0.0)
+
+    rc = cli._auto_pass(_args(tmp_path), cfg, _FakeConn(),
+                        _FakeChart(datetime(2026, 6, 2, 6, 0)), signals_path,
+                        iteration=1, candidate_console_state={})
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "SKIPPED by deployment gate (risk_budget_single)" in out
+    assert _FakeExecutor.place_calls == 0
+
+
+def test_gate_max_open_lots_rejects_live_placement(tmp_path, monkeypatch, capsys):
+    """max_open_lots (ELEV8 total concurrent volume): a 0.01-lot would-be leg
+    pushes total open lots over a tiny 0.005 ceiling, so the gate rejects."""
+    signal = _signal()
+    signals_path = tmp_path / "signals.txt"
+    signals_path.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda path, **kw: [signal])
+    monkeypatch.setattr(cli, "decide", lambda *a, **k: _follow_rec_with_order(lot=0.01))
+    _FakeExecutor.place_calls = 0
+    _FakeExecutor.place_log = ExecutionLog(actions=["  BUY LIMIT placed"], placed=1)
+    cfg = replace(DEFAULT_CONFIG, max_open_lots=0.005)
+
+    rc = cli._auto_pass(_args(tmp_path), cfg, _FakeConn(),
+                        _FakeChart(datetime(2026, 6, 2, 6, 0)), signals_path,
+                        iteration=1, candidate_console_state={})
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "SKIPPED by deployment gate (max_open_lots)" in out
+    assert _FakeExecutor.place_calls == 0
+
+
+def test_gate_off_by_default_places_normally(tmp_path, monkeypatch, capsys):
+    """With no gate enabled (DEFAULT_CONFIG) the FOLLOW places exactly as before --
+    the gate is a no-op, preserving parity."""
+    signal = _signal()
+    signals_path = tmp_path / "signals.txt"
+    signals_path.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(cli, "parse_signals_file", lambda path, **kw: [signal])
+    monkeypatch.setattr(cli, "decide", lambda *a, **k: _follow_rec_with_order())
+    _FakeExecutor.place_calls = 0
+    _FakeExecutor.place_log = ExecutionLog(actions=["  BUY LIMIT placed"], placed=1)
+
+    rc = cli._auto_pass(_args(tmp_path), DEFAULT_CONFIG, _FakeConn(),
+                        _FakeChart(datetime(2026, 6, 2, 6, 0)), signals_path,
+                        iteration=1, candidate_console_state={})
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "deployment gate" not in out
+    assert "BUY LIMIT placed" in out
+    assert _FakeExecutor.place_calls == 1
 
 
 def test_trailing_live_entry_off_keeps_replay_played_out_skip(tmp_path, monkeypatch, capsys):
