@@ -24,6 +24,7 @@ from trading.engine import Position, advance_bars, open_position
 from trading.engine import Signal
 from trading.engine import iter_bars, slice_bars
 from trading.engine.core.trend_runner import prewarm_indicators_from_dataframe
+from .deployment_gate import DeploymentGate
 
 
 # ---------------------------------------------------------------------------
@@ -582,6 +583,10 @@ def run_backtest(
     atr_at = (_atr_lookup(chart_df, config.atr_period)
               if getattr(config, "sl_source", "signal") == "atr" else None)
 
+    # Deployment-safety gates (None unless a small-account gate is enabled, so
+    # the default path is byte-identical -- parity).
+    gate = DeploymentGate.maybe(config, contract_size)
+
     for sig in signals:
         screened, reason = screen_signal(
             sig, config, chart_start, chart_end, atr_at=atr_at,
@@ -591,18 +596,33 @@ def run_backtest(
             excluded.append({"signal_key": sig.signal_key, "reason": reason})
             continue
         sig, sig_config = screened
+        if gate is not None:
+            greason = gate.pre_check(sig, equity)
+            if greason is not None:
+                excluded.append({"signal_key": sig.signal_key, "reason": greason})
+                continue
         built = replay_signal_rows(sig, chart_df, equity, sig_config, config,
                                    contract_size=contract_size)
+        if gate is not None:
+            greason = gate.risk_budget_check(built["entry_rows"], equity)
+            if greason is not None:
+                excluded.append({"signal_key": sig.signal_key, "reason": greason})
+                continue
         rows.append(built["row"])
         entry_rows.extend(built["entry_rows"])
         if built["status"] != "OPEN":
             equity = built["equity_after"]
+        if gate is not None:
+            gate.register(sig, built)
         if equity <= 0:
             break
 
-    return aggregate_backtest_result(
+    result = aggregate_backtest_result(
         rows, entry_rows, excluded, config, chart_df, chart_start, chart_end,
         equity, len(signals))
+    if gate is not None:
+        result["deployment_gate"] = gate.summary()
+    return result
 
 
 def _dot_free_stem(stem: str) -> str:

@@ -285,6 +285,32 @@ pair is a thin package that imports it.
   These are **backtest-only** and never change live order placement. From the
   2026-06-16 reconciliation: at equal lot, live tracks the backtest on entries,
   TP3, and SL to the cent; the only gap is locked exits, which this models.
+- **Small-account deployment-safety gates** (`strategy/deployment_gate.py`,
+  `DeploymentGate`; **all default OFF/0 → byte-identical parity**, pinned by
+  `tests/test_deployment_gate.py`). These exist for the 0.01-lot floor: a $2k
+  account can't size below one min-lot leg, so an 8-entry zone can over-risk.
+  A single shared gate enforces three signal-acceptance filters **identically in
+  `run_backtest` and the hybrid tick backtest** (and is the basis for the planned
+  live wiring): **risk-budget gate** (`risk_budget_gate`,
+  `max_single_entry_risk_pct`, `max_zone_risk_pct` — reject when worst-case
+  min-lot single-leg / whole-ladder risk exceeds a fraction of equity, computed
+  from the PLANNED ladder), **daily-loss circuit breaker** (`daily_loss_limit_pct`
+  — once a feed-zone day's realized P&L hits −pct×start-of-day equity, reject NEW
+  signals that day; open positions keep being managed; resets next day), and
+  **max concurrent open signals** (`max_open_signals` — cap open signal GROUPS,
+  not entries; a group holds the slot from placement to close/expiry). They only
+  REJECT/PAUSE signals (never add/modify geometry, lot, SL/TP, or trailing). CLI:
+  `--risk-budget-gate / --max-single-entry-risk-pct / --max-zone-risk-pct /
+  --daily-loss-limit-pct / --max-open-signals` on `backtest_explicit` (inherited
+  by `backtest_hybrid`). The **TS2K** candidate
+  (`cli/candidate_TS2K_small_account_tick.txt`, tag **TS2K**, *research/demo*) is
+  T818/TSL18 feed+geometry at **$2k** with **entries 2 / max-open 1 / daily 5% /
+  risk-budget zone 6%·single 4%**; validate with `tools/sweep_small_account_deploy.py`
+  (TICK; writes `reports/SMALL_ACCOUNT_<window>/summary.md` + the account-size
+  floor) and profile any workbook with `tools/strategy_profile.py`. **The gates
+  are backtest-enforced today but NOT yet wired into the live executor
+  (`auto_explicit`), so TS2K is DEMO-ONLY** until that lands + a demo A/B matches.
+  See `docs/SMALL_ACCOUNT_DEPLOYMENT.md`.
 - **Signal R:R / SL-source policy** (`strategy/backtest.apply_signal_rr_policy`,
   applied per-signal in `run_backtest`; **all default OFF → parity**). For
   provider feeds whose posted TP/SL vary in quality — Victor's 2024–25 signals

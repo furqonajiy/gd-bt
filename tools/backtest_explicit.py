@@ -399,6 +399,25 @@ def add_scale_out_args(p: argparse.ArgumentParser) -> None:
                    help="RUN legs engage their trailing stop when this TP is touched, then trail "
                         "by --trailing-close-distance. Never trails from entry. Default TP3.")
 
+    g = p.add_argument_group("small-account deployment-safety gates (default off)")
+    g.add_argument("--risk-budget-gate", type=_bool_text, default=False,
+                   help="Reject a signal whose worst-case MIN-LOT risk is too big for current "
+                        "equity (the 0.01-lot floor problem on a small account). Needs at least "
+                        "one of --max-single-entry-risk-pct / --max-zone-risk-pct. Default off.")
+    g.add_argument("--max-single-entry-risk-pct", type=_positive_float, default=0.0,
+                   help="Risk-budget cap: reject if ONE min-lot ladder leg, stopped out, would "
+                        "lose more than this fraction of equity (0.04=4%%). 0=disabled.")
+    g.add_argument("--max-zone-risk-pct", type=_positive_float, default=0.0,
+                   help="Risk-budget cap: reject if the WHOLE min-lot ladder, stopped out, would "
+                        "lose more than this fraction of equity (0.06=6%%). 0=disabled.")
+    g.add_argument("--daily-loss-limit-pct", type=_positive_float, default=0.0,
+                   help="Daily-loss circuit breaker: once realized P&L for a feed-zone day reaches "
+                        "this fraction of start-of-day equity in the red (0.05=5%%), stop accepting "
+                        "new signals that day (open positions keep being managed). 0=off.")
+    g.add_argument("--max-open-signals", type=_positive_int, default=0,
+                   help="Cap concurrent OPEN signal groups (not entries); a multi-entry signal "
+                        "counts as one. A new signal while >= this many are open is rejected. 0=unlimited.")
+
 
 def _add_adaptive_flags(p: argparse.ArgumentParser) -> None:
     g = p.add_argument_group("regime-adaptive (mirror auto --adaptive)")
@@ -521,6 +540,11 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         per_entry_targets=_parse_entry_targets(args.entry_targets, args.entries),
         bep_after_move=args.bep_after_move,
         runner_trail_from=args.runner_trail_from,
+        risk_budget_gate=getattr(args, "risk_budget_gate", False),
+        max_single_entry_risk_pct=getattr(args, "max_single_entry_risk_pct", 0.0),
+        max_zone_risk_pct=getattr(args, "max_zone_risk_pct", 0.0),
+        daily_loss_limit_pct=getattr(args, "daily_loss_limit_pct", 0.0),
+        max_open_signals=getattr(args, "max_open_signals", 0),
     )
 
 
