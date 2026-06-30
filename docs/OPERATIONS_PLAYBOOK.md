@@ -44,6 +44,39 @@ What to check in the output:
 - **Open positions/orders** match what's in `positions.json`. If MT5
   shows orders not in JSON, you have orphans — investigate before trading.
 
+## Live stale / terminal-signal protection (fast trailing strategies)
+
+A fast trailing strategy (TSL18 / `tsl18 3`) **must be kept running
+continuously**. If you restart it late, its feed may still hold signals from an
+hour ago whose market context is gone. The executor now refuses to revive them:
+
+- **Terminal-SL (always on, cannot be disabled).** If a signal's **original SL**
+  (or its **final target**) was already touched between the signal time and now,
+  the signal is **terminal** — it is never opened **or** re-armed, and any resting
+  pendings for it are cancelled. This overrides leg-level replay state, so a
+  partially-closed signal can't have its missing legs recreated after it should
+  already be stopped out. A *missing live order is only a repair candidate, not a
+  licence to recreate a stopped-out signal*.
+- **Played-out revival is OFF by default.** `--trailing-live-entry` no longer
+  restores replay-played-out legs unless you pass the **dangerous**
+  `--allow-live-replay-played-out-legs` (default OFF) — which the TSL18 live
+  snapshot does **not** set. This is the primary fix for the 2026-07-01 incident
+  (39 BUY legs revived at 03:31 when price had fallen ~4030→4012, all stopped out
+  in ~15s by the 0.5 trailing-close, −$3,062).
+- **LiveEntryGuard (opt-in, set in the TSL18 snapshot).** Before any live
+  placement it skips a signal that is too old
+  (`--max-live-signal-age-minutes 20`, separate from the broad `--pending-expiry`),
+  whose live price is through the original SL, whose live RR is below
+  `--min-live-entry-rr 1.0`, whose TP1 reward is thinner than
+  `--min-live-entry-reward-distance 2.0`, or whose tight trailing-close would sit
+  inside spread+freeze and instantly stop out
+  (`--max-live-spread-fraction-of-risk 0.25`). Every skip is logged on the
+  console / forensic / notification sinks with its reason.
+
+These are **LIVE-ONLY** and default-off in `DEFAULT_CONFIG`, so backtests and the
+live↔backtest parity contract are unchanged. Restarting `tsl18 3` after signals
+are already old will **not** back-fill resolved signals.
+
 ## Live trailing behavior — important
 
 When `trailing_open_distance = 0`, live placement uses normal broker LIMIT

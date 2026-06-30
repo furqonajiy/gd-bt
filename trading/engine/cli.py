@@ -488,27 +488,6 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         mlog = executor.manage_position(actual, config, replay_end)
         log.merge(mlog)
 
-    # Optional self-heal: re-place pending entries whose LIMITs vanished from MT5
-    # (e.g. cancelled by hand) while the signal is still live. Accepts the flag as
-    # a bool (main CLI store_true) or a "true"/"false" string (auto_explicit).
-    _rme = getattr(args, "replace_missing_entries", False)
-    if _rme is True or str(_rme).lower() == "true":
-        for _ideal, actual, _exec_at in tracked:
-            log.merge(executor.replace_missing_pending_entries(actual, config, replay_end))
-
-    # Optional mirror-the-replay: re-open positions for entries the replay still
-    # holds OPEN but that are missing from MT5 (typically closed by hand). Same
-    # bool / "true"/"false" flag handling as above.
-    _rmp = getattr(args, "reopen_missing_positions", False)
-    reopen_enabled = _rmp is True or str(_rmp).lower() == "true"
-    # In reopen/mirror mode, partially played-out signals are placed per entry
-    # (fresh LIMITs now; already-OPEN legs re-opened by the reopen pass) instead
-    # of being skipped wholesale. place_signal reads this flag.
-    executor._allow_partial_placement = reopen_enabled
-    if reopen_enabled:
-        for _ideal, actual, _exec_at in tracked:
-            log.merge(executor.reopen_missing_open_positions(actual, config))
-
     # Optional trailing-open LIVE entry: place the entry off the live price
     # instead of trusting the M1 replay's "already played out" verdict. Only for
     # trailing-open configs; the live-history gate (inside place_signal) keeps it
@@ -518,6 +497,158 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         (_tle is True or str(_tle).lower() == "true")
         and float(getattr(config, "trailing_open_distance", 0.0) or 0.0) > 0
     )
+
+    # --- Stale / terminal live-signal protection (LIVE-ONLY, default safe) ------
+    # A fast trailing strategy restarted late must NOT revive a signal whose
+    # original context is gone (the 2026-07-01 TSL18 incident: 39 BUY legs from
+    # 00:59-02:40 signals re-armed at 03:31 when price had fallen ~4030 -> ~4012,
+    # all stopped out in ~15s by the 0.5 trailing-close). Two layers:
+    #   1) TERMINAL-SL (always on, can't be disabled): if the original SL (or the
+    #      final target) was already touched between the signal time and now, the
+    #      signal is terminal -- never open OR re-arm it, and pull its pendings.
+    #   2) LiveEntryGuard (opt-in via flags): age, current-price-vs-SL context,
+    #      live RR, spread friction, and immediate-close (trailing-close inside
+    #      spread/freeze) checks before any live placement.
+    # Reviving REPLAY-played-out legs is gated behind an explicit dangerous flag,
+    # default OFF -- so by default a played-out signal is never restored live.
+    from trading.engine import LiveEntryGuard
+    _arp = getattr(args, "allow_live_replay_played_out_legs", False)
+    allow_replay_played_out = (_arp is True or str(_arp).lower() == "true")
+    _freeze_price = 0.0
+    try:
+        _si = conn.mt5.symbol_info(args.mt5_symbol)
+        if _si is not None:
+            _freeze_price = max(int(getattr(_si, "trade_stops_level", 0) or 0),
+                                int(getattr(_si, "freeze_level", 0) or 0)) * float(getattr(_si, "point", 0.01) or 0.01)
+    except Exception:
+        _freeze_price = 0.0
+    live_guard = LiveEntryGuard.maybe(
+        max_age_minutes=int(getattr(args, "max_live_signal_age_minutes", 0) or 0),
+        min_rr=float(getattr(args, "min_live_entry_rr", 0.0) or 0.0),
+        min_reward_distance=float(getattr(args, "min_live_entry_reward_distance", 0.0) or 0.0),
+        max_spread_fraction_of_risk=float(getattr(args, "max_live_spread_fraction_of_risk", 0.0) or 0.0),
+        trailing_close_distance=float(getattr(config, "trailing_close_distance", 0.0) or 0.0),
+        freeze_distance=_freeze_price,
+    )
+
+    def _final_target_price(sig) -> float:
+        return {"TP1": sig.tp1, "TP2": sig.tp2, "TP3": sig.tp3}.get(
+            getattr(config, "final_target", "TP3"), sig.tp3)
+
+    def _historical_touch(sig) -> tuple[bool, bool]:
+        """(original_sl_touched, final_target_touched) for bars in (signal_time, now].
+        BUY: low<=SL is a stop-out, high>=final is a target hit; SELL mirrored.
+        This is the signal-level TERMINAL test -- it overrides leg-level replay."""
+        ft = _final_target_price(sig)
+        sl_hit = tgt_hit = False
+        try:
+            bars = chart.bars_between(sig.signal_time_chart, replay_end)
+        except Exception:
+            return (False, False)
+        buy = sig.side.upper() == "BUY"
+        for b in bars:
+            if b.time <= sig.signal_time_chart:
+                continue
+            if buy:
+                if b.low <= sig.sl:
+                    sl_hit = True
+                if b.high >= ft:
+                    tgt_hit = True
+            else:
+                if b.high >= sig.sl:
+                    sl_hit = True
+                if b.low <= ft:
+                    tgt_hit = True
+            if sl_hit and tgt_hit:
+                break
+        return (sl_hit, tgt_hit)
+
+    def _terminal_reason(sig) -> str | None:
+        """Signal-level terminal reason (or None). Always active for live opens and
+        re-arms: a signal whose original SL was already touched -- even if the
+        engine is late and a fresh trailing-open price now looks attractive -- must
+        be treated as stopped out, not revived."""
+        sl_hit, tgt_hit = _historical_touch(sig)
+        if sl_hit:
+            return ("not opened/re-armed -- original SL was touched before live "
+                    "placement; signal marked terminal_sl")
+        if tgt_hit:
+            return ("not opened/re-armed -- final target already reached before live "
+                    "placement; signal already resolved")
+        return None
+
+    def _live_entry_skip(signal, rec) -> str | None:
+        """Combined terminal + LiveEntryGuard decision for a would-be live placement.
+        Returns a skip reason (already loggable) or None to place. ``planned_entry``
+        is the LIVE price the trailing-open STOP would force-fill at."""
+        treason = _terminal_reason(signal)
+        if treason is not None:
+            return treason
+        if live_guard is None:
+            return None
+        orders = getattr(rec.new_signal, "orders", []) or []
+        if not orders:
+            return None
+        o0 = orders[0]
+        buy = signal.side.upper() == "BUY"
+        planned_entry = (ask if buy else bid) if trailing_live_entry else float(o0.entry_price)
+        if planned_entry <= 0:
+            planned_entry = float(o0.entry_price)
+        sl_hit, tgt_hit = _historical_touch(signal)
+        age_min = max(0.0, (replay_end - signal.signal_time_chart).total_seconds() / 60.0)
+        return live_guard.check(
+            side=signal.side, planned_entry=planned_entry,
+            effective_sl=float(o0.initial_sl), original_sl=float(signal.sl),
+            tp1=float(signal.tp1), final_target=float(_final_target_price(signal)),
+            age_minutes=age_min, bid=bid, ask=ask,
+            sl_hit_after=sl_hit, target_hit_after=tgt_hit)
+
+    def _record_live_skip(signal, reason, *, dedup):
+        forensic.decision(signal_key=signal.signal_key, action="SKIP_STALE", rationale=reason)
+        _auto_record_candidate_action(
+            log, candidate_console_state, signal.signal_key,
+            f"Signal {signal.signal_key}: {reason}.", dedup_text=f"{dedup}:{signal.signal_key}")
+        if signal.signal_key not in notified_keys["skipped"]:
+            notifier.signal_skipped(signal_key=signal.signal_key, side=signal.side, reason=reason)
+            notified_keys["skipped"].add(signal.signal_key)
+
+    # Signal-level TERMINAL state for already-TRACKED signals: if a tracked
+    # signal's original SL (or final target) was touched historically, it is
+    # terminal -- pull its resting pendings and EXCLUDE it from every self-heal
+    # path below (replace-missing / reopen-missing / re-arm). This overrides the
+    # leg-level replay verdict, so a partially-closed signal can't have its missing
+    # legs recreated after it should already be stopped out (the #04 re-arm bug).
+    terminal_tracked_keys: set[str] = set()
+    for _ideal, actual, _exec_at in tracked:
+        _sig = getattr(actual, "signal", None)
+        if _sig is None:
+            continue
+        _tr = _terminal_reason(_sig)
+        if _tr is not None:
+            terminal_tracked_keys.add(_sig.signal_key)
+            log.merge(executor.cancel_signal_pendings(_sig.signal_key, reason="terminal_sl"))
+            _record_live_skip(_sig, f"not re-armed -- {_tr}", dedup="TERMINAL")
+
+    # Optional self-heal: re-place pending entries whose LIMITs vanished from MT5
+    # (e.g. cancelled by hand) while the signal is still live. Terminal signals are
+    # skipped (a missing order is NOT a reason to recreate a stopped-out signal).
+    _rme = getattr(args, "replace_missing_entries", False)
+    if _rme is True or str(_rme).lower() == "true":
+        for _ideal, actual, _exec_at in tracked:
+            if getattr(getattr(actual, "signal", None), "signal_key", None) in terminal_tracked_keys:
+                continue
+            log.merge(executor.replace_missing_pending_entries(actual, config, replay_end))
+
+    # Optional mirror-the-replay: re-open positions for entries the replay still
+    # holds OPEN but missing from MT5. Terminal signals are excluded.
+    _rmp = getattr(args, "reopen_missing_positions", False)
+    reopen_enabled = _rmp is True or str(_rmp).lower() == "true"
+    executor._allow_partial_placement = reopen_enabled
+    if reopen_enabled:
+        for _ideal, actual, _exec_at in tracked:
+            if getattr(getattr(actual, "signal", None), "signal_key", None) in terminal_tracked_keys:
+                continue
+            log.merge(executor.reopen_missing_open_positions(actual, config))
 
     # Optional provider edit/delete bridge: consume the listener's
     # signal_overrides journal so live MT5 follows the corrected feed. revoke =
@@ -661,13 +792,22 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
             # let the broker run it. The history gate inside place_signal keeps it
             # to one live trade; the trailing-open arm logic only fills when the
             # live price is actually in the entry's pullback zone (no chasing).
-            if trailing_live_entry:
+            # DANGEROUS: reviving a replay-PLAYED-OUT signal is gated behind
+            # --allow-live-replay-played-out-legs (default OFF). By default a
+            # played-out signal is never restored live -- this is the primary fix
+            # for the stale-revival incident. Even when explicitly allowed, the
+            # terminal-SL + LiveEntryGuard checks still apply before placing.
+            if trailing_live_entry and allow_replay_played_out:
                 _magic = signal_to_magic(signal.signal_key)
                 _exp = getattr(rec.new_signal, "pending_expires_at", None)
                 _window_open = _exp is None or replay_end < _exp
                 if (_window_open
                         and not executor.find_orders(_magic)
                         and not executor.find_positions(_magic)):
+                    _skip = _live_entry_skip(signal, rec)
+                    if _skip is not None:
+                        _record_live_skip(signal, _skip, dedup="SKIP_STALE")
+                        continue
                     if _gate_rejects(signal, rec) is not None:
                         continue
                     plog = executor.place_signal(signal, rec.new_signal)
@@ -711,9 +851,11 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         # overwritten so they come from the replay entry. The history gate +
         # find_orders keep it to one live placement, and the trailing-open arm only
         # fills in the pullback zone (no chasing). Mirrors the SKIP_INVALIDATED
-        # rescue, but per-leg. Gated on --trailing-live-entry so non-trailing / non-
-        # live-entry runs are unchanged.
-        if trailing_live_entry:
+        # rescue, but per-leg. Gated on --trailing-live-entry AND the dangerous
+        # --allow-live-replay-played-out-legs (default OFF) -- restoring played-out
+        # legs is exactly the stale-revival behavior, so by default the dropped
+        # played-out legs are NOT recreated; only genuinely-placeable legs place.
+        if trailing_live_entry and allow_replay_played_out:
             _rp = getattr(rec.new_signal, "replay_position", None)
             if _rp is not None and len(rec.new_signal.orders) < len(_rp.entries):
                 _before = len(rec.new_signal.orders)
@@ -744,6 +886,17 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         # planned min-lot risk is too big for live equity. Placed AFTER the ladder
         # rebuild so the planned legs the gate scores are the ones we would send.
         if _gate_rejects(signal, rec) is not None:
+            continue
+
+        # Stale / terminal / RR / immediate-close guard before placing a FOLLOW
+        # (especially under --trailing-live-entry, where the STOP force-fills at the
+        # live price): if the original SL/target was already touched, the live price
+        # is through the original SL, the live RR is too thin, or a tight
+        # trailing-close would instantly stop it out, do NOT open. No-op when no
+        # guard flag is set and nothing is terminal, so a fresh signal is unaffected.
+        _skip = _live_entry_skip(signal, rec)
+        if _skip is not None:
+            _record_live_skip(signal, _skip, dedup="SKIP_STALE")
             continue
 
         if _is_partial_placement(rec):

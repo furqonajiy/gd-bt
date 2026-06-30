@@ -780,6 +780,22 @@ class Mt5Executor(_BaseMt5Executor):
             log.actions.append(f"  FAILED {reason_label} close on #{p.ticket}: {reason}")
             failed.append((p.ticket, reason))
 
+    def cancel_signal_pendings(self, signal_key: str, *, reason: str = "terminal_sl") -> ExecutionLog:
+        """Cancel ONLY the still-resting pending orders for a signal's magic, WITHOUT
+        touching any open position. Used when a signal is marked terminal (its
+        original SL was already touched, or its final target reached, before we
+        could act): the resting STOP/LIMIT legs must be pulled so a terminal signal
+        is never (re-)armed, but genuinely-open legs are left for the normal exit
+        manager (flattening open losers was the 2026-06-12 mistake). Idempotent --
+        a no-op when the magic has no pendings."""
+        log = ExecutionLog()
+        magic = signal_to_magic(signal_key)
+        log.merge(self._cancel_orders(
+            magic, signal_key, f"{reason}_cancel_pending",
+            f"Cancelled pending ({reason})",
+        ))
+        return log
+
     def flatten_signal(self, signal_key: str, *, reason: str = "amend") -> ExecutionLog:
         """Cancel every pending order and close every open position for a signal.
 

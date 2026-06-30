@@ -1802,6 +1802,24 @@ def build_parser() -> argparse.ArgumentParser:
                          "placed if LIVE never traded it (no closed deals for its magic) and the "
                          "pending window is open; the broker fills the STOP + exits on the SL, and "
                          "the history gate blocks re-entry once it trades and closes.")
+    # Live stale-signal protection. The terminal-SL check (original SL / final
+    # target touched after the signal time -> signal terminal, never open/re-arm)
+    # is ALWAYS on for live; these flags add the opt-in guards. The dangerous
+    # replay-revival flag defaults OFF.
+    pa.add_argument("--allow-live-replay-played-out-legs", action="store_true",
+                    help="DANGEROUS (default OFF): let --trailing-live-entry restore replay-played-out "
+                         "legs / revive a played-out signal as fresh live STOPs. OFF = never revive. "
+                         "Do NOT enable in a live snapshot.")
+    pa.add_argument("--max-live-signal-age-minutes", type=int, default=0,
+                    help="Skip placing/arming a live order for a signal older than N minutes (separate "
+                         "from --pending-expiry). 0=off.")
+    pa.add_argument("--min-live-entry-rr", type=float, default=0.0,
+                    help="Reject a live entry whose reward(final)/risk is below this. 0=off.")
+    pa.add_argument("--min-live-entry-reward-distance", type=float, default=0.0,
+                    help="Reject a live entry whose TP1 reward distance (price units) is below this. 0=off.")
+    pa.add_argument("--max-live-spread-fraction-of-risk", type=float, default=0.0,
+                    help="Reject a live entry when spread exceeds this fraction of risk, and block "
+                         "trailing-close inside spread+freeze (immediate-close). 0=off.")
     pa.add_argument("--apply-signal-edits", action="store_true",
                     help="Consume the listener's signal-overrides journal each cycle: when the "
                          "provider EDITS a signal, flatten its live order and re-place it at the "

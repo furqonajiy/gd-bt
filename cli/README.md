@@ -59,6 +59,17 @@ back, so do them once yourself in the terminal before launching.)
 `candidate_R4_SL19_tick`, and the `trailing_open_R*` / `trailing_small_0101`
 research cells — were pruned 2026-06-25; recover from git history if needed.)
 
+**Fast trailing live snapshots (`tsl18 3`, etc.) must run continuously.** Their
+section-3 LIVE AUTO EXECUTOR carries live stale/terminal guards (terminal-SL
+always on; `--max-live-signal-age-minutes` / `--min-live-entry-rr` /
+`--min-live-entry-reward-distance` / `--max-live-spread-fraction-of-risk` set
+conservatively): a signal whose original SL or final target was already touched
+is **terminal** and is never opened or re-armed, and a late restart will **not**
+back-fill resolved signals. The dangerous `--allow-live-replay-played-out-legs`
+(which would revive played-out legs) is **default OFF and never set in a live
+snapshot**. See `docs/OPERATIONS_PLAYBOOK.md` → *Live stale / terminal-signal
+protection*.
+
 **Tick-aware backtests.** In the non-trailing snapshots, the **2026 backtest
 sections (5 & 6) run `tools/backtest_hybrid.py --ticks data/ticks/...`** instead
 of `backtest_explicit.py`: each signal is filled on the **real tick archive**
