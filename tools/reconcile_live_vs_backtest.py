@@ -200,6 +200,7 @@ class BtLeg:
     status: str
     exit_t: dt.datetime | None
     exit_px: float | None
+    source: str = ""  # TICK / M1 -- from the Per-Entry "Data Source" column
 
 
 def parse_backtest(path: str) -> list[BtLeg]:
@@ -235,6 +236,7 @@ def parse_backtest(path: str) -> list[BtLeg]:
             sig, leg, str(gv("Side") or "").upper(),
             _parse_dt(gv("Fill Time")), _f(gv("Entry Price")),
             str(gv("Status") or ""), _parse_dt(gv("Exit Time")), _f(gv("Exit Price")),
+            str(gv("Data Source") or "").upper(),
             ))
     return legs
 
@@ -260,6 +262,7 @@ class SignalRow:
     bt_open: dt.datetime | None = None
     bt_close: dt.datetime | None = None
     bt_exit: str = ""
+    bt_src: str = ""  # TICK / M1 / mixed -- backtest data source for this signal
     bt_pnl: float = 0.0
     lv_legs: int = 0
     lv_fills: int = 0
@@ -421,6 +424,8 @@ def build_rows(live: list[LiveFill], bt: list[BtLeg], usd_per_point: float,
             row.bt_open = min((b.fill_t for b in bvals if b.fill_t), default=None)
             row.bt_close = max((b.exit_t for b in bvals if b.exit_t), default=None)
             row.bt_exit = ",".join(sorted({(b.status or "")[:4] for b in bvals}))
+            srcs = {b.source for b in bvals if b.source}
+            row.bt_src = next(iter(srcs)) if len(srcs) == 1 else ("mixed" if srcs else "?")
             row.bt_pnl = sum(
                 (_signed_pnl(b.side, b.entry_px, b.exit_px, usd_per_point) or 0.0)
                 for b in bvals
@@ -460,12 +465,14 @@ def build_rows(live: list[LiveFill], bt: list[BtLeg], usd_per_point: float,
 
 _COLS = [
     ("Signal", 8), ("Side", 6),
-    ("BT legs", 8), ("BT entry", 10), ("BT open", 9), ("BT close", 9),
+    ("BT legs", 8), ("BT src", 8), ("BT entry", 10), ("BT open", 9), ("BT close", 9),
     ("BT exit", 9), ("BT $", 11),
     ("LV legs", 8), ("LV entry", 10), ("LV open", 9), ("LV close", 9), ("LV $", 11),
     ("dEntry (pt)", 11), ("dOpen (min)", 11), ("dClose (min)", 12), ("d$", 11),
     ("Discrepancy", 18), ("Description", 90),
 ]
+# 1-based column index by header name (so colour/format code never hardcodes numbers)
+_CI = {name: i for i, (name, _) in enumerate(_COLS, start=1)}
 
 
 def _hm(d: dt.datetime | None) -> str:
@@ -507,7 +514,8 @@ def write_excel(rows: list[SignalRow], out_path: str, *, tag: str, lot: float,
         klass_fill = PatternFill("solid", fgColor=DISCREPANCY[row.klass][1])
         vals = [
             row.sig, row.side,
-            row.bt_legs or "-", round(row.bt_entry, 2) if row.bt_entry else "-",
+            row.bt_legs or "-", row.bt_src or "-",
+            round(row.bt_entry, 2) if row.bt_entry else "-",
             _hm(row.bt_open), _hm(row.bt_close), row.bt_exit or "-", round(row.bt_pnl, 2),
             row.lv_legs or "-", round(row.lv_entry, 2) if row.lv_entry else "-",
             _hm(row.lv_open), _hm(row.lv_close), round(row.lv_pnl, 2),
@@ -525,13 +533,18 @@ def write_excel(rows: list[SignalRow], out_path: str, *, tag: str, lot: float,
                 vertical="center", wrap_text=(ci == len(_COLS)),
             )
         # colour the d$ cell green/red, the Discrepancy cell by class
-        d_cell = ws.cell(row=r, column=17)
+        d_cell = ws.cell(row=r, column=_CI["d$"])
         d_cell.fill = green if row.d_pnl >= 0 else red
         d_cell.font = Font(bold=True)
-        ws.cell(row=r, column=18).fill = klass_fill
-        # also tint LV $ vs BT $
-        ws.cell(row=r, column=8).font = Font(color="FF006100" if row.bt_pnl >= 0 else "FF9C0006")
-        ws.cell(row=r, column=13).font = Font(color="FF006100" if row.lv_pnl >= 0 else "FF9C0006")
+        ws.cell(row=r, column=_CI["Discrepancy"]).fill = klass_fill
+        # flag any non-TICK backtest source in red (the reconcile wants TICK)
+        src_cell = ws.cell(row=r, column=_CI["BT src"])
+        if row.bt_src and row.bt_src != "TICK":
+            src_cell.fill = red
+            src_cell.font = Font(bold=True, color="FF9C0006")
+        # tint LV $ vs BT $
+        ws.cell(row=r, column=_CI["BT $"]).font = Font(color="FF006100" if row.bt_pnl >= 0 else "FF9C0006")
+        ws.cell(row=r, column=_CI["LV $"]).font = Font(color="FF006100" if row.lv_pnl >= 0 else "FF9C0006")
         r += 1
 
     # totals row
@@ -585,6 +598,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--usd-per-point", type=float, default=None,
                     help="USD per 1.00 price move at the live lot (default lot/0.01 * 1.0)")
     ap.add_argument("--out", default=None, help="output .xlsx (default reports/<TAG>_recon_live_vs_bt.xlsx)")
+    ap.add_argument("--require-tick", action="store_true",
+                    help="fail if any matched signal's backtest source is not TICK "
+                         "(the reconcile is meant to run on a TICK backtest; "
+                         "generate the workbook with backtest_hybrid.py --ticks ...)")
     args = ap.parse_args(argv)
 
     upp = args.usd_per_point if args.usd_per_point is not None else (args.lot / 0.01) * 1.0
@@ -603,6 +620,12 @@ def main(argv: list[str] | None = None) -> int:
                   {d.lv_open.date() for d in rows if d.lv_open})
     window = f"{days[0]}..{days[-1]}" if days else "?"
 
+    # backtest data-source coverage (the reconcile is meant to run on TICK)
+    from collections import Counter
+    traded = [r for r in rows if r.bt_legs]
+    src_ct = Counter(r.bt_src or "?" for r in traded)
+    non_tick = [r for r in traded if r.bt_src and r.bt_src != "TICK"]
+
     write_excel(rows, out, tag=args.tag, lot=args.lot, window=window)
 
     # terminal echo
@@ -610,11 +633,21 @@ def main(argv: list[str] | None = None) -> int:
     tl = sum(r.lv_pnl for r in rows)
     print(f"=== {args.tag} reconcile  ({window})  matched lot {args.lot} ===")
     print(f"signals: {len(rows)}   backtest {_money(tb)}   live {_money(tl)}   live-vs-model {_money(tl - tb)}")
-    from collections import Counter
+    print("backtest data source: " + ", ".join(f"{s}={n}" for s, n in src_ct.most_common()))
     cc = Counter(r.klass for r in rows)
     for k, n in cc.most_common():
         print(f"  {DISCREPANCY[k][0]:<18} x{n}")
     print(f"workbook: {out}")
+
+    if non_tick:
+        msg = (f"[reconcile] {len(non_tick)} signal(s) are NOT on TICK data "
+               f"(sources: {dict(src_ct)}). The reconcile is meant to run on a TICK "
+               f"backtest - regenerate the workbook with backtest_hybrid.py --ticks ... "
+               f"covering the live window.")
+        if args.require_tick:
+            print("ERROR: " + msg)
+            return 2
+        print("WARNING: " + msg)
     return 0
 
 
