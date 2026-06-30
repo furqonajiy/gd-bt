@@ -20,6 +20,13 @@ on:
       validate_top_n:
         description: "How many June winners to validate on Jan-Jun ticks."
         default: "25"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "tools/sweep_tick_loss_filters.py"
+      - ".github/workflows/twl25-loss-tick-sweep.yml"
+      - "cli/candidate_TWL25_loss_filtered_tick.txt"
+      - "docs/TWL25_LOSS_SWEEP.md"
   push:
     branches: ["feature/twl25-loss-sweep"]
     paths:
