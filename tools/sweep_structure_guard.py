@@ -74,9 +74,10 @@ _IMPULSE = ["--structure-impulse-cooldown-bars", "5", "--structure-impulse-atr",
 _VWAP_SCORE = ["--structure-require-vwap-side", "--structure-min-score", "2"]
 PROGRESS = ["--progress-stall-filter", "--progress-htf-minutes", "60",
             "--progress-ema-fast", "20", "--progress-ema-slow", "50",
+            "--progress-min-diff-atr", "0.10", "--progress-local-lookback-bars", "30",
             "--progress-stall-n", "3", "--progress-min-no-progress-bars", "20",
-            "--progress-min-atr", "0.50", "--progress-close-confirm-atr", "0.10",
-            "--progress-min-points", "1.0"]
+            "--progress-probe-interval-bars", "30", "--progress-min-atr", "0.50",
+            "--progress-close-confirm-atr", "0.10", "--progress-min-points", "1.0"]
 
 VARIANTS: dict[str, list[str]] = {
     "base": [],
@@ -155,6 +156,7 @@ class Metrics:
     avg_bars_since_progress_when_filtered: float = 0.0
     avg_non_progressing_count_when_filtered: float = 0.0
     max_non_progressing_count_seen: int = 0
+    probe_signals_allowed: int = 0
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -340,13 +342,15 @@ def _progress_stall_metrics(m: Metrics, prog_csv: Path, base_trades: list[Trade]
         base_sig[t.match_key] = base_sig.get(t.match_key, 0.0) + t.pnl
     bars, counts = [], []
     max_seen = 0
-    win = lose = total = 0
+    win = lose = total = probes = 0
     with prog_csv.open(encoding="utf-8") as f:
         for row in csv.DictReader(f):
             try:
                 max_seen = max(max_seen, int(row["non_progressing_count"]))
             except (ValueError, KeyError):
                 pass
+            if str(row.get("probe_allowed")) == "1":
+                probes += 1
             if row.get("reject_reason") != "progress_stall":
                 continue
             total += 1
@@ -364,6 +368,7 @@ def _progress_stall_metrics(m: Metrics, prog_csv: Path, base_trades: list[Trade]
     m.avg_bars_since_progress_when_filtered = round(sum(bars) / len(bars), 1) if bars else 0.0
     m.avg_non_progressing_count_when_filtered = round(sum(counts) / len(counts), 2) if counts else 0.0
     m.max_non_progressing_count_seen = max_seen
+    m.probe_signals_allowed = probes
 
 
 def _write_summary(out_dir: Path, window: str, span: tuple[str, str],
@@ -405,8 +410,8 @@ def _write_summary(out_dir: Path, window: str, span: tuple[str, str],
             "",
             "## Progress-stall specifics (same-side cluster cap)",
             "",
-            "| variant | ps filtered (W/L of total) | avg bars-since-progress | avg non-prog count | max non-prog seen |",
-            "|---|--:|--:|--:|--:|",
+            "| variant | ps filtered (W/L of total) | avg bars-since-progress | avg non-prog count | max non-prog seen | probes allowed |",
+            "|---|--:|--:|--:|--:|--:|",
         ]
         for m in prog:
             lines.append(
@@ -414,7 +419,7 @@ def _write_summary(out_dir: Path, window: str, span: tuple[str, str],
                 f"{m.progress_stall_filtered_losers} (of {m.progress_stall_filtered_total}) | "
                 f"{m.avg_bars_since_progress_when_filtered} | "
                 f"{m.avg_non_progressing_count_when_filtered} | "
-                f"{m.max_non_progressing_count_seen} |"
+                f"{m.max_non_progressing_count_seen} | {m.probe_signals_allowed} |"
             )
         lines += [
             "",

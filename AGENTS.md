@@ -226,10 +226,14 @@ pair is a thin package that imports it.
   A second filter family, the **trend-progress stall cap** (`--progress-stall-*`,
   default OFF), targets the OTHER cluster the HTF veto can't reach: HTF-ALIGNED
   same-side pullbacks that keep firing while the trend stops making new extremes.
-  Completed-H1 regime + no-lookahead "valid progress" (prior extreme excludes the
-  current bar, close-confirmed, not wick-only); vetoes only when BOTH the
-  consecutive non-progressing same-side count ≥ `--progress-stall-n` AND
-  `bars_since_valid_progress ≥ --progress-min-no-progress-bars`. The sweep runs 8
+  Completed-H1 regime + no-lookahead "valid progress" = a **local rolling**
+  high/low (`--progress-local-lookback-bars`, excludes the current bar,
+  close-confirmed, not wick-only — NOT the whole-leg cumulative extreme, which
+  made progress too rare); vetoes only when BOTH the consecutive non-progressing
+  same-side count ≥ `--progress-stall-n` AND `bars_since_valid_progress ≥
+  --progress-min-no-progress-bars`, re-arming when progress happens on ANY bar
+  between signals (progress epoch), with a **probe** allowed every
+  `--progress-probe-interval-bars` so a leg never goes fully dark. The sweep runs 8
   variants (structure × progress, base first) + a progress-stall-specifics table;
   a **T819 candidate** (`cli/candidate_T819_progress_stall_structure_tick.txt`)
   is created only if a combined variant lowers `max_consecutive_losing_signals`

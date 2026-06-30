@@ -63,28 +63,38 @@ HTF-agreement veto keeps those by definition. The **trend-progress stall cap**
   completed H1 candles (`--progress-htf-minutes/-ema-fast/-ema-slow`); bull/bear
   when `|htf_diff_atr| > --progress-min-diff-atr`, else flat. **Leg** = a
   contiguous same-regime run (flat/opposite ends it).
-- **Valid progress (no-lookahead, not wick-only):** within a leg, the *prior*
-  favorable extreme is the running high/low over bars **before** the current bar.
-  A bar is "progress" only if its extreme beats the prior by
-  `max(--progress-min-atr·ATR, --progress-min-points)` **and** its **close
-  confirms** (`--progress-close-confirm-atr·ATR` beyond) — so a wick alone never
-  re-arms. The current bar's own closed OHLC may confirm (live sees it at
-  emission); the prior extreme excludes the current bar.
-- **Stall veto (needs BOTH):** count consecutive non-progressing same-side signals
-  (keyed on leg+progress-epoch so a new progress or new leg resets it without
-  rescanning). Veto only when count ≥ `--progress-stall-n` **AND**
-  `bars_since_valid_progress ≥ --progress-min-no-progress-bars`. The count is
-  frozen once the threshold is reached (counted once, not inflated per blocked
-  candidate). **Aligned-only** — wrong-side/flat/NaN pass through (tagged); the
+- **Valid progress = LOCAL, not whole-leg (no-lookahead, not wick-only):** the
+  reference is a **rolling** local high/low over the last
+  `--progress-local-lookback-bars` (default 30), **excluding the current bar**
+  (`shift(1)`). The cumulative-leg extreme was tried first and rejected — it made
+  progress far too rare (~900 bars apart), so the filter went dark for most of a
+  leg and over-filtered later winners. A bar is "progress" only if its extreme
+  beats the local ref by `max(--progress-min-atr·ATR, --progress-min-points)`
+  **and** its **close confirms** (`--progress-close-confirm-atr·ATR` beyond) — so
+  a wick alone never re-arms. The current bar's closed OHLC may confirm (live sees
+  it at emission); the local ref excludes the current bar.
+- **Stall veto (needs BOTH):** count consecutive non-progressing same-side signals;
+  veto only when count ≥ `--progress-stall-n` **AND** `bars_since_valid_progress ≥
+  --progress-min-no-progress-bars`. The count is frozen once blocked (counted
+  once). **Re-arm when progress happens on ANY bar between signals** — signals are
+  pullbacks, so progress rarely shows up *at* a signal bar; it shows on the
+  breakout bars between them, captured by the progress epoch (cumsum of progress
+  over all bars). A new progress epoch or a new leg resets the state.
+- **Probe decay (avoids going dark):** while blocked, exactly **one probe signal**
+  is allowed every `--progress-probe-interval-bars` (default 30) so a long leg
+  isn't fully muted; a probe does **not** unblock — only genuine progress / a leg
+  flip does. **Aligned-only** — wrong-side/flat/NaN pass through (tagged); the
   structure guard handles wrong-side. First same-side signal of a new leg is
   always allowed.
 - **Diagnostics** (`--progress-stall-diagnostics`): `time, side, close,
-  htf_regime, htf_leg_id, prior_extreme, current_extreme, valid_progress,
-  bars_since_valid_progress, non_progressing_count, reject_reason`
+  htf_regime, htf_leg_id, local_ref, current_extreme, valid_progress,
+  bars_since_valid_progress, non_progressing_count, stall_blocked,
+  bars_since_last_probe, probe_allowed, reject_reason`
   (`accept | progress_stall | htf_nan | htf_flat | htf_opposite`).
 
-Defaults: `htf 60 / ema 20·50 / min-diff-atr 0.10 / stall-n 3 /
-min-no-progress-bars 20 / min-atr 0.50 / close-confirm-atr 0.10 / min-points 1.0`.
+Defaults: `htf 60 / ema 20·50 / min-diff-atr 0.10 / local-lookback 30 / stall-n 3 /
+min-no-progress-bars 20 / probe-interval 30 / min-atr 0.50 / close-confirm-atr 0.10
+/ min-points 1.0`.
 It only removes signals; it does **not** replace the structure guard.
 
 All of these are **OFF by default** (`--structure-filter` defaults to off). With

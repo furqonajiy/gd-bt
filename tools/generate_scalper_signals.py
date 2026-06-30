@@ -337,18 +337,21 @@ def _add_indicators(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
             out["prog_regime"] = regime
             # 2) HTF leg id = contiguous same-regime run (flat/opposite ends a leg).
             out["prog_leg_id"] = (regime != regime.shift()).cumsum()
-            # 3) prior favorable extreme within the leg, EXCLUDING the current bar.
-            grp = out.groupby("prog_leg_id", sort=False)
-            prior_hi = grp["high"].cummax().groupby(out["prog_leg_id"], sort=False).shift(1)
-            prior_lo = grp["low"].cummin().groupby(out["prog_leg_id"], sort=False).shift(1)
+            # 3) LOCAL progress reference (NOT the whole-leg cumulative extreme,
+            #    which made progress far too rare ~900 bars apart and let the stall
+            #    go dark for most of a leg). A rolling local high/low over the last
+            #    --progress-local-lookback-bars, EXCLUDING the current bar (shift 1).
+            lb = max(1, args.progress_local_lookback_bars)
+            local_hi = out["high"].rolling(lb, min_periods=1).max().shift(1)
+            local_lo = out["low"].rolling(lb, min_periods=1).min().shift(1)
             atr14 = out["atr"]
             thr = (args.progress_min_atr * atr14).clip(lower=args.progress_min_points)
             cc = args.progress_close_confirm_atr * atr14
-            up_ok = (out["high"] >= prior_hi + thr) & (out["close"] >= prior_hi + cc)
-            dn_ok = (out["low"] <= prior_lo - thr) & (out["close"] <= prior_lo - cc)
+            up_ok = (out["high"] >= local_hi + thr) & (out["close"] >= local_hi + cc)
+            dn_ok = (out["low"] <= local_lo - thr) & (out["close"] <= local_lo - cc)
             valid = ((regime == "bull") & up_ok.fillna(False)) | ((regime == "bear") & dn_ok.fillna(False))
             out["prog_valid_progress"] = valid
-            out["prog_prior_extreme"] = prior_hi.where(regime == "bull", prior_lo)
+            out["prog_local_ref"] = local_hi.where(regime == "bull", local_lo)
             # 4) progress "epoch" within a leg (increments at each valid progress),
             #    so two same-side signals share a (leg, epoch) key iff no progress
             #    happened between them -> the stall counter resets without having to
@@ -569,43 +572,51 @@ def _progress_enabled(args: argparse.Namespace) -> bool:
 
 
 class _ProgressStall:
-    """Stateful trend-progress stall cap (one per generate_signals run).
+    """Stateful LOCAL-progress stall cap with probe decay (one per run).
 
     Caps HTF-ALIGNED same-side pullback CLUSTERS that keep firing while the trend
-    has stopped making new extremes. It only acts on signals aligned with the
-    completed-HTF regime (BUY in bull / SELL in bear); wrong-side and flat/NaN
-    signals are passed through (the structure guard, if enabled, handles
-    wrong-side). It can only REMOVE signals.
+    has stopped making LOCAL new extremes (a rolling local high/low, not the
+    whole-leg cumulative extreme -- the latter made progress too rare and let the
+    filter go dark for a whole leg). Aligned-only (BUY in bull / SELL in bear);
+    wrong-side / flat / NaN pass through (the structure guard handles wrong-side).
+    It can only REMOVE signals.
 
-    The non-progressing COUNT is keyed on (leg_id, progress_epoch, side): a new
-    epoch (a valid progress occurred) or a new leg resets the count to 0 without
-    re-scanning bars. Veto requires BOTH count >= stall_n AND
-    bars_since_progress >= min_no_progress_bars. The count is frozen once the
-    stall threshold is reached (counted once), so a blocked candidate does not
-    inflate it indefinitely.
+    Per (leg_id, side) state: non_progressing_count, stall_blocked, last_probe_pos.
+    A same-side aligned signal:
+      * valid progress         -> reset (count=0, unblock), allow.
+      * not blocked yet        -> count++; block+veto when count>=stall_n AND
+                                  bars_since_progress>=min_no_progress_bars; else allow.
+      * blocked                -> allow ONE probe every progress_probe_interval_bars
+                                  (so it never goes fully dark), else veto. A probe
+                                  does NOT unblock; only valid progress / a new leg
+                                  resets. The first same-side signal of a new leg is
+                                  always allowed (fresh state). The counter is frozen
+                                  once blocked (counted once).
     """
 
     def __init__(self, args: argparse.Namespace):
         self.stall_n = max(1, args.progress_stall_n)
         self.min_bars = max(0, args.progress_min_no_progress_bars)
-        self._count: dict[tuple, int] = {}   # (leg, epoch, side) -> non-progressing same-side signals
+        self.probe_interval = max(1, args.progress_probe_interval_bars)
+        self._st: dict[tuple, dict] = {}     # (leg, side) -> {count, blocked, last_probe_pos}
 
-    def decide(self, row, side: str) -> tuple[bool, str, dict]:
+    def decide(self, row, side: str, pos: int) -> tuple[bool, str, dict]:
         regime = str(getattr(row, "prog_regime", "nan"))
         leg = getattr(row, "prog_leg_id", -1)
-        epoch = getattr(row, "prog_epoch", 0)
+        epoch = int(getattr(row, "prog_epoch", 0) or 0)
         valid = bool(getattr(row, "prog_valid_progress", False))
         bars_since = float(getattr(row, "prog_bars_since_progress", 0.0) or 0.0)
-        prior_ex = getattr(row, "prog_prior_extreme", float("nan"))
+        local_ref = getattr(row, "prog_local_ref", float("nan"))
         buy = side == "BUY"
         aligned = (buy and regime == "bull") or (not buy and regime == "bear")
 
         diag = {"htf_regime": regime, "htf_leg_id": leg,
-                "prior_extreme": (round(float(prior_ex), 2) if pd.notna(prior_ex) else ""),
+                "local_ref": (round(float(local_ref), 2) if pd.notna(local_ref) else ""),
                 "current_extreme": round(float(getattr(row, "high" if buy else "low")), 2),
                 "valid_progress": int(valid),
                 "bars_since_valid_progress": int(bars_since),
-                "non_progressing_count": 0}
+                "non_progressing_count": 0, "stall_blocked": 0,
+                "bars_since_last_probe": "", "probe_allowed": 0}
 
         # out of scope -> pass through (not progress-stall's job)
         if regime == "nan":
@@ -615,17 +626,41 @@ class _ProgressStall:
         if not aligned:
             return True, "htf_opposite", diag
 
-        # aligned: a progressing bar re-arms (new epoch) -> accept
-        if valid:
+        st = self._st.setdefault((leg, side),
+                                 {"count": 0, "blocked": False, "last_probe_pos": None,
+                                  "last_epoch": epoch})
+
+        # RE-ARM when local progress happened on ANY bar since the last same-side
+        # signal (epoch advanced) or on this bar (valid). This is the key fix:
+        # signals are PULLBACKS, so 'valid' is rarely true AT a signal bar -- the
+        # trend's progress shows up on the breakout bars BETWEEN signals, which the
+        # progress epoch (cumsum over all bars) captures.
+        if valid or epoch != st["last_epoch"]:
+            st["count"] = 0
+            st["blocked"] = False
+            st["last_probe_pos"] = None
+            st["last_epoch"] = epoch
             return True, "accept", diag
 
-        key = (leg, epoch, side)
-        cnt = self._count.get(key, 0)
-        if cnt < self.stall_n:               # count once up to the threshold, then freeze
-            cnt += 1
-            self._count[key] = cnt
-        diag["non_progressing_count"] = cnt
-        if cnt >= self.stall_n and bars_since >= self.min_bars:
+        if st["blocked"]:
+            since_probe = (pos - st["last_probe_pos"]) if st["last_probe_pos"] is not None else self.probe_interval
+            diag["stall_blocked"] = 1
+            diag["bars_since_last_probe"] = int(since_probe)
+            diag["non_progressing_count"] = st["count"]
+            if since_probe >= self.probe_interval:  # let exactly one probe through
+                st["last_probe_pos"] = pos
+                diag["probe_allowed"] = 1
+                return True, "accept", diag
+            return False, "progress_stall", diag
+
+        # not blocked yet: count this non-progressing same-side signal (then freeze)
+        st["count"] += 1
+        diag["non_progressing_count"] = st["count"]
+        if st["count"] >= self.stall_n and bars_since >= self.min_bars:
+            st["blocked"] = True
+            st["last_probe_pos"] = pos            # next probe allowed probe_interval bars later
+            diag["stall_blocked"] = 1
+            diag["bars_since_last_probe"] = 0
             return False, "progress_stall", diag
         return True, "accept", diag
 
@@ -824,7 +859,7 @@ def generate_signals(df: pd.DataFrame, args: argparse.Namespace,
         # COUNT increments only for these would-be-taken aligned same-side signals,
         # so it reflects the cluster of trades actually taken.
         if sig is not None and prog_stall is not None:
-            p_ok, p_reason, p_diag = prog_stall.decide(row, sig_side)
+            p_ok, p_reason, p_diag = prog_stall.decide(row, sig_side, i)
             if prog_records is not None:
                 prog_records.append({
                     "time": t.isoformat(sep=" "), "side": sig_side, "close": round(close, 2),
@@ -911,8 +946,10 @@ def _write_structure_diagnostics(records: list[dict], path: Path) -> None:
 def _write_progress_diagnostics(records: list[dict], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = ["time", "side", "close", "htf_regime", "htf_leg_id",
-                  "prior_extreme", "current_extreme", "valid_progress",
-                  "bars_since_valid_progress", "non_progressing_count", "reject_reason"]
+                  "local_ref", "current_extreme", "valid_progress",
+                  "bars_since_valid_progress", "non_progressing_count",
+                  "stall_blocked", "bars_since_last_probe", "probe_allowed",
+                  "reject_reason"]
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -1065,10 +1102,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--progress-ema-slow", type=int, default=50)
     p.add_argument("--progress-min-diff-atr", type=float, default=0.10,
                    help="|HTF EMA diff| / HTF ATR above this = trend regime; within = flat.")
+    p.add_argument("--progress-local-lookback-bars", type=int, default=30,
+                   help="LOCAL rolling window (M1 bars, excl current) whose high/low is the "
+                        "progress reference -- NOT the whole-leg cumulative extreme.")
     p.add_argument("--progress-stall-n", type=int, default=3,
                    help="veto after this many consecutive non-progressing same-side signals.")
     p.add_argument("--progress-min-no-progress-bars", type=int, default=20,
                    help="also require this many M1 bars since the last valid progress before vetoing.")
+    p.add_argument("--progress-probe-interval-bars", type=int, default=30,
+                   help="while stalled, let exactly ONE probe signal through every this many bars "
+                        "(so the filter never goes dark for a whole leg).")
     p.add_argument("--progress-min-atr", type=float, default=0.50,
                    help="a new extreme must beat the prior by >= X*M1_ATR14 to count as progress.")
     p.add_argument("--progress-close-confirm-atr", type=float, default=0.10,

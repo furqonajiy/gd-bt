@@ -26,68 +26,91 @@ def _args(**ov):
 def _row(**kw):
     base = dict(prog_regime="bear", prog_leg_id=1, prog_epoch=0,
                 prog_valid_progress=False, prog_bars_since_progress=99.0,
-                prog_prior_extreme=4000.0, high=4001.0, low=3999.0)
+                prog_local_ref=4000.0, high=4001.0, low=3999.0)
     base.update(kw)
     return types.SimpleNamespace(**base)
 
 
 def _ps(**ov):
-    return _ProgressStall(_args(progress_stall_filter=True,
-                               progress_stall_n=3, progress_min_no_progress_bars=20, **ov))
+    return _ProgressStall(_args(progress_stall_filter=True, progress_stall_n=3,
+                               progress_min_no_progress_bars=20,
+                               progress_probe_interval_bars=30, **ov))
 
 
 def test_out_of_scope_passes_through():
     ps = _ps()
-    ok_nan, r_nan, _ = ps.decide(_row(prog_regime="nan"), "SELL")
+    ok_nan, r_nan, _ = ps.decide(_row(prog_regime="nan"), "SELL", 1)
     assert ok_nan and r_nan == "htf_nan"
-    ok_flat, r_flat, _ = ps.decide(_row(prog_regime="flat"), "SELL")
+    ok_flat, r_flat, _ = ps.decide(_row(prog_regime="flat"), "SELL", 2)
     assert ok_flat and r_flat == "htf_flat"
-    # BUY while bearish regime = wrong-side -> not progress-stall's job
-    ok_opp, r_opp, _ = ps.decide(_row(prog_regime="bear"), "BUY")
+    ok_opp, r_opp, _ = ps.decide(_row(prog_regime="bear"), "BUY", 3)
     assert ok_opp and r_opp == "htf_opposite"
 
 
 def test_first_same_side_signal_allowed():
     ps = _ps()
-    ok, reason, _ = ps.decide(_row(prog_epoch=0), "SELL")
+    ok, reason, _ = ps.decide(_row(prog_epoch=0), "SELL", 1)
     assert ok and reason == "accept"
 
 
-def test_valid_progress_accepts_and_rearms():
+def test_valid_progress_resets_count():
     ps = _ps()
-    # drive the count up in epoch 0, then a progressing bar (new epoch) accepts
-    for _ in range(5):
-        ps.decide(_row(prog_epoch=0, prog_valid_progress=False), "SELL")
-    ok, reason, _ = ps.decide(_row(prog_epoch=1, prog_valid_progress=True), "SELL")
+    for p in range(1, 4):
+        ps.decide(_row(prog_epoch=0, prog_bars_since_progress=25.0), "SELL", p)
+    ok, reason, d = ps.decide(_row(prog_epoch=0, prog_valid_progress=True), "SELL", 10)
+    assert ok and reason == "accept" and d["non_progressing_count"] == 0
+
+
+def test_progress_on_any_bar_between_signals_rearms_via_epoch():
+    # signals are pullbacks (valid=False at the signal bar), but a breakout bar
+    # BETWEEN signals advanced the epoch -> the next same-side signal re-arms.
+    ps = _ps()
+    for p in range(1, 4):
+        ps.decide(_row(prog_epoch=0, prog_bars_since_progress=25.0), "SELL", p)
+    ok, reason, _ = ps.decide(_row(prog_epoch=1, prog_valid_progress=False,
+                                   prog_bars_since_progress=2.0), "SELL", 12)
     assert ok and reason == "accept"
 
 
 def test_stall_requires_both_count_and_bars():
-    # count reaches n but bars_since < min -> still accept
     ps = _ps()
-    res = [ps.decide(_row(prog_bars_since_progress=5.0), "SELL") for _ in range(5)]
+    res = [ps.decide(_row(prog_bars_since_progress=5.0), "SELL", p) for p in range(1, 6)]
     assert all(ok for ok, _, _ in res), "no veto while bars_since < min_no_progress_bars"
-    # count reaches n AND bars_since >= min -> veto
     ps2 = _ps()
-    out = [ps2.decide(_row(prog_bars_since_progress=25.0), "SELL") for _ in range(4)]
-    assert out[0][0] and out[1][0]            # 1st,2nd non-progressing: count 1,2 -> accept
-    assert not out[2][0] and out[2][1] == "progress_stall"   # 3rd: count 3 >= n -> veto
-    assert not out[3][0]                       # stays vetoed
+    out = [ps2.decide(_row(prog_bars_since_progress=25.0), "SELL", p) for p in range(1, 5)]
+    assert out[0][0] and out[1][0]            # count 1,2 -> accept
+    assert not out[2][0] and out[2][1] == "progress_stall"   # count 3 >= n -> veto
+    assert not out[3][0]                       # stays vetoed (within probe interval)
 
 
 def test_counter_frozen_after_stall():
     ps = _ps()
-    decisions = [ps.decide(_row(prog_bars_since_progress=25.0), "SELL") for _ in range(8)]
-    counts = [d[2]["non_progressing_count"] for d in decisions]
+    decs = [ps.decide(_row(prog_bars_since_progress=25.0), "SELL", p) for p in range(1, 9)]
+    counts = [d[2]["non_progressing_count"] for d in decs]
     assert max(counts) == 3, f"counter must freeze at stall_n=3, saw {counts}"
+
+
+def test_probe_allowed_only_after_interval_and_does_not_unblock():
+    ps = _ps()   # probe interval 30 bars
+    # reach stall at pos 3 (blocked, last_probe_pos=3)
+    for p in range(1, 4):
+        ps.decide(_row(prog_bars_since_progress=25.0), "SELL", p)
+    # pos 20 (<30 since 3) -> still vetoed
+    ok_early, r_early, _ = ps.decide(_row(prog_bars_since_progress=40.0), "SELL", 20)
+    assert not ok_early and r_early == "progress_stall"
+    # pos 33 (>=30 since 3) -> exactly one probe allowed
+    ok_probe, r_probe, d_probe = ps.decide(_row(prog_bars_since_progress=50.0), "SELL", 33)
+    assert ok_probe and d_probe["probe_allowed"] == 1
+    # probe did NOT unblock: next signal soon after is vetoed again
+    ok_after, r_after, _ = ps.decide(_row(prog_bars_since_progress=55.0), "SELL", 40)
+    assert not ok_after and r_after == "progress_stall"
 
 
 def test_new_leg_resets_state():
     ps = _ps()
-    for _ in range(4):
-        ps.decide(_row(prog_leg_id=1, prog_bars_since_progress=25.0), "SELL")
-    # new leg -> fresh (leg,epoch,side) key -> first signal accepted again
-    ok, reason, _ = ps.decide(_row(prog_leg_id=2, prog_epoch=0), "SELL")
+    for p in range(1, 5):
+        ps.decide(_row(prog_leg_id=1, prog_bars_since_progress=25.0), "SELL", p)
+    ok, reason, _ = ps.decide(_row(prog_leg_id=2, prog_epoch=0), "SELL", 5)
     assert ok and reason == "accept"
 
 
@@ -187,6 +210,7 @@ def test_progress_stall_only_removes_signals_and_logs_reason():
     reasons = {r["reject_reason"] for r in recs}
     assert reasons <= {"accept", "progress_stall", "htf_nan", "htf_flat", "htf_opposite"}
     for r in recs:
-        assert set(r) >= {"time", "side", "htf_regime", "htf_leg_id", "prior_extreme",
+        assert set(r) >= {"time", "side", "htf_regime", "htf_leg_id", "local_ref",
                          "valid_progress", "bars_since_valid_progress",
-                         "non_progressing_count", "reject_reason"}
+                         "non_progressing_count", "stall_blocked", "bars_since_last_probe",
+                         "probe_allowed", "reject_reason"}
