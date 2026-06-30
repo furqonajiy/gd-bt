@@ -169,6 +169,53 @@ def test_daily_breaker_resets_next_day():
     assert g.pre_check(_sig("C", "2026-06-02 09:00"), 1800.0) is None
 
 
+def test_default_config_has_no_open_lots_cap():
+    assert DeploymentGate.maybe(StrategyConfig()) is None
+    assert DeploymentGate.maybe(StrategyConfig(max_open_lots=100.0)) is not None
+
+
+def test_open_lots_cap_rejects_over_total():
+    g = DeploymentGate(StrategyConfig(max_open_lots=100.0, max_hold_minutes=150,
+                                      pending_expiry_minutes=180))
+    # two signals already open holding 60 + 30 = 90 lots
+    for k, lots, t in (("A", 60.0, "2026-06-01 09:00"), ("B", 30.0, "2026-06-01 09:10")):
+        s = _sig(k, t)
+        g.pre_check(s, 2000.0)
+        g.register(s, _built(key=k, lot=lots, fill=t, exit="2026-06-01 18:00"))
+    # a third signal of 20 lots -> 90+20=110 > 100 -> reject
+    c = _sig("C", "2026-06-01 09:20"); g.pre_check(c, 2000.0)
+    assert g.open_lots_check(_built(key="C", lot=20.0, fill="2026-06-01 09:25",
+                                    exit="2026-06-01 18:00")["entry_rows"], 2000.0) == "max_open_lots"
+    # a 5-lot signal -> 95 <= 100 -> allowed
+    d = _sig("D", "2026-06-01 09:30"); g.pre_check(d, 2000.0)
+    assert g.open_lots_check(_built(key="D", lot=5.0, fill="2026-06-01 09:35",
+                                    exit="2026-06-01 18:00")["entry_rows"], 2000.0) is None
+
+
+def test_open_lots_cap_frees_as_positions_close():
+    g = DeploymentGate(StrategyConfig(max_open_lots=100.0, max_hold_minutes=150,
+                                      pending_expiry_minutes=180))
+    a = _sig("A", "2026-06-01 09:00"); g.pre_check(a, 2000.0)
+    g.register(a, _built(key="A", lot=90.0, fill="2026-06-01 09:05", exit="2026-06-01 10:00"))
+    # B at 11:00 -- A has closed (exit 10:00) so its 90 lots are freed -> 30 ok
+    b = _sig("B", "2026-06-01 11:00"); g.pre_check(b, 2000.0)
+    assert g.open_lots_check(_built(key="B", lot=30.0, fill="2026-06-01 11:05",
+                                    exit="2026-06-01 12:00")["entry_rows"], 2000.0) is None
+
+
+def test_live_check_open_lots_rejects():
+    g = DeploymentGate(StrategyConfig(max_open_lots=100.0))
+    legs = [{"entry_price": 4500.0, "effective_SL": 4480.0, "lot": 30.0}]
+    # 80 already open + 30 new = 110 > 100 -> reject
+    assert g.live_check(planned_legs=legs, equity=50000.0, open_groups=0,
+                        day_realized_pnl=0.0, day_start_equity=50000.0,
+                        open_lots=80.0) == "max_open_lots"
+    # 60 open + 30 = 90 <= 100 -> allowed
+    assert g.live_check(planned_legs=legs, equity=50000.0, open_groups=0,
+                        day_realized_pnl=0.0, day_start_equity=50000.0,
+                        open_lots=60.0) is None
+
+
 def test_daily_breaker_uses_source_day():
     # source (feed-zone) date differs from chart date around midnight; the day key
     # is the SOURCE date so it lines up with the report's daily breakdown.

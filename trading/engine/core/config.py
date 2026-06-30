@@ -199,6 +199,12 @@ class StrategyConfig:
     # open at once. A signal with up to entry_count legs still counts as ONE. A new
     # signal arriving while >= this many groups are open is rejected. 0 = unlimited.
     max_open_signals: int = 0
+    # MAX CONCURRENT OPEN LOTS: cap the TOTAL open volume across ALL positions
+    # (every BUY + SELL leg of every open signal) at once -- the ELEV8 broker
+    # ceiling is 100 lots total (e.g. 5 open signals share it, ~20 lots each). A
+    # new signal whose filled ladder would push total open lots over this is
+    # rejected. 0.0 = unlimited (parity). Companion to the per-order maximum_lot.
+    max_open_lots: float = 0.0
 
 
 DEFAULT_CONFIG = StrategyConfig()

@@ -279,7 +279,8 @@ def _run_hybrid_loop(signals, chart, chart_df, chart_start, chart_end, ticks,
             tick_built = True
 
         if gate is not None:
-            greason = gate.risk_budget_check(built["entry_rows"], equity)
+            greason = (gate.risk_budget_check(built["entry_rows"], equity)
+                       or gate.open_lots_check(built["entry_rows"], equity))
             if greason is not None:
                 excluded.append({"signal_key": tsig.signal_key, "reason": greason})
                 continue

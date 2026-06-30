@@ -417,6 +417,10 @@ def add_scale_out_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("--max-open-signals", type=_positive_int, default=0,
                    help="Cap concurrent OPEN signal groups (not entries); a multi-entry signal "
                         "counts as one. A new signal while >= this many are open is rejected. 0=unlimited.")
+    g.add_argument("--max-open-lots", type=_positive_float, default=0.0,
+                   help="Cap TOTAL concurrent open lots across ALL positions (ELEV8 broker ceiling "
+                        "=100). A new signal whose filled ladder would push total open lots over "
+                        "this is rejected. 0=unlimited.")
 
 
 def _add_adaptive_flags(p: argparse.ArgumentParser) -> None:
@@ -545,6 +549,7 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         max_zone_risk_pct=getattr(args, "max_zone_risk_pct", 0.0),
         daily_loss_limit_pct=getattr(args, "daily_loss_limit_pct", 0.0),
         max_open_signals=getattr(args, "max_open_signals", 0),
+        max_open_lots=getattr(args, "max_open_lots", 0.0),
     )
 
 

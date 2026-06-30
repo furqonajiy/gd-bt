@@ -1472,11 +1472,13 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         # extra orders, so it cannot increase exposure.
         if gate is not None:
             open_groups = len(tracked) + placed_this_cycle
-            planned_legs = [{"entry_price": o.entry_price, "effective_SL": o.initial_sl}
+            planned_legs = [{"entry_price": o.entry_price, "effective_SL": o.initial_sl,
+                             "lot": getattr(o, "lot", 0.0)}
                             for o in getattr(rec.new_signal, "orders", []) or []]
             greason = gate.live_check(
                 planned_legs=planned_legs, equity=equity, open_groups=open_groups,
-                day_realized_pnl=gate_day_pnl, day_start_equity=gate_day_start_equity)
+                day_realized_pnl=gate_day_pnl, day_start_equity=gate_day_start_equity,
+                open_lots=executor.open_lots())
             if greason is not None:
                 forensic.decision(signal_key=signal.signal_key, action="SKIP_GATE",
                                   rationale=greason)

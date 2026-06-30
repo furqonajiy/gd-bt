@@ -293,11 +293,12 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
     # Monthly breakdown table.
     ws.cell(row=row, column=1, value="Monthly Breakdown").font = SUBHEADER_FONT
     ws.cell(row=row, column=1).fill = SUBHEADER_FILL
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=16)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=17)
     row += 1
     headers = ["Month", "Regime", "Signals", "Wins", "Losses", "No-fills",
                "Win rate", "Trading P&L", "Bonus", "Closed lots",
-               "Net P&L", "P&L %", "Equity EoM", "Entries", "Drawdown %", "Drawdown $"]
+               "Net P&L", "P&L %", "Equity EoM", "Entries", "Drawdown %",
+               "Drawdown $", "Worst DD at"]
     _write_header(ws, row, headers)
     row += 1
     for m in result.get("monthly", []) or []:
@@ -314,6 +315,7 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
             m.get("trading_pnl", 0.0), m.get("bonus", 0.0), m.get("closed_lots", 0.0),
             pnl, f"{pnl_pct:+.2f}%", equity_end,
             m.get("entries", 0) or 0, f"{dd_pct:.2f}%", dd_usd,
+            m.get("max_drawdown_at") or "-",
         ]
         if signals == 0:
             _apply_row_fill(ws, row, len(headers), QUIET_DAY_FILL)
@@ -357,7 +359,8 @@ def _write_weekly_sheet(ws: Worksheet, result: dict) -> None:
     ws.title = "Weekly Breakdown"
     headers = ["Month-Week", "Signals", "Wins", "Losses", "No-fills",
                "Win rate", "Trading P&L", "Bonus", "Closed lots",
-               "Net P&L", "P&L %", "Equity EoW", "Entries", "Drawdown %", "Drawdown $"]
+               "Net P&L", "P&L %", "Equity EoW", "Entries", "Drawdown %",
+               "Drawdown $", "Worst DD at"]
     _write_header(ws, 1, headers)
 
     weekly = result.get("weekly", []) or []
@@ -373,6 +376,7 @@ def _write_weekly_sheet(ws: Worksheet, result: dict) -> None:
             w.get("trading_pnl", 0.0), w.get("bonus", 0.0), w.get("closed_lots", 0.0),
             pnl, f"{pnl_pct:+.2f}%", w.get("equity_end", 0.0) or 0.0,
             w.get("entries", 0) or 0, f"{dd_pct:.2f}%", dd_usd,
+            w.get("max_drawdown_at") or "-",
         ]
         if signals == 0:
             _apply_row_fill(ws, r_idx, len(headers), QUIET_DAY_FILL)
@@ -411,7 +415,7 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
     statuses = result.get("entry_statuses_present", []) or []
     base = ["Date", "Signals", "Wins", "Losses"]
     tail = ["Entries", "Avg R:R", "Avg R", "Trading P&L", "Bonus", "Closed lots",
-            "Net P&L", "P&L %", "Equity EoD", "Drawdown %", "Drawdown $"]
+            "Net P&L", "P&L %", "Equity EoD", "Drawdown %", "Drawdown $", "Worst DD at"]
     headers = base + statuses + tail
     _write_header(ws, 1, headers)
 
@@ -443,6 +447,7 @@ def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
             _fmt_rr_planned(rrp_avg), _fmt_rr_realized(rr_avg),
             trading_pnl, bonus, closed_lots, pnl,
             f"{pnl_pct:+.2f}%", equity_end, f"{drawdown_pct:.2f}%", drawdown_usd,
+            d.get("max_drawdown_at") or "-",
         ]
 
         if signals == 0:
