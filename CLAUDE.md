@@ -234,8 +234,33 @@ pair is a thin package that imports it.
   is created only if a combined variant lowers `max_consecutive_losing_signals`
   vs base with filtered-losers > winners. `.github/workflows/structure-guard-sweep.yml`
   runs it manually (workflow_dispatch).
+- **TSL18 quality-entry research layer** (`tools/generate_scalper_signals.py`
+  `--entry-quality-classifier` / `--quality-profile` / `--min-quality-score` /
+  `--extreme-entry-mode`, all **default OFF → feed byte-identical**, pinned by
+  `tests/test_tsl18_quality_entry.py`): a **no-lookahead** classifier that LABELS
+  every base ema-pullback entry with a quality CLASS (`trend_pullback`,
+  `deep_trend_pullback`, `countertrend_reversal`, `range_extreme_reversal`,
+  `low_quality_chase`, `unknown`) + a 0..1 score (own COMPLETION-stamped HTF, so
+  no in-progress-bucket leak), an optional quality PROFILE that filters the feed by
+  class/score (`off|trend_only|reversal_extreme|hybrid_quality|high_frequency_quality`),
+  and a buy-bottom / sell-top `--extreme-entry-mode`
+  (`support_demand|supply_resistance|both`). It only REMOVES signals (never invents
+  one); rich `--quality-diagnostics` (quality_class/score, htf_state, vwap_side,
+  rsi, bb_*, adx, near_*, distance_*, reject reasons, extreme_level_*). The
+  **rebate-aware** scorer (`tools/rebate_scoring.py`) splits a run into PURE
+  trading P&L vs the $3/closed-lot REBATE so a rebate-farm with bad pure P&L is
+  guarded out (`pure_trading_pnl/rebate_pnl/net_pnl/closed_lots/..._per_lot/
+  rebate_share_of_profit`; objectives `net_pnl|pure_pnl|edge_plus_rebate_guarded|
+  dd_adjusted_net`; guards `--min-pure-trading-pnl` / `--max-rebate-share-of-profit`).
+  The sweep SKELETON `tools/sweep_tsl18_quality_entry.py` (modes
+  smoke/full_june/validate_top, partial-tick-lifecycle + open/pending-left
+  exclusion gates, `results.csv` / `top_candidates.json` / `summary.md`;
+  **placeholder collision columns only — no collision logic here**) is the
+  structural check — `--skeleton` / `--mode smoke` only, **do not run the full
+  aggressive sweep**. Contract: `docs/TSL18_QUALITY_ENTRY.md`.
 - `docs/` — `MT5_SETUP.md`, `OPERATIONS_PLAYBOOK.md`,
   `demo_runbook_trailing_open.md`, `SWEEP_RUNBOOK.md`, `TSL18_STRUCTURE_GUARD.md`,
+  `TSL18_QUALITY_ENTRY.md`,
   `VICTOR_SWEEP_RUNBOOK.md`, `REGIME_ASSESSMENT.md` (the price-normalized
   regime-determination assessment + the volatility-scale-invariance verdict:
   the champion absorbs volatility, so finer regimes don't change champion
