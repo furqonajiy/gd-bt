@@ -53,8 +53,17 @@ jobs:
             python cli/run.py "$s" 4 2>&1 | tail -15 \
               || echo "(section 4 skipped for $s -- backtest uses a committed feed)"
             for sec in ${{ github.event.inputs.sections }}; do
-              echo "===== cli/run.py $s $sec ====="
-              python cli/run.py "$s" "$sec" 2>&1 | tail -25
+              # ALWAYS produce TWO capital variants per backtest: $50,000 (as the
+              # candidate authors it) and $5,000. We reconstruct the exact command
+              # with --print, run it as-is for $50k, then rewrite --initial-capital
+              # and the --output-dir (suffix _5k) for the $5k variant.
+              cmd=$(python cli/run.py "$s" "$sec" --print 2>&1 | grep -E 'python (tools/|-m )' | head -1)
+              if [ -z "$cmd" ]; then echo "(no command for $s $sec)"; continue; fi
+              echo "===== $s $sec @ \$50,000 ====="
+              bash -c "$cmd" 2>&1 | tail -20
+              cmd5=$(echo "$cmd" | sed -E 's#--initial-capital 50000#--initial-capital 5000#; s#(--output-dir [^ ]+)#\1_5k#')
+              echo "===== $s $sec @ \$5,000 ====="
+              bash -c "$cmd5" 2>&1 | tail -20
             done
           done
 
