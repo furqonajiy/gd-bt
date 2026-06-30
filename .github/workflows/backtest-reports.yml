@@ -44,6 +44,14 @@ jobs:
         run: |
           set -o pipefail
           for s in ${{ github.event.inputs.strategies }}; do
+            # Section 4 regenerates the strategy's static feed first. Self-scalper
+            # feeds (e.g. signals/t818.txt) are generated, not committed, so the
+            # backtest would otherwise fail with FileNotFoundError. Victor books
+            # read the committed victor_signals.txt, so their section 4 is a
+            # harmless no-op / tolerated failure.
+            echo "===== generate feed: cli/run.py $s 4 ====="
+            python cli/run.py "$s" 4 2>&1 | tail -15 \
+              || echo "(section 4 skipped for $s -- backtest uses a committed feed)"
             for sec in ${{ github.event.inputs.sections }}; do
               echo "===== cli/run.py $s $sec ====="
               python cli/run.py "$s" "$sec" 2>&1 | tail -25
