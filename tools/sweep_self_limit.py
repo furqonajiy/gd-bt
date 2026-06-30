@@ -191,6 +191,7 @@ def evaluate_self_limit(cfg: dict, *, signals, chart, validate_signals, args) ->
         "fixed_no_bonus_profit": edge,
         "fixed_with_bonus_profit": edge_bonus,
         "bonus_contribution": edge_bonus - edge,
+        "fixed_closed_lots": float(fixed_b.get("closed_lots") or 0.0),
         "concurrent_risk_max_dd_pct": dd_concurrent,
         "risk_net_profit_with_bonus": float(risk_full.get("net_profit") or 0.0),
         "stable_months": ms["stable_months"],

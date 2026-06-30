@@ -4,8 +4,9 @@ name: r4-entry-feature-sweep
 # regenerate the scalper24 feed with that variant's filter flags, then sweep the
 # full strategy+geometry params over it (tools/sweep_self_limit.py, slippage-aware
 # 2.0/1.0), and the aggregate picks the global winner on fixed-lot edge + $3/lot
-# bonus at DD<=40% & OOS>0. This is how we "combine all params": entry-feature
-# choice (feed-level) x strategy/geometry (candidate-level), attributable.
+# bonus at DD<=40% & OOS>0. A variant must beat base on edge+bonus, raw edge,
+# and OOS. This is how we "combine all params": entry-feature choice
+# (feed-level) x strategy/geometry (candidate-level), attributable.
 #
 # Each variant runs ONE job of 4 parallel shards (4 seeds). Artifact-only (no
 # branch writes), consistent with self-scalper-sweep / victor-sweep.
@@ -96,32 +97,10 @@ jobs:
             python tools/victor_sweep_aggregate.py --root "$d" --regime "R4F_${v}" \
               --out-dir "results/${v}" --dd-gate 40 --top-n 10 || true
           done
-          echo "==================== PER-VARIANT WINNERS ===================="
-          python - << 'PY'
-          import glob, csv, os
-          rows=[]
-          for csvp in glob.glob("results/*/leaderboard.csv"):
-              variant=os.path.basename(os.path.dirname(csvp))
-              best=None
-              for r in csv.DictReader(open(csvp)):
-                  def f(x):
-                      try: return float(x)
-                      except: return None
-                  dd=f(r["concurrent_risk_max_dd_pct"]); oos=f(r["oos_fixed_no_bonus_profit"]); edge=f(r["fixed_no_bonus_profit"])
-                  if dd is None or oos is None or edge is None: continue
-                  if abs(dd)<=40 and oos>0:
-                      key=f(r["fixed_with_bonus_profit"]) or edge
-                      if best is None or key>best[0]:
-                          best=(key,edge,oos,dd,r["cfg_entry_count"],r["cfg_sl_multiplier"],r["cfg_max_hold_minutes"],r["cfg_tp1_lock_delay_minutes"])
-              if best: rows.append((variant,*best))
-          rows.sort(key=lambda x:-(x[2]))  # by edge
-          print(f"{'variant':12}{'edge$':>10}{'OOS$':>9}{'DD%':>7}  e/slm/hold/d24")
-          for v,key,edge,oos,dd,e,slm,hold,d in rows:
-              print(f"{v:12}{edge:>10,.0f}{oos:>9,.0f}{dd:>7.1f}  e{e}/slm{slm}/h{hold}/d{d}")
-          if rows:
-              g=max(rows,key=lambda x:(x[2],x[1]))  # OOS then edge
-              print(f"\nGLOBAL R4 WINNER by OOS+edge: variant={g[0]} edge=${g[2]:,.0f} OOS=${g[3]:,.0f} DD={g[4]:.1f}%")
-              print("(baseline 'base' = current e5-feed space; a variant only wins if it beats base on edge AND OOS)")
-          PY
+          python tools/entry_feature_variant_report.py \
+            --results-dir results \
+            --dd-gate 40 \
+            --title "PER-VARIANT WINNERS" \
+            --winner-label "GLOBAL R4 WINNER"
       - uses: actions/upload-artifact@v4
         with: { name: "r4-feature-sweep-results", path: "results/**", if-no-files-found: warn }

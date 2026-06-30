@@ -51,15 +51,17 @@ of their pinned version — a safe catch-all.
   feed variants); each variant regenerates the scalper24 feed with those
   generator flags, then sweeps the full strategy/geometry grid via
   `tools/sweep_self_limit.py` (slippage-aware 2.0/1.0). Artifact-only; the agg
-  (`agg_entry_feature.sh R4 selfrbr`) keeps variants that beat `base` on edge
-  AND OOS at DD≤40%. Mirrors the R4 job of `self-scalper-rr-sweep.yml`.
+  (`agg_entry_feature.sh R4 selfrbr`) keeps variants that beat `base` on
+  edge+bonus, raw edge, and OOS at DD<=40%. Mirrors the R4 job of
+  `self-scalper-rr-sweep.yml`.
 - `self-scalper-rsi-bb-rr-sweep-r3r2r1.yml` — the SAME 34-variant RSI × Bollinger
   × R:R combination sweep extended to the remaining regimes, chained
   **R3 → R2 → R1** in one run (R4 already has its champion, SQZ6 / rsi75_sqz6_rr40).
   Each regime regenerates the scalper24 feed from its own chart window (R3=2025,
   R2=2023-10..2024, R1=2021-11..2023-09) and sweeps via `tools/sweep_self_limit.py`
   (slippage-aware 2.0/1.0). Artifact-only; per-regime agg
-  (`agg_entry_feature.sh R{3,2,1} selfrbr`) keeps variants that beat `base` on edge
-  AND OOS at DD≤40%. Results: `self-rbr-R{3,2,1}-results`.
+  (`agg_entry_feature.sh R{3,2,1} selfrbr`) keeps variants that beat `base` on
+  edge+bonus, raw edge, and OOS at DD<=40%. Results:
+  `self-rbr-R{3,2,1}-results`.
 
 _Reference: <https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/>_
