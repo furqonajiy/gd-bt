@@ -211,20 +211,31 @@ proven identical to the backtest/tick decision by
 (same signal slice → identical accept/reject reasons), so a **TS2K tick backtest
 predicts live placement**.
 
-How the live executor sources the gate state each cycle (in
-`trading/engine/cli_impl.py`'s `auto` candidate loop):
+How the live executor sources the gate state each cycle. The gate runs in the
+**ACTIVE** auto path, `trading/engine/cli.py`'s `_auto_pass` (the deployed
+console build; it overrides `cli_impl.cmd_auto` / `_auto_pass`, so the gate MUST
+live there to fire live — a copy in `cli_impl` alone is dead for live). It is
+applied before **every** placement path: a normal/partial FOLLOW, the restored
+full trailing-open ladder, and the `--trailing-live-entry` SKIP_INVALIDATED
+rescue. State sources:
 
 - **risk-budget** — the planned ladder from `rec.new_signal.orders`
   (`entry_price` / `initial_sl` per leg) → `worst_case_risk` vs live equity.
   Identical math to the backtest.
 - **max-open-signals** — currently-open tracked signal groups
-  (`len(tracked)`) plus any placed earlier this cycle.
+  (`len(tracked)`) plus any placed earlier this cycle (`placed_this_cycle`).
+- **max-open-lots** (ELEV8 total concurrent volume ceiling) — the would-be
+  ladder's filled lots plus the executor's live `open_lots()`.
 - **daily-loss breaker** — today's realized P&L from MT5 deal history
   (`Mt5Executor.realized_pnl_since`, OUT deals since server-midnight),
   **account-level** (suits a dedicated small account); start-of-day equity ≈
   current equity − today's realized (floating ignored — a coarse circuit-breaker
   basis). Best-effort: if MT5 history is unavailable the breaker simply does not
   fire (conservative).
+
+The gates only fire when their config fields are set, which only
+`tools/auto_explicit.py` exposes (the `cli/*.txt` snapshots invoke it). A plain
+`python -m trading.engine.cli auto` runs DEFAULT_CONFIG with every gate OFF.
 
 Two documented divergences (immaterial to a coarse safety gate): live uses the
 **server day** for the breaker boundary vs the backtest's feed-zone (source) day;

@@ -209,7 +209,7 @@ truncate comments below MT5's 31-char cap.
 
 To run **two auto executors on one MT5 account** (e.g. Victor + a self-feed
 scalper), give each a distinct **`--strategy-tag`** (e.g. `VIC` vs `SQZ6`, capped
-at 4 chars) and its own `--positions-json`. The tag is stamped onto `signal_key`,
+at 5 chars) and its own `--positions-json`. The tag is stamped onto `signal_key`,
 so the two get disjoint magics + comments and never manage each other's orders.
 It is live-only (empty in backtests, so parity holds).
 

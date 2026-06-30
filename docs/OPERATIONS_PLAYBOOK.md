@@ -301,7 +301,9 @@ In the MT5 terminal you tell them apart by the order **comment**, which reads
 `[TAG-]MMDD#DD.N` — tag, month-day, signal-of-day, entry — e.g. `VIC-0615#05.2`
 vs `SC24-0615#05.2`. Only the year is dropped (it's in the magic + open time) so
 the comment survives the broker's truncation (Elev8 cuts near 16 chars). The
-tag is **capped at 4 chars**; a longer one keeps its first 4. The tag is
+tag is **capped at 5 chars**; a longer one keeps its first 5 (the compact
+per-entry/close comment is independently clamped to the broker's 16-char limit,
+which is what makes a 5-char tag safe). The tag is
 live-only — backtests run untagged, so parity is unaffected.
 
 **One distinct identity per strategy.** Don't stop at the tag — give every
@@ -317,7 +319,7 @@ tag, so nothing ever collides and every file traces to one strategy at a glance:
 
 No two strategies share a tag, positions file, feed file, or report name. The
 snapshot file follows too (`cli/champion_R4_SQZ6_no_trailing.txt`). When you add
-a strategy, mint a fresh ≤ 4-char tag and derive all four names from it.
+a strategy, mint a fresh ≤ 5-char tag and derive all four names from it.
 
 ### Regime auto-switch (`--adaptive`)
 

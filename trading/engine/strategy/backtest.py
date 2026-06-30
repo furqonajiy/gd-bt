@@ -56,6 +56,16 @@ def apply_signal_rr_policy(sig, config: StrategyConfig, atr_value: float | None 
     ``signal_min_rr``. No-op by default (signal SL source, ``signal_min_rr`` 0,
     ``rewrite_tp3_rr`` 0) so parity / DEFAULT_CONFIG behavior is unchanged.
 
+    BACKTEST/SWEEP-ONLY. This is called ONLY from ``run_backtest`` (this module);
+    the live executor (``trading.engine.cli._auto_pass`` / ``decide`` / the MT5
+    executor) does NOT apply it, so a sweep winner that relies on a signal-policy
+    field (``signal_min_rr`` / ``rewrite_tp1/2/3_rr`` / ``sl_source="atr"`` /
+    ``signal_rr_reference``) is NOT live-deployable as-is -- live would still
+    follow the provider's posted SL/TP. To deploy such a winner you must either
+    bake the rewrite into the FEED (the generator emits the rewritten levels, as
+    the scalper24 ``--rr1/2/3`` flags do) or plumb the policy into the live path
+    first. Until then these fields are research dimensions, not live config.
+
     entry_edge = range_high (BUY) / range_low (SELL). Raw risk is |entry_edge -
     sl| ("signal" SL source) or ``atr_value * atr_sl_mult`` ("atr" -- which also
     REPLACES the signal's SL with entry_edge -/+ that), then scaled by

@@ -53,8 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Per-executor namespace prefix stamped onto each signal's magic + "
                               "MT5 comment. Set DISTINCT values when running two auto executors on "
                               "one account (e.g. VIC vs SC24) so they never manage each other's "
-                              "orders. Capped at 4 chars (first 4 kept) so the compact comment "
-                              "fits the broker limit.")
+                              "orders. Capped at 5 chars (first 5 kept); the compact per-entry/close "
+                              "MT5 comment is independently clamped to the broker's 16-char limit.")
     runtime.add_argument("--no-clear", action="store_true")
     runtime.add_argument("--replace-missing-entries", choices=["true", "false"], default="false",
                          help="Each cycle, re-place pending LIMIT entries that vanished from MT5 "
