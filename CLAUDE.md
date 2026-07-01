@@ -165,6 +165,16 @@ pair is a thin package that imports it.
   early-morning GMT+7 signal whose chart time is the prior evening still books
   on its feed day). The Per-Entry sheet's `Date` is already the source date;
   its `Time (chart EET/EEST)` column stays chart-time for reference.
+  **Every date/time in the workbook names its timezone** so no column is
+  ambiguous (`excel_report.CHART_TZ_LABEL` = `EET/EEST`; feed zone from the rows'
+  `source_tz`, e.g. `GMT+7`): CHART-clock columns are tagged `(EET/EEST)` —
+  `Chart start/end`, the `Max-DD trough`, every `Worst DD at`, and the Per-Entry
+  `Fill Time`/`Exit Time`/`Live Exit Time` — and FEED-zone buckets are tagged
+  with the feed tz — `Month (GMT+7)`, `Month-Week (GMT+7)`, `Date (GMT+7)`, plus
+  the pre-existing `Time (GMT+7)` source-time column. The Summary also carries a
+  one-line **Timezones** legend. Header labels are additive, so consumers match
+  by prefix (`reconcile_live_vs_backtest.col()` accepts `Exit Time` →
+  `Exit Time (EET/EEST)`); pinned by `test_all_report_dates_carry_a_timezone_label`.
 - `strategy/regime.py` — the **volatility-regime detector** (`detect_regime` /
   `read_current_regime` via smoothed M15 ATR + trend), re-exported from the
   package root. It labels months in the report and drives the **regime

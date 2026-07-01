@@ -100,6 +100,24 @@ def _fmt_dt(value: Any) -> Optional[str]:
     return str(value)
 
 
+# Every date/time in the report carries its timezone so no column is ambiguous.
+# CHART times are Eastern European (EET/EEST, UTC+2 winter / +3 summer) -- the
+# single chart-clock convention (see core/chart_tz.py): chart_start/end, the
+# drawdown trough, every "Worst DD at", and the Per-Entry fill/exit times. FEED
+# (source) dates -- the Weekly/Daily/Monthly buckets and the Per-Entry Date /
+# source-time -- are in each signal's own feed zone (Victor = GMT+7), grouped by
+# signal_time_source. The feed-zone label is read from the rows' source_tz.
+CHART_TZ_LABEL = "EET/EEST"
+
+
+def _feed_tz_label(result: dict) -> str:
+    """The feed/source timezone the Weekly/Daily/Monthly buckets are grouped in,
+    read from the rows' source_tz (e.g. 'GMT+7'). 'feed zone' if mixed/unknown."""
+    rows = result.get("entry_rows") or []
+    tzs = {r.get("source_tz") for r in rows if r.get("source_tz")}
+    return tzs.pop() if len(tzs) == 1 else "feed zone"
+
+
 def _autosize(ws: Worksheet, min_width: int = 8, max_width: int = 24,
               header_rows: int = 1) -> None:
     """Approximate auto-fit by inspecting cell content lengths."""
@@ -197,6 +215,7 @@ def _kv_section(ws: Worksheet, row: int, title: str, pairs: list[tuple], span: i
 def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
     ws.title = "Summary"
     cfg = result.get("config", {})
+    feed_tz = _feed_tz_label(result)
 
     ws["A1"] = "XAUUSD BACKTEST RESULTS"
     ws["A1"].font = Font(bold=True, size=14, color="305496")
@@ -215,8 +234,11 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
         ("Lock after TP1", cfg.get("lock_after_tp1")),
         ("Lock after TP2", cfg.get("lock_after_tp2")),
         ("Bonus / closed lot", f"${cfg.get('bonus_per_closed_lot', 0):,.2f}"),
-        ("Chart start", result.get("chart_start")),
-        ("Chart end", result.get("chart_end")),
+        # Timezone legend: every time in this workbook is tagged (chart vs feed).
+        ("Timezones", f"chart times = {CHART_TZ_LABEL} (UTC+2/+3); "
+                      f"feed/source dates = {feed_tz}"),
+        (f"Chart start ({CHART_TZ_LABEL})", result.get("chart_start")),
+        (f"Chart end ({CHART_TZ_LABEL})", result.get("chart_end")),
     ])
 
     initial = cfg.get("initial_capital", 0) or 1
@@ -239,7 +261,7 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
     tr = result.get("drawdown_trough")
     if tr:
         overall_pairs.append(
-            ("Max-DD trough",
+            (f"Max-DD trough ({CHART_TZ_LABEL})",
              f"{tr.get('time_chart') or '?'}  "
              f"({tr.get('signals_executed_through', 0)} signals / "
              f"{tr.get('entries_filled_through', 0)} entries executed by then)"))
@@ -321,10 +343,10 @@ def _write_summary_sheet(ws: Worksheet, result: dict) -> None:
     ws.cell(row=row, column=1).fill = SUBHEADER_FILL
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=17)
     row += 1
-    headers = ["Month", "Regime", "Signals", "Wins", "Losses", "No-fills",
+    headers = [f"Month ({feed_tz})", "Regime", "Signals", "Wins", "Losses", "No-fills",
                "Win rate", "Trading P&L", "Bonus", "Closed lots",
                "Net P&L", "P&L %", "Equity EoM", "Entries", "Drawdown %",
-               "Drawdown $", "Worst DD at"]
+               "Drawdown $", f"Worst DD at ({CHART_TZ_LABEL})"]
     _write_header(ws, row, headers)
     row += 1
     for m in result.get("monthly", []) or []:
@@ -383,10 +405,11 @@ def _write_weekly_sheet(ws: Worksheet, result: dict) -> None:
     Summary's Monthly Breakdown columns (minus Regime, which is a month-level
     label) so the mid-grain view reads the same way."""
     ws.title = "Weekly Breakdown"
-    headers = ["Month-Week", "Signals", "Wins", "Losses", "No-fills",
+    feed_tz = _feed_tz_label(result)
+    headers = [f"Month-Week ({feed_tz})", "Signals", "Wins", "Losses", "No-fills",
                "Win rate", "Trading P&L", "Bonus", "Closed lots",
                "Net P&L", "P&L %", "Equity EoW", "Entries", "Drawdown %",
-               "Drawdown $", "Worst DD at"]
+               "Drawdown $", f"Worst DD at ({CHART_TZ_LABEL})"]
     _write_header(ws, 1, headers)
 
     weekly = result.get("weekly", []) or []
@@ -438,10 +461,12 @@ def _write_weekly_sheet(ws: Worksheet, result: dict) -> None:
 
 def _write_daily_sheet(ws: Worksheet, result: dict) -> None:
     ws.title = "Daily Breakdown"
+    feed_tz = _feed_tz_label(result)
     statuses = result.get("entry_statuses_present", []) or []
-    base = ["Date", "Signals", "Wins", "Losses"]
+    base = [f"Date ({feed_tz})", "Signals", "Wins", "Losses"]
     tail = ["Entries", "Avg R:R", "Avg R", "Trading P&L", "Bonus", "Closed lots",
-            "Net P&L", "P&L %", "Equity EoD", "Drawdown %", "Drawdown $", "Worst DD at"]
+            "Net P&L", "P&L %", "Equity EoD", "Drawdown %", "Drawdown $",
+            f"Worst DD at ({CHART_TZ_LABEL})"]
     headers = base + statuses + tail
     _write_header(ws, 1, headers)
 
@@ -540,8 +565,8 @@ ENTRY_LAYOUT = [
     ("effective_SL", "Effective SL", "price", "exec"),
     ("lot", "Lot", "lot", "exec"),
     ("entry_status", "Status", None, "exec"),
-    ("fill_time", "Fill Time", "datetime", "exec"),
-    ("exit_time", "Exit Time", "datetime", "exec"),
+    ("fill_time", f"Fill Time ({CHART_TZ_LABEL})", "datetime", "exec"),
+    ("exit_time", f"Exit Time ({CHART_TZ_LABEL})", "datetime", "exec"),
     ("exit_price", "Exit Price", "price", "exec"),
     ("trading_pnl", "P&L ($)", "money", "exec"),
     ("rr_planned", "R:R", "rrp", "exec"),
@@ -567,7 +592,7 @@ LIVE_LAYOUT = [
     ("live_entry", "Live Entry", "price", "live", "entry_price"),
     ("live_sl", "Live SL", "price", "live", "effective_SL"),
     ("live_exit", "Live Exit", "price", "live", "exit_price"),
-    ("live_exit_time", "Live Exit Time", None, "live", None),
+    ("live_exit_time", f"Live Exit Time ({CHART_TZ_LABEL})", None, "live", None),
     ("live_pnl", "Live P&L", "money", "live", None),
     ("live_rr", "Live R", "rrr", "live", None),
 ]
@@ -587,7 +612,9 @@ def _write_entries_sheet(ws: Worksheet, result: dict) -> None:
     layout = [(k, h, kind, g, None) for k, h, kind, g in ENTRY_LAYOUT]
     if has_live:
         layout += list(LIVE_LAYOUT)
-    # Dynamic source-time header (e.g. "Time (GMT+7)").
+    # Dynamic source-time header (e.g. "Time (GMT+7)"); the Date column is the FEED
+    # (source) date, so label it with the feed zone too.
+    layout[1] = (layout[1][0], f"Date ({_feed_tz_label(result)})", layout[1][2], layout[1][3], None)
     layout[2] = (layout[2][0], _source_time_header(rows), layout[2][2], layout[2][3], None)
     # Hybrid backtests tag each row TICK/M1; add a SIGNAL-group column ONLY when
     # present so pure M1/tick reports keep their exact column set (parity).
