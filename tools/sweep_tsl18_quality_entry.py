@@ -29,7 +29,13 @@ end is the day AFTER the last day kept):
 
     smoke         2026-06-27 .. 2026-07-01   (last few June days, pure TICK)
     full_june     2026-06-01 .. 2026-07-01
+    full_recent   2026-06-01 .. 2026-08-01   (June + July -- the ``jun_jul`` window)
     validate_top  2026-01-01 .. 2026-07-01   (re-score a prior run's top via --top-json)
+
+Windows can be overridden with ``--window``: ``jun_jul`` (2026-06 + 07) and
+``jan_jul`` (2026-01..07 inclusive) extend the recent/validation windows to cover
+the newly-uploaded July tick data. ``full_recent`` defaults to ``jun_jul``, and
+``validate_top --window jan_jul`` re-scores the recent winners across Jan-Jul.
 
 Outputs (under ``reports/TSL18_QUALITY_<mode>/``):
 
@@ -82,12 +88,20 @@ TSL18_GEOMETRY = [
 ]
 ERA_SLIP = ["--lock-tp1-exit-slippage", "2.0", "--lock-tp2-exit-slippage", "1.0"]  # R4
 
+# Window spans (end EXCLUSIVE). ``jun_jul`` / ``jan_jul`` extend the recent /
+# validation windows to include the newly-uploaded July tick data (end 2026-08-01
+# keeps all of July). Older windows are unchanged for backward compatibility.
 WINDOWS = {
     "smoke": ("2026-06-27", "2026-07-01"),
     "june": ("2026-06-01", "2026-07-01"),
     "jan_jun": ("2026-01-01", "2026-07-01"),
+    "jun_jul": ("2026-06-01", "2026-08-01"),
+    "jan_jul": ("2026-01-01", "2026-08-01"),
 }
-MODE_WINDOW = {"smoke": "smoke", "full_june": "june", "validate_top": "jan_jun"}
+MODE_WINDOW = {
+    "smoke": "smoke", "full_june": "june", "full_recent": "jun_jul",
+    "validate_top": "jan_jun",
+}
 
 # Results schema. The collision columns are REAL: ``opposite_signal_policy`` /
 # ``same_side_overlap_policy`` record the candidate's policy, and the metrics are
@@ -548,9 +562,11 @@ def build_parser() -> argparse.ArgumentParser:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     # `full` is an automation alias for `full_june` (normalized in main()).
     ap.add_argument("--mode", choices=list(MODE_WINDOW) + ["full"], default="smoke",
-                    help="smoke | full_june | validate_top ('full' = automation alias for full_june).")
+                    help="smoke | full_june | full_recent (June+July) | validate_top "
+                         "('full' = automation alias for full_june). full_recent uses "
+                         "the jun_jul window and the same bounded grid as full_june.")
     ap.add_argument("--window", choices=list(WINDOWS), default=None,
-                    help="override the mode's default window.")
+                    help="override the mode's default window (smoke|june|jan_jun|jun_jul|jan_jul).")
     ap.add_argument("--start-date", default=None,
                     help="override the scoring-window START (YYYY-MM-DD); default = the mode/window start.")
     ap.add_argument("--end-date", default=None,

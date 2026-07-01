@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -63,19 +64,43 @@ def test_resolvers_and_aliases():
     assert [section.number for section in rng] == [7, 8, 9]
 
 
+def _count_capital(out: str, amount: int) -> int:
+    # Word-boundary count so "--initial-capital 5000" does NOT also match the
+    # "5000" INSIDE "50000" (a plain str.count would double-count).
+    return len(re.findall(rf"--initial-capital {amount}\b", out))
+
+
 def test_backtest_keyword_prints_50k_and_5k_variants(capsys):
-    rc = run.main(["v116", "backtest", "--print"])
+    # V817 is a deployed $50K book (Victor trailing): its backtest sections 5-9
+    # each emit a 50K command + a 5K clone (same dates, output dir suffixed _5k).
+    # (v116/VIC_C116 is intentionally a $12K book, so it is NOT the fixture here --
+    # see test_non_50k_book_backtest_is_not_expanded.)
+    rc = run.main(["v817", "backtest", "--print"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "running sections 5, 6, 7, 8, 9 in order" in out
     assert out.count("tools/backtest_hybrid.py") == 4
     assert out.count("tools/backtest_explicit.py") == 6
-    assert out.count("--initial-capital 50000") == 5
-    assert out.count("--initial-capital 5000") == 5
-    assert "--output-dir reports/V116_202606_5k" in out
+    assert _count_capital(out, 50000) == 5
+    assert _count_capital(out, 5000) == 5
+    assert "--output-dir reports/V817_202606_5k" in out
     assert "--start-date 2026-06-01" in out
-    assert "--output-dir reports/V116_202601_5k" in out
+    assert "--output-dir reports/V817_202601_5k" in out
     assert "--start-date 2026-01-01" in out
+
+
+def test_non_50k_book_backtest_is_not_expanded(capsys):
+    # A book authored at a non-$50K capital (VIC_C116 = $12K) is a deliberate
+    # sizing choice, NOT a 50K/5K pair: the launcher must leave it untouched (no
+    # 5K clone, no _5k output dir), so the capital-variant expansion never rewrites
+    # a strategy's authored capital.
+    rc = run.main(["v116", "backtest", "--print"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "--initial-capital 12000" in out
+    assert _count_capital(out, 50000) == 0
+    assert _count_capital(out, 5000) == 0
+    assert "_5k" not in out
 
 
 def test_capital_variants_keep_dates_and_suffix_output_dir():

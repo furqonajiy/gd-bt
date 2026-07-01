@@ -754,6 +754,25 @@ the run.bat/run.ps1 shims). It reconstructs each command byte-for-byte from the
 `.txt` (only joining the PowerShell `` ` `` continuations), so the `.txt` stay the
 single source of truth; the `cd`/`conda`/`git` preamble is intentionally not a
 runnable section (subprocess shell state doesn't persist). See `cli/README.md`.
+**`cli/run.py <book> backtest` emits BOTH $50K and a $5K clone** per backtest
+section: `_capital_variants` expands any command with `--initial-capital 50000` +
+`--output-dir` into the original 50K run plus a 5K clone that changes ONLY the
+capital (`5000`) and the output-dir suffix (`_5k`) — the month/date window is
+unchanged. A book authored at a non-$50K capital (e.g. V116 at 12000) is left
+untouched (no `_5k`), so the expansion never rewrites authored capital; pinned by
+`tests/test_cli_run_launcher.py` / `test_cli_run_capital_variants.py`. See
+`docs/CLI_BACKTEST_CAPITAL_VARIANTS.md`. The 2026 sections (5/6) are open-ended
+(`--start-date` + glob `--ticks`), so they extend through **July** automatically as
+the July tick archive is committed. **The July review runs via the manual-only
+`July V817 TSL18 Backtests + Staged Sweep` workflow**
+(`.github/workflows/july-v817-tsl18-backtests-staged-sweep.yml`): V817 + TSL18/T818
+50K/5K backtests then a bounded `smoke → full_recent (jun_jul) → validate_top
+(jan_jul)` sweep, committing workbooks + summaries to `main` on
+`commit_results=true`. V817 (Victor trailing $50K book) is the deliverable, distinct
+from V017 (Victor from 2026-07-01). The quality-entry sweep gained **`full_recent`**
+(the `jun_jul` window, 2026-06-01..08-01 — July-inclusive) + the `jun_jul`/`jan_jul`
+`--window` overrides; `full_recent` reuses the same bounded grid as `full_june`
+(older windows byte-unchanged).
 The nine sections: (1) Telegram Listener (Victor feed only), (2) Live
 Loop Signal Generator, (3) Live Auto Executor, (4) Signal Generator (one-shot
 static archive, run before the backtests), (5) Backtest from 2026-06 (R4
