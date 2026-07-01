@@ -32,6 +32,7 @@ ALIASES = {
     "vct5": "candidate_VCT5_victor_trailing",
     "vs17": "candidate_VS17_victor_trailing",
     "v017": "candidate_V017_victor_july_trailing",
+    "v072": "candidate_V072_victor_trailing_combo",
     "v817": "candidate_V817_victor_trailing",
     "t160": "candidate_T160_trailing_tick",
     "t18s": "candidate_T18S_trailing_tick",
