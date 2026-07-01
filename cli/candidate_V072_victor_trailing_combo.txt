@@ -1,0 +1,189 @@
+# =========================================================================
+# VICTOR TRAILING -- V072 (Victor E8 combined trailing geometry)  | tag V072
+#                                                          *** RESEARCH ***
+#
+# V072 is the combined-geometry Victor identity built from the July-2026 staged
+# Victor trailing-geometry sweep (tools/sweep_victor_trailing_geometry.py). It
+# takes the V017 baseline and stacks the FIVE best single-knob levers at once
+# (the "V107 combo"):
+#
+#     trailing-open distance  0.5 -> 0.25
+#     final target            TP2 -> TP3
+#     sl-multiplier           1.7 -> 1.60
+#     entry-SL gap            0.5 -> 0.70
+#     max-hold                150 -> 180
+#
+# Measured on May+June 2026 ticks (backtest_hybrid, TICK where covered), the
+# combination returns pure trading P&L $152,746 vs V017 base $111,704
+# (+$41,042 / +36.7%) at essentially IDENTICAL drawdown (14.07% vs 14.05%),
+# win-rate 44.8% (TP3 holds for a further target: fewer, larger winners). The
+# combined gain is sub-additive vs the naive sum of the single-knob gains
+# (~+$59k), as expected -- open0.25 and slm1.6 both act on the same early
+# lifecycle. It reads the SAME Victor provider feed as V116/V017; only the tag,
+# positions, logs and trailing geometry differ.
+#
+#   --strategy-tag V072
+#   --positions-json positions_v072.json
+#   reports/V072_2026*
+#   forensic_v072.jsonl / notifications_v072.jsonl / console_v072.txt
+#
+# RESEARCH / demo-validate ONLY. The +36.7% is in-sample (May+June is a MIXED
+# tick/M1 window, so it did NOT clear the sweep's --require-full-tick-lifecycle
+# ranking gate) and five knobs moved at once, so out-of-sample / overfit is
+# unproven -- forward-validate on a clean full-tick window + demo before any
+# live size. Do NOT use --execute from this snapshot without demo validation.
+# =========================================================================
+
+# ===== 1. TELEGRAM LISTENER =====
+# SHARED with V116/VCT5/VS17/V017/V072 -- run only ONE copy of the listener.
+python listeners\telegram\listener.py --signals-file victor_signals.txt
+
+# ===== 2. LIVE LOOP SIGNAL GENERATOR =====
+# Provider filter --watch mode. SHARED with other Victor executors -- run once.
+python tools/live_provider_signal_filter.py `
+  --input victor_signals.txt `
+  --output signals/victor_live.txt `
+  --preset all `
+  --watch `
+  --interval 2
+
+# ===== 3. LIVE AUTO EXECUTOR (RESEARCH ONLY; DO NOT EXECUTE WITHOUT DEMO VALIDATION) =====
+# tag V072, combined geometry: trailing-open 0.25 + trailing-close 0.5 after TP1,
+# sl-multiplier 1.6, final TP3, entry-SL gap 0.7, max-hold 180, entries 8.
+python tools/auto_explicit.py `
+  --signals signals/victor_live.txt `
+  --positions-json positions_v072.json `
+  --strategy-tag V072 `
+  --forensic-log forensic_v072.jsonl `
+  --notifications notifications_v072.jsonl `
+  --console-log console_v072.txt `
+  --console-log-retain-hours 24 `
+  --watch-interval 3 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 100.0 `
+  --max-open-lots 100 `
+  --lot-step 0.01 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 180 `
+  --sl-multiplier 1.6 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.25 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --replace-missing-entries true `
+  --reopen-missing-positions true `
+  --apply-signal-edits true `
+  --signal-overrides-file signal_overrides.jsonl
+
+# ===== 4. SIGNAL GENERATOR (before backtest) =====
+# N/A -- backtest reads victor_signals.txt directly.
+
+# ===== 5. BACKTEST FROM 2026-05 (V072 combined-geometry evidence window) =====
+# TICK-AWARE: all committed ELEV8 ticks/charts; starts 2026-05-01 (the May+June
+# window where the combined-geometry edge was measured).
+python tools/backtest_hybrid.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
+  --sync-charts true `
+  --sync-ticks true `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 100.0 `
+  --max-open-lots 100 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 180 `
+  --sl-multiplier 1.6 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.25 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --output-dir reports/V072_202605 `
+  --initial-capital 50000 `
+  --start-date 2026-05-01
+
+# ===== 6. BACKTEST FROM 2026-01 (V072 combined geometry, R4 current-regime validation) =====
+python tools/backtest_hybrid.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
+  --sync-charts true `
+  --sync-ticks true `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 100.0 `
+  --max-open-lots 100 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 180 `
+  --sl-multiplier 1.6 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.25 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --output-dir reports/V072_202601 `
+  --initial-capital 50000 `
+  --start-date 2026-01-01
