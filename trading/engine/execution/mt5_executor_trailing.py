@@ -203,6 +203,16 @@ class Mt5Executor(_Tp2Mt5Executor):
         trigger_prices: dict[int, float] = {}
         planned_stop_distances: dict[int, float] = {}
 
+        # Split the ladder into legs whose trailing-open trigger is reachable NOW
+        # (armed) and legs still waiting for a deeper move. A laddered trailing-open
+        # signal must ARM the reachable legs even while deeper legs wait: a partial
+        # dip that reaches the TOP of the ladder should place those STOPs, not be
+        # blocked by the deepest still-un-armed leg (the 2026-07-01 V017 miss -- Ask
+        # bottomed at ~3970.3, enough for the top legs, but the whole 8-leg ladder
+        # was held because the 3968.5 leg never armed, so nothing placed and the
+        # signal never traded). Waiting legs are logged once and left for a later
+        # cycle / the reopen-mirror pass; they never block the armed legs.
+        armed_orders = []
         waiting = []
         for order in plan.orders:
             lot = round_lot(order.lot, self.min_lot, self.lot_step)
@@ -218,12 +228,13 @@ class Mt5Executor(_Tp2Mt5Executor):
             )
             if trigger is None:
                 waiting.append((order.entry_index, float(order.entry_price)))
-            else:
-                rounded_lots[order.entry_index] = lot
-                trigger_prices[order.entry_index] = trigger
-                planned_stop_distances[order.entry_index] = self._planned_stop_distance(
-                    signal.side, float(order.entry_price), float(order.initial_sl)
-                )
+                continue
+            armed_orders.append(order)
+            rounded_lots[order.entry_index] = lot
+            trigger_prices[order.entry_index] = trigger
+            planned_stop_distances[order.entry_index] = self._planned_stop_distance(
+                signal.side, float(order.entry_price), float(order.initial_sl)
+            )
 
         if waiting:
             # Arm thresholds are stable across cycles, so log the "waiting" block
@@ -233,6 +244,10 @@ class Mt5Executor(_Tp2Mt5Executor):
                     self._trailing_open_waiting_line(signal, waiting, trailing_open_distance)
                 )
                 self._session_trailing_open_waiting_keys.add(signal.signal_key)
+
+        # Bail ONLY when nothing is armed. If any leg is armed, fall through and
+        # place its STOP -- the waiting deeper legs must not block it.
+        if not armed_orders:
             return log
 
         # Broker minimum stop/freeze distance: a STOP order must rest at least this
@@ -244,7 +259,7 @@ class Mt5Executor(_Tp2Mt5Executor):
         placed_tickets: list[int] = []
         armed_details: list[dict] = []
         market_fill_indices: list[int] = []
-        for order in plan.orders:
+        for order in armed_orders:
             entry_key = signal_entry_key(signal.signal_key, order.entry_index)
             trigger = trigger_prices[order.entry_index]
             stop_distance = planned_stop_distances[order.entry_index]
@@ -339,7 +354,7 @@ class Mt5Executor(_Tp2Mt5Executor):
                 )
             else:
                 price_now = ask if signal.side == "BUY" else bid
-                planned = "/".join(f"{float(o.entry_price):g}" for o in plan.orders)
+                planned = "/".join(f"{float(o.entry_price):g}" for o in armed_orders)
                 msg = (
                     f"Signal {signal.signal_key}: trailing-open placement FAILED. "
                     f"Activated {activation_at:%Y-%m-%d %H:%M} GMT+3, expected entry {planned}, "
