@@ -362,3 +362,138 @@ jobs:
               echo "push retry $i"; sleep $((2 ** i))
             done
           fi
+
+  victor-staged-sweep:
+    name: Staged Victor/V017 trailing-geometry sweep (bounded)
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    needs: [preflight-data, backtests]
+    if: >
+      always()
+      && needs.preflight-data.result == 'success'
+      && (needs.backtests.result == 'success' || needs.backtests.result == 'skipped')
+      && github.event.inputs.run_sweep != 'false'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install requirements
+        run: pip install -r requirements.txt
+
+      - name: Preflight compile + targeted tests
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            tools/sweep_victor_trailing_geometry.py \
+            tools/backtest_hybrid.py \
+            tools/backtest_explicit.py
+          python -m pytest -q tests/test_sweep_victor_trailing_geometry.py
+
+      - name: Smoke sweep (recent June)
+        run: |
+          set -uo pipefail
+          mkdir -p logs/july_victor_sweep
+          python tools/sweep_victor_trailing_geometry.py \
+            --mode smoke \
+            --out-root reports \
+            --charts data/XAUUSD_M1_202606_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_202606*_ELEV8.csv \
+            --require-full-tick-lifecycle \
+            --exclude-open-or-pending \
+            --score-objective "$SCORE_OBJECTIVE" 2>&1 | tee logs/july_victor_sweep/smoke.log
+
+      - name: Full recent sweep (May + June)
+        run: |
+          set -uo pipefail
+          python tools/sweep_victor_trailing_geometry.py \
+            --mode full_recent \
+            --out-root reports \
+            --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_202605*_ELEV8.csv data/ticks/XAUUSD_TICK_202606*_ELEV8.csv \
+            --start-date 2026-05-01 --end-date 2026-07-01 \
+            --require-full-tick-lifecycle \
+            --exclude-open-or-pending \
+            --score-objective "$SCORE_OBJECTIVE" 2>&1 | tee logs/july_victor_sweep/full_recent.log
+
+      - name: Validation sweep (Jan-Jun, tick where covered)
+        run: |
+          set -uo pipefail
+          TOPJSON=reports/VICTOR_TRAILING_full_recent/top_candidates.json
+          if [ ! -f "$TOPJSON" ]; then
+            echo "No top_candidates.json from full_recent; skipping validate_top." | tee logs/july_victor_sweep/validate_top.log
+            exit 0
+          fi
+          python tools/sweep_victor_trailing_geometry.py \
+            --mode validate_top \
+            --top-json "$TOPJSON" \
+            --out-root reports \
+            --charts data/XAUUSD_M1_20260[1-6]*_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_20260[1-6]*_ELEV8.csv \
+            --start-date 2026-01-01 --end-date 2026-07-01 \
+            --require-full-tick-lifecycle \
+            --exclude-open-or-pending \
+            --score-objective "$SCORE_OBJECTIVE" 2>&1 | tee logs/july_victor_sweep/validate_top.log
+
+      - name: Build Victor sweep status summary
+        if: always()
+        run: |
+          set -uo pipefail
+          mkdir -p reports/JULY_VICTOR_TRAILING_SWEEP_STATUS
+          STATUS=reports/JULY_VICTOR_TRAILING_SWEEP_STATUS/sweep.md
+          {
+            echo "# July staged Victor/V017 trailing-geometry sweep — status"
+            echo
+            echo "- Run: \`${GITHUB_RUN_ID}\`  objective: \`${SCORE_OBJECTIVE}\`"
+            echo "- Recent window: May+June (tick-covered); validation: Jan-Jun (tick where covered)."
+            echo "- Bounded curated single-knob grid from base_v017, NOT a cartesian product."
+            echo "- Research/backtest only; never live."
+            echo
+            for stage in smoke full_recent validate_top; do
+              echo "## ${stage}"
+              if [ -f "reports/VICTOR_TRAILING_${stage}/summary.md" ]; then
+                cat "reports/VICTOR_TRAILING_${stage}/summary.md"
+              else
+                echo "_missing or skipped: reports/VICTOR_TRAILING_${stage}/summary.md_"
+              fi
+              echo
+            done
+          } > "$STATUS"
+          cat "$STATUS"
+
+      - name: Upload Victor sweep artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: july-victor-trailing-geometry-sweep
+          path: |
+            reports/VICTOR_TRAILING_smoke/**
+            reports/VICTOR_TRAILING_full_recent/**
+            reports/VICTOR_TRAILING_validate_top/**
+            reports/JULY_VICTOR_TRAILING_SWEEP_STATUS/**
+            logs/july_victor_sweep/**
+          if-no-files-found: warn
+
+      - name: Commit Victor sweep summaries to main
+        if: always() && github.event.inputs.commit_results != 'false'
+        run: |
+          set -uo pipefail
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+          for stage in smoke full_recent validate_top; do
+            git add "reports/VICTOR_TRAILING_${stage}/results.csv" \
+                    "reports/VICTOR_TRAILING_${stage}/top_candidates.json" \
+                    "reports/VICTOR_TRAILING_${stage}/summary.md" 2>/dev/null || true
+          done
+          git add reports/JULY_VICTOR_TRAILING_SWEEP_STATUS/ 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No Victor sweep summary changes to commit."
+          else
+            git commit -m "report: add July staged Victor trailing-geometry sweep summaries [skip ci]"
+            for i in 1 2 3 4; do
+              git pull --rebase origin main && git push origin HEAD:main && break
+              echo "push retry $i"; sleep $((2 ** i))
+            done
+          fi
