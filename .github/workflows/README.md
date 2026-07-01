@@ -88,14 +88,21 @@ of their pinned version — a safe catch-all.
 
 - `july-v817-tsl18-backtests-staged-sweep.yml` — **July V817 TSL18 Backtests +
   Staged Sweep**: **manual-only** (`workflow_dispatch`) runner for the July-2026
-  review cycle. Three jobs: **preflight-data** (fails fast if the July XAUUSD tick
+  review cycle. Four jobs: **preflight-data** (fails fast if the July XAUUSD tick
   archive is missing; verifies `cli/run.py` emits matched $50K + $5K commands for
   the requested books), **backtests** (`cli/run.py <book> backtest` for **V817** and
   **TSL18/T818**, so each authored $50K section runs a $50K + a `_5k` clone; the
   open-ended 2026 sections pick up the July ticks), and **staged-sweep** (a
   **bounded** TSL18 quality/collision sweep: `smoke` → `full_recent` (jun_jul,
   July-inclusive) → `validate_top` (jan_jul), on the curated ~17-candidate grid —
-  never a cartesian product). Inputs: `strategies` (default `v817 tsl18`),
+  never a cartesian product), and **victor-staged-sweep** (a bounded
+  **Victor/V017 trailing-geometry** sweep via
+  `tools/sweep_victor_trailing_geometry.py` — single-knob perturbations from
+  `base_v017` over trailing-open/close, SL-mult, hold, expiry, gap, final target;
+  recent window **May+June** where tick-covered, validate Jan-Jun; artifact
+  `july-victor-trailing-geometry-sweep`). The **TSL18 sweep covers quality +
+  collision; the Victor sweep covers trailing geometry**; backtests run **$50K +
+  $5K**; manual-only; never `--execute`, never live. Inputs: `strategies` (default `v817 tsl18`),
   `run_backtests`, `run_sweep`, `commit_results`, `recent_window` (jun_jul),
   `validation_window` (jan_jul), `score_objective`. With `commit_results=true`
   (`contents: write`) it commits the backtest workbooks + sweep summaries + status

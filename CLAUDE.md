@@ -772,7 +772,16 @@ the July tick archive is committed. **The July review runs via the manual-only
 from V017 (Victor from 2026-07-01). The quality-entry sweep gained **`full_recent`**
 (the `jun_jul` window, 2026-06-01..08-01 — July-inclusive) + the `jun_jul`/`jan_jul`
 `--window` overrides; `full_recent` reuses the same bounded grid as `full_june`
-(older windows byte-unchanged).
+(older windows byte-unchanged). A fourth job **`victor-staged-sweep`** runs the
+separate **Victor/V017 trailing-geometry** sweep
+(`tools/sweep_victor_trailing_geometry.py`): single-knob perturbations from
+**`base_v017`** over trailing-open/close distance + engage stage, SL-multiplier,
+max-hold, pending-expiry, entry-SL gap and final target — a curated ~21-candidate
+grid (never a cartesian product), recent window **May+June** where tick-covered,
+validate Jan-Jun, at **$50K + $5K**, artifact `july-victor-trailing-geometry-sweep`.
+So **the TSL18 sweep covers quality + collision; the Victor sweep covers trailing
+geometry** — both are manual-only research/backtest sweeps that never `--execute`
+and never promote to live.
 The nine sections: (1) Telegram Listener (Victor feed only), (2) Live
 Loop Signal Generator, (3) Live Auto Executor, (4) Signal Generator (one-shot
 static archive, run before the backtests), (5) Backtest from 2026-06 (R4

@@ -306,6 +306,25 @@ stays **research‑only until a demo‑validated LIVE collision implementation e
 live `auto` refuses non‑baseline collision flags today
 (`_validate_live_collision_policy`). Never `--execute`, never promote to live.
 
+### Victor / V017 trailing‑geometry sweep (rebate‑aware)
+
+A **separate** bounded sweep for the **Victor provider feed** (`victor_signals.txt`,
+GMT+7) — `tools/sweep_victor_trailing_geometry.py`. Where the TSL18 sweep covers
+**quality + collision** on the self‑scalper feed, the **Victor sweep covers trailing
+geometry**: starting from **`base_v017`** (the V017 baseline geometry — entries 8,
+range_to_sl, entry_sl_gap 0.5, sl_mult 1.7, final TP2, max_hold 150, pending_expiry
+180, trailing_open 0.5 / trailing_close 0.5 @ stage 1) it perturbs ONE (occasionally
+two) controlled knob(s) per candidate — trailing‑open distance, trailing‑close
+distance + engage stage, SL multiplier, max‑hold, pending‑expiry, entry‑SL gap, final
+target — a curated ~21‑candidate grid, **never a cartesian product**. Modes: `smoke`
+(short recent June) → `full_recent` (**May+June**, where tick is covered — July tick
+is only one day) → `validate_top` (Jan‑Jun via `--top-json`). Same **rebate‑aware**
+objective + gates (`--require-full-tick-lifecycle`, `--exclude-open-or-pending`), and
+runs at both **$50K and $5K** capital. Outputs `reports/VICTOR_TRAILING_<mode>/`. It
+runs as the **`victor-staged-sweep`** job of the July workflow (below), artifact
+`july-victor-trailing-geometry-sweep`. Research/backtest only — never `--execute`,
+never promote to live.
+
 ---
 
 ## 6. Execution model — how to run it unattended **(ASK the user)**
