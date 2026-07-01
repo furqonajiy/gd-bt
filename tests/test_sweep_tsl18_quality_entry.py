@@ -187,3 +187,49 @@ def test_hybrid_backtest_exports_collision_policy_symbol():
     import tools.backtest_hybrid as hybrid
 
     assert hybrid.CollisionPolicy is not None
+
+
+# --- July (full_recent / jun_jul / jan_jul) windows -------------------------
+
+def test_full_recent_uses_jun_jul_window_and_bounded_grid(tmp_path):
+    # full_recent = the July-inclusive recent sweep (jun_jul window, end EXCLUSIVE
+    # 2026-08-01 keeps all of July), same bounded grid as full_june.
+    rc = main(["--mode", "full_recent", "--skeleton", "--out-root", str(tmp_path)])
+    assert rc == 0
+    out_dir = tmp_path / "TSL18_QUALITY_full_recent"
+    fieldnames, rows = _read_results(out_dir)
+    assert fieldnames == RESULTS_COLUMNS
+    assert all(r["window_start"] == "2026-06-01" for r in rows)
+    assert all(r["window_end"] == "2026-08-01" for r in rows)      # includes July
+    labels = [r["label"] for r in rows]
+    assert labels[0] == "base"
+    # bounded staged grid, NOT a huge cartesian product
+    assert len(labels) <= 20
+
+
+def test_full_recent_grid_equals_full_june_grid():
+    # full_recent reuses the curated full_june grid (only the window differs).
+    assert build_candidate_grid("full_recent") == build_candidate_grid("full_june")
+
+
+def test_validate_top_jan_jul_window(tmp_path):
+    top = tmp_path / "top.json"
+    top.write_text(json.dumps([
+        {"label": "hybrid_quality", "quality_profile": "hybrid_quality",
+         "min_quality_score": 0.0, "extreme_entry_mode": "off"}]), encoding="utf-8")
+    rc = main(["--mode", "validate_top", "--window", "jan_jul", "--top-json", str(top),
+               "--skeleton", "--out-root", str(tmp_path)])
+    assert rc == 0
+    _, rows = _read_results(tmp_path / "TSL18_QUALITY_validate_top")
+    assert rows and rows[0]["label"] == "hybrid_quality"
+    assert all(r["window_start"] == "2026-01-01" for r in rows)
+    assert all(r["window_end"] == "2026-08-01" for r in rows)      # Jan-Jul inclusive
+
+
+def test_legacy_modes_unchanged():
+    # Backward compatibility: the pre-July windows keep their exact spans.
+    from tools.sweep_tsl18_quality_entry import WINDOWS, MODE_WINDOW
+    assert WINDOWS["june"] == ("2026-06-01", "2026-07-01")
+    assert WINDOWS["jan_jun"] == ("2026-01-01", "2026-07-01")
+    assert MODE_WINDOW["full_june"] == "june"
+    assert MODE_WINDOW["validate_top"] == "jan_jun"
