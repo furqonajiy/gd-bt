@@ -1,0 +1,5 @@
+label,window,window_start,window_end,entries,entry_sl_gap,sl_multiplier,pending_expiry,max_hold,final_target,tp1_lock_delay_minutes,tp2_lock_delay_minutes,tp1_lock_fraction,trailing_open_distance,trailing_close_distance,trailing_close_after_stage,pure_trading_pnl,rebate_pnl,net_pnl,closed_lots,pure_pnl_per_lot,net_pnl_per_lot,max_drawdown_pct,win_rate_pct,signals_included,tick_signals,m1_signals,open_or_pending_left,included_in_ranking,score,guard_reason
+base_v017,smoke,2026-06-25,2026-07-01,8,0.5,1.7,180,150,TP2,12,2,0.5,0.5,0.5,1,-261.72,21.72,-240.0,7.24,-36.1492,-33.1492,3.88,50.0,34,34,0,False,False,-261.72,pure_pnl_below_min
+open_0_75,smoke,2026-06-25,2026-07-01,8,0.5,1.7,180,150,TP2,12,2,0.5,0.75,0.5,1,15.12,21.0,36.12,7.0,2.16,5.16,3.91,50.0,34,34,0,False,False,15.12,rebate_share_too_high
+close_0_75_stage1,smoke,2026-06-25,2026-07-01,8,0.5,1.7,180,150,TP2,12,2,0.5,0.5,0.75,1,-261.72,21.72,-240.0,7.24,-36.1492,-33.1492,3.88,50.0,34,34,0,False,False,-261.72,pure_pnl_below_min
+slm_1_80,smoke,2026-06-25,2026-07-01,8,0.5,1.8,180,150,TP2,12,2,0.5,0.5,0.5,1,-519.89,20.43,-499.46,6.81,-76.3421,-73.3421,4.04,50.0,34,34,0,False,False,-519.89,pure_pnl_below_min
