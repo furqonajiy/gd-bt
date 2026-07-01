@@ -26,8 +26,8 @@ at the first one that fails.
 
 Aliases: sqz6 (R4 champion), victor/vic/v116 (Victor champion), c160 (R4 candidate
 beside SQZ6), vct5 (VCT5 Victor trailing), vs17 (VS17 Victor trailing research),
-v817 (V817 Victor E8 SLM1.7 Phase-2 #1), t160 (T160 self-scalper trailing),
-t18s (T18S self-scalper trailing research), t818 (T818 Trailing E8 SLM1.8 Phase-2 #1),
+v017 (V017 Victor trailing from 1 July), v817 (V817 Victor E8 SLM1.7 Phase-2 #1),
+t160 (T160 self-scalper trailing), t18s (T18S self-scalper trailing research), t818 (T818 Trailing E8 SLM1.8 Phase-2 #1),
 resync (M1), ticks (tick archive) -- or any unique part of a filename. The reconstructed command is byte-identical to the snapshot (PowerShell `
 continuations are joined into one line), so this never diverges from cli/*.txt.
 """
@@ -53,6 +53,7 @@ ALIASES = {
     "sqz6": "champion_R4_SQZ6", "c160": "candidate_R4_C160",
     "vct5": "candidate_VCT5_victor_trailing",
     "vs17": "candidate_VS17_victor_trailing",
+    "v017": "candidate_V017_victor_july_trailing",
     "v817": "candidate_V817_victor_trailing",
     "t160": "candidate_T160_trailing_tick",
     "t18s": "candidate_T18S_trailing_tick",

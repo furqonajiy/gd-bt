@@ -1,10 +1,10 @@
-name: Backtest reports (TSL18 / V817)
+name: Backtest reports (TSL18 / V017)
 
 # Runs the deployed-book 2026 TICK backtests on a runner (the tick archive is
 # committed, so no MT5 is needed -- the --sync flags soft-fail and fall back to
 # the committed data) and commits the refreshed Excel workbooks -- which now carry
 # the USD + % drawdown columns -- back to the branch. This offloads the slow
-# tick replays (T818 Jan-Jun is ~10k signals) off a laptop / the dev container.
+# tick replays (T818 Jan-Jul is ~10k+ signals) off a laptop / the dev container.
 #
 # It does NOT merge code -- code lands on main only through the normal --no-ff PR
 # review flow. This workflow only regenerates + commits report ARTIFACTS.
@@ -14,9 +14,9 @@ on:
     inputs:
       strategies:
         description: "Which books (space-separated cli/run.py names)"
-        default: "t818 v817"
+        default: "t818 v017"
       sections:
-        description: "Which backtest sections (5=Jun 2026, 6=Jan-Jun 2026)"
+        description: "Which backtest sections (5/6; V017 starts 2026-07-01)"
         default: "5 6"
 
 # Allow the job to push the regenerated reports back to the branch.
@@ -71,10 +71,10 @@ jobs:
         run: |
           git config user.name "C - Furqon Aji Yudhistira"
           git config user.email "furqonajiy@gmail.com"
-          git add reports/T818_2026*.xlsx reports/V817_2026*.xlsx 2>/dev/null || true
+          git add reports/T818_2026*.xlsx reports/TSL18_2026*.xlsx reports/V017_2026*.xlsx 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No report changes to commit."
           else
-            git commit -m "report: refresh TSL18 (T818) + V817 2026 TICK backtests with drawdown [skip ci]"
+            git commit -m "report: refresh TSL18 (T818) + V017 2026 TICK backtests with drawdown [skip ci]"
             for i in 1 2 3 4; do git push && break || sleep $((2**i)); done
           fi
