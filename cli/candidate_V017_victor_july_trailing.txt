@@ -36,6 +36,8 @@ python tools/auto_explicit.py `
   --strategy-tag V017 `
   --forensic-log forensic_v017.jsonl `
   --notifications notifications_v017.jsonl `
+  --console-log console_v017.txt `
+  --console-log-retain-hours 24 `
   --watch-interval 3 `
   --mt5-symbol XAUUSD `
   --mt5-server-offset 3 `

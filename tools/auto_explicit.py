@@ -258,6 +258,15 @@ def build_parser() -> argparse.ArgumentParser:
     obs.add_argument("--no-notifications", action="store_true")
     obs.add_argument("--forensic-log", default=None)
     obs.add_argument("--no-forensic", action="store_true")
+    obs.add_argument("--console-log", default="",
+                     help="Tee the live console event stream (Signal/EXECUTION/RECONCILIATION/"
+                          "heartbeat lines) to this .txt file so a terminal/process crash still "
+                          "leaves the recent history on disk to analyze. Keeps only the last "
+                          "--console-log-retain-hours. Off unless set; use a per-strategy name "
+                          "(e.g. console_v017.txt) like --forensic-log/--notifications.")
+    obs.add_argument("--console-log-retain-hours", type=_positive_float, default=24.0,
+                     help="How many hours of console log to keep in --console-log (older lines are "
+                          "pruned on a slow cadence via an atomic rewrite). 0=unbounded. Default 24.")
     return p
 
 

@@ -878,7 +878,11 @@ file-writing code on the same convention.
 **One distinct identity per strategy.** Every deployed strategy gets its OWN
 names across the board — `--strategy-tag`, `--positions-json`, the generated
 signal/feed `.txt`, the backtest report (Excel) dir, **and the live
-`--forensic-log` / `--notifications` JSONL** — all keyed off the same
+`--forensic-log` / `--notifications` JSONL + the optional `--console-log`
+`console_<tag>.txt`** (the human-readable console event stream, tee'd to disk and
+kept to the last `--console-log-retain-hours` so a terminal/process crash still
+leaves the recent history to analyze; off unless set, best-effort, backtest/parity
+untouched — `core/rotating_text.py::RotatingTextLog`) — all keyed off the same
 short tag (≤ 5 chars, capped at 5 — first 5 kept, e.g. `SQZ6`, `VIC`). **No two strategies ever share a tag,
 positions file, feed file, report name, or log file**, so live executors stay
 isolated (disjoint magics) and every artifact traces to exactly one strategy at

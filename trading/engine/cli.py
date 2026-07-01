@@ -277,6 +277,44 @@ def cmd_auto(args: argparse.Namespace) -> int:
         conn.shutdown()
 
 
+class _TeeStdout:
+    """Write to the real stdout AND mirror to a text sink (best-effort).
+
+    Wraps ``sys.stdout`` for the duration of the auto watch loop so every console
+    line the operator sees is also persisted to disk, without touching any of the
+    individual ``print`` sites. A sink failure never breaks the console output --
+    trading observability must never take down trading."""
+
+    def __init__(self, wrapped, sink) -> None:
+        self._wrapped = wrapped
+        self._sink = sink
+
+    def write(self, data):
+        n = self._wrapped.write(data)
+        try:
+            self._sink.write(data)
+        except Exception:
+            pass
+        return n
+
+    def flush(self):
+        return self._wrapped.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+
+def _make_console_log_sink(args: argparse.Namespace):
+    """Build the RotatingTextLog from --console-log / --console-log-retain-hours,
+    or None when --console-log is unset (opt-in; default path unchanged)."""
+    path = getattr(args, "console_log", "") or ""
+    if not path:
+        return None
+    from trading.engine.core.rotating_text import RotatingTextLog
+    hours = float(getattr(args, "console_log_retain_hours", 24.0) or 0.0)
+    return RotatingTextLog(path, retain_hours=hours)
+
+
 def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
                     conn, chart, signals_path: Path) -> int:
     interval = float(args.watch_interval)
@@ -286,6 +324,16 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
     last_heartbeat = time.monotonic()
     _tag = getattr(args, "strategy_tag", "") or ""
     _adaptive = " | ADAPTIVE (regime auto-switch)" if _adaptive_enabled(args) else ""
+
+    # Persist the console event stream to a time-windowed .txt so a terminal /
+    # process crash still leaves the last N hours on disk to analyze. Opt-in via
+    # --console-log; stdout is restored on exit so nothing else is affected.
+    sink = _make_console_log_sink(args)
+    orig_stdout = sys.stdout
+    if sink is not None:
+        sys.stdout = _TeeStdout(orig_stdout, sink)
+        print(f"[auto] console log -> {sink.path} (keeping last {sink.retain_hours:g}h)")
+
     print(f"[auto] strategy_tag={_tag or '(none)'} | "
           f"positions={getattr(args, 'positions_json', '?')} | signals: {signals_path}{_adaptive}")
     try:
@@ -308,6 +356,8 @@ def _run_auto_watch(args: argparse.Namespace, config: StrategyConfig,
         print()
         print("Interrupted; exiting auto mode.")
         return 0
+    finally:
+        sys.stdout = orig_stdout
 
 
 def _adaptive_enabled(args: argparse.Namespace) -> bool:

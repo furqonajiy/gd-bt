@@ -1841,6 +1841,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Directory holding CHAMPION_<regime>.json for --adaptive.")
     pa.add_argument("--adaptive-window-days", type=int, default=20,
                     help="Trailing window (days) of M1 used to classify the regime in --adaptive.")
+    pa.add_argument("--console-log", default="",
+                    help="Tee the live console event stream to this .txt file so a "
+                         "terminal/process crash still leaves the recent history on disk. "
+                         "Keeps only the last --console-log-retain-hours. Off unless set.")
+    pa.add_argument("--console-log-retain-hours", type=float, default=24.0,
+                    help="Hours of console log to keep in --console-log (older lines pruned via "
+                         "an atomic rewrite). 0=unbounded. Default 24.")
     _add_strategy_overrides(pa)
     _add_mt5_flags(pa)
     _add_notification_flags(pa)
