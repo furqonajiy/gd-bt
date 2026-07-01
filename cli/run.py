@@ -31,7 +31,7 @@ ALIASES = {
     "sqz6": "champion_R4_SQZ6", "c160": "candidate_R4_C160",
     "vct5": "candidate_VCT5_victor_trailing",
     "vs17": "candidate_VS17_victor_trailing",
-    "v017": "candidate_V017_victor_july_trailing",
+    "v017": "candidate_V017_victor_july_entry_level",
     "v817": "candidate_V817_victor_trailing",
     "t160": "candidate_T160_trailing_tick",
     "t18s": "candidate_T18S_trailing_tick",
