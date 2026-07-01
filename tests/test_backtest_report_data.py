@@ -185,10 +185,13 @@ def test_summary_monthly_breakdown_shows_equity_end_of_month(tmp_path):
 
     path = write_backtest_outputs(result, tmp_path / "reports" / "eom_check")
     ws = load_workbook(path)["Summary"]
+    # The Month header now carries its feed timezone, e.g. "Month (GMT+3)".
     header_row = next(
-        r for r in range(1, ws.max_row + 1) if ws.cell(row=r, column=1).value == "Month"
+        r for r in range(1, ws.max_row + 1)
+        if str(ws.cell(row=r, column=1).value or "").startswith("Month (")
     )
     headers = [ws.cell(row=header_row, column=c).value for c in range(1, 14)]
+    assert str(headers[0]).startswith("Month")          # Month (feed tz)
     assert headers[1] == "Regime"                       # inserted after Month
     assert headers[11:] == ["P&L %", "Equity EoM"]
     month_cells = [ws.cell(row=header_row + 1, column=c).value for c in range(1, 14)]
@@ -229,6 +232,58 @@ def test_weekly_breakdown_sheet_written_with_headers(tmp_path):
     assert "Weekly Breakdown" in wb.sheetnames
     ws = wb["Weekly Breakdown"]
     headers = [ws.cell(row=1, column=c).value for c in range(1, 13)]
-    assert headers[0] == "Month-Week"
+    assert str(headers[0]).startswith("Month-Week")         # now carries feed tz
     assert headers[-1] == "Equity EoW"
     assert ws.cell(row=2, column=1).value == "2026-06 W1"   # first month-week row
+
+
+def test_all_report_dates_carry_a_timezone_label(tmp_path):
+    """Every date/time in the workbook must name its timezone: CHART clock times
+    (EET/EEST) for the trough / worst-DD / chart span / fill+exit, and the FEED
+    zone (here GMT+3) for the source-date buckets. No bare 'Date'/'Time' header."""
+    from openpyxl import load_workbook
+
+    from trading.engine import write_backtest_outputs
+
+    sig = parse_one_signal(
+        "1. BUY XAUUSD 100 - 100 SL 95 TP1 110 TP2 115 TP3 120 11:00 AM",
+        source_date="2026-06-02", source_offset=3,
+    )
+    result = run_backtest([sig], _chart(tmp_path), _config())
+    path = write_backtest_outputs(result, tmp_path / "reports" / "tz_check")
+    wb = load_workbook(path)
+
+    # Summary: timezone legend + chart span + monthly worst-DD header, all tagged.
+    summary_labels = [wb["Summary"].cell(row=r, column=1).value
+                      for r in range(1, wb["Summary"].max_row + 1)]
+    summary_labels = [str(x) for x in summary_labels if x]
+    assert any(s == "Timezones" for s in summary_labels)
+    assert any(s.startswith("Chart start (EET/EEST)") for s in summary_labels)
+    assert any(s.startswith("Chart end (EET/EEST)") for s in summary_labels)
+    # Monthly Breakdown header row carries the chart tz on Worst DD at + feed tz on Month.
+    mrow = next(r for r in range(1, wb["Summary"].max_row + 1)
+                if str(wb["Summary"].cell(row=r, column=1).value or "").startswith("Month ("))
+    mheaders = [str(wb["Summary"].cell(row=mrow, column=c).value or "")
+                for c in range(1, 18)]
+    assert mheaders[0].startswith("Month (") and "GMT+3" in mheaders[0]
+    assert any(h.startswith("Worst DD at (EET/EEST)") for h in mheaders)
+
+    # Weekly + Daily: the "Worst DD at" column and the bucket-date column are tagged.
+    for sheet in ("Weekly Breakdown", "Daily Breakdown"):
+        ws = wb[sheet]
+        hdrs = [str(ws.cell(row=1, column=c).value or "") for c in range(1, ws.max_column + 1)]
+        assert any(h.startswith("Worst DD at (EET/EEST)") for h in hdrs), sheet
+        # the first column is the feed-zone bucket (Month-Week / Date), tz-tagged
+        assert "(GMT+3)" in hdrs[0], (sheet, hdrs[0])
+
+    # Per-Entry: fill/exit are chart-clock, Date is feed-zone; source + chart time
+    # columns were already tagged.
+    pe = wb["Per-Entry Detail"]
+    pe_hdrs = [str(pe.cell(row=2, column=c).value or "") for c in range(1, pe.max_column + 1)]
+    assert any(h == "Fill Time (EET/EEST)" for h in pe_hdrs)
+    assert any(h == "Exit Time (EET/EEST)" for h in pe_hdrs)
+    assert any(h.startswith("Date (GMT+3)") for h in pe_hdrs)
+    assert any(h == "Time (chart EET/EEST)" for h in pe_hdrs)   # pre-existing, still tagged
+    assert any(h.startswith("Time (GMT+3)") for h in pe_hdrs)   # source-time, pre-existing
+    # No bare, ambiguous date/time header survives anywhere.
+    assert "Date" not in pe_hdrs and "Fill Time" not in pe_hdrs and "Exit Time" not in pe_hdrs

@@ -220,7 +220,13 @@ def parse_backtest(path: str) -> list[BtLeg]:
            for c in range(1, ws.max_column + 1)}
 
     def col(name: str) -> int | None:
-        return hdr.get(name)
+        # Exact match, else a header that STARTS WITH "<name> (" -- so a column
+        # renamed to carry its timezone (e.g. "Exit Time (EET/EEST)") still maps
+        # to the base name "Exit Time". Keeps old and new workbooks both readable.
+        if name in hdr:
+            return hdr[name]
+        prefix = f"{name} ("
+        return next((c for h, c in hdr.items() if h.startswith(prefix)), None)
 
     legs: list[BtLeg] = []
     for r in range(hdr_row + 1, ws.max_row + 1):
