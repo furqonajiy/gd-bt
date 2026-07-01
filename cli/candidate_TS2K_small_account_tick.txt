@@ -51,7 +51,8 @@
 #   3. Live Auto Executor           (tag TS2K, entries 2; gates pending live wiring)
 #   4. Signal Generator             (one-shot static archive signals/ts2k.txt)
 #   5. Backtest from 2026-06        -> reports/TS2K_202606  (TICK; gates ON)
-#   6. Backtest from 2026-01        -> reports/TS2K_202601  (TICK; gates ON)
+#   6. Backtest from 2026-05        -> reports/TS2K_202605  (TICK; gates ON)
+#   7. Backtest from 2026-01        -> reports/TS2K_202601  (TICK; gates ON)
 #   7-9. (omitted -- TS2K is a $2k deployment wrapper validated on the tick era;
 #        for full-history era reads use T818's sections 7-9.)
 #   10. Small-account validation report (sweep_small_account_deploy.py, TICK)
@@ -126,7 +127,7 @@ python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --o
 
 # ===== 5. BACKTEST FROM 2026-06 (current month, $2k, gates ON) =====
 # TICK-preferred (real fills from the committed tick archive). entries 2 + the
-# three deployment-safety gates. --initial-capital 2000. --end-date EXCLUSIVE.
+# three deployment-safety gates. --initial-capital 3000. --end-date EXCLUSIVE.
 python tools/backtest_hybrid.py `
   --signals signals/ts2k.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -172,11 +173,63 @@ python tools/backtest_hybrid.py `
   --daily-loss-limit-pct 0.05 `
   --max-open-signals 1 `
   --output-dir reports/TS2K_202606 `
-  --initial-capital 2000 `
+  --initial-capital 3000 `
   --start-date 2026-06-01 `
   --end-date 2026-07-01
 
-# ===== 6. BACKTEST FROM 2026-01 (current regime, $2k, gates ON) =====
+# ===== 6. BACKTEST FROM 2026-05 (current month, $2k, gates ON) =====
+# TICK-preferred (real fills from the committed tick archive). entries 2 + the
+# three deployment-safety gates. --initial-capital 3000. --end-date EXCLUSIVE.
+python tools/backtest_hybrid.py `
+  --signals signals/ts2k.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
+  --sync-ticks true `
+  --sync-charts true `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --maximum-lot 100.0 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 2 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --shared-sl false `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.8 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 24 `
+  --tp2-lock-delay-minutes 24 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.75 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 2 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --risk-budget-gate true `
+  --max-single-entry-risk-pct 0.04 `
+  --max-zone-risk-pct 0.06 `
+  --daily-loss-limit-pct 0.05 `
+  --max-open-signals 1 `
+  --output-dir reports/TS2K_202605 `
+  --initial-capital 3000 `
+  --start-date 2026-05-01 `
+  --end-date 2026-07-01
+
+# ===== 7. BACKTEST FROM 2026-01 (current regime, $2k, gates ON) =====
 python tools/backtest_hybrid.py `
   --signals signals/ts2k.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -222,11 +275,11 @@ python tools/backtest_hybrid.py `
   --daily-loss-limit-pct 0.05 `
   --max-open-signals 1 `
   --output-dir reports/TS2K_202601 `
-  --initial-capital 2000 `
+  --initial-capital 3000 `
   --start-date 2026-01-01 `
   --end-date 2026-07-01
 
-# ===== 10. SMALL-ACCOUNT VALIDATION REPORT (TICK) =====
+# ===== 8. SMALL-ACCOUNT VALIDATION REPORT (TICK) =====
 # Compares full-8-entry (at $50k AND forced onto $2k) vs the TS2K wrappers, and
 # writes the account-size floor + drawdown/expectancy trade-off table to
 # reports/SMALL_ACCOUNT_<window>/summary.md. Always TICK.

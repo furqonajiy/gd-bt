@@ -7,7 +7,7 @@
 #
 #   --strategy-tag V017
 #   --positions-json positions_v017.json
-#   reports/V017_202607*
+#   reports/V017_2026xx / _2025 / _2024 / _2021_2023
 #   forensic_v017.jsonl / notifications_v017.jsonl
 #
 # This is BACKTEST/RESEARCH identity only until separately demo-validated.
@@ -78,8 +78,10 @@ python tools/auto_explicit.py `
 # ===== 4. SIGNAL GENERATOR (before backtest) =====
 # N/A -- backtest reads victor_signals.txt directly.
 
-# ===== 5. BACKTEST FROM 2026-07 (V017 July start) =====
-# TICK-AWARE: uses all committed ELEV8 ticks/charts and starts Victor V017 on 2026-07-01.
+# ===== 5. BACKTEST FROM 2026-06 (current month) =====
+# TICK-AWARE: real fills from committed tick archive (2026-05+), M1 elsewhere.
+# --lock-tp1/tp2-exit-slippage 2.0/1.0 model the locked-exit give-back (R4).
+# --max-drawdown-limit-pct 200: research cell; let it run to see full picture.
 python tools/backtest_hybrid.py `
   --signals victor_signals.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -119,12 +121,14 @@ python tools/backtest_hybrid.py `
   --trailing-close-after-stage 1 `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
-  --output-dir reports/V017_202607 `
-  --initial-capital 50000 `
-  --start-date 2026-07-01
+  --output-dir reports/V017_202606 `
+  --initial-capital 3000 `
+  --start-date 2026-06-01
 
-# ===== 6. BACKTEST FROM 2026-07 (V017 July start, validation label) =====
-# Same July-start identity with a distinct output dir so automation can run sections 5 and 6.
+# ===== 6. BACKTEST FROM 2026-05 (May-to-today, tick) =====
+# TICK-AWARE: real fills from committed tick archive (2026-05+), M1 elsewhere.
+# --lock-tp1/tp2-exit-slippage 2.0/1.0 model the locked-exit give-back (R4).
+# --max-drawdown-limit-pct 200: research cell; let it run to see full picture.
 python tools/backtest_hybrid.py `
   --signals victor_signals.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -164,6 +168,183 @@ python tools/backtest_hybrid.py `
   --trailing-close-after-stage 1 `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
-  --output-dir reports/V017_202607_validation `
-  --initial-capital 50000 `
-  --start-date 2026-07-01
+  --output-dir reports/V017_202605 `
+  --initial-capital 3000 `
+  --start-date 2026-05-01
+
+# ===== 7. BACKTEST FROM 2026-01 (current regime) =====
+python tools/backtest_hybrid.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
+  --sync-charts true `
+  --sync-ticks true `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 100.0 `
+  --max-open-lots 100 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --output-dir reports/V017_202601 `
+  --initial-capital 3000 `
+  --start-date 2026-01-01
+
+# ===== 8. BACKTEST FROM 2025 (R3 strong) =====
+# Era-matched slippage 0.9/0.45 (R3). M1 only (no tick overlap).
+python tools/backtest_explicit.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 100.0 `
+  --max-open-lots 100 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 0.9 `
+  --lock-tp2-exit-slippage 0.45 `
+  --output-dir reports/V017_2025 `
+  --initial-capital 3000 `
+  --start-date 2025-01-01 `
+  --end-date 2025-12-31
+
+# ===== 9. BACKTEST FROM 2024 (R2 bull) =====
+# Era-matched slippage 0.5/0.25 (R2). M1 only.
+python tools/backtest_explicit.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 100.0 `
+  --max-open-lots 100 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 0.5 `
+  --lock-tp2-exit-slippage 0.25 `
+  --output-dir reports/V017_2024 `
+  --initial-capital 3000 `
+  --start-date 2024-01-01 `
+  --end-date 2024-12-31
+
+# ===== 10. BACKTEST FROM 2021-2023 (R1 quiet) =====
+# Era-matched slippage 0.4/0.2 (R1). M1 only.
+# NOTE: Victor only began posting ~2024; this window barely emits.
+python tools/backtest_explicit.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sync-charts true `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 100.0 `
+  --max-open-lots 100 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 0.4 `
+  --lock-tp2-exit-slippage 0.2 `
+  --output-dir reports/V017_2021_2023 `
+  --initial-capital 3000 `
+  --start-date 2021-01-01 `
+  --end-date 2023-12-31

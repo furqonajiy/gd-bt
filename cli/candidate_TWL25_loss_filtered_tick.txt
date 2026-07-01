@@ -120,11 +120,56 @@ python tools/backtest_hybrid.py `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --output-dir reports/TWL25_202606 `
-  --initial-capital 50000 `
+  --initial-capital 3000 `
   --start-date 2026-06-01 `
   --end-date 2026-07-01
 
-# ===== 6. BACKTEST FROM 2026-01 (tick-first where available) =====
+# ===== 6. BACKTEST FROM 2026-05 (tick-first) =====
+python tools/backtest_hybrid.py `
+  --signals signals/twl25.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
+  --sync-ticks false `
+  --sync-charts true `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.01 `
+  --minimum-lot 0.01 `
+  --maximum-lot 500.0 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 6 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --shared-sl false `
+  --activation-delay 1 `
+  --pending-expiry 180 `
+  --max-hold 120 `
+  --sl-multiplier 2.1 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 10 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode bep_plus_half_tp1 `
+  --bep-trigger-distance 2.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.75 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --output-dir reports/TWL25_202605 `
+  --initial-capital 3000 `
+  --start-date 2026-05-01 `
+  --end-date 2026-07-01
+
+# ===== 7. BACKTEST FROM 2026-01 (tick-first where available) =====
 python tools/backtest_hybrid.py `
   --signals signals/twl25.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -165,6 +210,6 @@ python tools/backtest_hybrid.py `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --output-dir reports/TWL25_202601 `
-  --initial-capital 50000 `
+  --initial-capital 3000 `
   --start-date 2026-01-01 `
   --end-date 2026-07-01

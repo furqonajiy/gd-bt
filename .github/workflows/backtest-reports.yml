@@ -16,8 +16,8 @@ on:
         description: "Which books (space-separated cli/run.py names)"
         default: "t818 v017"
       sections:
-        description: "Which backtest sections (5/6; V017 starts 2026-07-01)"
-        default: "5 6"
+        description: "Backtest sections (5=Jun2026 6=May2026 7=Jan2026 8=R3-2025 9=R2-2024 10=R1-2021-2023; all at capital 3K)"
+        default: "5 6 7"
 
 # Allow the job to push the regenerated reports back to the branch.
 permissions:
@@ -53,17 +53,21 @@ jobs:
             python cli/run.py "$s" 4 2>&1 | tail -15 \
               || echo "(section 4 skipped for $s -- backtest uses a committed feed)"
             for sec in ${{ github.event.inputs.sections }}; do
-              # ALWAYS produce TWO capital variants per backtest: $50,000 (as the
-              # candidate authors it) and $5,000. We reconstruct the exact command
-              # with --print, run it as-is for $50k, then rewrite --initial-capital
-              # and the --output-dir (suffix _5k) for the $5k variant.
+              # Run the section exactly as the snapshot authors it (single capital).
+              # The books are now authored at --initial-capital 3000, so we run one
+              # variant. For any book still authored at $50,000 we ALSO emit the
+              # legacy $5,000 clone (rewrite --initial-capital + _5k output-dir);
+              # that second run is skipped when the command is not at 50000, so a
+              # 3K book never produces a redundant duplicate _5k report.
               cmd=$(python cli/run.py "$s" "$sec" --print 2>&1 | grep -E 'python (tools/|-m )' | head -1)
               if [ -z "$cmd" ]; then echo "(no command for $s $sec)"; continue; fi
-              echo "===== $s $sec @ \$50,000 ====="
+              echo "===== $s $sec (as authored) ====="
               bash -c "$cmd" 2>&1 | tail -20
-              cmd5=$(echo "$cmd" | sed -E 's#--initial-capital 50000#--initial-capital 5000#; s#(--output-dir [^ ]+)#\1_5k#')
-              echo "===== $s $sec @ \$5,000 ====="
-              bash -c "$cmd5" 2>&1 | tail -20
+              if echo "$cmd" | grep -q -- '--initial-capital 50000'; then
+                cmd5=$(echo "$cmd" | sed -E 's#--initial-capital 50000#--initial-capital 5000#; s#(--output-dir [^ ]+)#\1_5k#')
+                echo "===== $s $sec @ \$5,000 (legacy clone) ====="
+                bash -c "$cmd5" 2>&1 | tail -20
+              fi
             done
           done
 
@@ -71,10 +75,10 @@ jobs:
         run: |
           git config user.name "C - Furqon Aji Yudhistira"
           git config user.email "furqonajiy@gmail.com"
-          git add reports/T818_2026*.xlsx reports/TSL18_2026*.xlsx reports/V017_2026*.xlsx 2>/dev/null || true
+          git add reports/T818_*.xlsx reports/TSL18_*.xlsx reports/V017_*.xlsx 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No report changes to commit."
           else
-            git commit -m "report: refresh TSL18 (T818) + V017 2026 TICK backtests with drawdown [skip ci]"
+            git commit -m "report: refresh V017 / TSL18 / T818 backtests (3K, multi-window) with drawdown [skip ci]"
             for i in 1 2 3 4; do git push && break || sleep $((2**i)); done
           fi

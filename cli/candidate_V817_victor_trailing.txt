@@ -49,16 +49,17 @@
 #   -- the SAME source as V116/VCT5/VS17. Run the listener+filter (sections 1-2)
 #   ONCE; all Victor executors share the one feed.
 #
-# SECTION MAP (copy-paste 5-9 for backtests; 4 is N/A for Victor):
+# SECTION MAP (copy-paste 5-10 for backtests; 4 is N/A for Victor):
 #   1. Telegram Listener            (Victor channel -> victor_signals.txt; SHARED)
 #   2. Live Loop Signal Generator   (provider filter --watch; SHARED with V116/VCT5)
 #   3. Live Auto Executor           (tag V817, TRAILING on, risk 5%)
 #   4. Signal Generator             (N/A -- backtest reads victor_signals.txt direct)
 #   5. Backtest from 2026-06         -> reports/V817_202606.xlsx  (R4; slip 2.0/1.0)
-#   6. Backtest from 2026-01         -> reports/V817_202601.xlsx  (R4; slip 2.0/1.0)
-#   7. Backtest 2025 (R3 strong)     -> reports/V817_2025.xlsx    (slip 0.9/0.45)
-#   8. Backtest 2024 (R2 bull)       -> reports/V817_2024.xlsx    (slip 0.5/0.25)
-#   9. Backtest 2021-2023 (R1 quiet) -> reports/V817_2021_2023.xlsx (slip 0.4/0.2)
+#   6. Backtest from 2026-05         -> reports/V817_202605.xlsx  (R4; slip 2.0/1.0)
+#   7. Backtest from 2026-01         -> reports/V817_202601.xlsx  (R4; slip 2.0/1.0)
+#   8. Backtest 2025 (R3 strong)     -> reports/V817_2025.xlsx    (slip 0.9/0.45)
+#   9. Backtest 2024 (R2 bull)       -> reports/V817_2024.xlsx    (slip 0.5/0.25)
+#   10. Backtest 2021-2023 (R1 quiet) -> reports/V817_2021_2023.xlsx (slip 0.4/0.2)
 # =========================================================================
 
 # ===== 1. TELEGRAM LISTENER =====
@@ -167,10 +168,57 @@ python tools/backtest_hybrid.py `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --output-dir reports/V817_202606 `
-  --initial-capital 50000 `
+  --initial-capital 3000 `
   --start-date 2026-06-01
 
-# ===== 6. BACKTEST FROM 2026-01 (current regime) =====
+# ===== 6. BACKTEST FROM 2026-05 (May-to-today, tick) =====
+# TICK-AWARE: real fills from committed tick archive (2026-05+), M1 elsewhere.
+# --lock-tp1/tp2-exit-slippage 2.0/1.0 model the locked-exit give-back (R4).
+# --max-drawdown-limit-pct 200: research cell; let it run to see full picture.
+python tools/backtest_hybrid.py `
+  --signals victor_signals.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
+  --sync-charts true `
+  --sync-ticks true `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 100.0 `
+  --max-open-lots 100 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.5 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 150 `
+  --sl-multiplier 1.7 `
+  --final-target TP2 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --output-dir reports/V817_202605 `
+  --initial-capital 3000 `
+  --start-date 2026-05-01
+
+# ===== 7. BACKTEST FROM 2026-01 (current regime) =====
 python tools/backtest_hybrid.py `
   --signals victor_signals.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -211,10 +259,10 @@ python tools/backtest_hybrid.py `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --output-dir reports/V817_202601 `
-  --initial-capital 50000 `
+  --initial-capital 3000 `
   --start-date 2026-01-01
 
-# ===== 7. BACKTEST FROM 2025 (R3 strong) =====
+# ===== 8. BACKTEST FROM 2025 (R3 strong) =====
 # Era-matched slippage 0.9/0.45 (R3). M1 only (no tick overlap).
 python tools/backtest_explicit.py `
   --signals victor_signals.txt `
@@ -254,11 +302,11 @@ python tools/backtest_explicit.py `
   --lock-tp1-exit-slippage 0.9 `
   --lock-tp2-exit-slippage 0.45 `
   --output-dir reports/V817_2025 `
-  --initial-capital 50000 `
+  --initial-capital 3000 `
   --start-date 2025-01-01 `
   --end-date 2025-12-31
 
-# ===== 8. BACKTEST FROM 2024 (R2 bull) =====
+# ===== 9. BACKTEST FROM 2024 (R2 bull) =====
 # Era-matched slippage 0.5/0.25 (R2). M1 only.
 python tools/backtest_explicit.py `
   --signals victor_signals.txt `
@@ -298,11 +346,11 @@ python tools/backtest_explicit.py `
   --lock-tp1-exit-slippage 0.5 `
   --lock-tp2-exit-slippage 0.25 `
   --output-dir reports/V817_2024 `
-  --initial-capital 50000 `
+  --initial-capital 3000 `
   --start-date 2024-01-01 `
   --end-date 2024-12-31
 
-# ===== 9. BACKTEST FROM 2021-2023 (R1 quiet) =====
+# ===== 10. BACKTEST FROM 2021-2023 (R1 quiet) =====
 # Era-matched slippage 0.4/0.2 (R1). M1 only.
 # NOTE: Victor only began posting ~2024; this window barely emits.
 python tools/backtest_explicit.py `
@@ -343,6 +391,6 @@ python tools/backtest_explicit.py `
   --lock-tp1-exit-slippage 0.4 `
   --lock-tp2-exit-slippage 0.2 `
   --output-dir reports/V817_2021_2023 `
-  --initial-capital 50000 `
+  --initial-capital 3000 `
   --start-date 2021-01-01 `
   --end-date 2023-12-31

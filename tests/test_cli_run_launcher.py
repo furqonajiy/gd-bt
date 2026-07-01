@@ -57,7 +57,7 @@ def test_resolvers_and_aliases():
     sections = run.parse_sections(SQZ6)
     selected, multi = run.resolve_sections("backtest", sections)
     assert multi
-    assert [section.number for section in selected] == [4, 5, 6, 7, 8, 9]
+    assert [section.number for section in selected] == [4, 5, 6, 7, 8, 9, 10]
 
     rng, multi = run.resolve_sections("7-9", sections)
     assert multi
@@ -70,34 +70,38 @@ def _count_capital(out: str, amount: int) -> int:
     return len(re.findall(rf"--initial-capital {amount}\b", out))
 
 
-def test_backtest_keyword_prints_50k_and_5k_variants(capsys):
-    # V817 is a deployed $50K book (Victor trailing): its backtest sections 5-9
-    # each emit a 50K command + a 5K clone (same dates, output dir suffixed _5k).
-    # (v116/VIC_C116 is intentionally a $12K book, so it is NOT the fixture here --
-    # see test_non_50k_book_backtest_is_not_expanded.)
+def test_backtest_keyword_prints_single_3k_variant(capsys):
+    # The books are now authored at a single --initial-capital 3000 (the 50K/5K
+    # dual-variant authoring was retired). V817's ten-section layout has six
+    # backtest windows (5=2026-06, 6=2026-05, 7=2026-01, 8=2025, 9=2024,
+    # 10=2021-2023): three tick/hybrid 2026 windows + three M1 era windows, each
+    # emitted ONCE at 3K -- no _5k clone. (The 50K->5K expansion itself is still
+    # covered by test_capital_variants_keep_dates_and_suffix_output_dir.)
     rc = run.main(["v817", "backtest", "--print"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "running sections 5, 6, 7, 8, 9 in order" in out
-    assert out.count("tools/backtest_hybrid.py") == 4
-    assert out.count("tools/backtest_explicit.py") == 6
-    assert _count_capital(out, 50000) == 5
-    assert _count_capital(out, 5000) == 5
-    assert "--output-dir reports/V817_202606_5k" in out
-    assert "--start-date 2026-06-01" in out
-    assert "--output-dir reports/V817_202601_5k" in out
+    assert "running sections 5, 6, 7, 8, 9, 10 in order" in out
+    assert out.count("tools/backtest_hybrid.py") == 3
+    assert out.count("tools/backtest_explicit.py") == 3
+    assert _count_capital(out, 3000) == 6
+    assert _count_capital(out, 50000) == 0
+    assert _count_capital(out, 5000) == 0
+    assert "_5k" not in out
+    assert "--output-dir reports/V817_202605" in out
+    assert "--start-date 2026-05-01" in out
+    assert "--output-dir reports/V817_202601" in out
     assert "--start-date 2026-01-01" in out
 
 
 def test_non_50k_book_backtest_is_not_expanded(capsys):
-    # A book authored at a non-$50K capital (VIC_C116 = $12K) is a deliberate
-    # sizing choice, NOT a 50K/5K pair: the launcher must leave it untouched (no
-    # 5K clone, no _5k output dir), so the capital-variant expansion never rewrites
-    # a strategy's authored capital.
+    # A book NOT authored at $50K is a deliberate sizing choice, NOT a 50K/5K
+    # pair: the launcher must leave it untouched (no 5K clone, no _5k output dir),
+    # so the capital-variant expansion never rewrites a strategy's authored
+    # capital. All books are now at 3K, which is likewise left as a single variant.
     rc = run.main(["v116", "backtest", "--print"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "--initial-capital 12000" in out
+    assert "--initial-capital 3000" in out
     assert _count_capital(out, 50000) == 0
     assert _count_capital(out, 5000) == 0
     assert "_5k" not in out

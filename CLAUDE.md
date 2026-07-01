@@ -756,7 +756,7 @@ and `pytest`, which use CSV data and a stub MT5 layer. To resync the M1 archive
 from 2020, see the standalone `cli/resync_m1_from_2020.txt` (`fetch --months 80`,
 `--mt5-server-offset 3` keeps the broker EET/EEST clock verbatim). The
 `cli/*.txt` files are runnable deployment-command snapshots, each with the same
-nine sections — live order first, backtests last (copy-paste 4-9 to generate the
+ten sections — live order first, backtests last (copy-paste 4-10 to generate the
 archive + run all backtests). **`cli/run.py` makes them clickable**: it parses a
 snapshot, lists the numbered sections, and runs the chosen one **in the current
 terminal** (`python cli/run.py sqz6 3`, or a menu with no args; `cli\run …` via
@@ -792,12 +792,18 @@ validate Jan-Jun, at **$50K + $5K**, artifact `july-victor-trailing-geometry-swe
 So **the TSL18 sweep covers quality + collision; the Victor sweep covers trailing
 geometry** — both are manual-only research/backtest sweeps that never `--execute`
 and never promote to live.
-The nine sections: (1) Telegram Listener (Victor feed only), (2) Live
+The ten sections: (1) Telegram Listener (Victor feed only), (2) Live
 Loop Signal Generator, (3) Live Auto Executor, (4) Signal Generator (one-shot
 static archive, run before the backtests), (5) Backtest from 2026-06 (R4
-parabolic, current month), (6) Backtest from 2026-01 (R4 parabolic, current
-regime), (7) Backtest 2025 (R3 strong), (8) Backtest 2024 (R2 bull), and
-(9) Backtest 2021-2023 (R1 quiet). Each backtest window carries **era-matched locked-exit slippage** —
+parabolic, current month), (6) Backtest from 2026-05 (R4 parabolic,
+May-to-today; the tick-covered month before June), (7) Backtest from 2026-01
+(R4 parabolic, current regime), (8) Backtest 2025 (R3 strong), (9) Backtest
+2024 (R2 bull), and (10) Backtest 2021-2023 (R1 quiet). **Every backtest
+section is authored at `--initial-capital 3000` (single 3K capital)** — the
+older 50K/5K dual-variant authoring was retired, so the `backtest-reports.yml`
+$50k→$5k rewrite and `cli/run.py … backtest`'s `_capital_variants` clone are
+now no-ops for these snapshots (a book authored below 50K is left untouched).
+Each backtest window carries **era-matched locked-exit slippage** —
 R4 2.0/1.0, R3 0.9/0.45, R2 0.5/0.25, R1 0.4/0.2 (the volatility-scaled give-back
 measured per regime; backtest-only realism, never sent live) — so a full-history
 read is the union of the per-era windows rather than one run that wrongly applies
