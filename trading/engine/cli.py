@@ -445,6 +445,41 @@ def _maybe_print_sanity_errors(state: dict, errors: list[str]) -> None:
     state["__sanity_sig__"] = signature
 
 
+def _fmt_duration(delta: timedelta) -> str:
+    """Compact 'Nh Mm' / 'Nh' / 'Nm' / 'Ns' rendering of a non-negative duration."""
+    secs = int(max(delta.total_seconds(), 0))
+    hours, rem = divmod(secs, 3600)
+    minutes = rem // 60
+    if hours and minutes:
+        return f"{hours}h {minutes}m"
+    if hours:
+        return f"{hours}h"
+    if minutes:
+        return f"{minutes}m"
+    return f"{secs}s"
+
+
+def _format_expired_reason(*, fired_chart, expiry_chart, now_chart) -> str:
+    """Human-readable 'entry window closed' line for the live log.
+
+    Instead of a bare 'pending window already closed', it says WHEN the signal
+    armed, HOW LONG its entry window stayed open, WHEN it closed, and HOW LONG
+    ago -- all in GMT+7 (the live-log zone) so it lines up with the feed and the
+    operator's clock. ``expiry_chart`` may be None (window length then unknown,
+    so only the arm time + now are shown)."""
+    fired = chart_tz.to_log_tz(fired_chart)
+    now = chart_tz.to_log_tz(now_chart)
+    if expiry_chart is None:
+        return (f"armed {fired:%Y-%m-%d %H:%M} GMT+7; entry window already closed "
+                f"(now {now:%Y-%m-%d %H:%M} GMT+7). Skipped.")
+    expiry = chart_tz.to_log_tz(expiry_chart)
+    window = _fmt_duration(expiry_chart - fired_chart)
+    ago = _fmt_duration(now_chart - expiry_chart)
+    return (f"armed {fired:%Y-%m-%d %H:%M} GMT+7, only active for {window} "
+            f"(entry window closed {expiry:%Y-%m-%d %H:%M} GMT+7) -- expired "
+            f"{ago} ago (now {now:%Y-%m-%d %H:%M} GMT+7). Skipped.")
+
+
 def _format_terminal_reason(*, fired_chart, expiry_chart, hit_chart,
                             label: str, level: float, tag: str) -> str:
     """Human-readable 'why this signal is no longer valid' line for the live log.
@@ -851,9 +886,12 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
 
         if rec.new_signal.action == "SKIP_EXPIRED":
             status = (
-                f"Signal {signal.signal_key}: pending window already closed at "
-                f"{chart_tz.to_log_tz(rec.new_signal.pending_expires_at):%Y-%m-%d %H:%M} GMT+7 "
-                f"(now {chart_tz.to_log_tz(replay_end):%H:%M} GMT+7). Skipped."
+                f"Signal {signal.signal_key}: "
+                + _format_expired_reason(
+                    fired_chart=signal.signal_time_chart,
+                    expiry_chart=rec.new_signal.pending_expires_at,
+                    now_chart=replay_end,
+                )
             )
             # The 'now HH:MM' clock changes every minute, so dedupe on a stable
             # per-signal key; expiry is terminal and only needs announcing once.
