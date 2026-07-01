@@ -710,3 +710,125 @@ def test_trailing_reopen_falls_back_to_base_limit_when_distance_zero(monkeypatch
 
     assert not any("Re-armed trailing-open" in a for a in log.actions)
     assert all(r["type"] not in (mt5.ORDER_TYPE_BUY_STOP,) for r in mt5.requests)
+
+
+# ---------------------------------------------------------------------------
+# Partial trailing-open arming (V017 2026-07-01 fix)
+#
+# A laddered trailing-open signal must ARM the legs whose trigger the market has
+# reached, even while deeper legs are still waiting for a further move -- it must
+# NOT hold the whole ladder hostage to its deepest un-armed leg. This reproduces
+# the 2026-07-01 V017 miss: Ask bottomed at ~3970.3 (enough for the top of the
+# ladder) but the 8-leg BUY placed nothing because the 3968.5 leg never armed.
+# ---------------------------------------------------------------------------
+
+def _v017_ladder_plan(signal, activation, orders, *, target=3990.0, label="TP2"):
+    return NewSignalPlan(
+        signal=signal,
+        action="FOLLOW",
+        rationale="test",
+        orders=orders,
+        pending_expires_at=activation + timedelta(minutes=180),
+        final_target_label=label,
+        final_target_price=target,
+        total_initial_risk_dollars=sum(o.risk_dollars for o in orders),
+        pending_activates_at=activation,
+        trailing_open_distance=0.5,
+    )
+
+
+def test_trailing_open_arms_reachable_buy_legs_while_deeper_legs_wait(monkeypatch):
+    """At Ask 3970.33, V017 places BUY STOPs for #4 (3972.21) and #5 (3971.29)
+    while #6/#7/#8 (3970.36/3969.43/3968.50) remain waiting -- the partial-arming
+    fix. Before the fix the whole ladder was blocked by the un-armed deep legs."""
+    signal = parse_one_signal(
+        "2. BUY XAUUSD 3975 - 3973 SL 3968 TP1 3980 TP2 3990 TP3 4005 7:25 AM",
+        source_date="2026-07-01", source_offset=3,
+    )
+    activation = signal.signal_time_chart
+    monkeypatch.setattr(mt5_executor_trailing, "_wall_clock_chart_now",
+                        lambda: activation + timedelta(minutes=1))
+    plan = _v017_ladder_plan(signal, activation, orders=[
+        PlannedOrder(3, signal.side, 3972.21, 3966.0, 0.10, 62.1),  # #4 arms Ask<=3971.71
+        PlannedOrder(4, signal.side, 3971.29, 3965.0, 0.10, 62.1),  # #5 arms Ask<=3970.79
+        PlannedOrder(5, signal.side, 3970.36, 3964.0, 0.10, 62.1),  # #6 arms Ask<=3969.86
+        PlannedOrder(6, signal.side, 3969.43, 3963.0, 0.10, 62.1),  # #7 arms Ask<=3968.93
+        PlannedOrder(7, signal.side, 3968.50, 3962.0, 0.10, 62.1),  # #8 arms Ask<=3968.00
+    ])
+    mt5 = _FakeMt5(bid=3970.11, ask=3970.33)
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.place_signal(signal, plan)
+
+    # Only the two reachable legs armed (#4, #5); nothing deeper.
+    assert log.placed == 2
+    assert sorted(log.placed_entry_indices) == [3, 4]
+    assert len(mt5.requests) == 2
+    # Both are BUY STOP orders (not LIMIT), resting at Ask + distance (above market).
+    assert all(req["type"] == _FakeMt5.ORDER_TYPE_BUY_STOP for req in mt5.requests)
+    assert all(abs(req["price"] - (3970.33 + 0.5)) < 1e-6 for req in mt5.requests)
+    # #6 / #7 / #8 are listed in the waiting log, not placed.
+    waiting = next(a for a in log.actions if "trailing-open waiting" in a)
+    assert "#6 arms when Ask<=3969.86" in waiting
+    assert "#7 arms when Ask<=3968.93" in waiting
+    assert "#8 arms when Ask<=3968" in waiting
+    assert "#4 arms" not in waiting and "#5 arms" not in waiting
+
+
+def test_trailing_open_places_nothing_when_no_buy_leg_is_armable(monkeypatch):
+    """Ask above every arm threshold -> nothing placed and the waiting log lists
+    the un-armable legs (the correct all-waiting case is preserved)."""
+    signal = parse_one_signal(
+        "2. BUY XAUUSD 3975 - 3973 SL 3968 TP1 3980 TP2 3990 TP3 4005 7:25 AM",
+        source_date="2026-07-01", source_offset=3,
+    )
+    activation = signal.signal_time_chart
+    monkeypatch.setattr(mt5_executor_trailing, "_wall_clock_chart_now",
+                        lambda: activation + timedelta(minutes=1))
+    plan = _v017_ladder_plan(signal, activation, orders=[
+        PlannedOrder(3, signal.side, 3972.21, 3966.0, 0.10, 62.1),  # arms Ask<=3971.71
+        PlannedOrder(4, signal.side, 3971.29, 3965.0, 0.10, 62.1),  # arms Ask<=3970.79
+    ])
+    # Ask 3973.00 is above both arm thresholds -> all waiting, nothing armed.
+    mt5 = _FakeMt5(bid=3972.9, ask=3973.0)
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.place_signal(signal, plan)
+
+    assert log.placed == 0
+    assert mt5.requests == []
+    assert any("trailing-open waiting" in a for a in log.actions)
+
+
+def test_trailing_open_arms_reachable_sell_legs_while_deeper_legs_wait(monkeypatch):
+    """Mirror of the BUY case: at Bid 3974.67 a SELL ladder arms #1/#2/#3
+    (3972/3973/3974) while #4/#5 (3975/3976) wait; the STOPs are SELL STOPs at
+    Bid - distance."""
+    signal = parse_one_signal(
+        "1. SELL XAUUSD 3972 - 3976 SL 3982 TP1 3966 TP2 3956 TP3 3946 7:25 AM",
+        source_date="2026-07-01", source_offset=3,
+    )
+    activation = signal.signal_time_chart
+    monkeypatch.setattr(mt5_executor_trailing, "_wall_clock_chart_now",
+                        lambda: activation + timedelta(minutes=1))
+    plan = _v017_ladder_plan(signal, activation, target=3956.0, orders=[
+        PlannedOrder(0, signal.side, 3972.0, 3982.0, 0.10, 100.0),  # #1 arms Bid>=3972.5
+        PlannedOrder(1, signal.side, 3973.0, 3983.0, 0.10, 100.0),  # #2 arms Bid>=3973.5
+        PlannedOrder(2, signal.side, 3974.0, 3984.0, 0.10, 100.0),  # #3 arms Bid>=3974.5
+        PlannedOrder(3, signal.side, 3975.0, 3985.0, 0.10, 100.0),  # #4 arms Bid>=3975.5
+        PlannedOrder(4, signal.side, 3976.0, 3986.0, 0.10, 100.0),  # #5 arms Bid>=3976.5
+    ])
+    mt5 = _FakeMt5(bid=3974.67, ask=3974.89)
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.place_signal(signal, plan)
+
+    assert log.placed == 3
+    assert sorted(log.placed_entry_indices) == [0, 1, 2]
+    assert len(mt5.requests) == 3
+    assert all(req["type"] == _FakeMt5.ORDER_TYPE_SELL_STOP for req in mt5.requests)
+    assert all(abs(req["price"] - (3974.67 - 0.5)) < 1e-6 for req in mt5.requests)
+    waiting = next(a for a in log.actions if "trailing-open waiting" in a)
+    assert "#4 arms when Bid>=3975.5" in waiting
+    assert "#5 arms when Bid>=3976.5" in waiting
+    assert "#1 arms" not in waiting and "#3 arms" not in waiting
