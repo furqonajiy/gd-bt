@@ -1,0 +1,262 @@
+name: Backtests + Full TSL18 Sweep
+
+# One-shot/or manual runner for the current TSL18 review cycle.
+#
+# It does two things in order:
+# 1. Regenerates V817 + TSL18/T818 2026 TICK backtest workbooks for both $50K and $5K.
+# 2. Runs the full TSL18 quality-entry + collision sweep, including Jan-Jun validation.
+#
+# Artifact-only: this workflow does not trade live, does not promote a strategy,
+# and does not commit reports back to main. The existing backtest-reports.yml can
+# still be used separately when report commit-back is desired.
+#
+# Push behavior is intentionally narrow: it runs on main only when this workflow
+# file itself changes, so merging the workflow can start the one-shot runner
+# without making every future main merge launch the heavy jobs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      strategies:
+        description: "Backtest books from cli/run.py; T818 is the current TSL18 alias"
+        required: false
+        default: "t818 v817"
+      sections:
+        description: "Backtest sections: 5=June 2026, 6=Jan-Jun 2026"
+        required: false
+        default: "5 6"
+      run_backtests:
+        description: "Run V817 + TSL18/T818 5K/50K reports"
+        required: false
+        default: "true"
+      run_full_sweep:
+        description: "Run full_june TSL18 quality+collision sweep"
+        required: false
+        default: "true"
+      run_jan_jun:
+        description: "Run Jan-Jun validate_top after full_june"
+        required: false
+        default: "true"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/backtest-and-full-sweep-runner.yml"
+
+concurrency:
+  group: backtests-and-full-tsl18-sweep
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  STRATEGIES: ${{ github.event.inputs.strategies || 't818 v817' }}
+  SECTIONS: ${{ github.event.inputs.sections || '5 6' }}
+  RUN_BACKTESTS: ${{ github.event.inputs.run_backtests || 'true' }}
+  RUN_FULL_SWEEP: ${{ github.event.inputs.run_full_sweep || 'true' }}
+  RUN_JAN_JUN: ${{ github.event.inputs.run_jan_jun || 'true' }}
+
+jobs:
+  backtests:
+    name: V817 + TSL18/T818 backtests at 50K and 5K
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install requirements
+        run: pip install -r requirements.txt
+
+      - name: Backtest report status header
+        run: |
+          mkdir -p reports/COMBINED_BACKTEST_SWEEP_STATUS logs/backtests
+          STATUS=reports/COMBINED_BACKTEST_SWEEP_STATUS/summary.md
+          {
+            echo "# Backtests + Full TSL18 Sweep — Status"
+            echo
+            echo "- Workflow: Backtests + Full TSL18 Sweep"
+            echo "- SHA: \`${GITHUB_SHA}\`"
+            echo "- Event: \`${{ github.event_name }}\`"
+            echo "- Run: \`${GITHUB_RUN_ID}\`"
+            echo "- Strategies: \`${STRATEGIES}\`"
+            echo "- Sections: \`${SECTIONS}\`"
+            echo "- Run backtests: \`${RUN_BACKTESTS}\`"
+            echo "- Run full sweep: \`${RUN_FULL_SWEEP}\`"
+            echo "- Run Jan-Jun: \`${RUN_JAN_JUN}\`"
+            echo
+          } > "$STATUS"
+
+      - name: Run V817 + TSL18/T818 50K and 5K backtests
+        if: env.RUN_BACKTESTS == 'true'
+        run: |
+          set -euo pipefail
+          STATUS=reports/COMBINED_BACKTEST_SWEEP_STATUS/summary.md
+          echo "## Backtest reports" >> "$STATUS"
+          for s in $STRATEGIES; do
+            echo "### Strategy: $s" >> "$STATUS"
+            echo "===== generate feed: cli/run.py $s 4 ====="
+            python cli/run.py "$s" 4 > "logs/backtests/${s}_section4.log" 2>&1 \
+              || echo "section 4 tolerated for $s; see logs/backtests/${s}_section4.log"
+            tail -30 "logs/backtests/${s}_section4.log" || true
+
+            for sec in $SECTIONS; do
+              echo "===== command: cli/run.py $s $sec --print ====="
+              cmd=$(python cli/run.py "$s" "$sec" --print 2>&1 | grep -E 'python (tools/|-m )' | head -1 || true)
+              if [ -z "$cmd" ]; then
+                echo "- $s section $sec: no command emitted" >> "$STATUS"
+                continue
+              fi
+              echo "- $s section $sec @ 50K: running" >> "$STATUS"
+              echo "$cmd" > "logs/backtests/${s}_section${sec}_50k.cmd.txt"
+              bash -c "$cmd" > "logs/backtests/${s}_section${sec}_50k.log" 2>&1
+              tail -40 "logs/backtests/${s}_section${sec}_50k.log" || true
+
+              cmd5=$(echo "$cmd" | sed -E 's#--initial-capital 50000#--initial-capital 5000#; s#(--output-dir [^ ]+)#\1_5k#')
+              echo "- $s section $sec @ 5K: running" >> "$STATUS"
+              echo "$cmd5" > "logs/backtests/${s}_section${sec}_5k.cmd.txt"
+              bash -c "$cmd5" > "logs/backtests/${s}_section${sec}_5k.log" 2>&1
+              tail -40 "logs/backtests/${s}_section${sec}_5k.log" || true
+              echo "- $s section $sec: completed 50K + 5K" >> "$STATUS"
+            done
+          done
+          {
+            echo
+            echo "### Backtest report files"
+            find reports -maxdepth 1 -type f \( -iname 'T818_2026*.xlsx' -o -iname 'V817_2026*.xlsx' -o -iname 'TSL18_2026*.xlsx' \) | sort | sed 's#^#- #'
+            echo
+          } >> "$STATUS"
+
+      - name: Upload backtest report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v817-tsl18-backtest-reports-5k-50k
+          path: |
+            reports/T818_2026*.xlsx
+            reports/TSL18_2026*.xlsx
+            reports/V817_2026*.xlsx
+            logs/backtests/**
+            reports/COMBINED_BACKTEST_SWEEP_STATUS/**
+          if-no-files-found: warn
+
+  full-sweep:
+    name: Full TSL18 quality+collision sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    needs: backtests
+    if: always() && needs.backtests.result == 'success' && (github.event.inputs.run_full_sweep || 'true') == 'true'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install requirements
+        run: pip install -r requirements.txt
+
+      - name: Preflight compile and targeted tests
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            tools/generate_scalper_signals.py \
+            tools/sweep_tsl18_quality_entry.py \
+            tools/backtest_hybrid.py \
+            tools/backtest_explicit.py \
+            tools/rebate_scoring.py \
+            tools/auto_explicit.py \
+            trading/engine/strategy/backtest.py \
+            trading/engine/strategy/collision_policy.py
+          python -m pytest -q tests/test_sweep_tsl18_quality_entry.py
+          python -m pytest -q tests/test_backtest_hybrid_collision_policy.py
+          python -m pytest -q tests/test_auto_explicit_collision_live_guard.py
+          python -m pytest -q tests/test_collision_policy.py
+          python -m pytest -q tests/test_backtest_hybrid_parity.py
+
+      - name: Smoke sweep
+        run: |
+          set -euo pipefail
+          python tools/sweep_tsl18_quality_entry.py \
+            --mode smoke \
+            --out-root reports \
+            --require-full-tick-lifecycle \
+            --exclude-open-or-pending \
+            --score-objective edge_plus_rebate_guarded
+
+      - name: Full June sweep
+        run: |
+          set -euo pipefail
+          python tools/sweep_tsl18_quality_entry.py \
+            --mode full_june \
+            --out-root reports \
+            --charts data/XAUUSD_M1_202605_ELEV8.csv data/XAUUSD_M1_202606_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_202606*_ELEV8.csv \
+            --gen-start 2026-05-01 \
+            --require-full-tick-lifecycle \
+            --exclude-open-or-pending \
+            --score-objective edge_plus_rebate_guarded
+
+      - name: Jan-Jun validation
+        if: env.RUN_JAN_JUN == 'true'
+        run: |
+          set -euo pipefail
+          TOPJSON=reports/TSL18_QUALITY_full_june/top_candidates.json
+          if [ ! -f "$TOPJSON" ]; then
+            echo "No top_candidates.json from full_june; skipping validate_top."
+            exit 0
+          fi
+          python tools/sweep_tsl18_quality_entry.py \
+            --mode validate_top \
+            --top-json "$TOPJSON" \
+            --out-root reports \
+            --charts data/XAUUSD_M1_2026*_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_20260*_ELEV8.csv \
+            --gen-start 2026-01-01 \
+            --require-full-tick-lifecycle \
+            --exclude-open-or-pending \
+            --score-objective edge_plus_rebate_guarded
+
+      - name: Build final status summary
+        if: always()
+        run: |
+          mkdir -p reports/COMBINED_BACKTEST_SWEEP_STATUS
+          STATUS=reports/COMBINED_BACKTEST_SWEEP_STATUS/final_sweep_summary.md
+          {
+            echo "# Full TSL18 Quality+Collision Sweep — Final Status"
+            echo
+            echo "- SHA: \`${GITHUB_SHA}\`"
+            echo "- Run: \`${GITHUB_RUN_ID}\`"
+            echo
+            echo "## Artifact paths"
+            echo "- reports/TSL18_QUALITY_smoke/"
+            echo "- reports/TSL18_QUALITY_full_june/"
+            echo "- reports/TSL18_QUALITY_validate_top/"
+            echo
+            echo "## Full June summary"
+            if [ -f reports/TSL18_QUALITY_full_june/summary.md ]; then
+              cat reports/TSL18_QUALITY_full_june/summary.md
+            else
+              echo "Missing reports/TSL18_QUALITY_full_june/summary.md"
+            fi
+            echo
+            echo "## Jan-Jun validation summary"
+            if [ -f reports/TSL18_QUALITY_validate_top/summary.md ]; then
+              cat reports/TSL18_QUALITY_validate_top/summary.md
+            else
+              echo "Missing or skipped reports/TSL18_QUALITY_validate_top/summary.md"
+            fi
+          } > "$STATUS"
+
+      - name: Upload sweep artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsl18-quality-collision-full-sweep
+          path: |
+            reports/TSL18_QUALITY_smoke/**
+            reports/TSL18_QUALITY_full_june/**
+            reports/TSL18_QUALITY_validate_top/**
+            reports/COMBINED_BACKTEST_SWEEP_STATUS/**
+          if-no-files-found: warn

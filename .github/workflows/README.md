@@ -77,6 +77,26 @@ of their pinned version — a safe catch-all.
   the DD25/DD40 loss-first gates AND a demo-forward run confirms broker behaviour;
   it does not replace TSL18/T818. See `../../docs/TWL25_LOSS_SWEEP.md`.
 
+- `backtest-reports.yml` — **Backtest reports (TSL18 / V817)**: manual-only
+  workflow that regenerates deployed-book 2026 TICK report workbooks from
+  `cli/run.py` books (`t818` = current TSL18 alias, plus `v817`) for sections 5
+  and 6. It produces both the authored $50,000 capital report and a $5,000 variant
+  by rewriting `--initial-capital 50000` to `5000` and suffixing the output dir
+  with `_5k`. Unlike most research workflows, this one has `contents: write` and
+  commits refreshed `reports/T818_2026*.xlsx` / `reports/V817_2026*.xlsx` back to
+  the selected branch.
+
+- `backtest-and-full-sweep-runner.yml` — **Backtests + Full TSL18 Sweep**:
+  artifact-only combined runner for the current review cycle. It first runs V817
+  and TSL18/T818 section 5/6 backtest reports at both $50K and $5K, then runs the
+  TSL18 quality-entry + collision sweep (`smoke` → `full_june` → optional
+  `validate_top`). It uses a narrow push trigger (`paths:` limited to this workflow
+  file) so merging the workflow can start a one-shot run without making every
+  future `main` merge launch heavy jobs; manual dispatch can also rerun it. It
+  uploads `v817-tsl18-backtest-reports-5k-50k` and
+  `tsl18-quality-collision-full-sweep` artifacts, never commits reports, never
+  trades live, and never promotes a strategy.
+
 - `tsl18-quality-entry-overnight-sweep.yml` — **TSL18 Quality Entry Overnight
   Sweep**: runs the quality-entry sweep (`tools/sweep_tsl18_quality_entry.py`) on
   Actions instead of a long warm Claude session, using the **canonical current
