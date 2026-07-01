@@ -445,6 +445,25 @@ def _maybe_print_sanity_errors(state: dict, errors: list[str]) -> None:
     state["__sanity_sig__"] = signature
 
 
+def _format_terminal_reason(*, fired_chart, expiry_chart, hit_chart,
+                            label: str, level: float, tag: str) -> str:
+    """Human-readable 'why this signal is no longer valid' line for the live log.
+
+    Instead of a bare 'signal already resolved', it says WHEN the signal fired,
+    HOW LONG its entry window ran, and WHEN its original SL / final target was
+    reached -- all in GMT+7 (the live-log zone) so it lines up with the feed and
+    the operator's clock. ``expiry_chart`` may be None (no window shown)."""
+    fired = chart_tz.to_log_tz(fired_chart)
+    hit = chart_tz.to_log_tz(hit_chart)
+    window = ""
+    if expiry_chart is not None:
+        expiry = chart_tz.to_log_tz(expiry_chart)
+        window = f", entry window until {expiry:%Y-%m-%d %H:%M} GMT+7"
+    return (f"not opened/re-armed -- fired {fired:%Y-%m-%d %H:%M} GMT+7{window}; "
+            f"{label} {level:g} already reached at {hit:%Y-%m-%d %H:%M} GMT+7 "
+            f"-> no longer valid ({tag})")
+
+
 def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
                conn, chart, signals_path: Path, iteration: int = 1,
                candidate_console_state: dict[str, str] | None = None,
@@ -585,47 +604,58 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         return {"TP1": sig.tp1, "TP2": sig.tp2, "TP3": sig.tp3}.get(
             getattr(config, "final_target", "TP3"), sig.tp3)
 
-    def _historical_touch(sig) -> tuple[bool, bool]:
-        """(original_sl_touched, final_target_touched) for bars in (signal_time, now].
-        BUY: low<=SL is a stop-out, high>=final is a target hit; SELL mirrored.
-        This is the signal-level TERMINAL test -- it overrides leg-level replay."""
+    def _historical_touch(sig) -> tuple[datetime | None, datetime | None]:
+        """(sl_touch_time, target_touch_time): the FIRST bar time in
+        (signal_time, now] where the original SL / final target was touched, or
+        None. BUY: low<=SL is a stop-out, high>=final a target hit; SELL mirrored.
+        Signal-level TERMINAL test -- it overrides the leg-level replay."""
         ft = _final_target_price(sig)
-        sl_hit = tgt_hit = False
+        sl_time = tgt_time = None
         try:
             bars = chart.bars_between(sig.signal_time_chart, replay_end)
         except Exception:
-            return (False, False)
+            return (None, None)
         buy = sig.side.upper() == "BUY"
         for b in bars:
             if b.time <= sig.signal_time_chart:
                 continue
             if buy:
-                if b.low <= sig.sl:
-                    sl_hit = True
-                if b.high >= ft:
-                    tgt_hit = True
+                if sl_time is None and b.low <= sig.sl:
+                    sl_time = b.time
+                if tgt_time is None and b.high >= ft:
+                    tgt_time = b.time
             else:
-                if b.high >= sig.sl:
-                    sl_hit = True
-                if b.low <= ft:
-                    tgt_hit = True
-            if sl_hit and tgt_hit:
+                if sl_time is None and b.high >= sig.sl:
+                    sl_time = b.time
+                if tgt_time is None and b.low <= ft:
+                    tgt_time = b.time
+            if sl_time is not None and tgt_time is not None:
                 break
-        return (sl_hit, tgt_hit)
+        return (sl_time, tgt_time)
 
     def _terminal_reason(sig) -> str | None:
         """Signal-level terminal reason (or None). Always active for live opens and
         re-arms: a signal whose original SL was already touched -- even if the
         engine is late and a fresh trailing-open price now looks attractive -- must
-        be treated as stopped out, not revived."""
-        sl_hit, tgt_hit = _historical_touch(sig)
-        if sl_hit:
-            return ("not opened/re-armed -- original SL was touched before live "
-                    "placement; signal marked terminal_sl")
-        if tgt_hit:
-            return ("not opened/re-armed -- final target already reached before live "
-                    "placement; signal already resolved")
-        return None
+        be treated as stopped out, not revived. The reason names WHEN it fired, its
+        entry window, and WHEN the SL/target was reached (see _format_terminal_reason)."""
+        sl_time, tgt_time = _historical_touch(sig)
+        if sl_time is None and tgt_time is None:
+            return None
+        expiry_min = int(getattr(config, "pending_expiry_minutes", 0) or 0)
+        delay_min = int(getattr(config, "activation_delay_minutes", 0) or 0)
+        expiry_chart = (sig.signal_time_chart + timedelta(minutes=delay_min + expiry_min)
+                        if expiry_min else None)
+        # A stop-out is the more important flag, so it wins if both were touched.
+        if sl_time is not None:
+            return _format_terminal_reason(
+                fired_chart=sig.signal_time_chart, expiry_chart=expiry_chart,
+                hit_chart=sl_time, label="original SL", level=float(sig.sl),
+                tag="terminal_sl")
+        return _format_terminal_reason(
+            fired_chart=sig.signal_time_chart, expiry_chart=expiry_chart,
+            hit_chart=tgt_time, label="final target",
+            level=float(_final_target_price(sig)), tag="resolved")
 
     def _live_entry_skip(signal, rec) -> str | None:
         """Combined terminal + LiveEntryGuard decision for a would-be live placement.
@@ -644,14 +674,14 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         planned_entry = (ask if buy else bid) if trailing_live_entry else float(o0.entry_price)
         if planned_entry <= 0:
             planned_entry = float(o0.entry_price)
-        sl_hit, tgt_hit = _historical_touch(signal)
+        sl_time, tgt_time = _historical_touch(signal)
         age_min = max(0.0, (replay_end - signal.signal_time_chart).total_seconds() / 60.0)
         return live_guard.check(
             side=signal.side, planned_entry=planned_entry,
             effective_sl=float(o0.initial_sl), original_sl=float(signal.sl),
             tp1=float(signal.tp1), final_target=float(_final_target_price(signal)),
             age_minutes=age_min, bid=bid, ask=ask,
-            sl_hit_after=sl_hit, target_hit_after=tgt_hit)
+            sl_hit_after=sl_time is not None, target_hit_after=tgt_time is not None)
 
     def _record_live_skip(signal, reason, *, dedup):
         forensic.decision(signal_key=signal.signal_key, action="SKIP_STALE", rationale=reason)
@@ -677,7 +707,8 @@ def _auto_pass(args: argparse.Namespace, config: StrategyConfig,
         if _tr is not None:
             terminal_tracked_keys.add(_sig.signal_key)
             log.merge(executor.cancel_signal_pendings(_sig.signal_key, reason="terminal_sl"))
-            _record_live_skip(_sig, f"not re-armed -- {_tr}", dedup="TERMINAL")
+            # _tr already reads "not opened/re-armed -- ..."; don't double-prefix.
+            _record_live_skip(_sig, _tr, dedup="TERMINAL")
 
     # Optional self-heal: re-place pending entries whose LIMITs vanished from MT5
     # (e.g. cancelled by hand) while the signal is still live. Terminal signals are
