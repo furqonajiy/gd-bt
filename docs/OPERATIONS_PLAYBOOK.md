@@ -423,6 +423,20 @@ closed; the executor correctly declines to chase and logs it **once per leg**
 `positions_*.json`). To reconcile a live session against the backtest, see
 `tools/reconcile_report_html.py` (one command per strategy tag).
 
+**Persist the console for post-mortem (`--console-log`).** The event stream lives
+only in the terminal, so a terminal / process crash loses it. Add
+`--console-log console_<tag>.txt --console-log-retain-hours 24` (per-strategy
+name, like `--forensic-log` / `--notifications`) and the executor tees every
+console line to that `.txt`, keeping the **last N hours** on disk (older lines
+are pruned on a slow cadence via an atomic rewrite, so it never grows without
+bound and a crash always leaves the recent history to analyze). It is off unless
+the flag is set, restores stdout cleanly on exit, and is best-effort (a disk/path
+error only skips logging, never breaks trading). The V017 snapshot already sets
+`console_v017.txt` at 24 h. Note the once-per-leg / once-per-session notices (the
+`trailing-open waiting` block, the no-chase notice) still log once, so the `.txt`
+shows the *last* such line followed by the eventual EXECUTION / resolved lines —
+enough to reconstruct what happened to a signal after a crash.
+
 ### MT5 orders don't match `positions.json`
 
 The execute command prints a `WARNINGS:` section listing each unknown
