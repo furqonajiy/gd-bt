@@ -448,7 +448,16 @@ pair is a thin package that imports it.
   $2K account — so run **limited 2-entry from $2K, switch to full 8-entry ~$10K**
   (stop → change `--entries` → restart). **Don't pool TSL18+V817 on one small
   account** (combined DD −41.6%; TSL18 starves V817 via the shared concurrency
-  cap). VS2K is the V817 analogue of TS2K (Victor feed). See
+  cap). VS2K is the V817 analogue of TS2K (Victor feed). **TS3K**
+  (`cli/candidate_TS3K_small_account_tick.txt`, tag **TS3K**, *research/demo*) is
+  the **$3k** sibling of TS2K — identical T818/TSL18 feed+geometry and the SAME
+  equity-relative 2-entry gates (entries 2 / max-open 1 / daily 5% / risk-budget
+  zone 6%·single 4%), only `--initial-capital 3000`. $3k is STILL under the
+  full-8-entry floor (~$4k p95 → ~$8k worst stop), so it stays 2-entry (the extra
+  $1k vs TS2K is pure DD cushion, not more legs) until ~$10K. **Run ONE book per
+  small account — do NOT pool TS3K with a Victor book (V072/V116/V817)** on the
+  same $3k (shared-concurrency starvation; combined DD worse than either solo).
+  See
   `docs/SMALL_ACCOUNT_DEPLOYMENT.md`; profile any workbook with
   `tools/strategy_profile.py`, simulate both books pooled with
   `tools/sim_portfolio_small_account.py`.
