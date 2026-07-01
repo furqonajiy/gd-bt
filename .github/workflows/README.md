@@ -86,6 +86,25 @@ of their pinned version — a safe catch-all.
   `contents: write` and commits refreshed `reports/T818_2026*.xlsx` /
   `reports/V017_2026*.xlsx` back to the selected branch.
 
+- `july-v817-tsl18-backtests-staged-sweep.yml` — **July V817 TSL18 Backtests +
+  Staged Sweep**: **manual-only** (`workflow_dispatch`) runner for the July-2026
+  review cycle. Three jobs: **preflight-data** (fails fast if the July XAUUSD tick
+  archive is missing; verifies `cli/run.py` emits matched $50K + $5K commands for
+  the requested books), **backtests** (`cli/run.py <book> backtest` for **V817** and
+  **TSL18/T818**, so each authored $50K section runs a $50K + a `_5k` clone; the
+  open-ended 2026 sections pick up the July ticks), and **staged-sweep** (a
+  **bounded** TSL18 quality/collision sweep: `smoke` → `full_recent` (jun_jul,
+  July-inclusive) → `validate_top` (jan_jul), on the curated ~17-candidate grid —
+  never a cartesian product). Inputs: `strategies` (default `v817 tsl18`),
+  `run_backtests`, `run_sweep`, `commit_results`, `recent_window` (jun_jul),
+  `validation_window` (jan_jul), `score_objective`. With `commit_results=true`
+  (`contents: write`) it commits the backtest workbooks + sweep summaries + status
+  to `main` (commits marked `[skip ci]`); the bulky per-candidate workbooks stay in
+  the `july-tsl18-staged-quality-collision-sweep` artifact and the backtests upload
+  as `july-v817-tsl18-backtests-5k-50k`. It never uses `--execute`, never trades
+  live, and never promotes a strategy. V817 is the deliverable Victor book here —
+  distinct from V017 (Victor from 2026-07-01).
+
 - `backtest-and-full-sweep-runner.yml` — **Backtests + Full TSL18 Sweep**:
   artifact-only combined runner for the current review cycle. It first runs V017
   (Victor from 2026-07-01) and TSL18/T818 section 5/6 backtest reports at both

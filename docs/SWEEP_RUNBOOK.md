@@ -277,18 +277,34 @@ classifies each entry by **quality** and asks two new questions:
    baseline candidate (`allow_hedge` + `allow_all`) stays byte‑identical (parity).
 
 Run it from `tools/sweep_tsl18_quality_entry.py` (modes `smoke` / `full_june` /
-`validate_top`, with partial‑tick‑lifecycle, open/pending‑left, and
-collision‑metrics‑present exclusion gates, writing `results.csv` /
+**`full_recent`** / `validate_top`, with partial‑tick‑lifecycle, open/pending‑left,
+and collision‑metrics‑present exclusion gates, writing `results.csv` /
 `top_candidates.json` / `summary.md`; the real collision columns
 `opposite_signal_policy` / `same_side_overlap_policy` + the collision counters are
 in `results.csv`). The `--skeleton` flag emits the schema with placeholder rows and
 runs **no** backtests — use it (or `--mode smoke`) for a fast structural check.
-**The overnight sweep runs on Actions, not from this branch** (a push to `main`
-runs **smoke only**; the heavy `full_june` runs via `workflow_dispatch mode=full`).
-Promotion follows the same edge+OOS forward‑fit bar as every other strategy, and a
-collision‑policy winner stays **research‑only until a demo‑validated LIVE collision
-implementation exists** — live `auto` refuses non‑baseline collision flags today
-(`_validate_live_collision_policy`).
+
+**Windows (`--end‑date` EXCLUSIVE):** `smoke` (2026‑06‑27..07‑01), `full_june`
+(`june`, 06‑01..07‑01), **`full_recent`** (`jun_jul`, 2026‑06‑01..**08‑01** — June
+**+ July**), `validate_top` (`jan_jun` default). Override with `--window`:
+**`jun_jul`** / **`jan_jul`** (2026‑01..07 inclusive) extend the recent / validation
+windows onto the newly‑uploaded **July** tick data. `full_recent` reuses the SAME
+bounded curated grid as `full_june` (quality + collision + combined, ~17 candidates
+— never a cartesian product); the older windows are byte‑unchanged for backward
+compatibility. So the July staged sweep is `--mode full_recent --window jun_jul`
+then `--mode validate_top --window jan_jul --top-json …full_recent/top_candidates.json`.
+
+**The overnight/heavy sweep runs on Actions, not from a working branch.** For July
+use the manual‑only **`July V817 TSL18 Backtests + Staged Sweep`** workflow
+(`.github/workflows/july-v817-tsl18-backtests-staged-sweep.yml`): it runs V817 +
+TSL18/T818 50K/5K backtests then the bounded `smoke → full_recent → validate_top`
+sweep, and (with `commit_results=true`) commits backtest workbooks + sweep summaries
+to `main`. (The older `tsl18-quality-entry-overnight-sweep.yml` still runs smoke on a
+`main` push / `full_june` via `workflow_dispatch mode=full`.) Promotion follows the
+same edge+OOS forward‑fit bar as every other strategy, and a collision‑policy winner
+stays **research‑only until a demo‑validated LIVE collision implementation exists** —
+live `auto` refuses non‑baseline collision flags today
+(`_validate_live_collision_policy`). Never `--execute`, never promote to live.
 
 ---
 

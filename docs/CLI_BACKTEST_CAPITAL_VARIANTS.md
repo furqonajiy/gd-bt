@@ -27,7 +27,33 @@ Example:
 
 ```text
 python cli/run.py tsl18 backtest
+python cli/run.py v817 backtest       # V817 Victor trailing ($50K book)
+python cli/run.py t818 backtest       # t818 = current TSL18 alias
 ```
 
-This prints or runs the existing TSL18 backtest sections, with each 50K report
-followed by the matching 5K report.
+This prints or runs the existing backtest sections, with each 50K report followed
+by the matching 5K report. Use `--print` to preview the commands without running.
+
+A book authored at a **non-$50K** capital is a deliberate sizing choice and is
+**left untouched** — no 5K clone, no `_5k` output dir (e.g. the Victor V116 book at
+`--initial-capital 12000`). The expansion only mirrors a $50K book down to $5K; it
+never rewrites a strategy's authored capital. Pinned by
+`tests/test_cli_run_launcher.py` (`test_backtest_keyword_prints_50k_and_5k_variants`
+on V817, `test_non_50k_book_backtest_is_not_expanded` on V116) and
+`tests/test_cli_run_capital_variants.py`.
+
+## July tick data + automation
+
+The 2026 sections (5/6) use `tools/backtest_hybrid.py` with an open-ended
+`--start-date` and a glob `--ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv`, so once the
+**July** tick archive is committed they extend through July with **no snapshot
+edit** — the month/date windows are unchanged.
+
+The **`July V817 TSL18 Backtests + Staged Sweep`** workflow
+(`.github/workflows/july-v817-tsl18-backtests-staged-sweep.yml`, **manual-only**)
+runs `python cli/run.py <book> backtest` for **V817** and **TSL18/T818** to produce
+both the $50K and $5K reports from the July tick data, then a **bounded** staged
+TSL18 quality/collision sweep (`smoke` → `full_recent` (jun_jul) → `validate_top`
+(jan_jul)). Dispatched with `commit_results=true` it commits the backtest workbooks
++ sweep summaries back to `main`. It never uses `--execute`, never trades live, and
+never promotes a strategy.

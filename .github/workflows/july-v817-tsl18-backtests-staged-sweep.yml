@@ -1,0 +1,364 @@
+name: July V817 TSL18 Backtests + Staged Sweep
+
+# Manual-only (workflow_dispatch) runner for the July-2026 review cycle. It:
+#   1. preflight-data  — fails fast if the uploaded July XAUUSD tick data is
+#      missing, and verifies cli/run.py emits BOTH the $50K and $5K backtest
+#      commands for the requested books.
+#   2. backtests       — runs V817 and TSL18/T818 backtests via `cli/run.py
+#      <book> backtest`, which already expands each authored $50K command into a
+#      $50K run + a $5K clone (same dates/window, output dir suffixed `_5k`). The
+#      2026 sections (5/6) are open-ended, so they pick up the July tick archive.
+#   3. staged-sweep    — a BOUNDED (not brute-force) TSL18 quality + collision
+#      staged sweep: smoke -> full_recent (jun_jul, July-inclusive) -> validate_top
+#      (jan_jul). Uses the curated 17-candidate grid, never a huge cartesian product.
+#
+# Manual-only by design so the heavy jobs never run on a merge. It NEVER trades
+# live, NEVER uses --execute, and NEVER promotes a strategy. When dispatched with
+# commit_results=true it commits the backtest workbooks + sweep summaries + status
+# back to main (commits are marked [skip ci] so they do not trigger other jobs).
+
+on:
+  workflow_dispatch:
+    inputs:
+      strategies:
+        description: "Backtest strategy aliases (space-separated; e.g. 'v817 tsl18' or 'v817 t818')"
+        required: false
+        default: "v817 tsl18"
+      run_backtests:
+        description: "Run V817 and TSL18/T818 50K + 5K backtests"
+        required: false
+        default: "true"
+      run_sweep:
+        description: "Run staged TSL18 quality/collision sweep"
+        required: false
+        default: "true"
+      commit_results:
+        description: "Commit generated reports/results back to main"
+        required: false
+        default: "true"
+      recent_window:
+        description: "Recent sweep window (full_recent)"
+        required: false
+        default: "jun_jul"
+      validation_window:
+        description: "Validation sweep window (validate_top)"
+        required: false
+        default: "jan_jul"
+      score_objective:
+        description: "Sweep score objective"
+        required: false
+        default: "edge_plus_rebate_guarded"
+
+concurrency:
+  group: july-v817-tsl18-backtests-staged-sweep
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  # Catch-all so any JS action still shipping a Node-20 major runs on Node 24.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  STRATEGIES: ${{ github.event.inputs.strategies || 'v817 tsl18' }}
+  RUN_BACKTESTS: ${{ github.event.inputs.run_backtests || 'true' }}
+  RUN_SWEEP: ${{ github.event.inputs.run_sweep || 'true' }}
+  COMMIT_RESULTS: ${{ github.event.inputs.commit_results || 'true' }}
+  RECENT_WINDOW: ${{ github.event.inputs.recent_window || 'jun_jul' }}
+  VALIDATION_WINDOW: ${{ github.event.inputs.validation_window || 'jan_jul' }}
+  SCORE_OBJECTIVE: ${{ github.event.inputs.score_objective || 'edge_plus_rebate_guarded' }}
+
+jobs:
+  preflight-data:
+    name: Preflight — July data + CLI 50K/5K
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install requirements
+        run: pip install -r requirements.txt
+
+      - name: Detect July data + verify CLI 50K/5K
+        run: |
+          set -uo pipefail
+          mkdir -p reports/JULY_V817_TSL18_SWEEP_STATUS logs/july_backtests logs/july_sweep
+          STATUS=reports/JULY_V817_TSL18_SWEEP_STATUS/summary.md
+          {
+            echo "# July V817 + TSL18 Backtests and Staged Sweep"
+            echo
+            echo "- SHA: \`${GITHUB_SHA}\`"
+            echo "- Run: \`${GITHUB_RUN_ID}\`"
+            echo "- Strategies: \`${STRATEGIES}\`"
+            echo "- run_backtests=\`${RUN_BACKTESTS}\`  run_sweep=\`${RUN_SWEEP}\`  commit_results=\`${COMMIT_RESULTS}\`"
+            echo "- recent_window=\`${RECENT_WINDOW}\`  validation_window=\`${VALIDATION_WINDOW}\`  score_objective=\`${SCORE_OBJECTIVE}\`"
+            echo
+            echo "## Detected July data"
+            find data -maxdepth 5 -type f | sort | grep -Ei 'XAUUSD.*(TICK|M1).*(202607|2026-07|JUL|July|jul)' || true
+          } > "$STATUS"
+
+          JULY_TICKS="$(find data -maxdepth 5 -type f | grep -Ei 'XAUUSD.*TICK.*(202607|2026_07|2026-07|JUL|July|jul)' || true)"
+          if [ -z "$JULY_TICKS" ]; then
+            echo "No July XAUUSD tick file found. Upload/commit July tick data first." | tee -a "$STATUS"
+            exit 1
+          fi
+          echo "July tick data present:" | tee -a "$STATUS"
+          echo "$JULY_TICKS" | sed 's#^#- #' | tee -a "$STATUS"
+
+          python -m py_compile cli/run.py
+          {
+            echo
+            echo "## CLI 50K/5K verification"
+          } >> "$STATUS"
+          fail=0
+          for s in $STRATEGIES; do
+            python cli/run.py "$s" backtest --print > "/tmp/${s}_print.txt" 2>&1 || { echo "- $s: cli print FAILED" >> "$STATUS"; fail=1; continue; }
+            has50k=$(grep -cE -- '--initial-capital 50000( |$)' "/tmp/${s}_print.txt" || true)
+            has5k=$(grep -cE -- '--initial-capital 5000( |$)' "/tmp/${s}_print.txt" || true)
+            has5kdir=$(grep -c -- '_5k' "/tmp/${s}_print.txt" || true)
+            echo "- $s: 50K=${has50k} 5K=${has5k} _5k_dirs=${has5kdir}" >> "$STATUS"
+            if [ "$has50k" -lt 1 ] || [ "$has5k" -lt 1 ] || [ "$has5kdir" -lt 1 ] || [ "$has50k" != "$has5k" ]; then
+              echo "  ! $s did not emit matched 50K + 5K variants" >> "$STATUS"; fail=1
+            fi
+          done
+          cat "$STATUS"
+          if [ "$fail" -ne 0 ]; then echo "Preflight FAILED"; exit 1; fi
+          echo "Preflight OK"
+
+      - name: Upload preflight status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: july-preflight-status
+          path: reports/JULY_V817_TSL18_SWEEP_STATUS/**
+          if-no-files-found: warn
+
+  backtests:
+    name: V817 + TSL18/T818 backtests at 50K and 5K
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    needs: preflight-data
+    if: needs.preflight-data.result == 'success' && github.event.inputs.run_backtests != 'false'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install requirements
+        run: pip install -r requirements.txt
+
+      - name: Run V817 + TSL18/T818 50K and 5K backtests
+        run: |
+          set -uo pipefail
+          mkdir -p reports/JULY_V817_TSL18_SWEEP_STATUS logs/july_backtests
+          STATUS=reports/JULY_V817_TSL18_SWEEP_STATUS/backtests.md
+          {
+            echo "# July backtests (50K + 5K) — $(TZ='Asia/Jakarta' date '+%Y-%m-%d %H:%M WIB' 2>/dev/null || echo now)"
+            echo
+            echo "- Run: \`${GITHUB_RUN_ID}\`  Strategies: \`${STRATEGIES}\`"
+            echo
+          } > "$STATUS"
+          for s in $STRATEGIES; do
+            echo "### Strategy: $s" >> "$STATUS"
+            python cli/run.py "$s" backtest --print > "logs/july_backtests/${s}_backtest_commands.txt" 2>&1 || true
+            if ! grep -qE -- '--initial-capital 5000( |$)' "logs/july_backtests/${s}_backtest_commands.txt"; then
+              echo "- $s: did NOT emit a 5K variant — skipping (fix the snapshot)" >> "$STATUS"
+              echo "$s emitted no 5K variant" >&2
+              continue
+            fi
+            echo "===== running: cli/run.py $s backtest ====="
+            set +e
+            python cli/run.py "$s" backtest > "logs/july_backtests/${s}_backtest.log" 2>&1
+            rc=$?
+            set -e
+            tail -60 "logs/july_backtests/${s}_backtest.log" || true
+            if [ "$rc" -eq 0 ]; then
+              echo "- $s: backtest OK (50K + 5K)" >> "$STATUS"
+            else
+              echo "- $s: backtest exited $rc (see logs/july_backtests/${s}_backtest.log)" >> "$STATUS"
+            fi
+          done
+          {
+            echo
+            echo "### Backtest report outputs"
+            find reports -maxdepth 1 \( -iname 'V817_2*' -o -iname 'TSL18_2*' -o -iname 'T818_2*' \) | sort | sed 's#^#- #'
+          } >> "$STATUS"
+          cat "$STATUS"
+
+      - name: Upload backtest artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: july-v817-tsl18-backtests-5k-50k
+          path: |
+            reports/V817_2*
+            reports/TSL18_2*
+            reports/T818_2*
+            reports/JULY_V817_TSL18_SWEEP_STATUS/**
+            logs/july_backtests/**
+          if-no-files-found: warn
+
+      - name: Commit backtest results to main
+        if: always() && github.event.inputs.commit_results != 'false'
+        run: |
+          set -uo pipefail
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+          git add reports/V817_2* reports/TSL18_2* reports/T818_2* reports/JULY_V817_TSL18_SWEEP_STATUS/ 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No backtest result changes to commit."
+          else
+            git commit -m "report: add July V817 and TSL18 5K/50K backtests [skip ci]"
+            for i in 1 2 3 4; do
+              git pull --rebase origin main && git push origin HEAD:main && break
+              echo "push retry $i"; sleep $((2 ** i))
+            done
+          fi
+
+  staged-sweep:
+    name: Staged TSL18 quality + collision sweep (bounded)
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    needs: [preflight-data, backtests]
+    if: >
+      always()
+      && needs.preflight-data.result == 'success'
+      && (needs.backtests.result == 'success' || needs.backtests.result == 'skipped')
+      && github.event.inputs.run_sweep != 'false'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install requirements
+        run: pip install -r requirements.txt
+
+      - name: Preflight compile + targeted tests
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            tools/sweep_tsl18_quality_entry.py \
+            tools/backtest_hybrid.py \
+            tools/backtest_explicit.py \
+            tools/auto_explicit.py \
+            trading/engine/strategy/backtest.py \
+            trading/engine/strategy/collision_policy.py
+          python -m pytest -q tests/test_sweep_tsl18_quality_entry.py
+          python -m pytest -q tests/test_backtest_hybrid_collision_policy.py
+          python -m pytest -q tests/test_auto_explicit_collision_live_guard.py
+          python -m pytest -q tests/test_collision_policy.py
+          python -m pytest -q tests/test_backtest_hybrid_parity.py
+
+      - name: Smoke sweep
+        run: |
+          set -uo pipefail
+          mkdir -p logs/july_sweep
+          python tools/sweep_tsl18_quality_entry.py \
+            --mode smoke \
+            --out-root reports \
+            --require-full-tick-lifecycle \
+            --exclude-open-or-pending \
+            --score-objective "$SCORE_OBJECTIVE" 2>&1 | tee logs/july_sweep/smoke.log
+
+      - name: Full recent sweep (June + July)
+        run: |
+          set -uo pipefail
+          python tools/sweep_tsl18_quality_entry.py \
+            --mode full_recent \
+            --window "$RECENT_WINDOW" \
+            --out-root reports \
+            --charts data/XAUUSD_M1_202606*_ELEV8.csv data/XAUUSD_M1_202607*_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_202606*_ELEV8.csv data/ticks/XAUUSD_TICK_202607*_ELEV8.csv \
+            --gen-start 2026-06-01 \
+            --require-full-tick-lifecycle \
+            --exclude-open-or-pending \
+            --score-objective "$SCORE_OBJECTIVE" 2>&1 | tee logs/july_sweep/full_recent.log
+
+      - name: Validation sweep (Jan-Jul)
+        run: |
+          set -uo pipefail
+          TOPJSON=reports/TSL18_QUALITY_full_recent/top_candidates.json
+          if [ ! -f "$TOPJSON" ]; then
+            echo "No top_candidates.json from full_recent; skipping validate_top." | tee logs/july_sweep/validate_top.log
+            exit 0
+          fi
+          python tools/sweep_tsl18_quality_entry.py \
+            --mode validate_top \
+            --window "$VALIDATION_WINDOW" \
+            --top-json "$TOPJSON" \
+            --out-root reports \
+            --charts data/XAUUSD_M1_20260[1-7]*_ELEV8.csv \
+            --ticks data/ticks/XAUUSD_TICK_20260[1-7]*_ELEV8.csv \
+            --gen-start 2026-01-01 \
+            --require-full-tick-lifecycle \
+            --exclude-open-or-pending \
+            --score-objective "$SCORE_OBJECTIVE" 2>&1 | tee logs/july_sweep/validate_top.log
+
+      - name: Build sweep status summary
+        if: always()
+        run: |
+          set -uo pipefail
+          mkdir -p reports/JULY_V817_TSL18_SWEEP_STATUS
+          STATUS=reports/JULY_V817_TSL18_SWEEP_STATUS/sweep.md
+          {
+            echo "# July staged TSL18 quality + collision sweep — status"
+            echo
+            echo "- Run: \`${GITHUB_RUN_ID}\`  objective: \`${SCORE_OBJECTIVE}\`"
+            echo "- recent window: \`${RECENT_WINDOW}\`  validation window: \`${VALIDATION_WINDOW}\`"
+            echo "- Bounded curated grid (quality + collision + combined), NOT a cartesian product."
+            echo
+            for stage in smoke full_recent validate_top; do
+              echo "## ${stage}"
+              if [ -f "reports/TSL18_QUALITY_${stage}/summary.md" ]; then
+                cat "reports/TSL18_QUALITY_${stage}/summary.md"
+              else
+                echo "_missing or skipped: reports/TSL18_QUALITY_${stage}/summary.md_"
+              fi
+              echo
+            done
+          } > "$STATUS"
+          cat "$STATUS"
+
+      - name: Upload staged sweep artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: july-tsl18-staged-quality-collision-sweep
+          path: |
+            reports/TSL18_QUALITY_smoke/**
+            reports/TSL18_QUALITY_full_recent/**
+            reports/TSL18_QUALITY_validate_top/**
+            reports/JULY_V817_TSL18_SWEEP_STATUS/**
+            logs/july_sweep/**
+          if-no-files-found: warn
+
+      - name: Commit sweep summaries to main
+        if: always() && github.event.inputs.commit_results != 'false'
+        run: |
+          set -uo pipefail
+          git config user.name "C - Furqon Aji Yudhistira"
+          git config user.email "furqonajiy@gmail.com"
+          # Commit the reviewable summaries (results.csv / top_candidates.json /
+          # summary.md) + status; the bulky per-candidate workbooks stay in the
+          # artifact only, so main stays clean.
+          for stage in smoke full_recent validate_top; do
+            git add "reports/TSL18_QUALITY_${stage}/results.csv" \
+                    "reports/TSL18_QUALITY_${stage}/top_candidates.json" \
+                    "reports/TSL18_QUALITY_${stage}/summary.md" 2>/dev/null || true
+          done
+          git add reports/JULY_V817_TSL18_SWEEP_STATUS/ 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No sweep summary changes to commit."
+          else
+            git commit -m "report: add July staged TSL18 sweep summaries [skip ci]"
+            for i in 1 2 3 4; do
+              git pull --rebase origin main && git push origin HEAD:main && break
+              echo "push retry $i"; sleep $((2 ** i))
+            done
+          fi
