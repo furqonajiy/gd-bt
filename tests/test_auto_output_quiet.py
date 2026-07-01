@@ -409,7 +409,7 @@ def test_auto_expired_skip_dedupes_across_minute_change(tmp_path, monkeypatch, c
     assert run_once(datetime(2026, 6, 2, 6, 1)) == 0  # 'now' advances a minute
 
     captured = capsys.readouterr()
-    assert captured.out.count("pending window already closed") == 1
+    assert captured.out.count("entry window closed") == 1
 
 def test_auto_reopen_tracked_partial_survives_same_cycle_prune(tmp_path, monkeypatch):
     """A trailing partial ladder (placed=0) whose replay still holds OPEN legs is
