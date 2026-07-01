@@ -3,7 +3,7 @@ name: Backtests + Full TSL18 Sweep
 # One-shot/or manual runner for the current TSL18 review cycle.
 #
 # It does two things in order:
-# 1. Regenerates V817 + TSL18/T818 2026 TICK backtest workbooks for both $50K and $5K.
+# 1. Regenerates V017 + TSL18/T818 2026 TICK backtest workbooks for both $50K and $5K.
 # 2. Runs the full TSL18 quality-entry + collision sweep, including Jan-Jun validation.
 #
 # Artifact-only: this workflow does not trade live, does not promote a strategy,
@@ -19,15 +19,15 @@ on:
   workflow_dispatch:
     inputs:
       strategies:
-        description: "Backtest books from cli/run.py; T818 is the current TSL18 alias"
+        description: "Backtest books from cli/run.py; T818 is the current TSL18 alias; V017 is Victor from 2026-07-01"
         required: false
-        default: "t818 v817"
+        default: "t818 v017"
       sections:
-        description: "Backtest sections: 5=June 2026, 6=Jan-Jun 2026"
+        description: "Backtest sections: 5/6; V017 starts 2026-07-01"
         required: false
         default: "5 6"
       run_backtests:
-        description: "Run V817 + TSL18/T818 5K/50K reports"
+        description: "Run V017 + TSL18/T818 5K/50K reports"
         required: false
         default: "true"
       run_full_sweep:
@@ -53,7 +53,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  STRATEGIES: ${{ github.event.inputs.strategies || 't818 v817' }}
+  STRATEGIES: ${{ github.event.inputs.strategies || 't818 v017' }}
   SECTIONS: ${{ github.event.inputs.sections || '5 6' }}
   RUN_BACKTESTS: ${{ github.event.inputs.run_backtests || 'true' }}
   RUN_FULL_SWEEP: ${{ github.event.inputs.run_full_sweep || 'true' }}
@@ -61,7 +61,7 @@ env:
 
 jobs:
   backtests:
-    name: V817 + TSL18/T818 backtests at 50K and 5K
+    name: V017 + TSL18/T818 backtests at 50K and 5K
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
@@ -91,7 +91,7 @@ jobs:
             echo
           } > "$STATUS"
 
-      - name: Run V817 + TSL18/T818 50K and 5K backtests
+      - name: Run V017 + TSL18/T818 50K and 5K backtests
         if: env.RUN_BACKTESTS == 'true'
         run: |
           set -euo pipefail
@@ -127,7 +127,7 @@ jobs:
           {
             echo
             echo "### Backtest report files"
-            find reports -maxdepth 1 -type f \( -iname 'T818_2026*.xlsx' -o -iname 'V817_2026*.xlsx' -o -iname 'TSL18_2026*.xlsx' \) | sort | sed 's#^#- #'
+            find reports -maxdepth 1 -type f \( -iname 'T818_2026*.xlsx' -o -iname 'V017_2026*.xlsx' -o -iname 'TSL18_2026*.xlsx' \) | sort | sed 's#^#- #'
             echo
           } >> "$STATUS"
 
@@ -135,11 +135,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: v817-tsl18-backtest-reports-5k-50k
+          name: v017-tsl18-backtest-reports-5k-50k
           path: |
             reports/T818_2026*.xlsx
             reports/TSL18_2026*.xlsx
-            reports/V817_2026*.xlsx
+            reports/V017_2026*.xlsx
             logs/backtests/**
             reports/COMBINED_BACKTEST_SWEEP_STATUS/**
           if-no-files-found: warn
