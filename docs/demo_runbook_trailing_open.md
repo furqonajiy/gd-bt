@@ -17,7 +17,16 @@ trailing_open 1.0 | trailing_close 2.0   (both ≥ broker stops_level 0.40 → v
 sizing risk | risk 0.02 | bonus 0
 ```
 
-Backtest reference (2025–26, fixed-lot, no-bonus): **+$2,898 net, 79.9% win, 24.9% concurrent DD, $162/closed-lot.** The demo is judged against the *per-signal behaviour* behind those numbers, not the headline $.
+**Runner-cap note.** `trailing_close 2.0 > 0`, so under the current
+`--runner-final-cap auto` default this config is an **uncapped runner**:
+`final_target TP3` is only a reference level and the trailing-close SL rides past
+it (bounded by `max_hold 45`); the `--runner-after-tp3 false` / `--tp3-lock-target
+TP2` flags in the commands below no longer gate the exit. The reference stats below
+were measured **capped at TP3** — to reproduce them, add **`--runner-final-cap
+tp3`** to the Section 3 (runner) and Section 5b (parity backtest) commands (keep
+both identical so live↔backtest parity holds).
+
+Backtest reference (2025–26, fixed-lot, no-bonus, **capped at TP3**): **+$2,898 net, 79.9% win, 24.9% concurrent DD, $162/closed-lot.** The demo is judged against the *per-signal behaviour* behind those numbers, not the headline $.
 
 ---
 
