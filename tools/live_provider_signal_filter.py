@@ -20,7 +20,7 @@ import re
 import sys
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from trading.engine.strategy.provider_filter import decide_provider_signal_filter  # noqa: E402
+from tools.victor_rr_rewrite import DEFAULT_MAX_RISK, rewrite_tps  # noqa: E402
 
 HEADER_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\s+GMT\s*([+-]\d+)")
 SIGNAL_RE = re.compile(
@@ -182,8 +183,26 @@ def write_filtered(signals: list[ProviderSignal], output_path: Path) -> None:
     tmp.replace(output_path)
 
 
-def run_once(input_path: Path, output_path: Path, preset: str) -> tuple[int, int, list[ProviderSignal]]:
+def rewrite_signal_rr(sig: ProviderSignal, rr1: float, rr2: float, rr3: float,
+                      max_risk: float) -> ProviderSignal:
+    """Return a copy of ``sig`` with TP1/TP2/TP3 rewritten to the ladder via the
+    SHARED ``victor_rr_rewrite`` core (byte-identical to the backtest feed the
+    generator emits -- the V073A live/backtest parity contract). A provider
+    SL-typo line (risk <= 0 or > ``max_risk``) is returned unchanged."""
+    tps = rewrite_tps(sig.side, sig.r1, sig.r2, sig.sl, rr1, rr2, rr3,
+                      max_risk=max_risk)
+    if tps is None:
+        return sig
+    return replace(sig, tp1=tps[0], tp2=tps[1], tp3=tps[2])
+
+
+def run_once(input_path: Path, output_path: Path, preset: str,
+             rewrite: tuple[float, float, float, float] | None = None
+             ) -> tuple[int, int, list[ProviderSignal]]:
     kept, total = parse_and_filter(input_path, preset)
+    if rewrite is not None:
+        rr1, rr2, rr3, max_risk = rewrite
+        kept = [rewrite_signal_rr(s, rr1, rr2, rr3, max_risk) for s in kept]
     write_filtered(kept, output_path)
     return total, len(kept), kept
 
@@ -200,6 +219,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="In watch mode, also print existing kept signals at startup. Default is quiet startup.",
     )
+    # Corrected-R:R rewrite (opt-in; all default 0 = OFF -> feed byte-identical,
+    # so existing Victor books are unaffected). When set, each kept signal's
+    # TP1/TP2/TP3 is rewritten to the ladder off the POSTED entry-edge/SL via the
+    # shared victor_rr_rewrite core (same math as tools/generate_victor_rr_feed.py,
+    # so this live feed == the backtest feed). victor_signals.txt is never touched.
+    # This is the V073A live path (ladder 1.5/3.0/5.0). rr2/rr3 default to rr1's
+    # value only to satisfy the "0<rr1<rr2<rr3" guard when rr1 alone is passed;
+    # normal use passes all three.
+    p.add_argument("--rewrite-rr1", type=float, default=0.0,
+                   help="TP1 = rr1 x |entry_edge-SL| (0 = no rewrite; needs rr2/rr3 too).")
+    p.add_argument("--rewrite-rr2", type=float, default=0.0, help="TP2 ladder multiple.")
+    p.add_argument("--rewrite-rr3", type=float, default=0.0, help="TP3 ladder multiple.")
+    p.add_argument("--rewrite-max-risk", type=float, default=DEFAULT_MAX_RISK,
+                   help="Leave a signal's TPs as posted when |entry_edge-SL| exceeds "
+                        "this (provider SL typos; default matches the backtest feed).")
     return p
 
 
@@ -213,10 +247,22 @@ def main(argv: list[str] | None = None) -> int:
     input_path = Path(args.input)
     output_path = Path(args.output)
 
+    rewrite: tuple[float, float, float, float] | None = None
+    if args.rewrite_rr1 or args.rewrite_rr2 or args.rewrite_rr3:
+        if not (0.0 < args.rewrite_rr1 < args.rewrite_rr2 < args.rewrite_rr3):
+            raise SystemExit(
+                "--rewrite-rr* must satisfy 0 < rr1 < rr2 < rr3 (pass all three); "
+                f"got {args.rewrite_rr1}/{args.rewrite_rr2}/{args.rewrite_rr3}")
+        rewrite = (args.rewrite_rr1, args.rewrite_rr2, args.rewrite_rr3,
+                   args.rewrite_max_risk)
+    rr_note = (f" | R:R rewrite {rewrite[0]}/{rewrite[1]}/{rewrite[2]}"
+               f" (max-risk {rewrite[3]})" if rewrite else "")
+
     if not args.watch:
-        total, kept_count, _kept = run_once(input_path, output_path, args.preset)
+        total, kept_count, _kept = run_once(input_path, output_path, args.preset, rewrite)
         print(
-            f"[{_stamp()}] [provider-filter] input={total:,} kept={kept_count:,} preset={args.preset} output={output_path}",
+            f"[{_stamp()}] [provider-filter] input={total:,} kept={kept_count:,} "
+            f"preset={args.preset} output={output_path}{rr_note}",
             flush=True,
         )
         return 0
@@ -225,14 +271,14 @@ def main(argv: list[str] | None = None) -> int:
     last_mtime: int | None = None
     first_run = True
     print(
-        f"[{_stamp()}] [provider-filter] watching {input_path} -> {output_path} | preset={args.preset} | quiet until a new kept signal appears",
+        f"[{_stamp()}] [provider-filter] watching {input_path} -> {output_path} | preset={args.preset}{rr_note} | quiet until a new kept signal appears",
         flush=True,
     )
 
     while True:
         current_mtime = _input_mtime_ns(input_path)
         if first_run or current_mtime != last_mtime:
-            total, kept_count, kept = run_once(input_path, output_path, args.preset)
+            total, kept_count, kept = run_once(input_path, output_path, args.preset, rewrite)
             kept_keys = {_signal_key(sig) for sig in kept}
 
             if first_run:

@@ -30,6 +30,7 @@ ALIASES = {
     # TSL18 (self-scalper), live $3K book TS3K. Everything else was removed --
     # recover any pruned book from git history.
     "v072": "candidate_V072_victor_trailing_combo",
+    "v073a": "candidate_V073A_victor_rr_trailing",
     "tsl18": "candidate_TSL18_trailing_tick",
     "ts3k": "candidate_TS3K_small_account_tick",
     "resync": "resync_m1_from_2020",
