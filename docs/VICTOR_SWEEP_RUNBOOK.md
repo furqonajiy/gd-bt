@@ -227,3 +227,19 @@ loop, not a one-off:
    `--lock-tp1/tp2-exit-slippage`) to the remeasured values.
 5. **Re-sweep** with the calibrated slippage and redeploy. Repeat -- each pass the
    slippage (and the chosen champion) gets more trustworthy.
+
+## Corrected-R:R ladder sweep (VRR)
+
+Victor's posted TP1 R:R degraded to ~0.5-0.67 outside his Feb-Jun 2026 era. The
+VRR study (`reports/VRR_LADDER_STUDY/summary.md`) bakes a consistent asymmetric
+ladder into a DERIVED feed via `tools/generate_victor_rr_feed.py` (TPk =
+entry_edge +/- rrk * |edge-SL|, nominal; SL-typo lines kept verbatim;
+`victor_signals.txt` stays the pristine as-posted record) and A/Bs it against
+the as-posted feed on fixed geometry. Three-era verdict: ladders win R4-2026 +
+R3-2025, INVERT in R2-2024 -> adoption is REGIME-SCOPED (trending regimes only).
+`victor-rr-ladder-geometry-sweep.yml` (manual) then re-tunes geometry UNDER the
+chosen ladder via `sweep_victor_trailing_geometry.py`, with the ELEV8 broker
+floor enforced (`--min-trailing-open/--min-trailing-close 0.5` -- a resting STOP
+inside SYMBOL_TRADE_STOPS_LEVEL ~0.4 is rejected retcode 10015; the tick mock
+does not model that, so sub-floor cells are live-infeasible and are DROPPED with
+a logged reason, never silently).

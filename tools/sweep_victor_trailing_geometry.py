@@ -452,6 +452,17 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--exclude-open-or-pending", "--fail-on-open-or-pending",
                     dest="exclude_open_or_pending", action="store_true",
                     help="exclude candidates that left positions OPEN/PENDING at window end.")
+    # Broker-feasibility floor: ELEV8 rejects a resting STOP closer than
+    # SYMBOL_TRADE_STOPS_LEVEL (~0.4) to price (retcode 10015), and the tick mock
+    # does NOT enforce that floor -- a sub-floor trailing distance backtests fills
+    # a real account cannot take (operator rule: trailing-open 0.5, never 0.25).
+    # Default 0.0 = keep every candidate, so existing runs are byte-identical.
+    ap.add_argument("--min-trailing-open", type=float, default=0.0,
+                    help="drop candidates whose trailing_open_distance is below "
+                         "this broker floor (0 = keep all).")
+    ap.add_argument("--min-trailing-close", type=float, default=0.0,
+                    help="drop candidates whose trailing_close_distance is below "
+                         "this broker floor (0 = keep all).")
     return ap
 
 
@@ -472,6 +483,23 @@ def main(argv: list[str] | None = None) -> int:
         ]
     else:
         candidates = build_candidate_grid(args.mode)
+
+    # Broker-feasibility floor (see --min-trailing-open/--min-trailing-close):
+    # dropped candidates are LOGGED, never silently skipped.
+    if args.min_trailing_open > 0.0 or args.min_trailing_close > 0.0:
+        feasible = []
+        for cand in candidates:
+            if cand["trailing_open_distance"] < args.min_trailing_open:
+                print(f"[victor-sweep] DROP {cand['label']}: trailing_open "
+                      f"{cand['trailing_open_distance']} < broker floor "
+                      f"{args.min_trailing_open}", flush=True)
+            elif cand["trailing_close_distance"] < args.min_trailing_close:
+                print(f"[victor-sweep] DROP {cand['label']}: trailing_close "
+                      f"{cand['trailing_close_distance']} < broker floor "
+                      f"{args.min_trailing_close}", flush=True)
+            else:
+                feasible.append(cand)
+        candidates = feasible
 
     rows: list[dict] = []
     for cand in candidates:
