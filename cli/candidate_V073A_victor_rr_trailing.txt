@@ -1,5 +1,6 @@
 # =========================================================================
-# VICTOR TRAILING + CORRECTED R:R -- V073A  | tag V073A   *** RESEARCH / DEMO ***
+# VICTOR TRAILING + CORRECTED R:R -- V073A  | tag V073A
+#                                    *** DEPLOYED -- VICTOR CHAMPION (2026-07-02) ***
 #
 # V073A = V072's combined trailing geometry, fed a CORRECTED-R:R Victor feed.
 # Victor's posted TP1 risk:reward collapsed to ~0.5-0.67 outside his Feb-Jun
@@ -39,10 +40,13 @@
 #   reports/V073A_2026* . forensic_v073a.jsonl / notifications_v073a.jsonl /
 #   console_v073a.txt.
 #
-# RESEARCH / DEMO-VALIDATE ONLY. The 2026 net edge is ~flat (the win is DD, not
-# raw P&L); the 2025 gain is in-sample M1; and R2 inverts. Forward-validate on a
-# clean full-tick window + DEMO (side-by-side vs V072) before any live size. Do
-# NOT use --execute from this snapshot without demo validation.
+# DEPLOYED as the Victor champion 2026-07-02 by operator decision (superseding
+# V072, which is retained as the as-posted / R2-grind fallback -- see the regime
+# rule above). Add --execute to section 3 to trade live. Caveats the operator has
+# accepted: the 2026 net edge is ~flat (the win is DD, not raw P&L), the 2025
+# gain is in-sample M1, and R2 inverts (hence the regime rule). Operator is
+# monitoring live results; if a clean full-tick / demo read or the regime turns,
+# revert to V072.
 # =========================================================================
 
 # ===== 1. TELEGRAM LISTENER =====
