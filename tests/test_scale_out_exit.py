@@ -273,12 +273,29 @@ def test_auto_explicit_scale_out_flows_into_config():
 
 
 def test_explicit_scale_out_defaults_off_when_omitted():
+    # A trailing-close strategy now defaults to the uncapped runner
+    # (--runner-final-cap auto -> runner_no_final_cap when trailing-close is on),
+    # which is a scale-out mode. Force the cap back on (tp3) and, with no scale-out
+    # flags, scale-out stays off.
+    m = _load("backtest_explicit")
+    argv = ["--signals", "s.txt", "--charts", "c.csv", "--output-dir", "out",
+            "--max-drawdown-limit-pct", "40", "--progress-interval-seconds", "0",
+            *_COMMON_STRATEGY, "--runner-final-cap", "tp3"]
+    cfg = m.config_from_args(m.build_parser().parse_args(argv))
+    assert _scale_out_mode(cfg) is False
+    assert cfg.runner_no_final_cap is False
+
+
+def test_trailing_close_defaults_to_uncapped_runner():
+    # The key contract: a trailing-close strategy rides past the final target by
+    # default (no --runner-final-cap needed) -- trailing-close IS the exit.
     m = _load("backtest_explicit")
     argv = ["--signals", "s.txt", "--charts", "c.csv", "--output-dir", "out",
             "--max-drawdown-limit-pct", "40", "--progress-interval-seconds", "0",
             *_COMMON_STRATEGY]
     cfg = m.config_from_args(m.build_parser().parse_args(argv))
-    assert _scale_out_mode(cfg) is False
+    assert cfg.runner_no_final_cap is True
+    assert _scale_out_mode(cfg) is True
 
 
 def test_trailing_close_after_stage_out_of_range_rejected():
