@@ -29,7 +29,7 @@ python tools/backtest_hybrid.py `
   --profit-lock-mode tp_levels --bep-trigger-distance 3 `
   --tp1-lock-fraction 0.5 --tp2-lock-target TP1 `
   --runner-after-tp3 false `
-  --trailing-open-distance 0.2 --trailing-close-distance 0.5 `
+  --trailing-open-distance 0.5 --trailing-close-distance 0.5 `
   --lock-tp1-exit-slippage 2.0 --lock-tp2-exit-slippage 1.0 `
   --output-dir reports/TR05_demo `
   --initial-capital 1000
