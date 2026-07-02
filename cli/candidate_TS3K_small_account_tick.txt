@@ -29,7 +29,9 @@
 #     --daily-loss-limit-pct     (none) -> 0.10 (stop NEW signals after -10%/day)
 #     --initial-capital          50000 -> 3000
 #     (risk-budget gate not used: a 1-leg zone cannot over-risk the ladder)
-#   OTHERWISE IDENTICAL to TSL18 (geometry, trailing, locks, slippage).
+#   OTHERWISE IDENTICAL to TSL18 (geometry, trailing, locks, slippage), except
+#   the TP3 broker cap is intentionally removed so the runner can trail beyond
+#   TP3 instead of banking the first 40 pt move and missing a 70 pt continuation.
 #
 # *** READ BEFORE TRUSTING THIS ***
 #  1) This does NOT create a new edge. It bounds tail risk. Judge it by max
@@ -129,6 +131,7 @@ python tools/auto_explicit.py `
   --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
   --trailing-close-after-stage 2 `
+  --runner-final-cap none `
   --daily-loss-limit-pct 0.10 `
   --max-open-signals 4
 
@@ -176,6 +179,7 @@ python tools/backtest_hybrid.py `
   --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
   --trailing-close-after-stage 2 `
+  --runner-final-cap none `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --daily-loss-limit-pct 0.10 `
@@ -223,6 +227,7 @@ python tools/backtest_hybrid.py `
   --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
   --trailing-close-after-stage 2 `
+  --runner-final-cap none `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --daily-loss-limit-pct 0.10 `
