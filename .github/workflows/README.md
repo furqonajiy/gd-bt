@@ -1,5 +1,13 @@
 # GitHub Actions — workflow conventions
 
+> **All sweep/backtest workflows were removed 2026-07-03.** They were one-off
+> research sweeps (and several referenced now-pruned strategies), so they were
+> deleted to clean up the Actions tab. **Recover any from git history** if you need
+> to re-run one (`git log --all --diff-filter=D -- .github/workflows/`, then
+> `git checkout <sha>^ -- .github/workflows/<file>.yml`). The sweeps themselves are
+> just `tools/sweep_*.py` runs — you can also run them locally without a workflow.
+> The action-version conventions below still apply to any workflow you re-add.
+
 When you **create or edit** any workflow in this folder, always pin the **latest
 Node-24-native major versions** of the standard actions. GitHub forces Node 20
 actions to Node 24 from **2026-06-16** and removes Node 20 from runners on
@@ -39,113 +47,5 @@ of their pinned version — a safe catch-all.
       `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"`
 - [ ] `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/<file>.yml'))"` parses
 - [ ] First run's logs show **no** Node-20 deprecation warnings
-
-## Workflows in this folder
-- `regime-grid-sweep.yml` (renamed from `self-regime-grid.yml`) — the
-  unattended parameter sweep. It sweeps **one regime at a time** (R4 → R3 → R2
-  → R1), risk 1–5%, and ranks DD‑≤‑40% champions on **compounded net P&L +
-  the $3/closed‑lot bonus** (with a positive held‑out OOS gate). See
-  `../../docs/SWEEP_RUNBOOK.md` for the methodology.
-- `self-scalper-rsi-bb-rr-sweep.yml` — the SC24 **RSI × Bollinger × R:R**
-  combination sweep (R4/2026 only). Full cross of the best-of-each levels (34
-  feed variants); each variant regenerates the scalper24 feed with those
-  generator flags, then sweeps the full strategy/geometry grid via
-  `tools/sweep_self_limit.py` (slippage-aware 2.0/1.0). Artifact-only; the agg
-  (`agg_entry_feature.sh R4 selfrbr`) keeps variants that beat `base` on edge
-  AND OOS at DD≤40%. Mirrors the R4 job of `self-scalper-rr-sweep.yml`.
-- `self-scalper-rsi-bb-rr-sweep-r3r2r1.yml` — the SAME 34-variant RSI × Bollinger
-  × R:R combination sweep extended to the remaining regimes, chained
-  **R3 → R2 → R1** in one run (R4 already has its champion, SQZ6 / rsi75_sqz6_rr40).
-  Each regime regenerates the scalper24 feed from its own chart window (R3=2025,
-  R2=2023-10..2024, R1=2021-11..2023-09) and sweeps via `tools/sweep_self_limit.py`
-  (slippage-aware 2.0/1.0). Artifact-only; per-regime agg
-  (`agg_entry_feature.sh R{3,2,1} selfrbr`) keeps variants that beat `base` on edge
-  AND OOS at DD≤40%. Results: `self-rbr-R{3,2,1}-results`.
-- `twl25-loss-tick-sweep.yml` — the **TWL25 loss-filter** tick sweep
-  (`tools/sweep_tick_loss_filters.py`). **Research-only — NOT a live replacement.**
-  Loss-FIRST sweep of the TSL18/T818 self-scalper family: harder feed filters
-  (RSI/BB/ADX/HTF/VWAP/SR/SD) × defensive TSL18 geometry, scored on **real ticks**.
-  Two stages: **June 2026 first** (the full `3 sessions × 6 filters × 8 strategies
-  = 144`-cell grid; aggregation refuses to publish unless all 144 rows are
-  present), then **Jan-Jun validation** of the June winners on every available 2026
-  tick file. Scoring is loss-first (penalizes consecutive losers + worst day) and
-  STRICT on integrity: partial-tick-coverage signals are not scored as clean tick
-  P&L, and any unresolved exposure (`open_or_pending_left`) fails the DD25/DD40
-  gates. Publishes `sweep_reports/twl25_loss_sweep/**` **only on a push to a
-  `feature/*` branch** — manual dispatch / PR / `main` runs upload artifacts only,
-  never commit to `main`. TWL25 stays research until June + Jan-Jun artifacts pass
-  the DD25/DD40 loss-first gates AND a demo-forward run confirms broker behaviour;
-  it does not replace TSL18/T818. See `../../docs/TWL25_LOSS_SWEEP.md`.
-
-- `backtest-reports.yml` — **Backtest reports (TSL18 / V017)**: manual-only
-  workflow that regenerates deployed-book 2026 TICK report workbooks from
-  `cli/run.py` books (`t818` = current TSL18 alias, plus `v017` = Victor from
-  2026-07-01) for sections 5 and 6. It produces both the authored $50,000 capital
-  report and a $5,000 variant by rewriting `--initial-capital 50000` to `5000` and
-  suffixing the output dir with `_5k`. Unlike most research workflows, this one has
-  `contents: write` and commits refreshed `reports/T818_2026*.xlsx` /
-  `reports/V017_2026*.xlsx` back to the selected branch.
-
-- `july-v817-tsl18-backtests-staged-sweep.yml` — **July V817 TSL18 Backtests +
-  Staged Sweep**: **manual-only** (`workflow_dispatch`) runner for the July-2026
-  review cycle. Four jobs: **preflight-data** (fails fast if the July XAUUSD tick
-  archive is missing; verifies `cli/run.py` emits matched $50K + $5K commands for
-  the requested books), **backtests** (`cli/run.py <book> backtest` for **V817** and
-  **TSL18/T818**, so each authored $50K section runs a $50K + a `_5k` clone; the
-  open-ended 2026 sections pick up the July ticks), and **staged-sweep** (a
-  **bounded** TSL18 quality/collision sweep: `smoke` → `full_recent` (jun_jul,
-  July-inclusive) → `validate_top` (jan_jul), on the curated ~17-candidate grid —
-  never a cartesian product), and **victor-staged-sweep** (a bounded
-  **Victor/V017 trailing-geometry** sweep via
-  `tools/sweep_victor_trailing_geometry.py` — single-knob perturbations from
-  `base_v017` over trailing-open/close, SL-mult, hold, expiry, gap, final target;
-  trailing distances < 0.5 are never swept — ELEV8 rejects a resting stop under
-  its ~0.4 min-stop and the tick backtest doesn't enforce that floor;
-  recent window **May+June** where tick-covered, validate Jan-Jun; artifact
-  `july-victor-trailing-geometry-sweep`). The **TSL18 sweep covers quality +
-  collision; the Victor sweep covers trailing geometry**; backtests run **$50K +
-  $5K**; manual-only; never `--execute`, never live. Inputs: `strategies` (default `v817 tsl18`),
-  `run_backtests`, `run_sweep`, `commit_results`, `recent_window` (jun_jul),
-  `validation_window` (jan_jul), `score_objective`. With `commit_results=true`
-  (`contents: write`) it commits the backtest workbooks + sweep summaries + status
-  to `main` (commits marked `[skip ci]`); the bulky per-candidate workbooks stay in
-  the `july-tsl18-staged-quality-collision-sweep` artifact and the backtests upload
-  as `july-v817-tsl18-backtests-5k-50k`. It never uses `--execute`, never trades
-  live, and never promotes a strategy. V817 is the deliverable Victor book here —
-  distinct from V017 (Victor from 2026-07-01).
-
-- `backtest-and-full-sweep-runner.yml` — **Backtests + Full TSL18 Sweep**:
-  artifact-only combined runner for the current review cycle. It first runs V017
-  (Victor from 2026-07-01) and TSL18/T818 section 5/6 backtest reports at both
-  $50K and $5K, then runs the TSL18 quality-entry + collision sweep (`smoke` →
-  `full_june` → optional `validate_top`). It uses a narrow push trigger (`paths:`
-  limited to this workflow file) so merging the workflow can start a one-shot run
-  without making every future `main` merge launch heavy jobs; manual dispatch can
-  also rerun it. It uploads `v017-tsl18-backtest-reports-5k-50k` and
-  `tsl18-quality-collision-full-sweep` artifacts, never commits reports, never
-  trades live, and never promotes a strategy.
-
-- `tsl18-quality-entry-overnight-sweep.yml` — **TSL18 Quality Entry Overnight
-  Sweep**: runs the quality-entry sweep (`tools/sweep_tsl18_quality_entry.py`) on
-  Actions instead of a long warm Claude session, using the **canonical current
-  CLI** — `--mode smoke|full_june|validate_top`, `--out-root reports`,
-  `--gen-start`, `--charts`/`--ticks`, `--top-json`, `--score-objective`,
-  `--require-full-tick-lifecycle`, `--exclude-open-or-pending`. **Guarded**: it
-  detects the quality-entry layer (#328) and the collision policies (#329); if
-  collision policies are absent it still runs **quality-entry-only** and marks the
-  status `COLLISION_NOT_MERGED` (never a hard fail), and if the quality-entry layer
-  itself is absent it writes `reports/OVERNIGHT_AUTO_SWEEP_STATUS/summary.md` and
-  **exits 0**. Pipeline: preflight (compile + targeted pytest) → smoke → full_june
-  → jan_jun, writing `reports/TSL18_QUALITY_{smoke,full_june,validate_top}/` and
-  uploading them as artifacts (no commit-back; `contents: read`). **Run modes
-  (the heavy overnight grid never runs on a merge):** a `push` to `main` runs
-  **SMOKE only**; the `workflow_dispatch` `mode` input selects `smoke` (default) or
-  `full` — `mode=full` runs smoke → full_june, then Jan-Jun validation only when
-  `run_jan_jun=true` (default false). An "effective mode" step forces SMOKE on
-  push regardless of inputs. It never trades live and never promotes to live TSL18.
-  The sweep script also accepts
-  automation aliases (`--mode full`, `--output-dir`, `--rank-objective`,
-  `--require-full-lifecycle-ticks`, `--fail-on-open-or-pending`,
-  `--input-candidates`).
 
 _Reference: <https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/>_
