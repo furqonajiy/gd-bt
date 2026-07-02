@@ -26,9 +26,9 @@ BANNER_RE = re.compile(r"^#\s*=+\s*$")
 NUM_NAME_RE = re.compile(r"^(\d+)\.\s*(.*)$")
 
 ALIASES = {
-    # Deployed set (2026-07-02 prune): champions V072 (Victor trailing combo) +
-    # TSL18 (self-scalper), live $3K book TS3K. Everything else was removed --
-    # recover any pruned book from git history.
+    # Deployed set: champions V073A (Victor corrected-R:R, promoted 2026-07-02) +
+    # TSL18 (self-scalper), live $3K book TS3K. V072 (Victor as-posted) is kept as
+    # the R2-grind fallback for V073A. Everything else pruned -- recover from git.
     "v072": "candidate_V072_victor_trailing_combo",
     "v073a": "candidate_V073A_victor_rr_trailing",
     "tsl18": "candidate_TSL18_trailing_tick",
