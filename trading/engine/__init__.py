@@ -299,7 +299,7 @@ from .execution.mt5_executor import (
     round_lot,
     signal_to_magic,
 )
-from .execution.mt5_executor_trailing import Mt5Executor
+from .execution.mt5_executor_uncapped_runner import Mt5Executor
 from .execution.live_entry_guard import LiveEntryGuard
 
 
