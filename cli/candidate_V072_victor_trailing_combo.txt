@@ -4,32 +4,36 @@
 #
 # V072 is the combined-geometry Victor identity built from the July-2026 staged
 # Victor trailing-geometry sweep (tools/sweep_victor_trailing_geometry.py). It
-# takes the V017 baseline and stacks the FIVE best single-knob levers at once
-# (the "V107 combo"):
+# takes the V017 baseline and stacks the best single-knob levers at once:
 #
-#     trailing-open distance  0.5 -> 0.25
 #     final target            TP2 -> TP3
 #     sl-multiplier           1.7 -> 1.60
 #     entry-SL gap            0.5 -> 0.70
 #     max-hold                150 -> 180
+#     trailing-open distance  0.5 (UNCHANGED -- the original 0.25 lever was
+#         RETIRED 2026-07-02: ELEV8 rejects a resting STOP under its ~0.4
+#         min-stop (retcode 10015), so 0.25 is not live-executable, and on the
+#         refreshed tick archive 0.5 also simply scores BETTER than 0.25 -- the
+#         old 0.25 edge was an artifact of the thinner archive. See
+#         MIN_TRAILING_DISTANCE in tools/sweep_victor_trailing_geometry.py.)
 #
-# Measured on May+June 2026 ticks (backtest_hybrid, TICK where covered), the
-# combination returns pure trading P&L $152,746 vs V017 base $111,704
-# (+$41,042 / +36.7%) at essentially IDENTICAL drawdown (14.07% vs 14.05%),
-# win-rate 44.8% (TP3 holds for a further target: fewer, larger winners). The
-# combined gain is sub-additive vs the naive sum of the single-knob gains
-# (~+$59k), as expected -- open0.25 and slm1.6 both act on the same early
-# lifecycle. It reads the SAME Victor provider feed as V116/V017; only the tag,
-# positions, logs and trailing geometry differ.
+# Measured on May+June 2026 (backtest_hybrid, archive with ticks through
+# 2026-07-02, 316 TICK / 49 M1 signals): pure trading P&L $80,962 vs V017 base
+# $65,409 (+23.8%) at LOWER drawdown (19.02% vs 19.27%), win-rate 43.6% (TP3
+# holds for a further target: fewer, larger winners). The retired 0.25 variant
+# scored $77,393 (+18.3%) on the same data -- dominated by 0.5 on this archive
+# even before the live-executability argument. It reads the SAME Victor
+# provider feed as V116/V017; only the tag, positions, logs and trailing
+# geometry differ.
 #
 #   --strategy-tag V072
 #   --positions-json positions_v072.json
 #   reports/V072_2026*
 #   forensic_v072.jsonl / notifications_v072.jsonl / console_v072.txt
 #
-# RESEARCH / demo-validate ONLY. The +36.7% is in-sample (May+June is a MIXED
+# RESEARCH / demo-validate ONLY. The +23.8% is in-sample (May+June is a MIXED
 # tick/M1 window, so it did NOT clear the sweep's --require-full-tick-lifecycle
-# ranking gate) and five knobs moved at once, so out-of-sample / overfit is
+# ranking gate) and four knobs moved at once, so out-of-sample / overfit is
 # unproven -- forward-validate on a clean full-tick window + demo before any
 # live size. Do NOT use --execute from this snapshot without demo validation.
 # =========================================================================
@@ -48,7 +52,7 @@ python tools/live_provider_signal_filter.py `
   --interval 2
 
 # ===== 3. LIVE AUTO EXECUTOR (RESEARCH ONLY; DO NOT EXECUTE WITHOUT DEMO VALIDATION) =====
-# tag V072, combined geometry: trailing-open 0.25 + trailing-close 0.5 after TP1,
+# tag V072, combined geometry: trailing-open 0.5 + trailing-close 0.5 after TP1,
 # sl-multiplier 1.6, final TP3, entry-SL gap 0.7, max-hold 180, entries 8.
 python tools/auto_explicit.py `
   --signals signals/victor_live.txt `
@@ -87,7 +91,7 @@ python tools/auto_explicit.py `
   --tp2-lock-target TP1 `
   --tp3-lock-target TP2 `
   --runner-after-tp3 false `
-  --trailing-open-distance 0.25 `
+  --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
   --trailing-close-after-stage 1 `
   --replace-missing-entries true `
@@ -135,7 +139,7 @@ python tools/backtest_hybrid.py `
   --tp2-lock-target TP1 `
   --tp3-lock-target TP2 `
   --runner-after-tp3 false `
-  --trailing-open-distance 0.25 `
+  --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
   --trailing-close-after-stage 1 `
   --lock-tp1-exit-slippage 2.0 `
@@ -179,7 +183,7 @@ python tools/backtest_hybrid.py `
   --tp2-lock-target TP1 `
   --tp3-lock-target TP2 `
   --runner-after-tp3 false `
-  --trailing-open-distance 0.25 `
+  --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
   --trailing-close-after-stage 1 `
   --lock-tp1-exit-slippage 2.0 `

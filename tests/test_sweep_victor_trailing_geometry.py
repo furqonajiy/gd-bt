@@ -8,20 +8,28 @@ from __future__ import annotations
 
 import csv
 
+import pytest
+
 from tools.sweep_victor_trailing_geometry import (
-    RESULTS_COLUMNS, V017_BASELINE, build_candidate_grid, main,
+    MIN_TRAILING_DISTANCE, RESULTS_COLUMNS, V017_BASELINE, _candidate,
+    build_candidate_grid, main,
 )
 
 REQUIRED_LABELS = {
     "base_v017",
-    "open_0_25", "open_0_50", "open_0_75", "open_1_00",
-    "close_0_25_stage1", "close_0_50_stage1", "close_0_75_stage1", "close_0_50_stage2",
+    "open_0_50", "open_0_75", "open_1_00",
+    "close_0_50_stage1", "close_0_75_stage1", "close_0_50_stage2",
     "slm_1_60", "slm_1_70", "slm_1_80",
     "hold_120", "hold_150", "hold_180",
     "expiry_120", "expiry_180",
     "entry_gap_0_50", "entry_gap_0_70",
     "tp2_final", "tp3_final",
 }
+
+# Live-executability floor: ELEV8 rejects a resting stop under the ~0.4
+# min-stop (retcode 10015), so no sweep candidate may carry a trailing
+# distance in (0, MIN_TRAILING_DISTANCE). Operator rule 2026-07-02.
+FORBIDDEN_SUB_MIN_LABELS = {"open_0_25", "close_0_25_stage1"}
 
 REQUIRED_COLUMNS = {
     "label", "window", "window_start", "window_end",
@@ -43,6 +51,30 @@ def test_grid_contains_all_required_labels_base_first():
     assert labels[0] == "base_v017"                 # baseline always first
     assert REQUIRED_LABELS <= set(labels)
     assert len(labels) == len(set(labels))          # no duplicates
+    assert not (FORBIDDEN_SUB_MIN_LABELS & set(labels))
+
+
+def test_no_candidate_carries_sub_min_trailing_distance():
+    """Every grid candidate is live-executable: no trailing distance in
+    (0, MIN_TRAILING_DISTANCE) — the broker rejects that resting stop."""
+    for mode in ("smoke", "full_recent"):
+        for c in build_candidate_grid(mode):
+            for key in ("trailing_open_distance", "trailing_close_distance"):
+                dist = float(c[key])
+                assert dist == 0.0 or dist >= MIN_TRAILING_DISTANCE, (
+                    f"{c['label']}: {key}={dist} below the live min-stop floor")
+
+
+def test_candidate_guard_rejects_sub_min_trailing_distances():
+    with pytest.raises(ValueError, match="MIN_TRAILING_DISTANCE"):
+        _candidate("bad_open", trailing_open_distance=0.25)
+    with pytest.raises(ValueError, match="MIN_TRAILING_DISTANCE"):
+        _candidate("bad_close", trailing_close_distance=0.25)
+    with pytest.raises(ValueError, match="MIN_TRAILING_DISTANCE"):
+        _candidate("bad_edge", trailing_open_distance=0.4)
+    # 0 = disabled and >= MIN_TRAILING_DISTANCE both stay allowed
+    assert _candidate("ok_off", trailing_open_distance=0.0)["trailing_open_distance"] == 0.0
+    assert _candidate("ok_min", trailing_close_distance=0.5)["trailing_close_distance"] == 0.5
 
 
 def test_base_v017_has_expected_baseline_parameters():

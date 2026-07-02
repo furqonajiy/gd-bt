@@ -316,7 +316,13 @@ range_to_sl, entry_sl_gap 0.5, sl_mult 1.7, final TP2, max_hold 150, pending_exp
 180, trailing_open 0.5 / trailing_close 0.5 @ stage 1) it perturbs ONE (occasionally
 two) controlled knob(s) per candidate — trailing‑open distance, trailing‑close
 distance + engage stage, SL multiplier, max‑hold, pending‑expiry, entry‑SL gap, final
-target — a curated ~21‑candidate grid, **never a cartesian product**. Modes: `smoke`
+target — a curated ~19‑candidate grid, **never a cartesian product**. **Trailing
+distances below `MIN_TRAILING_DISTANCE` (0.5) are never swept**: ELEV8 rejects a
+resting stop under its ~0.4 min‑stop (`SYMBOL_TRADE_STOPS_LEVEL`, retcode 10015) and
+the tick backtest does **not** enforce that floor, so a sub‑0.5 trailing candidate
+(the old `open_0_25` / `close_0_25_stage1`) wins on fills live can never get —
+`_candidate()` hard‑rejects any trailing distance in (0, 0.5); 0 (disabled) stays
+allowed. Modes: `smoke`
 (short recent June) → `full_recent` (**May+June**, where tick is covered — July tick
 is only one day) → `validate_top` (Jan‑Jun via `--top-json`). Same **rebate‑aware**
 objective + gates (`--require-full-tick-lifecycle`, `--exclude-open-or-pending`), and
