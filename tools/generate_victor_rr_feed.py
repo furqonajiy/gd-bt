@@ -34,6 +34,12 @@ import re
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.victor_rr_rewrite import DEFAULT_MAX_RISK, rewrite_tps  # noqa: E402
+
 # One signal line: "N. BUY XAUUSD 4543 - 4541 SL 4536 TP1 4551 TP2 4561 TP3 4576 2:02 PM"
 # TP2/TP3 are optional (rare early lines omit them). Groups capture everything
 # needed to rewrite the TP numbers in place and keep the rest verbatim.
@@ -49,42 +55,30 @@ SIGNAL_RE = re.compile(
 )
 
 
-def _fmt(x: float) -> str:
-    """Feed-style number: whole -> '4093', else 2dp with trailing zeros trimmed."""
-    v = round(x, 2)
-    if v == int(v):
-        return str(int(v))
-    s = f"{v:.2f}"
-    return s.rstrip("0").rstrip(".")
-
-
 def rewrite_line(line: str, rr1: float, rr2: float, rr3: float,
-                 max_risk: float = 30.0) -> tuple[str, bool]:
+                 max_risk: float = DEFAULT_MAX_RISK) -> tuple[str, bool]:
     """Rewrite one line's TPs to the ladder; (line, was_rewritten).
 
-    A line whose |entry_edge - SL| exceeds ``max_risk`` points is left VERBATIM:
-    those are provider SL typos (the wrong-hundreds ~100-pt shifts and the
-    extra-digit 47802 case the listener's apply_signal_corrections repairs
-    live), and rewriting TPs off a phantom 100+-pt risk would be nonsense.
-    Keeping them as-posted means baseline and every ladder candidate treat the
-    typo lines identically, so the A/B isolates the R:R change alone.
+    Uses the shared ``victor_rr_rewrite`` core so a line rewritten here is
+    byte-identical to the same signal rewritten by the LIVE provider filter
+    (the V073A live/backtest parity contract). A line whose |entry_edge - SL|
+    exceeds ``max_risk`` points is left VERBATIM (provider SL typos -- the
+    wrong-hundreds shifts and the extra-digit 47802 case), so baseline and
+    every ladder candidate treat the typo lines identically.
     """
     m = SIGNAL_RE.match(line.rstrip("\n"))
     if not m:
         return line, False
-    side = m.group("side").upper()
-    e1, e2, sl = float(m.group("e1")), float(m.group("e2")), float(m.group("sl"))
-    entry = max(e1, e2) if side == "BUY" else min(e1, e2)   # entry_edge
-    risk = abs(entry - sl)
-    if risk <= 0.0 or risk > max_risk:                       # malformed/typo: keep as posted
+    tps = rewrite_tps(m.group("side"), m.group("e1"), m.group("e2"),
+                      m.group("sl"), rr1, rr2, rr3, max_risk=max_risk)
+    if tps is None:                          # risk <= 0 or > max_risk: keep as posted
         return line, False
-    sign = 1.0 if side == "BUY" else -1.0
-    out = m.group("head")
-    out += m.group("tp1") + _fmt(entry + sign * rr1 * risk)
+    tp1v, tp2v, tp3v = tps
+    out = m.group("head") + m.group("tp1") + tp1v
     if m.group("tp2v") is not None:
-        out += m.group("tp2") + _fmt(entry + sign * rr2 * risk)
+        out += m.group("tp2") + tp2v
     if m.group("tp3v") is not None:
-        out += m.group("tp3") + _fmt(entry + sign * rr3 * risk)
+        out += m.group("tp3") + tp3v
     out += m.group("tail")
     return out + "\n", True
 
@@ -98,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--rr1", type=float, required=True, help="TP1 = rr1 x risk")
     p.add_argument("--rr2", type=float, required=True, help="TP2 = rr2 x risk")
     p.add_argument("--rr3", type=float, required=True, help="TP3 = rr3 x risk")
-    p.add_argument("--max-risk", type=float, default=30.0,
+    p.add_argument("--max-risk", type=float, default=DEFAULT_MAX_RISK,
                    help="Leave lines with |entry_edge-SL| above this VERBATIM "
                         "(provider SL typos; default 30 pts, ~3x Victor's widest "
                         "real stop).")

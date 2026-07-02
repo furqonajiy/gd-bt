@@ -1,0 +1,209 @@
+# =========================================================================
+# VICTOR TRAILING + CORRECTED R:R -- V073A  | tag V073A   *** RESEARCH / DEMO ***
+#
+# V073A = V072's combined trailing geometry, fed a CORRECTED-R:R Victor feed.
+# Victor's posted TP1 risk:reward collapsed to ~0.5-0.67 outside his Feb-Jun
+# 2026 era (SL:TP1 ~1:0.5 instead of the 1:2 he used to run). V073A keeps his
+# strategy -- entries, ranges, SL, timing, ordering all exactly as posted -- but
+# rewrites TP1/TP2/TP3 to a consistent asymmetric ladder:
+#
+#     TP1 = entry_edge +/- 1.5 x |entry_edge - SL|   (SL:TP1 = 1:1.5)
+#     TP2 = entry_edge +/- 3.0 x |entry_edge - SL|
+#     TP3 = entry_edge +/- 5.0 x |entry_edge - SL|
+#
+# GEOMETRY = V072 verbatim (entries 8 / range_to_sl / entry-sl-gap 0.7 /
+#   sl-multiplier 1.6 / max-hold 180 / final TP3 / trailing-open 0.5 +
+#   trailing-close 0.5 after TP1 / risk 5%). Trailing-open is 0.5 (NOT 0.25):
+#   ELEV8 rejects a resting STOP under its ~0.4 min-stop (retcode 10015).
+#
+# EVIDENCE (three-era A/B vs the as-posted feed on V072 geometry, ladder
+#   rr15x30x50; reports/VRR_LADDER_STUDY/summary.md):
+#     2026 (R4, tick, trailing-open 0.5): net ~flat (-1.4%) at HALF the drawdown
+#         -- $9.09M / DD 12.9% vs base $9.22M / DD 22.5%.
+#     2025 (R3, M1): +24.5% net at flat DD.
+#     2024 (R2 bull-grind): ladders INVERT (lose) -- see the regime rule below.
+#
+# *** REGIME-SCOPED ADOPTION (operator rule 2026-07-02) ***
+#   The ladder wins in TRENDING regimes (R3/R4) and LOSES in an R2 bull-grind
+#   (price pays ~0.6R then reverses, so a 1.5R TP1 rarely fills and the profit
+#   lock never arms). Run V073A only while the regime is trending; if the regime
+#   detector flips to R2-style grind, STOP V073A (or revert to the as-posted
+#   Victor book V072). Auto regime-gating is NOT wired in yet -- this is a manual
+#   operator check for now.
+#
+# IDENTITY (tag **V073A**; disjoint magics; reads the SAME provider feed as
+#   V072/V017 but through a DISTINCT rewritten live feed):
+#   --strategy-tag V073A . --positions-json positions_v073a.json .
+#   live feed signals/victor_v073a_live.txt (rewritten by the provider filter) .
+#   static feed signals/v073a.txt (rewritten by generate_victor_rr_feed.py) .
+#   reports/V073A_2026* . forensic_v073a.jsonl / notifications_v073a.jsonl /
+#   console_v073a.txt.
+#
+# RESEARCH / DEMO-VALIDATE ONLY. The 2026 net edge is ~flat (the win is DD, not
+# raw P&L); the 2025 gain is in-sample M1; and R2 inverts. Forward-validate on a
+# clean full-tick window + DEMO (side-by-side vs V072) before any live size. Do
+# NOT use --execute from this snapshot without demo validation.
+# =========================================================================
+
+# ===== 1. TELEGRAM LISTENER =====
+# SHARED with V116/VCT5/VS17/V017/V072/V073A -- run only ONE copy of the listener.
+python listeners\telegram\listener.py --signals-file victor_signals.txt
+
+# ===== 2. LIVE LOOP SIGNAL GENERATOR =====
+# Provider filter --watch WITH the corrected-R:R rewrite. This is V073A's OWN
+# live feed (distinct output; do NOT point it at victor_live.txt, which the
+# as-posted Victor books use). victor_signals.txt is never modified; the rewrite
+# uses the SAME shared core (tools/victor_rr_rewrite.py) as the backtest feed in
+# section 4, so the live feed == the backtest feed.
+python tools/live_provider_signal_filter.py `
+  --input victor_signals.txt `
+  --output signals/victor_v073a_live.txt `
+  --preset all `
+  --rewrite-rr1 1.5 `
+  --rewrite-rr2 3.0 `
+  --rewrite-rr3 5.0 `
+  --watch `
+  --interval 2
+
+# ===== 3. LIVE AUTO EXECUTOR (RESEARCH ONLY; DO NOT EXECUTE WITHOUT DEMO VALIDATION) =====
+# tag V073A, V072 geometry, reading the corrected-R:R live feed from section 2.
+python tools/auto_explicit.py `
+  --signals signals/victor_v073a_live.txt `
+  --positions-json positions_v073a.json `
+  --strategy-tag V073A `
+  --forensic-log forensic_v073a.jsonl `
+  --notifications notifications_v073a.jsonl `
+  --console-log console_v073a.txt `
+  --console-log-retain-hours 24 `
+  --watch-interval 3 `
+  --mt5-symbol XAUUSD `
+  --mt5-server-offset 3 `
+  --mt5-history-bars 5000 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 100.0 `
+  --max-open-lots 100 `
+  --lot-step 0.01 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 180 `
+  --sl-multiplier 1.6 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --replace-missing-entries true `
+  --reopen-missing-positions true `
+  --apply-signal-edits true `
+  --signal-overrides-file signal_overrides.jsonl
+
+# ===== 4. SIGNAL GENERATOR (before backtest) =====
+# One-shot corrected-R:R static feed for the backtests below. Same shared rewrite
+# core as the live filter (section 2), so backtest == live. victor_signals.txt
+# stays the pristine as-posted record.
+python tools/generate_victor_rr_feed.py --input victor_signals.txt --rr1 1.5 --rr2 3.0 --rr3 5.0 --output signals/v073a.txt
+
+# ===== 5. BACKTEST FROM 2026-05 (V073A corrected-R:R evidence window) =====
+# TICK-AWARE: all committed ELEV8 ticks/charts; starts 2026-05-01. Reads the
+# corrected-R:R static feed from section 4.
+python tools/backtest_hybrid.py `
+  --signals signals/v073a.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
+  --sync-charts true `
+  --sync-ticks true `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 100.0 `
+  --max-open-lots 100 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 180 `
+  --sl-multiplier 1.6 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --output-dir reports/V073A_202605 `
+  --initial-capital 50000 `
+  --start-date 2026-05-01
+
+# ===== 6. BACKTEST FROM 2026-01 (V073A corrected-R:R, R4 current-regime validation) =====
+python tools/backtest_hybrid.py `
+  --signals signals/v073a.txt `
+  --charts data/XAUUSD_M1_*_ELEV8.csv `
+  --ticks data/ticks/XAUUSD_TICK_*_ELEV8.csv `
+  --sync-charts true `
+  --sync-ticks true `
+  --max-drawdown-limit-pct 200 `
+  --progress-interval-seconds 30 `
+  --sizing-mode risk `
+  --lot 0.01 `
+  --risk 0.05 `
+  --minimum-lot 0.01 `
+  --maximum-lot 100.0 `
+  --max-open-lots 100 `
+  --lot-step 0.01 `
+  --bonus-per-closed-lot 3.0 `
+  --entries 8 `
+  --entry-ladder range_to_sl `
+  --entry-sl-gap 0.7 `
+  --activation-delay 0 `
+  --pending-expiry 180 `
+  --max-hold 180 `
+  --sl-multiplier 1.6 `
+  --final-target TP3 `
+  --lock-after-tp1 true `
+  --lock-after-tp2 true `
+  --tp1-lock-delay-minutes 12 `
+  --tp2-lock-delay-minutes 2 `
+  --profit-lock-mode tp_levels `
+  --bep-trigger-distance 3.0 `
+  --tp1-lock-fraction 0.5 `
+  --tp2-lock-target TP1 `
+  --tp3-lock-target TP2 `
+  --runner-after-tp3 false `
+  --trailing-open-distance 0.5 `
+  --trailing-close-distance 0.5 `
+  --trailing-close-after-stage 1 `
+  --lock-tp1-exit-slippage 2.0 `
+  --lock-tp2-exit-slippage 1.0 `
+  --output-dir reports/V073A_202601 `
+  --initial-capital 50000 `
+  --start-date 2026-01-01

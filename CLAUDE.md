@@ -124,7 +124,24 @@ pair is a thin package that imports it.
   (`tools/live_provider_signal_filter.py --watch`) regenerates the filtered live
   feed (`signals/victor_live.txt`) from the raw feed on every change; startup
   catch-up reconciles the 24 h lookback so downtime edits/deletions are applied
-  too. **`auto --apply-signal-edits`** (opt-in) consumes that journal so
+  too. The provider filter also has an **opt-in corrected-R:R rewrite**
+  (`--rewrite-rr1/2/3` + `--rewrite-max-risk`, all default 0 = OFF → feed
+  byte-identical, existing books unaffected): each kept signal's TP1/TP2/TP3 is
+  rewritten to a consistent asymmetric ladder off the POSTED entry-edge/SL
+  (`TPk = entry_edge ± rrk·|edge−SL|`) via the shared `tools/victor_rr_rewrite.py`
+  core — the SAME math the backtest feed generator `tools/generate_victor_rr_feed.py`
+  uses, so the live feed == the backtest feed (the V073A live↔backtest parity
+  contract, pinned by `tests/test_victor_rr_rewrite.py`). Provider SL-typo lines
+  (risk > `--rewrite-max-risk`, default 30 pt) pass through as-posted.
+  `victor_signals.txt` is never modified. This is the **V073A** live path
+  (`cli/candidate_V073A_victor_rr_trailing`, alias `v073a`, tag V073A — V072's
+  geometry fed the `rr15x30x50` ladder 1.5/3.0/5.0): the corrected-R:R A/B
+  (`reports/VRR_LADDER_STUDY/summary.md`) halves 2026 drawdown at ~flat net and
+  adds +24.5% net in 2025, but **INVERTS in the R2-2024 bull-grind → adoption is
+  REGIME-SCOPED (trending R3/R4 only; stop/revert to V072 in an R2 grind, a
+  manual check for now)**. RESEARCH/DEMO — its own feed
+  (`signals/victor_v073a_live.txt` live, `signals/v073a.txt` static), positions
+  `positions_v073a.json`, `reports/V073A_*`, logs `*_v073a`. **`auto --apply-signal-edits`** (opt-in) consumes that journal so
   the live executor follows the corrected feed: on `amend` it **flattens** the
   signal's MT5 footprint (`Mt5Executor.flatten_signal` — cancel pendings + close
   any open position) and **re-places at the corrected levels** (close-and-reopen,
