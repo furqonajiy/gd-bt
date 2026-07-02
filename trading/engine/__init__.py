@@ -188,7 +188,7 @@ from .core.positions import (
 )
 
 # 5b. shared lifecycle. This wrapper preserves the old lifecycle when trailing
-distances are 0, and adds virtual trailing-open / trailing-close when enabled.
+# distances are 0, and adds virtual trailing-open / trailing-close when enabled.
 from .core.trailing_positions import (
     advance_bars,
     advance_one_bar,
