@@ -965,6 +965,15 @@ derive all artifact names (positions, feed, report, logs) from it.
 
 ## GitHub Actions / CI
 
+**All sweep/backtest workflows were removed 2026-07-03** — they were one-off
+research sweeps (several referencing now-pruned strategies), so `.github/workflows/`
+now holds only `README.md`. The sweeps are just `tools/sweep_*.py` runs: run them
+locally, or recover a workflow from git history
+(`git log --all --diff-filter=D -- .github/workflows/`) if you want it back. So
+where the prose below says "run the `<name>.yml` workflow", that file no longer
+exists on `main` — it documents the methodology; run the underlying `tools/`
+script directly.
+
 When creating or editing any workflow under `.github/workflows/`, **pin the
 latest Node-24-native major versions** of the standard actions. GitHub forces
 Node 20 actions to Node 24 from 2026-06-16 and removes Node 20 from runners on
