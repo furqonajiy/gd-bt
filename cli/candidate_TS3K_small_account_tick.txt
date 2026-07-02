@@ -183,7 +183,7 @@ python tools/backtest_hybrid.py `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --daily-loss-limit-pct 0.10 `
-  --max-open-signals 4 `
+  --max-open-signals 10 `
   --output-dir reports/TS3K_202606 `
   --initial-capital 3000 `
   --start-date 2026-06-01 `
@@ -231,7 +231,7 @@ python tools/backtest_hybrid.py `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --daily-loss-limit-pct 0.10 `
-  --max-open-signals 4 `
+  --max-open-signals 10 `
   --output-dir reports/TS3K_202601 `
   --initial-capital 3000 `
   --start-date 2026-01-01 `
