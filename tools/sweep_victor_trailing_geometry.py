@@ -76,6 +76,14 @@ V017_BASELINE = {
     "trailing_close_after_stage": 1,
 }
 
+# LIVE-EXECUTABILITY floor for trailing distances: ELEV8 rejects a resting STOP
+# closer than its min-stop (SYMBOL_TRADE_STOPS_LEVEL, ~0.4 — retcode 10015), and
+# the tick backtest does NOT enforce that floor, so a sub-0.5 trailing distance
+# "wins" a sweep on fills live can never get. Any candidate with a trailing-open
+# or trailing-close distance in (0, MIN_TRAILING_DISTANCE) is rejected at grid
+# build time (0 = feature disabled, always allowed). Operator rule 2026-07-02.
+MIN_TRAILING_DISTANCE = 0.5
+
 # Fixed (non-swept) sizing/execution flags — mirror of the V017 snapshot. Risk
 # sizing at 5% off capital; slippage overlay 2.0/1.0; DD limit 200 (research).
 FIXED_EXEC = [
@@ -125,12 +133,23 @@ GEOMETRY_COLUMNS = [
 def _candidate(label: str, **overrides) -> dict:
     """A candidate = the V017 baseline geometry with ``overrides`` applied. Only
     known geometry keys may be overridden (guards against typo'd knobs), and each
-    curated candidate is expected to change only one/two parameters."""
+    curated candidate is expected to change only one/two parameters. Trailing
+    distances in (0, MIN_TRAILING_DISTANCE) are refused — the broker rejects the
+    resting stop live (see MIN_TRAILING_DISTANCE above), so such a candidate can
+    only win on fills that do not exist."""
     bad = set(overrides) - set(V017_BASELINE)
     if bad:
         raise ValueError(f"unknown geometry keys for {label}: {sorted(bad)}")
     geom = dict(V017_BASELINE)
     geom.update(overrides)
+    for key in ("trailing_open_distance", "trailing_close_distance"):
+        dist = float(geom[key])
+        if 0.0 < dist < MIN_TRAILING_DISTANCE:
+            raise ValueError(
+                f"{label}: {key}={dist} is below MIN_TRAILING_DISTANCE "
+                f"({MIN_TRAILING_DISTANCE}) — ELEV8 rejects resting stops under "
+                f"the ~0.4 min-stop (retcode 10015), so this is not "
+                f"live-executable and must not be swept")
     return {"label": label, **geom}
 
 
@@ -140,13 +159,12 @@ def build_candidate_grid(mode: str) -> list[dict]:
     full curated grid (all required labels)."""
     grid = [
         _candidate("base_v017"),
-        # trailing-open distance
-        _candidate("open_0_25", trailing_open_distance=0.25),
+        # trailing-open distance (>= MIN_TRAILING_DISTANCE only — 0.25 removed:
+        # ELEV8 rejects resting stops below the ~0.4 min-stop)
         _candidate("open_0_50", trailing_open_distance=0.50),
         _candidate("open_0_75", trailing_open_distance=0.75),
         _candidate("open_1_00", trailing_open_distance=1.00),
-        # trailing-close distance (+ engage stage)
-        _candidate("close_0_25_stage1", trailing_close_distance=0.25, trailing_close_after_stage=1),
+        # trailing-close distance (+ engage stage; 0.25 removed, same floor)
         _candidate("close_0_50_stage1", trailing_close_distance=0.50, trailing_close_after_stage=1),
         _candidate("close_0_75_stage1", trailing_close_distance=0.75, trailing_close_after_stage=1),
         _candidate("close_0_50_stage2", trailing_close_distance=0.50, trailing_close_after_stage=2),

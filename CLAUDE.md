@@ -795,9 +795,16 @@ from V017 (Victor from 2026-07-01). The quality-entry sweep gained **`full_recen
 separate **Victor/V017 trailing-geometry** sweep
 (`tools/sweep_victor_trailing_geometry.py`): single-knob perturbations from
 **`base_v017`** over trailing-open/close distance + engage stage, SL-multiplier,
-max-hold, pending-expiry, entry-SL gap and final target — a curated ~21-candidate
+max-hold, pending-expiry, entry-SL gap and final target — a curated ~19-candidate
 grid (never a cartesian product), recent window **May+June** where tick-covered,
 validate Jan-Jun, at **$50K + $5K**, artifact `july-victor-trailing-geometry-sweep`.
+**Trailing distances below `MIN_TRAILING_DISTANCE` (0.5) are never swept**: ELEV8
+rejects a resting stop under its ~0.4 min-stop (retcode 10015) and the tick
+backtest does not enforce that floor, so a sub-0.5 trailing-open/close candidate
+(e.g. the old `open_0_25` / `close_0_25_stage1`) wins on fills live can never
+get — `_candidate()` hard-rejects any distance in (0, 0.5) (0 = disabled stays
+allowed; operator rule 2026-07-02, pinned by
+`test_candidate_guard_rejects_sub_min_trailing_distances`).
 So **the TSL18 sweep covers quality + collision; the Victor sweep covers trailing
 geometry** — both are manual-only research/backtest sweeps that never `--execute`
 and never promote to live.
