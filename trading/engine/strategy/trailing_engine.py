@@ -1,11 +1,10 @@
 """Decision wrapper that carries trailing settings into live execution.
 
 The existing engine already builds the normal NewSignalPlan. MT5 execution also
-needs to know whether a signal is using virtual trailing-open entries and
-whether an uncapped trailing runner should omit broker-side TP, otherwise live
-placement can defeat the shared lifecycle model. Dataclasses in this project are
-not slotted, so attaching metadata keeps the public plan shape backwards
-compatible.
+needs to know whether a signal is using virtual trailing-open entries and whether
+a trailing-close strategy should omit broker-side TP, otherwise live placement can
+defeat the shared lifecycle model. Dataclasses in this project are not slotted,
+so attaching metadata keeps the public plan shape backwards compatible.
 """
 from __future__ import annotations
 
@@ -18,13 +17,13 @@ from .engine import Recommendation, decide as _decide
 
 
 def _broker_take_profit_price(config: StrategyConfig, final_target_price: float) -> float | None:
-    """Return the broker TP to attach, or None for a pure trailing runner.
+    """Return the broker TP to attach, or None when trailing-close owns exit.
 
-    ``runner_no_final_cap`` only becomes safe when a trailing-close stop exists;
-    without that protective owner, omitting TP3 would create an unmanaged runner.
+    A trailing-close strategy should not also carry a broker TP3 cap. TP3 remains
+    a model/reference level, but live MT5 exits by executor-owned SL only.
     """
     has_trailing_close = float(getattr(config, "trailing_close_distance", 0.0) or 0.0) > 0
-    if bool(getattr(config, "runner_no_final_cap", False)) and has_trailing_close:
+    if has_trailing_close:
         return None
     return float(final_target_price)
 
