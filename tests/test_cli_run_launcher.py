@@ -18,8 +18,9 @@ def _load():
 
 
 run = _load()
-SQZ6 = CLI / "champion_R4_SQZ6_no_trailing.txt"
-VICTOR = CLI / "candidate_VIC_C116_tick.txt"
+TSL18 = CLI / "candidate_TSL18_trailing_tick.txt"
+V072 = CLI / "candidate_V072_victor_trailing_combo.txt"
+TS3K = CLI / "candidate_TS3K_small_account_tick.txt"
 
 
 def test_every_snapshot_parses_into_runnable_sections():
@@ -34,9 +35,11 @@ def test_every_snapshot_parses_into_runnable_sections():
 
 
 def test_note_only_section_is_skipped():
-    numbers = [section.number for section in run.parse_sections(VICTOR)]
+    # V072's section 4 is an N/A note (the backtest reads victor_signals.txt
+    # directly), so it must not surface as a runnable section.
+    numbers = [section.number for section in run.parse_sections(V072)]
     assert 4 not in numbers
-    assert {1, 2, 3, 5, 6, 7, 8, 9} <= set(numbers)
+    assert {1, 2, 3, 5, 6} <= set(numbers)
 
 
 def test_sectionless_file_uses_leading_commands():
@@ -50,11 +53,12 @@ def test_sectionless_file_uses_leading_commands():
 
 def test_resolvers_and_aliases():
     files = run.discover()
-    assert run.resolve_strategy("sqz6", files) == SQZ6
-    assert run.resolve_strategy("vic", files) == VICTOR
+    assert run.resolve_strategy("tsl18", files) == TSL18
+    assert run.resolve_strategy("v072", files) == V072
+    assert run.resolve_strategy("ts3k", files) == TS3K
     assert run.resolve_strategy("nope", files) is None
 
-    sections = run.parse_sections(SQZ6)
+    sections = run.parse_sections(TSL18)
     selected, multi = run.resolve_sections("backtest", sections)
     assert multi
     assert [section.number for section in selected] == [4, 5, 6, 7, 8, 9]
@@ -71,33 +75,32 @@ def _count_capital(out: str, amount: int) -> int:
 
 
 def test_backtest_keyword_prints_50k_and_5k_variants(capsys):
-    # V817 is a deployed $50K book (Victor trailing): its backtest sections 5-9
-    # each emit a 50K command + a 5K clone (same dates, output dir suffixed _5k).
-    # (v116/VIC_C116 is intentionally a $12K book, so it is NOT the fixture here --
-    # see test_non_50k_book_backtest_is_not_expanded.)
-    rc = run.main(["v817", "backtest", "--print"])
+    # TSL18 is a deployed $50K book: its hybrid/explicit backtest sections each
+    # emit a 50K command + a 5K clone (same dates, output dir suffixed _5k).
+    # (TS3K is intentionally a $3K book, so it is NOT the fixture here -- see
+    # test_non_50k_book_backtest_is_not_expanded.)
+    rc = run.main(["tsl18", "backtest", "--print"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "running sections 5, 6, 7, 8, 9 in order" in out
-    assert out.count("tools/backtest_hybrid.py") == 4
-    assert out.count("tools/backtest_explicit.py") == 6
+    assert out.count("tools/backtest_hybrid.py") == 4      # sections 5,6 x (50K+5K)
+    assert out.count("tools/backtest_explicit.py") == 6    # sections 7,8,9 x (50K+5K)
     assert _count_capital(out, 50000) == 5
     assert _count_capital(out, 5000) == 5
-    assert "--output-dir reports/V817_202606_5k" in out
+    assert "--output-dir reports/TSL18_202606_5k" in out
     assert "--start-date 2026-06-01" in out
-    assert "--output-dir reports/V817_202601_5k" in out
+    assert "--output-dir reports/TSL18_202601_5k" in out
     assert "--start-date 2026-01-01" in out
 
 
 def test_non_50k_book_backtest_is_not_expanded(capsys):
-    # A book authored at a non-$50K capital (VIC_C116 = $12K) is a deliberate
-    # sizing choice, NOT a 50K/5K pair: the launcher must leave it untouched (no
-    # 5K clone, no _5k output dir), so the capital-variant expansion never rewrites
-    # a strategy's authored capital.
-    rc = run.main(["v116", "backtest", "--print"])
+    # A book authored at a non-$50K capital (TS3K = $3K, the live small-account
+    # book) is a deliberate sizing choice, NOT a 50K/5K pair: the launcher must
+    # leave it untouched (no 5K clone, no _5k output dir), so the capital-variant
+    # expansion never rewrites a strategy's authored capital.
+    rc = run.main(["ts3k", "backtest", "--print"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "--initial-capital 12000" in out
+    assert "--initial-capital 3000" in out
     assert _count_capital(out, 50000) == 0
     assert _count_capital(out, 5000) == 0
     assert "_5k" not in out
@@ -106,7 +109,7 @@ def test_non_50k_book_backtest_is_not_expanded(capsys):
 def test_capital_variants_keep_dates_and_suffix_output_dir():
     cmd = (
         "python tools/backtest_hybrid.py "
-        "--output-dir reports/T818_202607 "
+        "--output-dir reports/TSL18_202607 "
         "--initial-capital 50000 "
         "--start-date 2026-07-01 "
         "--end-date 2026-07-31"
@@ -114,7 +117,7 @@ def test_capital_variants_keep_dates_and_suffix_output_dir():
     variants = run._capital_variants(cmd)
     assert variants[0] == cmd
     assert "--initial-capital 5000" in variants[1]
-    assert "--output-dir reports/T818_202607_5k" in variants[1]
+    assert "--output-dir reports/TSL18_202607_5k" in variants[1]
     assert "--start-date 2026-07-01" in variants[1]
     assert "--end-date 2026-07-31" in variants[1]
 

@@ -26,19 +26,12 @@ BANNER_RE = re.compile(r"^#\s*=+\s*$")
 NUM_NAME_RE = re.compile(r"^(\d+)\.\s*(.*)$")
 
 ALIASES = {
-    "victor": "candidate_VIC_C116", "vic": "candidate_VIC_C116",
-    "v116": "candidate_VIC_C116", "vic116": "candidate_VIC_C116",
-    "sqz6": "champion_R4_SQZ6", "c160": "candidate_R4_C160",
-    "vct5": "candidate_VCT5_victor_trailing",
-    "vs17": "candidate_VS17_victor_trailing",
-    "v017": "candidate_V017_victor_july_trailing",
+    # Deployed set (2026-07-02 prune): champions V072 (Victor trailing combo) +
+    # TSL18 (self-scalper), live $3K book TS3K. Everything else was removed --
+    # recover any pruned book from git history.
     "v072": "candidate_V072_victor_trailing_combo",
-    "v817": "candidate_V817_victor_trailing",
-    "t160": "candidate_T160_trailing_tick",
-    "t18s": "candidate_T18S_trailing_tick",
-    "t818": "candidate_T818_trailing_tick",
     "tsl18": "candidate_TSL18_trailing_tick",
-    "twl25": "candidate_TWL25_loss_filtered_tick",
+    "ts3k": "candidate_TS3K_small_account_tick",
     "resync": "resync_m1_from_2020",
     "resync-ticks": "resync_ticks", "ticks": "resync_ticks",
 }

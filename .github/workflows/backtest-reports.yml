@@ -14,7 +14,7 @@ on:
     inputs:
       strategies:
         description: "Which books (space-separated cli/run.py names)"
-        default: "t818 v017"
+        default: "tsl18 v072"
       sections:
         description: "Which backtest sections (5/6; V017 starts 2026-07-01)"
         default: "5 6"
