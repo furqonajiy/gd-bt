@@ -99,6 +99,8 @@ of their pinned version — a safe catch-all.
   **Victor/V017 trailing-geometry** sweep via
   `tools/sweep_victor_trailing_geometry.py` — single-knob perturbations from
   `base_v017` over trailing-open/close, SL-mult, hold, expiry, gap, final target;
+  trailing distances < 0.5 are never swept — ELEV8 rejects a resting stop under
+  its ~0.4 min-stop and the tick backtest doesn't enforce that floor;
   recent window **May+June** where tick-covered, validate Jan-Jun; artifact
   `july-victor-trailing-geometry-sweep`). The **TSL18 sweep covers quality +
   collision; the Victor sweep covers trailing geometry**; backtests run **$50K +
