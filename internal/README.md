@@ -245,9 +245,14 @@ python tools/live_feed_loop.py --family scalper --interval 30 `
 
 `--family` selects the generator (`scalper`/`risk02`/`canonical`/`better`/`zones`);
 everything after `--` is passed verbatim to that generator, so the live feed is
-byte-identical to the backtest archive for the same bars. The repo-root
-`cli_*.txt` files are runnable deployment-command snapshots — the current R4
-champion is `cli/champion_R4_SQZ6_no_trailing.txt`; Victor is `cli/champion_victor.txt`.
+byte-identical to the backtest archive for the same bars. The `cli/*.txt` files
+are runnable deployment-command snapshots — the deployed live set is the Victor
+champion `cli/candidate_V073A_victor_rr_trailing.txt` (as-posted R2-grind fallback
+`cli/candidate_V072_victor_trailing_combo.txt`), the self-scalper book
+`cli/candidate_TSL18_trailing_tick.txt` (joins at ~$10k), and the live $3K book
+`cli/candidate_TS3K_small_account_tick.txt`. All are trailing-close **uncapped
+runners** (`--runner-final-cap` default: TP3/TP2 is a reference level, the
+trailing-close SL owns the exit). `cli/run.py <alias> <section>` runs any section.
 
 Full procedures, sanity checks, and failure recovery are in
 [`../docs/OPERATIONS_PLAYBOOK.md`](../docs/OPERATIONS_PLAYBOOK.md). MT5 connection

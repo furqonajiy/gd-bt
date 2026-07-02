@@ -6,9 +6,14 @@ Verified 2026-06-16 against the live broker spec via the live reconciliation
 + `tools/dump_mt5_spec.py`.
 
 Bottom line from the reconciliation: at equal lot, live tracks the backtest **to
-the cent** on entries, TP1/TP2/TP3 targets, and SL. The **only** gap is **locked
-protective stops** (LOCK_TP1 / LOCK_TP2), which fill at market on the retrace and
-give back a point or two. Everything below is how each live effect is handled.
+the cent** on entries, TP1/TP2 targets, and SL (and TP3 for capped / laddered
+books). Two gaps: **locked protective stops** (LOCK_TP1 / LOCK_TP2), which fill at
+market on the retrace and give back a point or two; and — for a **trailing-close
+RUNNER** book (`runner_no_final_cap`, the default whenever trailing-close is on) —
+the **final target is only a reference level**: there is NO broker TP at TP3/TP2,
+the trailing-close SL rides past it to the highest close (bounded by `max_hold`),
+and that exit carries the usual M1-vs-tick trailing seam. Everything below is how
+each live effect is handled.
 
 **Skip the model where you have ticks.** The slippage/spread rows below are how
 the **M1 OHLC** backtest *approximates* live fills. When the **tick archive**
@@ -26,7 +31,8 @@ knob and is what the per-regime sweeps score against.
 | Live execution effect | Backtest treatment | Current value | Set in code |
 |---|---|---|---|
 | **Entry fills** | exact at the ladder price (spread-aware, strict-touch) | matched to the cent | engine |
-| **TP1/TP2/TP3 targets** | exact limit fill at the level | matched | engine |
+| **TP1/TP2 targets** (and TP3 for capped / laddered books) | exact limit fill at the level | matched | engine |
+| **Final target of a trailing-close RUNNER** (`runner_no_final_cap`) | reference level only — no broker TP; the trailing-close SL rides past it to the highest close (bounded by `max_hold`) | executor-owned SL | `strategy/trailing_engine._broker_take_profit_price` + `execution/mt5_executor_uncapped_runner` |
 | **Raw SL** | exact at the stop level (tick-confirmed, never past) | matched | engine |
 | **LOCK_TP1 give-back** (lock fills past TP1 on retrace) | **modeled** | **2.0 pts** | `lock_tp1_exit_slippage_points` |
 | **LOCK_TP2 give-back** | **modeled** | **1.0 pt** | `lock_tp2_exit_slippage_points` |

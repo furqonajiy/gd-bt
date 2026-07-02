@@ -116,8 +116,9 @@ execution geometry, structure guard ON in the feed. It is **SHADOW / RESEARCH**:
 it has its own positions / feed / report / log artifacts
 (`positions_tsg18.json`, `signals/tsg18*.txt`, `reports/TSG18_*`,
 `forensic_tsg18.jsonl`) so it can be demo-A/B'd beside TSL18 without colliding.
-Runnable now by unique filename substring (`python cli/run.py tsl18_structure_guard 5`);
-**no `cli/run.py` alias is added until it is validated.**
+**The TSG18 shadow snapshot was pruned 2026-07-02 with the deployed-set
+consolidation** — recover `cli/candidate_TSL18_structure_guard_tick.txt` from git
+history to re-run it (it has no `cli/run.py` alias until it is validated).
 
 ## How to validate
 

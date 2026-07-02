@@ -25,7 +25,8 @@ or ask the user to re‑explain.
   now runs **`rsi75_sqz6_rr40`** — the edge+OOS leader of the 34-variant RSI ×
   Bollinger × R:R sweep (edge $63,940 / OOS $11,633 / DD 38.4%), which superseded
   an interim e5 RSI champion. They live in `champions/CHAMPION_{R2bull,R3strong,
-  R4parab}.json` / `cli/champion_R4_SQZ6_no_trailing` (tag SQZ6). SC24 (e6 d24) stays the
+  R4parab}.json` (the SQZ6 R4 snapshot `cli/champion_R4_SQZ6_no_trailing` was
+  pruned 2026-07-02 — recover from git; tag SQZ6). SC24 (e6 d24) stays the
   baseline so the per-regime "did anything beat it?" comparison is stable across
   R4→R3→R2→R1.
 - **Sweep = search for something that beats the baseline.** It samples many
@@ -296,8 +297,8 @@ then `--mode validate_top --window jan_jul --top-json …full_recent/top_candida
 
 **The overnight/heavy sweep runs on Actions, not from a working branch.** For July
 use the manual‑only **`July V817 TSL18 Backtests + Staged Sweep`** workflow
-(`.github/workflows/july-v817-tsl18-backtests-staged-sweep.yml`): it runs V817 +
-TSL18/T818 50K/5K backtests then the bounded `smoke → full_recent → validate_top`
+(`.github/workflows/july-v817-tsl18-backtests-staged-sweep.yml`): it runs the
+deployed-book 50K/5K backtests then the bounded `smoke → full_recent → validate_top`
 sweep, and (with `commit_results=true`) commits backtest workbooks + sweep summaries
 to `main`. (The older `tsl18-quality-entry-overnight-sweep.yml` still runs smoke on a
 `main` push / `full_june` via `workflow_dispatch mode=full`.) Promotion follows the

@@ -95,17 +95,20 @@ OOS>0 and DD≤40% are non-negotiable.
 
 ## 3. Deploy a winner
 
-The Victor executor is `cli/champion_victor.txt` (tag **VIC**, feed
-`signals/victor_live.txt`, positions `positions_victor.json`). Plug the winning
-config's flags into its BACKTEST + AUTO commands (entries, sl_multiplier, lock
-delays, max-hold, final-target, …). If the winner uses the signal policy
+The deployed Victor executor is `cli/candidate_V073A_victor_rr_trailing.txt` (tag
+**V073A**, feed `signals/victor_v073a_live.txt`, positions `positions_v073a.json`),
+with `cli/candidate_V072_victor_trailing_combo.txt` (tag **V072**) as the R2-grind
+fallback. (`cli/champion_victor.txt` / tag VIC was pruned 2026-07-02 — recover from
+git history if needed.) Plug the winning config's flags into the BACKTEST + AUTO
+commands (entries, sl_multiplier, lock delays, max-hold, final-target, …). If the winner uses the signal policy
 (`signal_min_rr`, `rewrite_tp*_rr`, `sl_source=atr`, …), note these are
 **backtest/sweep dimensions** — to trade them live the executor must apply the
 same policy (it reads the same StrategyConfig fields; confirm `auto_explicit`
 forwards them before relying on a policy winner live). A pure-param winner
 (`[Victor TP/SL as-is]`) deploys with no policy flags.
 
-Pick `--risk` to your cap (Victor's deployed champion runs **2.5%** — the DD≤40%
+Pick `--risk` to your cap (the deployed Victor champion V073A runs **5%** on the
+corrected-R:R ladder; the earlier VIC book ran **2.5%** — the DD≤40%
 compliant max on 2026: ~36.8% equity-curve DD, $50k → ~$417k. 5% was ~57% and over
 the gate; 3%+ breaches it; 1% is compliant but smaller — your sizing choice,
 separate from the strategy the sweep picks).
@@ -216,7 +219,7 @@ loop, not a one-off:
    tab -> Report -> HTML) -> reconcile with
    ```
    python tools/reconcile_report_html.py --report <history.html> \
-       --backtest <reports/BEST_VIC_*.xlsx> --tag VIC
+       --backtest <reports/V073A_*.xlsx> --tag V073A
    ```
    It matches each live leg to its backtest entry by the `[TAG-]MMDD#DD.N`
    comment and prints per-exit-type live-vs-backtest P&L + **avg LOCK_* slip in

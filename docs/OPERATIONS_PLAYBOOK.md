@@ -282,8 +282,9 @@ the line is amended in place (same `N.`, same signal_key/magic) and an
 `amend` record is appended to `signal_overrides.jsonl`; when he deletes
 one the line is removed and a `revoke` record is appended. When the Victor
 provider-filter is run (`tools/live_provider_signal_filter.py --watch`, as
-in `cli/champion_victor.txt`), it regenerates the filtered live feed
-(`signals/victor_live.txt`) from the raw feed on every change. Startup
+in the Victor snapshot `cli/candidate_V073A_victor_rr_trailing.txt`), it
+regenerates the filtered live feed (`signals/victor_v073a_live.txt`) from the raw
+feed on every change. Startup
 catch-up applies the same reconciliation to the
 last 24 h, so edits/deletions made while the listener was down are not
 lost (see "Listener was down" below for longer gaps).
@@ -365,8 +366,8 @@ tag, so nothing ever collides and every file traces to one strategy at a glance:
 | Report (Excel) dir | `--output-dir` | `reports/SQZ6_202601` | `reports/VIC_202601` |
 
 No two strategies share a tag, positions file, feed file, or report name. The
-snapshot file follows too (`cli/champion_R4_SQZ6_no_trailing.txt`). When you add
-a strategy, mint a fresh ≤ 5-char tag and derive all four names from it.
+snapshot file follows too (e.g. `cli/candidate_TSL18_trailing_tick.txt`). When you
+add a strategy, mint a fresh ≤ 5-char tag and derive all four names from it.
 
 ### Regime auto-switch (`--adaptive`)
 
@@ -486,7 +487,11 @@ With `--reopen-missing-positions true`, MT5 mirrors the replay: any entry the
 backtest engine still considers **OPEN** that has no live position (e.g. you
 closed it by hand to thin out exposure) is restored on the next cycle — same
 per-entry comment, the replay's lot, its current effective stop (clamped to a
-broker-legal level), and the leg's target. **Restoration follows the strategy:**
+broker-legal level), and — for a **capped** book — the leg's target as a broker TP.
+(A trailing-close **runner** book, `runner_no_final_cap` — the default whenever
+trailing-close is on, so all deployed books — carries **no** broker TP on restore
+either; the executor-owned trailing SL owns the exit.) **Restoration follows the
+strategy:**
 
 - **`trailing_open_distance = 0` (laddered LIMIT strategies)** — **price-aware,
   per leg**: at market when the current price is at-or-better than that leg's

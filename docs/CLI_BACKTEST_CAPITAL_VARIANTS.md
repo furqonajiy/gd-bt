@@ -26,20 +26,19 @@ and month window. It changes only:
 Example:
 
 ```text
-python cli/run.py tsl18 backtest
-python cli/run.py v817 backtest       # V817 Victor trailing ($50K book)
-python cli/run.py t818 backtest       # t818 = current TSL18 alias
+python cli/run.py tsl18 backtest      # TSL18 self-scalper trailing ($50K book)
+python cli/run.py v073a backtest      # V073A Victor corrected-R:R trailing
 ```
 
 This prints or runs the existing backtest sections, with each 50K report followed
 by the matching 5K report. Use `--print` to preview the commands without running.
 
 A book authored at a **non-$50K** capital is a deliberate sizing choice and is
-**left untouched** — no 5K clone, no `_5k` output dir (e.g. the Victor V116 book at
-`--initial-capital 12000`). The expansion only mirrors a $50K book down to $5K; it
+**left untouched** — no 5K clone, no `_5k` output dir (e.g. the live TS3K book at
+`--initial-capital 3000`). The expansion only mirrors a $50K book down to $5K; it
 never rewrites a strategy's authored capital. Pinned by
 `tests/test_cli_run_launcher.py` (`test_backtest_keyword_prints_50k_and_5k_variants`
-on V817, `test_non_50k_book_backtest_is_not_expanded` on V116) and
+on TSL18, `test_non_50k_book_backtest_is_not_expanded` on TS3K) and
 `tests/test_cli_run_capital_variants.py`.
 
 ## July tick data + automation
@@ -51,8 +50,8 @@ edit** — the month/date windows are unchanged.
 
 The **`July V817 TSL18 Backtests + Staged Sweep`** workflow
 (`.github/workflows/july-v817-tsl18-backtests-staged-sweep.yml`, **manual-only**)
-runs `python cli/run.py <book> backtest` for **V817** and **TSL18/T818** to produce
-both the $50K and $5K reports from the July tick data, then a **bounded** staged
+runs `python cli/run.py <book> backtest` to produce both the $50K and $5K reports
+from the July tick data, then a **bounded** staged
 TSL18 quality/collision sweep (`smoke` → `full_recent` (jun_jul) → `validate_top`
 (jan_jul)). Dispatched with `commit_results=true` it commits the backtest workbooks
 + sweep summaries back to `main`. It never uses `--execute`, never trades live, and

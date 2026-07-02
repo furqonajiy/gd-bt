@@ -19,11 +19,24 @@ from .engine import Recommendation, decide as _decide
 def _broker_take_profit_price(config: StrategyConfig, final_target_price: float) -> float | None:
     """Return the broker TP to attach, or None when trailing-close owns exit.
 
-    A trailing-close strategy should not also carry a broker TP3 cap. TP3 remains
-    a model/reference level, but live MT5 exits by executor-owned SL only.
+    The broker TP is dropped only for a trailing-close RUNNER -- a strategy that
+    both trails (``trailing_close_distance > 0``) AND runs past the final target
+    (``runner_no_final_cap`` / ``--runner-final-cap none``). For a runner, TP3
+    stays a model/reference level and live MT5 exits by the executor-owned trailing
+    SL only.
+
+    A trailing-close strategy that STILL caps at its final target keeps its broker
+    TP. This is the same switch (``runner_no_final_cap``) the engine uses to skip
+    the final-target close, so live and the replay agree: if the engine still banks
+    at TP3, live must too -- and the broker TP is the ONLY thing that closes a leg
+    at its target (the executor manage has no final-target close). Dropping it for a
+    capped book would leave the leg riding past a target the backtest banks at,
+    with a stale SL, until the max-hold timer -- the exact live/replay drift this
+    gate prevents.
     """
+    runs_past_target = bool(getattr(config, "runner_no_final_cap", False))
     has_trailing_close = float(getattr(config, "trailing_close_distance", 0.0) or 0.0) > 0
-    if has_trailing_close:
+    if runs_past_target and has_trailing_close:
         return None
     return float(final_target_price)
 

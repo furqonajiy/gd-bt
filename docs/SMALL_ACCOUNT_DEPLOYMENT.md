@@ -1,9 +1,20 @@
-# Small-account ($2K) safe deployment of TSL18 / T818
+# Small-account safe deployment of the self-scalper (TS3K live / TS2K research)
+
+> **DEPLOYED (2026-07-02): the live small-account book is `TS3K`** — the
+> self-scalper feed+geometry at **$3,000** with **entries 1 / risk 1% / max-open 4 /
+> daily-loss 10%** (1-entry beat 2-entry ~2× on June net; a 1-leg zone can't
+> over-risk, so the risk-budget gate is left **off**). It is an **uncapped runner**
+> (`--runner-final-cap none`; TP3 a reference level, the trailing-close SL owns the
+> exit). Snapshot `cli/candidate_TS3K_small_account_tick.txt`, alias `ts3k`. Step up
+> to the full **TSL18** book around ~$10K. **The `TS2K` $2K wrapper this doc was
+> written around is the superseded predecessor** (entries 2 / max-open 1 /
+> risk-budget gate on), pruned 2026-07-02 (recover from git). Its risk-math, floor
+> formulas, and measurements below remain valid research.
 
 This is the contract for running the existing **profitable-but-volatile**
-self-scalper (T818, live tag TSL18) on a **small $2,000 account** without one bad
-zone blowing the account. It does **not** invent a new edge — it adds a
-deployment-risk wrapper (candidate **TS2K**) and the tooling to validate it.
+self-scalper (live tag TSL18) on a **small account** without one bad zone blowing
+the account. It does **not** invent a new edge — it adds a deployment-risk wrapper
+and the tooling to validate it.
 
 **Be honest up front:** TS2K reduces tail risk and cluster exposure and **will
 cap upside**. Judge it by max drawdown, worst daily loss, and *survival* first —
@@ -183,9 +194,12 @@ NOT shrink with more money — only the $ figure grows); the gated 2-entry holds
 **~−18 to −21%** with a higher profit factor. At **$2K a single worst-case zone
 (~$1,469) is ~73% of the account**, so full-entry is ruin-prone there.
 
-**Decision: at $2K run LIMITED 2-entry (TS2K / VS2K). Switch to full 8-entry
-around ~$10K**, where the worst zone is ~15% of the account and full ≈ doubles the
-return for the same ~−30% DD on a comfortable base.
+**Decision (2026-07-02): the live book is 1-entry `TS3K` at $3K** (entries 1 /
+risk 1% / max-open 4 / daily-loss 10% — 1-entry beat 2-entry ~2× on June net).
+**Switch to the full 8-entry TSL18 book around ~$10K**, where the worst zone is
+~15% of the account and full ≈ doubles the return for the same ~−30% DD on a
+comfortable base. (The earlier plan — LIMITED 2-entry TS2K / VS2K at $2K — is
+superseded; both wrappers were pruned 2026-07-02.)
 
 **This is MANUAL, not automatic.** Nothing auto-scales the entry count with
 equity. What IS automatic: per-entry **lot sizing** (risk% × current equity) and
@@ -199,7 +213,8 @@ resolver could automate this, but it is not built — change the parameter, re-r
 **Do not pool both books on one small account.** A combined TSL18+V817 $2K run
 made things *worse* (combined DD −41.6%, and TSL18's high signal rate starved
 V817 via the shared concurrency cap, dragging it to a loss). Run each book on its
-own account / slot; V817 alone is the stronger small-account vehicle.
+own account / slot. (The deployed Victor book is now V073A; this pooling test used
+TSL18 + the since-pruned V817.)
 
 ## Live enforcement (wired) — backtest ↔ live ↔ tick-sim parity
 

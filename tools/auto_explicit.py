@@ -183,8 +183,11 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Profit locked beyond entry (price units) when --bep-after-tp1; use >=0.40 for live.")
     scale.add_argument("--trailing-close-after-stage", type=_positive_int, default=0,
                        help="Trailing-close engages only at/after this stage (0=from open, 1=after TP1, 2=after TP2).")
-    scale.add_argument("--runner-final-cap", choices=["tp3", "none"], default="tp3",
-                       help="tp3 = trailing remainder force-closes at the final target; none = pure trail.")
+    scale.add_argument("--runner-final-cap", choices=["auto", "tp3", "none"], default="auto",
+                       help="auto (default) = a trailing-close strategy runs past the final target "
+                            "(no broker TP; the trailing-close SL owns the exit) -- because trailing-close "
+                            "IS the exit; tp3 = force the trailing remainder to bank at the final target "
+                            "(keeps the broker TP); none = pure trail (explicit).")
     scale.add_argument("--shared-sl", choices=["true", "false"], default="false",
                        help="All entries share ONE stop level (anchored on the first entry) instead "
                             "of per-entry stops; risk-sizing uses each leg's real distance to it.")
@@ -336,7 +339,9 @@ def config_from_args(args: argparse.Namespace) -> StrategyConfig:
         bep_after_tp1=_bool_text(args.bep_after_tp1),
         bep_buffer=args.bep_buffer,
         trailing_close_after_stage=args.trailing_close_after_stage,
-        runner_no_final_cap=(args.runner_final_cap == "none"),
+        runner_no_final_cap=(args.runner_final_cap == "none"
+                             or (args.runner_final_cap == "auto"
+                                 and float(args.trailing_close_distance or 0.0) > 0)),
         shared_sl=_bool_text(args.shared_sl),
         per_entry_targets=_parse_entry_targets(args.entry_targets, args.entries),
         bep_after_move=args.bep_after_move,

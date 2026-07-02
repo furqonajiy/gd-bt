@@ -19,7 +19,9 @@ def _stamp(dt: datetime, msg: str) -> str:
 def test_write_appends_lines(tmp_path):
     p = tmp_path / "console.txt"
     log = RotatingTextLog(p, retain_hours=24)
-    now = datetime(2026, 7, 1, 15, 0, 0)
+    # Stamp at real 'now' -- write() prunes against the wall clock, so a hardcoded
+    # past date would age out (and drop) the line as soon as the test runs a day later.
+    now = datetime.now()
     log.write(_stamp(now, "EXECUTION: placed=0"))
     log.write(_stamp(now, "Signal V017-...#05: trailing-open waiting"))
     text = p.read_text()
