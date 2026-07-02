@@ -503,6 +503,18 @@ it stays 1-entry until ~$10K, then switch to the full TSL18 book.
   worse than either solo). See `docs/SMALL_ACCOUNT_DEPLOYMENT.md`; profile a workbook with
   `tools/strategy_profile.py`, simulate both books pooled with
   `tools/sim_portfolio_small_account.py`.
+  `tools/sim_pool_two_books.py` is the **generic** two-book pooling harness that
+  emits the **standard 4-sheet workbook**: it runs BOTH books' feeds on ONE
+  shared-equity account via `run_hybrid_backtest`'s `config_resolver` (each signal
+  keeps its OWN book's geometry + risk sizing; equity compounds across both), with
+  ONE account-level `DeploymentGate` from the `--gate-from` book's config capping
+  concurrency / daily-loss across BOTH feeds — so the workbook's Summary carries
+  the COMBINED equity + drawdown (both books can be underwater at once, the number
+  that matters for a shared small account). Each book is its exact
+  `backtest_hybrid.py` command (`--book TAG=cmdfile`, pass twice); window / capital
+  / output-dir come from the tool's own flags. TICK-preferred / M1-fallback like
+  every hybrid backtest. Research/reporting only; promotes nothing, never trades
+  live.
 - **Drawdown is reported in USD *and* %** everywhere (standing rule):
   `aggregate_backtest_result` carries `max_drawdown_usd` + a `drawdown_trough`
   (when it happened + how many signals/entries had executed by then), and the
