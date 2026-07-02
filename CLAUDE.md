@@ -386,7 +386,29 @@ pair is a thin package that imports it.
   `bep_after_move` (per-leg break-even+ once a leg is N price units in
   favour) — all default to **disabled** and are enabled **explicitly per run
   via CLI flags** (the full surface lives in `tools/backtest_explicit.py` /
-  `tools/auto_explicit.py`). The **`bep_plus_half_tp1` profit-lock mode**'s
+  `tools/auto_explicit.py`). **Trailing-close IS the exit — a trailing-close
+  strategy runs past its final target by DEFAULT** (`--runner-final-cap auto`, the
+  default on `backtest_explicit`/`auto_explicit`): when `trailing_close_distance >
+  0` the CLI sets `runner_no_final_cap` so the leg does NOT bank at `final_target`
+  — it rides the `trailing_close_distance` stop past it (to the highest close,
+  bounded by `max_hold`; once price hits the trail it closes anyway, so the timer
+  is only a backstop). `final_target` (TP3/TP2) stays a **model/reference** level.
+  Force the old cap back with **`--runner-final-cap tp3`**; `none` is the explicit
+  form of the default. The switch is enforced in BOTH places at once and they MUST
+  agree: the engine skips the final-target close (`core/trailing_positions.py`
+  `pure_trail`) AND the live executor omits the broker TP
+  (`strategy/trailing_engine._broker_take_profit_price` +
+  `execution/mt5_executor_uncapped_runner`), **both keyed on `runner_no_final_cap`**
+  (which the CLI auto-derives from trailing-close). The broker TP is the ONLY thing
+  that closes a leg at its target live (the executor manage has no final-target
+  close), so the two must never drift: a `tp3`-forced trailing book KEEPS its broker
+  TP, and dropping the TP without also uncapping the engine would leave the leg
+  riding past a target the replay banks at, on a stale stop, until `max_hold` (the
+  live↔replay drift this coupling prevents). `DEFAULT_CONFIG.runner_no_final_cap`
+  stays **False** (parity: the default is CLI-only, so direct-`StrategyConfig` and
+  non-trailing books are byte-identical). Live books **TS3K + V073A** run this now;
+  **TSL18** (`cli/candidate_TSL18_trailing_tick.txt`, `--runner-final-cap none`)
+  joins at ~$10k capital. The **`bep_plus_half_tp1` profit-lock mode**'s
   early-arm stop (a leg that moves `bep_trigger_distance` *before* TP1) now parks
   at **entry ± `bep_buffer`** instead of exactly entry — `bep_buffer` defaults
   **0.0** so it is exact break-even (byte-identical to before, parity preserved),

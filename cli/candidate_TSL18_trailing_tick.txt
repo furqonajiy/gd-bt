@@ -1,17 +1,19 @@
 # =========================================================================
 # SELF-SCALPER TRAILING -- TSL18 (Trailing SLM 1.8)  | tag TSL18   *** RESEARCH ***
-# TSL18 = a SECOND deployed identity of T818 -- IDENTICAL params/feed/geometry,
-# a distinct 5-char tag so it can run BESIDE T818 (and T160/SQZ6/T18S) on one
-# account with disjoint magics/comments. Use it for an A/B sleeve or a parallel
-# demo of the same strategy without colliding on positions/orders.
+# TSL18 = T818's feed/geometry with the UNCAPPED-RUNNER exit: --runner-final-cap
+# none, so TP3 is only a reference level and the trailing-close 0.5 stop takes the
+# exit (rides to the highest close, bounded by max-hold). This is the ONE way it
+# now differs from T818 (which still banks at TP3); the 5-char tag keeps it on
+# disjoint magics/comments so it can run BESIDE T818/T160/SQZ6/T18S on one account.
 #
-# WHAT IT IS (identical to T818): the C160 self-scalper feed (RSI 70/30 +
-#   Bollinger squeeze >=0.0006 + R:R 1.2/2.5/5.0) + trailing-open/close 0.5/0.5
-#   engaged after TP2, on the Phase-2 winner geometry:
+# WHAT IT IS: the C160 self-scalper feed (RSI 70/30 + Bollinger squeeze >=0.0006 +
+#   R:R 1.2/2.5/5.0) + trailing-open/close 0.5/0.5 engaged after TP2, UNCAPPED
+#   (--runner-final-cap none), on the Phase-2 winner geometry:
 #     entries 8 / range_to_sl / entry-sl-gap 0.7 / shared-sl off /
-#     sl-multiplier 1.8 / max-hold 150 / activation-delay 0 / final-target TP3 /
+#     sl-multiplier 1.8 / max-hold 150 / activation-delay 0 / final-target TP3(ref) /
 #     lock-after-tp1+tp2 / tp1-lock-delay 24 / tp2-lock-delay 24 /
-#     tp1-lock-fraction 0.75 / trailing-close-after-stage 2. Risk 1%.
+#     tp1-lock-fraction 0.75 / trailing-close-after-stage 2 / runner-final-cap none.
+#     Risk 1%.
 #
 # CALIBRATED EVIDENCE (inherits T818's, risk 1% / $50k, Phase-2 tick-calibrated
 #   Jan 2026, ~10,140 signals): est. edge $108,985 / est. OOS $6,408 /
@@ -104,7 +106,8 @@ python tools/auto_explicit.py `
   --runner-after-tp3 false `
   --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
-  --trailing-close-after-stage 2
+  --trailing-close-after-stage 2 `
+  --runner-final-cap none
 
 # ===== 4. SIGNAL GENERATOR (before backtest) =====
 # One-shot full static archive signals/tsl18.txt from ALL chart history.
@@ -153,6 +156,7 @@ python tools/backtest_hybrid.py `
   --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
   --trailing-close-after-stage 2 `
+  --runner-final-cap none `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --output-dir reports/TSL18_202606 `
@@ -197,6 +201,7 @@ python tools/backtest_hybrid.py `
   --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
   --trailing-close-after-stage 2 `
+  --runner-final-cap none `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
   --output-dir reports/TSL18_202601 `
@@ -240,6 +245,7 @@ python tools/backtest_explicit.py `
   --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
   --trailing-close-after-stage 2 `
+  --runner-final-cap none `
   --lock-tp1-exit-slippage 0.9 `
   --lock-tp2-exit-slippage 0.45 `
   --output-dir reports/TSL18_2025 `
@@ -284,6 +290,7 @@ python tools/backtest_explicit.py `
   --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
   --trailing-close-after-stage 2 `
+  --runner-final-cap none `
   --lock-tp1-exit-slippage 0.5 `
   --lock-tp2-exit-slippage 0.25 `
   --output-dir reports/TSL18_2024 `
@@ -328,6 +335,7 @@ python tools/backtest_explicit.py `
   --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
   --trailing-close-after-stage 2 `
+  --runner-final-cap none `
   --lock-tp1-exit-slippage 0.4 `
   --lock-tp2-exit-slippage 0.2 `
   --output-dir reports/TSL18_2021_2023 `

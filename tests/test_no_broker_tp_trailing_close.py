@@ -99,6 +99,8 @@ def test_trailing_close_placement_sends_no_broker_tp(monkeypatch):
         trailing_open_distance=2.0,
     )
     setattr(plan, "trailing_close_distance", 0.5)
+    # Broker TP is dropped only for a trailing-close RUNNER (runner_no_final_cap).
+    setattr(plan, "runner_no_final_cap", True)
 
     mt5 = _FakeMt5()
     executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
@@ -108,6 +110,42 @@ def test_trailing_close_placement_sends_no_broker_tp(monkeypatch):
     assert log.placed == 1
     assert mt5.requests[0]["tp"] == 0.0
     assert any("TP=none" in action for action in log.actions)
+
+
+def test_trailing_close_capped_keeps_broker_tp(monkeypatch):
+    """A trailing-close book that STILL caps at its final target (runner_no_final_cap
+    off) must keep its broker TP -- that TP is the only thing that closes the leg at
+    the target live, and removing it would leave the leg riding past a target the
+    backtest banks at (the #353 over-broad-gate regression this guards)."""
+    signal = _signal()
+    activation = signal.signal_time_chart
+    monkeypatch.setattr(
+        mt5_executor_trailing,
+        "_wall_clock_chart_now",
+        lambda: activation + timedelta(minutes=1),
+    )
+    plan = NewSignalPlan(
+        signal=signal,
+        action="FOLLOW",
+        rationale="test",
+        orders=[PlannedOrder(0, signal.side, 4750.0, 4740.34, 0.10, 96.6)],
+        pending_expires_at=activation + timedelta(minutes=630),
+        final_target_label="TP3",
+        final_target_price=4780.0,
+        total_initial_risk_dollars=96.6,
+        pending_activates_at=activation,
+        trailing_open_distance=2.0,
+    )
+    setattr(plan, "trailing_close_distance", 0.5)
+    setattr(plan, "runner_no_final_cap", False)  # capped: broker TP must stay
+
+    mt5 = _FakeMt5()
+    executor = Mt5Executor(_FakeConn(mt5), "XAUUSD")
+
+    log = executor.place_signal(signal, plan)
+
+    assert log.placed == 1
+    assert mt5.requests[0]["tp"] == 4780.0  # broker TP3 kept
 
 
 def test_trailing_close_manage_removes_existing_broker_tp():
@@ -128,3 +166,24 @@ def test_trailing_close_manage_removes_existing_broker_tp():
     assert mt5.requests[0]["position"] == 42
     assert mt5.requests[0]["sl"] == 4744.0
     assert mt5.requests[0]["tp"] == 0.0
+
+
+def test_broker_take_profit_price_gates_on_runner_not_trailing_close():
+    """The broker TP is dropped only for a trailing-close RUNNER: it needs BOTH a
+    trailing-close distance AND runner_no_final_cap. A trailing-close book that caps
+    at its target keeps the TP; the runner flag alone (no trail) keeps it too."""
+    import dataclasses
+
+    from trading.engine import DEFAULT_CONFIG
+    from trading.engine.strategy.trailing_engine import _broker_take_profit_price
+
+    capped = dataclasses.replace(DEFAULT_CONFIG, trailing_close_distance=0.5,
+                                 runner_no_final_cap=False)
+    runner = dataclasses.replace(DEFAULT_CONFIG, trailing_close_distance=0.5,
+                                 runner_no_final_cap=True)
+    no_trail = dataclasses.replace(DEFAULT_CONFIG, trailing_close_distance=0.0,
+                                   runner_no_final_cap=True)
+
+    assert _broker_take_profit_price(capped, 4780.0) == 4780.0
+    assert _broker_take_profit_price(runner, 4780.0) is None
+    assert _broker_take_profit_price(no_trail, 4780.0) == 4780.0

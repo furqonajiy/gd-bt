@@ -20,13 +20,22 @@ class Mt5Executor(_TrailingMt5Executor):
 
     @staticmethod
     def _config_omits_broker_tp(config: StrategyConfig) -> bool:
-        return float(getattr(config, "trailing_close_distance", 0.0) or 0.0) > 0
+        # Drop the broker TP only for a trailing-close RUNNER (trails AND runs past
+        # the final target). A trailing-close book that still caps at its target
+        # keeps its broker TP -- that TP is the only thing that closes the leg at the
+        # target live (see trailing_engine._broker_take_profit_price).
+        runs_past_target = bool(getattr(config, "runner_no_final_cap", False))
+        return runs_past_target and float(getattr(config, "trailing_close_distance", 0.0) or 0.0) > 0
 
     @staticmethod
     def _plan_omits_broker_tp(plan) -> bool:
+        # The decide wrapper stamps broker_take_profit_price = None exactly when the
+        # config is a trailing-close runner, so prefer it; the fallback mirrors the
+        # runner_no_final_cap + trailing-close gate for a hand-built plan.
         if hasattr(plan, "broker_take_profit_price"):
             return getattr(plan, "broker_take_profit_price") is None
-        return float(getattr(plan, "trailing_close_distance", 0.0) or 0.0) > 0
+        runs_past_target = bool(getattr(plan, "runner_no_final_cap", False))
+        return runs_past_target and float(getattr(plan, "trailing_close_distance", 0.0) or 0.0) > 0
 
     @staticmethod
     def _format_no_broker_tp_log(log):
