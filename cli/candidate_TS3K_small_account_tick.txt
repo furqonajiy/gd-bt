@@ -1,69 +1,72 @@
 # =========================================================================
-# SMALL-ACCOUNT SAFE DEPLOYMENT -- TS3K  | tag TS3K   *** RESEARCH / DEMO ***
+# SMALL-ACCOUNT LIVE DEPLOYMENT -- TS3K  | tag TS3K   *** THE LIVE $3K BOOK ***
 #
-# WHAT IT IS: the $3,000 sibling of TS2K. NOT a new alpha strategy -- the EXACT
-#   T818 / TSL18 feed and geometry (C160 self-scalper: RSI 70/30 + Bollinger
-#   >=0.0006 + R:R 1.2/2.5/5.0, range_to_sl / slm1.8 / max-hold 150 / TP3 /
-#   trailing 0.5-0.5 after TP2), wrapped in the SAME small-account
-#   deployment-safety constraints as TS2K so it can be run on a $3,000 account
-#   without one failed zone blowing the day.
+# WHAT IT IS: the SELECTED live variant of TSL18 for a $3,000 account. NOT a new
+#   alpha strategy -- the EXACT TSL18 feed and geometry (C160 self-scalper:
+#   RSI 70/30 + Bollinger >=0.0006 + R:R 1.2/2.5/5.0, range_to_sl / slm1.8 /
+#   max-hold 150 / TP3 / trailing 0.5-0.5 after TP2), run at ONE entry per
+#   signal with a daily circuit breaker and a concurrency cap, so it fits the
+#   0.01-lot floor and can never lose more than a bounded slice of the day.
 #
-# WHY $3K STILL USES THE 2-ENTRY POSTURE: the broker 0.01-lot floor. Full 8-entry
-#   TSL18 ladders up to 8 min-lot legs into ONE zone; the measured account-size
-#   floor for the full-8-entry-<=4% posture is ~$4,000 (p95 stop) up to ~$8,000
-#   (worst stop), so $3K is STILL UNDER the 8-entry floor. The safe 2-entry-<=6%
-#   posture needs only ~$660, so $3K carries it with more cushion than $2K (the
-#   extra $1k lowers the effective DD, it does NOT buy more legs). Keep entries at
-#   2 until ~$10K, then step up to full 8-entry (a MANUAL, capital-staged knob).
-#   See the risk table + floor math in docs/SMALL_ACCOUNT_DEPLOYMENT.md.
+# WHY 1 ENTRY (the 2026-07-02 selection, measured on the June/$3K grid):
+#   - Full 8-entry TSL18 at $3K rides a $1,235-class max DD (41% of the account)
+#     and a 25-loss streak -- the 8-entry account floor is ~$4K-$8K; step up to
+#     the full TSL18 book only around ~$10K (a MANUAL, capital-staged knob).
+#   - 1-entry beat 2-entry (~2x June net at similar DD%): the single leg sits at
+#     the shallowest ladder price (fills most often, no deeper-leg drag) and the
+#     whole 1% risk concentrates in one live-sizable leg.
+#   - max-open 4 beat max-open 1 decisively (strict max-open 1 suffocated the
+#     feed AND read worse DD%); daily breaker 10% cut the 6-month worst-case DD
+#     from -34.6% (ungated) to ~-25.6% and losing streaks from 27 to 21 at equal
+#     PF. Measured June/$3K: net +$11.3k (+378%) / DD -9.7% / PF 1.64 (grid run
+#     F1; pre-refresh archive -- refreshed-archive absolutes read lower, the
+#     variant ORDERING is what the selection rests on).
+#   See docs/SMALL_ACCOUNT_DEPLOYMENT.md for the floor math.
 #
-#   Only the small-account levers differ from T818 (all equity-RELATIVE, so they
-#   scale to $3k automatically):
-#     --entries                  8 -> 2     (fewer legs in one zone)
-#     --max-open-signals         (none) -> 1   (one signal group at a time)
-#     --daily-loss-limit-pct     (none) -> 0.05 (stop new signals after -5%/day)
-#     --risk-budget-gate         off -> on   (reject a min-lot zone too big for equity)
-#       --max-single-entry-risk-pct 0.04   (one leg <= 4% of equity ~= $120 at $3k)
-#       --max-zone-risk-pct         0.06   (whole ladder <= 6% of equity ~= $180 at $3k)
+#   The small-account levers vs the TSL18 champion book (equity-RELATIVE):
+#     --entries                  8 -> 1     (one live-sizable leg per signal)
+#     --max-open-signals         (none) -> 4   (cap open signal GROUPS)
+#     --daily-loss-limit-pct     (none) -> 0.10 (stop NEW signals after -10%/day)
 #     --initial-capital          50000 -> 3000
-#   OTHERWISE IDENTICAL to T818 (geometry, trailing, locks, slippage).
+#     (risk-budget gate not used: a 1-leg zone cannot over-risk the ladder)
+#   OTHERWISE IDENTICAL to TSL18 (geometry, trailing, locks, slippage).
 #
 # *** READ BEFORE TRUSTING THIS ***
-#  1) This does NOT create a new edge. It REDUCES tail risk / cluster exposure and
-#     WILL cap upside. Judge it by max drawdown, worst daily loss, and SURVIVAL
-#     first -- not net profit. Validate on the report (section 10) and demo.
-#  2) The three gates (daily-loss, max-open-signals, risk-budget) are enforced in
-#     BOTH the backtest (run_backtest + backtest_hybrid) AND the live executor
-#     (auto, via the same trading.engine DeploymentGate.live_check), proven to make
-#     identical decisions (tests/test_deployment_gate.py::
+#  1) This does NOT create a new edge. It bounds tail risk. Judge it by max
+#     drawdown, worst daily loss, and SURVIVAL first -- not net profit. Validate
+#     on the report (section 10) and demo.
+#  2) The gates (daily-loss, max-open-signals) are enforced in BOTH the backtest
+#     (run_backtest + backtest_hybrid) AND the live executor (auto, via the same
+#     trading.engine DeploymentGate.live_check), proven to make identical
+#     decisions (tests/test_deployment_gate.py::
 #     test_live_check_matches_backtest_gate_decisions). The live daily breaker is
 #     ACCOUNT-level (today's realized P&L on the symbol vs start-of-day equity),
 #     which suits a dedicated small account. Still DEMO-validate first: ELEV8 ticks
 #     != your broker, and the live daily-P&L read needs MT5 history.
 #  3) Numbers are tick-preferred but ELEV8 ticks != your live/demo broker.
-#  4) Run ONE book on the small account. Do NOT pool TS3K with a Victor book
-#     (V072/V116/V817) on the same $3k -- they fight for the shared concurrency cap
-#     and the combined drawdown is worse than either alone (measured TSL18+V817
-#     pooled DD -41.6%). One dedicated account per book.
+#  4) If V072 runs on the SAME account, note the gates are per-executor: TS3K's
+#     max-open counts only TS3K's signals, and its ACCOUNT-level daily breaker
+#     will also pause TS3K after a bad V072 day (deliberate capital protection).
+#     Combined exposure runs slightly hotter than the pooled simulation, which
+#     shared one cap -- set --max-open-signals 3 to be conservative.
 #
-# IDENTITY (tag **TS3K**, disjoint magics; never collides with TS2K/T818/TSL18):
+# IDENTITY (tag **TS3K**, disjoint magics; never collides with TSL18/V072):
 #   --strategy-tag TS3K . --positions-json positions_ts3k.json .
 #   feed signals/ts3k.txt (static) + signals/ts3k_live.txt (live) .
 #   reports/TS3K_2026xx (Excel) . forensic_ts3k.jsonl / notifications_ts3k.jsonl .
 #   console_ts3k.txt.
 #
-# NO cli/run.py alias is added (research/demo). Run by unique filename substring:
-#   python cli/run.py ts3k_small_account 5
+# Alias: python cli/run.py ts3k <section>
 #
 # SECTION MAP:
 #   1. Telegram Listener            (N/A -- self-generated feed)
 #   2. Live Loop Signal Generator   (continuous feed -> signals/ts3k_live.txt)
-#   3. Live Auto Executor           (tag TS3K, entries 2; gates enforced live)
+#   3. Live Auto Executor           (tag TS3K, entries 1; gates enforced live)
 #   4. Signal Generator             (one-shot static archive signals/ts3k.txt)
 #   5. Backtest from 2026-06        -> reports/TS3K_202606  (TICK; gates ON)
 #   6. Backtest from 2026-01        -> reports/TS3K_202601  (TICK; gates ON)
-#   7-9. (omitted -- TS3K is a $3k deployment wrapper validated on the tick era;
-#        for full-history era reads use T818's sections 7-9.)
+#   7-9. (omitted -- TS3K is the $3k deployment wrapper validated on the tick era;
+#        for full-history era reads use TSL18's sections 7-9.)
 #   10. Small-account validation report (sweep_small_account_deploy.py, TICK)
 # =========================================================================
 
@@ -71,7 +74,7 @@
 # N/A -- self-generated feed. Signals come from the generator (sections 2+4).
 
 # ===== 2. LIVE LOOP SIGNAL GENERATOR =====
-# IDENTICAL C160 feed filter to T818/TSL18/TS2K; only the output file differs.
+# IDENTICAL C160 feed filter to TSL18; only the output file differs.
 python tools/live_feed_loop.py `
   --family scalper `
   --interval 30 `
@@ -82,7 +85,7 @@ python tools/live_feed_loop.py `
   -- --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/ts3k_live.txt --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
 
 # ===== 3. LIVE AUTO EXECUTOR  (DEMO first -- see READ note 2) =====
-# entries 2 + all three deployment-safety gates enforced live (same DeploymentGate
+# entries 1 + the daily-loss + concurrency gates enforced live (same DeploymentGate
 # as the backtest). Demo-validate before any real-account run.
 python tools/auto_explicit.py `
   --signals signals/ts3k_live.txt `
@@ -104,7 +107,7 @@ python tools/auto_explicit.py `
   --minimum-lot 0.01 `
   --maximum-lot 100.0 `
   --lot-step 0.01 `
-  --entries 2 `
+  --entries 1 `
   --entry-ladder range_to_sl `
   --entry-sl-gap 0.7 `
   --shared-sl false `
@@ -126,19 +129,16 @@ python tools/auto_explicit.py `
   --trailing-open-distance 0.5 `
   --trailing-close-distance 0.5 `
   --trailing-close-after-stage 2 `
-  --risk-budget-gate true `
-  --max-single-entry-risk-pct 0.04 `
-  --max-zone-risk-pct 0.06 `
-  --daily-loss-limit-pct 0.05 `
-  --max-open-signals 1
+  --daily-loss-limit-pct 0.10 `
+  --max-open-signals 4
 
 # ===== 4. SIGNAL GENERATOR (before backtest) =====
-# One-shot full static archive signals/ts3k.txt -- identical C160 filter to T818.
+# One-shot full static archive signals/ts3k.txt -- identical C160 filter to TSL18.
 python tools/generate_scalper_signals.py --charts data/XAUUSD_M1_*_ELEV8.csv --output signals/ts3k.txt --start 2021-01-01 --session-start 0 --session-end 0 --signal-tz 7 --rsi-buy-max 70 --rsi-sell-min 30 --bb-bandwidth-min 0.0006 --rr1 1.2 --rr2 2.5 --rr3 5
 
 # ===== 5. BACKTEST FROM 2026-06 (current month, $3k, gates ON) =====
-# TICK-preferred (real fills from the committed tick archive). entries 2 + the
-# three deployment-safety gates. --initial-capital 3000. --end-date EXCLUSIVE.
+# TICK-preferred (real fills from the committed tick archive). entries 1 + the
+# daily-loss + concurrency gates. --initial-capital 3000. --end-date EXCLUSIVE.
 python tools/backtest_hybrid.py `
   --signals signals/ts3k.txt `
   --charts data/XAUUSD_M1_*_ELEV8.csv `
@@ -154,7 +154,7 @@ python tools/backtest_hybrid.py `
   --maximum-lot 100.0 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3.0 `
-  --entries 2 `
+  --entries 1 `
   --entry-ladder range_to_sl `
   --entry-sl-gap 0.7 `
   --shared-sl false `
@@ -178,11 +178,8 @@ python tools/backtest_hybrid.py `
   --trailing-close-after-stage 2 `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
-  --risk-budget-gate true `
-  --max-single-entry-risk-pct 0.04 `
-  --max-zone-risk-pct 0.06 `
-  --daily-loss-limit-pct 0.05 `
-  --max-open-signals 1 `
+  --daily-loss-limit-pct 0.10 `
+  --max-open-signals 4 `
   --output-dir reports/TS3K_202606 `
   --initial-capital 3000 `
   --start-date 2026-06-01 `
@@ -204,7 +201,7 @@ python tools/backtest_hybrid.py `
   --maximum-lot 100.0 `
   --lot-step 0.01 `
   --bonus-per-closed-lot 3.0 `
-  --entries 2 `
+  --entries 1 `
   --entry-ladder range_to_sl `
   --entry-sl-gap 0.7 `
   --shared-sl false `
@@ -228,11 +225,8 @@ python tools/backtest_hybrid.py `
   --trailing-close-after-stage 2 `
   --lock-tp1-exit-slippage 2.0 `
   --lock-tp2-exit-slippage 1.0 `
-  --risk-budget-gate true `
-  --max-single-entry-risk-pct 0.04 `
-  --max-zone-risk-pct 0.06 `
-  --daily-loss-limit-pct 0.05 `
-  --max-open-signals 1 `
+  --daily-loss-limit-pct 0.10 `
+  --max-open-signals 4 `
   --output-dir reports/TS3K_202601 `
   --initial-capital 3000 `
   --start-date 2026-01-01 `

@@ -221,10 +221,7 @@ pair is a thin package that imports it.
   (`--structure-min-score`, 0..4) vetoes. It only REMOVES signals (never invents
   one). `--structure-diagnostics` logs the per-base-setup decision (htf_state /
   vwap_side / impulse_state / score / reject_reason). It targets TSL18's
-  sequential wrong-side losses — **not another generic RSI/BB/SL/TP sweep**. Shadow
-  strategy `cli/candidate_TSL18_structure_guard_tick.txt` (**tag TSG18**, identical
-  TSL18 geometry, guard ON; SHADOW/RESEARCH, not a live replacement, no `run.py`
-  alias until validated). Compare base vs guarded variants with
+  sequential wrong-side losses — **not another generic RSI/BB/SL/TP sweep**. The shadow strategy TSG18 (identical TSL18 geometry, guard ON) was pruned 2026-07-02 with the deployed-set consolidation — recover `cli/candidate_TSL18_structure_guard_tick.txt` from git history to rerun it. Compare base vs guarded variants with
   `tools/sweep_structure_guard.py --window june|jan_jun` (scores max-consecutive-
   losses, max-daily-loss, BUY-loss-in-bearish-HTF, filtered-winners-vs-losers — not
   profit alone). Full contract + promote bar: `docs/TSL18_STRUCTURE_GUARD.md`.
@@ -428,10 +425,12 @@ pair is a thin package that imports it.
   REJECT/PAUSE signals (never add/modify geometry, lot, SL/TP, or trailing). CLI:
   `--risk-budget-gate / --max-single-entry-risk-pct / --max-zone-risk-pct /
   --daily-loss-limit-pct / --max-open-signals` on `backtest_explicit` (inherited
-  by `backtest_hybrid`). The **TS2K** candidate
-  (`cli/candidate_TS2K_small_account_tick.txt`, tag **TS2K**, *research/demo*) is
-  T818/TSL18 feed+geometry at **$2k** with **entries 2 / max-open 1 / daily 5% /
-  risk-budget zone 6%·single 4%**; validate with `tools/sweep_small_account_deploy.py`
+  by `backtest_hybrid`). The small-account book is now **TS3K**
+(`cli/candidate_TS3K_small_account_tick.txt`, tag **TS3K**, alias `ts3k` —
+**the live $3K book**; TS2K, its pruned $2K predecessor, used entries 2 /
+max-open 1 / daily 5% / risk-budget zone 6%·single 4%): TSL18 feed+geometry
+at **$3k** with **entries 1 / risk 1% / max-open 4 / daily 10%** (no
+risk-budget gate — a 1-leg zone cannot over-risk the ladder); validate with `tools/sweep_small_account_deploy.py`
   (TICK; writes `reports/SMALL_ACCOUNT_<window>/summary.md` + the account-size
   floor) and profile any workbook with `tools/strategy_profile.py`. **The gates
   are wired into the live executor too** (`auto_explicit` flags →
@@ -449,12 +448,14 @@ pair is a thin package that imports it.
   (stop → change `--entries` → restart). **Don't pool TSL18+V817 on one small
   account** (combined DD −41.6%; TSL18 starves V817 via the shared concurrency
   cap). VS2K is the V817 analogue of TS2K (Victor feed). **TS3K**
-  (`cli/candidate_TS3K_small_account_tick.txt`, tag **TS3K**, *research/demo*) is
-  the **$3k** sibling of TS2K — identical T818/TSL18 feed+geometry and the SAME
-  equity-relative 2-entry gates (entries 2 / max-open 1 / daily 5% / risk-budget
-  zone 6%·single 4%), only `--initial-capital 3000`. $3k is STILL under the
-  full-8-entry floor (~$4k p95 → ~$8k worst stop), so it stays 2-entry (the extra
-  $1k vs TS2K is pure DD cushion, not more legs) until ~$10K. **Run ONE book per
+  (`cli/candidate_TS3K_small_account_tick.txt`, tag **TS3K**, alias `ts3k` —
+  **the live $3K book**) is TSL18's exact feed+geometry at **entries 1 /
+  risk 1% / max-open 4 / daily-loss breaker 10%** (the 2026-07-02 selected
+  variant: 1-entry beat 2-entry ~2× on June net, max-open 4 beat the
+  suffocating max-open 1, the breaker cut the 6-month worst-case DD from
+  −34.6% to ~−25.6%; no risk-budget gate — a 1-leg zone cannot over-risk).
+  $3k is STILL under the full-8-entry floor (~$4k p95 → ~$8k worst stop), so
+  it stays 1-entry until ~$10K, then switch to the full TSL18 book. **Run ONE book per
   small account — do NOT pool TS3K with a Victor book (V072/V116/V817)** on the
   same $3k (shared-concurrency starvation; combined DD worse than either solo).
   See
@@ -777,7 +778,7 @@ runnable section (subprocess shell state doesn't persist). See `cli/README.md`.
 section: `_capital_variants` expands any command with `--initial-capital 50000` +
 `--output-dir` into the original 50K run plus a 5K clone that changes ONLY the
 capital (`5000`) and the output-dir suffix (`_5k`) — the month/date window is
-unchanged. A book authored at a non-$50K capital (e.g. V116 at 12000) is left
+unchanged. A book authored at a non-$50K capital (e.g. TS3K at 3000) is left
 untouched (no `_5k`), so the expansion never rewrites authored capital; pinned by
 `tests/test_cli_run_launcher.py` / `test_cli_run_capital_variants.py`. See
 `docs/CLI_BACKTEST_CAPITAL_VARIANTS.md`. The 2026 sections (5/6) are open-ended
@@ -817,16 +818,7 @@ regime), (7) Backtest 2025 (R3 strong), (8) Backtest 2024 (R2 bull), and
 R4 2.0/1.0, R3 0.9/0.45, R2 0.5/0.25, R1 0.4/0.2 (the volatility-scaled give-back
 measured per regime; backtest-only realism, never sent live) — so a full-history
 read is the union of the per-era windows rather than one run that wrongly applies
-the parabolic 2.0/1.0 to the quiet years. The current R4 champion is
-`cli/champion_R4_SQZ6_no_trailing` (tag **SQZ6**) — **`rsi75_sqz6_rr40`**
-(e8 / range_to_sl / slm2.1 / max_hold 240 / tp1_lock_delay 24 / lock_after_tp2 on /
-shared_sl off, on the **triple-filtered** scalper24 feed `--rsi-buy-max 75
---rsi-sell-min 25 --bb-bandwidth-min 0.0006 --rr1 1.0 --rr2 2.0 --rr3 4.0`;
-`champions/CHAMPION_R4parab.json`), the edge+OOS leader of the 34-variant RSI ×
-Bollinger × R:R sweep (edge $63,940 / OOS $11,633 / DD 38.4%) — it superseded the
-e5 RSI champion, which had superseded SC24T24E8 for R4 after it breached the DD ≤
-40% gate on 2026 data (SC24T24E8 remains the R2bull/R3strong champion); the other
-deployed feeds are **V116** (the **Victor champion**, `cli/candidate_VIC_C116_tick` — tick-tuned TP2/mh180/slm1.7/delay12 on Victor's provider feed `signals/victor_live.txt`, positions `positions_v116.json`, tag V116; it replaced the old VIC champion 2026-06-25, TICK +$24.7k / M1 DD 11.3%) and **C160** (`cli/candidate_R4_C160_tick`, beside SQZ6 — *research-grade*: M1 DD **42.1% is OVER the 40% gate** and 193/200 May+June cells were tick-negative, so run it at REDUCED risk / on DEMO; SQZ6 stays the gate-compliant R4 champion). The **trailing** research candidates on the C160 feed are **TOC5** (`cli/candidate_TOC5_trailing_tick`, tag TOC5 — real-DD tick sweep #1: trailing-open 0.5 / trailing-close 0.5 / trail-after-TP1, net $115.6k / real-tick DD 23.5%) and **TC18** (`cli/candidate_TC18_trailing_tick`, tag TC18 — aggressive-sweep #1: the SAME feed/geometry with slm 2.1→1.8 + trail-after-**TP2** + lock-after-tp2 on + tp2-lock-delay 24, net **$166.8k / DD 23.65%**, +44% net at essentially flat DD; the strict beat-on-both gate flagged no winner only on the 0.14 pt DD). **Both are RESEARCH — demo-validate (TC18 side-by-side vs TOC5) before live size; SQZ6 stays the champion.** A **Victor** trailing research candidate **VT05** (`cli/candidate_VT05_victor_trailing`, tag VT05) is V116's feed/geometry + the #1 cell of the VIC aggressive trailing sweep (to0.5/tc0.5/trail-after-TP1 + slm 1.7→1.5 + activation-delay 2→1): on May+June ticks it ~2× net ($21.7k) and edge ($3.1k) vs V116 but also ~2× DD (5.6%→9.6%, still ≪40%) and its **OOS collapses** ($526→$57) — so it's overfit, **V116 stays the deployed Victor champion**, run VT05 on DEMO A/B only. It reads the SAME Victor feed as V116 (one provider feed); only tag/positions/logs/params differ. Two **deployed** trailing books were added 2026-06-27 from the **tick-calibrated Jan-2026 sweep** (`sweep_reports/tick_cal_jan/`, run 28294329356; M1→TICK ratio applied to M1 Jan so Jan reads "as if TICK"): **VCT5** (`cli/candidate_VCT5_victor_trailing`, tag VCT5 — "Victor Trail 0.5", VT05's geometry promoted to deployed at **MAX risk 5%** on the Victor feed; calibrated est edge $14.0k / OOS $977 / DD **23.5% at 1%** → ~5× DD at 5%, deliberately NOT gate-compliant — the operator wants the Victor trailing sleeve sized as aggressively as possible) and **T160** (`cli/candidate_T160_trailing_tick`, tag T160 — "Trailing SLM 1.6", the C160 self-scalper feed + trailing slm1.6/mh240/ad0 at **risk 1%**; calibrated est edge $93.9k / OOS $5.4k / DD **44.4%**, beating deployed TC18 on edge+OOS+DD). Both are **high-DD by design** (the operator accepts the drawdown for max return); the numbers are tick-CALIBRATED estimates (real ticks only May-Jun) — forward-validate on demo before scaling. Four **Phase-2 #1 research cells** were added from the tick-calibrated Jan-2026 Phase-2 full trailing sweep (`sweep_reports/tick_cal_jan_full/`): **VS17** (`cli/candidate_VS17_victor_trailing`, tag VS17 — Phase-2 #1 VIC DD≤40% cell on Victor feed: e8/slm1.7/ad0/mh150/to0.5/tc0.5/s1/TP2 at risk 5%; calibrated est edge $18.4k / OOS $1.3k / DD 38.4% at 1% — leads VCT5 on est_edge+oos but tick_oos $755 < VCT5 $977; **RESEARCH**, demo-validate before replacing VCT5) and its promoted identity **V817** (`cli/candidate_V817_victor_trailing`, tag V817 — identical params to VS17, distinct deployed tag so it can run beside VCT5/VS17 with disjoint magics); **T18S** (`cli/candidate_T18S_trailing_tick`, tag T18S — Phase-2 #1 TC18 DD≤40% cell on C160 feed: e8/slm1.8/ad0/mh150/to0.5/tc0.5/s2/TP3 at risk 1%; est edge $109k / OOS $6.4k / DD 38.6% — beats T160 on all three metrics but tick_oos $52 is near-zero on real fills; **RESEARCH**, demo-validate before replacing T160) and its promoted identity **T818** (`cli/candidate_T818_trailing_tick`, tag T818 — identical params to T18S, distinct deployed tag for isolation; feed signals/t818.txt / signals/t818_live.txt). A **combined-geometry Victor** research book **V072** (`cli/candidate_V072_victor_trailing_combo`, tag V072, alias `v072`) stacks V017's five best single-knob trailing levers at once — trailing-open 0.5→**0.25**, final TP2→**TP3**, slm 1.7→**1.6**, entry-SL gap 0.5→**0.7**, max-hold 150→**180** — from the July Victor trailing-geometry sweep: on May+June ticks it returns pure P&L **$152.7k vs V017 $111.7k (+36.7%)** at **flat DD 14.07%** (win 44.8%; TP3 = fewer, larger winners). It reads the SAME Victor feed as V116/V017 (one provider feed); only tag / positions (`positions_v072.json`) / logs / trailing geometry differ. **RESEARCH — demo-validate before live size**: the edge is in-sample (May+June is mixed tick/M1, so it did NOT clear the sweep's full-tick-lifecycle ranking gate) and five knobs moved together, so OOS/overfit is unproven; V017 stays the incumbent Victor July identity. `cli/resync_m1_from_2020` (M1) and `cli/resync_ticks` (tick archive, day-window `_D<start>_pN` parts) are data-sync utilities, not strategies. A separate **DEMO-broker data lane** keeps demo quotes from clobbering the live ELEV8 archive: `fetch` / `export_ticks` take **`--source DEMO`** (tag baked into the filename — `XAUUSD_M1_YYYYMM_DEMO.csv`, `XAUUSD_TICK_..._DEMO.csv`) + **`--output-dir data/demo`**, and `chart.py` recognizes `_DEMO` at the same load priority as `_ELEV8` (inert without demo files). The demo trailing candidate **DTR0** (`cli/demo/demo_DTR0_trailing.txt`, tag DTR0, **DEMO-ONLY**) is the C160 self-scalper feed + trailing-open/close 0.5/0.5, with `cli/demo/backtest_TR05_demo.txt` (repro) and `cli/demo/resync_{m1,ticks}_demo.txt` (sync into `data/demo`). The bulky `_DEMO` CSVs are **not committed** — regenerate them locally via the resync snapshots. Pruned snapshots — the old `champion_victor` (VIC), `cli/E640`, `cli/rr08x15x30`, `candidate_R4_SL19_tick`, and the `trailing_open_R*` / `trailing_small_0101` research cells (plus the earlier `cli_R4_scalper24` / `_breakout` / `_scalperwide24` / `_bbsqueeze`, `cli_trailing_risk02allhours`, `cli_adaptive_regime`) — were removed; recover from git history if needed. The `auto --adaptive` regime auto-switch feature still lives in `strategy/regime_adaptive.py`.
+the parabolic 2.0/1.0 to the quiet years. The deployed set was **consolidated 2026-07-02** to two champions + one live book (everything else pruned; recover from git history): **V072** (the **Victor champion**, `cli/candidate_V072_victor_trailing_combo`, alias `v072`, tag V072 — V017's geometry + the four live-safe levers **TP3 / slm 1.6 / gap 0.7 / mh 180**; **trailing-open stays 0.5** — the original 0.25 lever was retired 2026-07-02: ELEV8 rejects a resting STOP under its ~0.4 min-stop (retcode 10015) AND 0.5 outscores 0.25 on the refreshed archive. May+June on the refreshed archive (ticks through 2026-07-02; 316 TICK / 49 M1 signals): pure **$80,962, +23.8% vs V017 $65,409** at DD 19.02% vs 19.27%, win 43.6%. Reads the Victor provider feed `signals/victor_live.txt`, positions `positions_v072.json`; **demo-validate before live size**), **TSL18** (the **self-scalper champion**, `cli/candidate_TSL18_trailing_tick`, alias `tsl18`, tag TSL18 — C160 feed, e8 / slm 1.8 / TP3 / trailing 0.5-0.5 after TP2 / locks 24-24; the FULL book for **≥ ~$10K** accounts — its 8-entry account floor is ~$4K–$8K and at $3K it rides a 41%-of-account DD), and **TS3K** (**the live $3K book**, `cli/candidate_TS3K_small_account_tick`, alias `ts3k`, tag TS3K — TSL18's exact feed+geometry at **entries 1 / risk 1% / max-open-signals 4 / daily-loss breaker 10%**, the measured best $3K variant: 1-entry beat 2-entry ~2× on June net at similar DD%, max-open 4 decisively beat the suffocating max-open 1, and the daily breaker cut the 6-month worst-case DD from −34.6% (ungated) to ~−25.6% at equal PF; the gates are enforced identically in backtest and live via `DeploymentGate`; step up to the full TSL18 book around ~$10K — a MANUAL, capital-staged switch). `cli/resync_m1_from_2020` (M1) and `cli/resync_ticks` (tick archive, day-window `_D<start>_pN` parts) are data-sync utilities, not strategies. A separate **DEMO-broker data lane** keeps demo quotes from clobbering the live ELEV8 archive: `fetch` / `export_ticks` take **`--source DEMO`** (tag baked into the filename — `XAUUSD_M1_YYYYMM_DEMO.csv`, `XAUUSD_TICK_..._DEMO.csv`) + **`--output-dir data/demo`**, and `chart.py` recognizes `_DEMO` at the same load priority as `_ELEV8` (inert without demo files). The demo lane keeps `cli/demo/resync_{m1,ticks}_demo.txt` (sync into `data/demo`); the demo books DTR0/TR05 were pruned 2026-07-02 with the deployed-set consolidation. The bulky `_DEMO` CSVs are **not committed** — regenerate them locally via the resync snapshots. Pruned snapshots — **2026-07-02 (deployed-set consolidation)**: SQZ6, VIC_C116/V116, C160, TOC5, TC18, VT05, VCT5, VS17, V017, V817, T160, T18S, T818, TWL25, TS2K, the TSG18 structure-guard shadow, and the demo books DTR0/TR05 — the operator consolidated to champions **V072 + TSL18** with **TS3K** as the live $3K book. Earlier, 2026-06-25: the old `champion_victor` (VIC), `cli/E640`, `cli/rr08x15x30`, `candidate_R4_SL19_tick`, and the `trailing_open_R*` / `trailing_small_0101` research cells (plus the earlier `cli_R4_scalper24` / `_breakout` / `_scalperwide24` / `_bbsqueeze`, `cli_trailing_risk02allhours`, `cli_adaptive_regime`) — were removed; recover from git history if needed. The `auto --adaptive` regime auto-switch feature still lives in `strategy/regime_adaptive.py`.
 
 ## Docs to keep in sync with code
 
@@ -921,12 +913,13 @@ isolated (disjoint magics) and every artifact traces to exactly one strategy at
 a glance. Sharing one forensic/notifications path between two `auto` processes
 interleaves their events and races the rotation, so each executor passes its own
 (the per-sink size cap + `.1` rotation then bounds each file independently).
-Example: the R4 champion is tag `SQZ6` → `positions_sqz6.json`,
-`signals/sqz6.txt` / `signals/sqz6_live.txt`, `reports/SQZ6_2026xx`,
-`forensic_sqz6.jsonl` / `notifications_sqz6.jsonl`, snapshot
-`cli/champion_R4_SQZ6_no_trailing.txt`; the Victor champion is tag `V116` →
-`positions_v116.json`, `signals/victor_live.txt`, `forensic_v116.jsonl` /
-`notifications_v116.jsonl`, snapshot `cli/candidate_VIC_C116_tick.txt`. When you
+Example: the live $3K book is tag `TS3K` → `positions_ts3k.json`,
+`signals/ts3k.txt` / `signals/ts3k_live.txt`, `reports/TS3K_2026xx`,
+`forensic_ts3k.jsonl` / `notifications_ts3k.jsonl`, snapshot
+`cli/candidate_TS3K_small_account_tick.txt`; the Victor champion is tag
+`V072` → `positions_v072.json`, `signals/victor_live.txt` (shared provider
+feed), `forensic_v072.jsonl` / `notifications_v072.jsonl`, snapshot
+`cli/candidate_V072_victor_trailing_combo.txt`. When you
 add a strategy, mint a fresh tag and
 derive all artifact names (positions, feed, report, logs) from it.
 </content>
